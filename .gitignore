@@ -4,6 +4,7 @@
 *.iml
 
 .venv/
+/.venv/
 
 # Compiled class file
 *.class
