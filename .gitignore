@@ -3,6 +3,8 @@
 .gigaide/
 *.iml
 
+.venv/
+
 # Compiled class file
 *.class
 
