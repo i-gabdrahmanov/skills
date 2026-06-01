@@ -1,0 +1,26 @@
+{
+  "_comment": [
+    "Упорядоченные правила ребрендинга Gigacode -> GigaCode. Применяются СВЕРХУ ВНИЗ:",
+    "специфичные (url, cli, dotpath, product) идут раньше общего brand_generic,",
+    "чтобы общий 'gigacode'->'gigacode' не испортил ссылки/команды.",
+    "МОДЕЛИ НЕ МАПЯТСЯ: скиллы не выбирают модель (нет поля model: в SKILL.md);",
+    "модель задаёт рантайм GigaCode. Флаг --model в skill-creator по умолчанию",
+    "берёт модель текущей сессии. Поэтому раздела model_id здесь нет специально.",
+    "Каждое правило: pattern (regex), replacement, [flags: 'i'=ignorecase], [case_preserve]."
+  ],
+  "rules": [
+    { "category": "url", "pattern": "gigacode\\.ai/code", "replacement": "gigacode.ru" },
+    { "category": "url", "pattern": "gigacode\\.com/gigacode-code", "replacement": "gigacode.ru" },
+    { "category": "url", "pattern": "gigacode\\.ai", "replacement": "gigacode.ru" },
+    { "category": "url", "pattern": "gigacode\\.com", "replacement": "gigacode.ru" },
+
+    { "category": "cli", "pattern": "gigacode\\s+-p", "replacement": "gigacode -p" },
+
+    { "category": "product", "pattern": "Gigacode\\s+Code", "replacement": "GigaCode" },
+    { "category": "product", "pattern": "GigaCode", "replacement": "GigaCode" },
+
+    { "category": "dotpath", "pattern": "\\.gigacode", "replacement": ".gigacode" },
+
+    { "category": "brand_generic", "pattern": "gigacode", "flags": "i", "replacement": "gigacode", "case_preserve": true }
+  ]
+}

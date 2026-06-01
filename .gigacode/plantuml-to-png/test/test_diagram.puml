@@ -1,0 +1,20 @@
+@startuml
+title Authentication Flow
+
+actor Alice
+participant "Auth Server" as Bob
+database "User DB" as DB
+
+Alice -> Bob: Login request (username, password)
+activate Bob
+Bob -> DB: SELECT user WHERE name=?
+DB --> Bob: user record
+Bob -> Bob: verify password hash
+Bob --> Alice: JWT token
+deactivate Bob
+
+Alice -> Bob: GET /profile (JWT)
+activate Bob
+Bob --> Alice: profile data
+deactivate Bob
+@enduml
