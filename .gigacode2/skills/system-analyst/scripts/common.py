@@ -1,0 +1,53 @@
+"""Общие хелперы детерминированных сканеров system-analyst.
+
+Цель сканеров — recall ≈ 100% по механическим артефактам (без LLM, без лимитов
+токенов). Каждый сканер возвращает плоский список dict-ов, где у каждого элемента
+есть поле ``file`` — по нему ``attribute_module`` приписывает находку к модулю.
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Iterable
+
+SKIP_DIRS = {"build", "out", "target", ".gradle", ".idea", "node_modules", ".git", "bin"}
+BUILD_FILES = ("build.gradle", "build.gradle.kts", "pom.xml")
+
+_COMMENT_BLOCK_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+_COMMENT_LINE_RE = re.compile(r"//[^\n]*")
+
+
+def strip_comments(src: str) -> str:
+    return _COMMENT_LINE_RE.sub("", _COMMENT_BLOCK_RE.sub("", src))
+
+
+def read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def iter_files(root: Path, suffixes: tuple[str, ...]) -> Iterable[Path]:
+    for path in root.rglob("*"):
+        if path.is_dir():
+            continue
+        if any(part in SKIP_DIRS for part in path.parts):
+            continue
+        if not suffixes or path.suffix in suffixes or path.name in suffixes:
+            yield path
+
+
+def iter_java(root: Path) -> Iterable[Path]:
+    yield from iter_files(root, (".java", ".kt"))
+
+
+def attribute_module(file_path: Path, module_dirs: list[tuple[str, Path]]) -> str:
+    """Вернуть имя модуля — ближайший предок-модуль для файла (самый длинный путь-префикс)."""
+    fp = str(Path(file_path).resolve())
+    best, best_len = "?", -1
+    for name, mp in module_dirs:
+        mps = str(Path(mp).resolve())
+        if (fp == mps or fp.startswith(mps + "/")) and len(mps) > best_len:
+            best, best_len = name, len(mps)
+    return best
