@@ -8,15 +8,16 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from common import BUILD_FILES, SKIP_DIRS, iter_java, read_text
+from common import BUILD_FILES, in_skipped_dir, iter_java, read_text
 
 
 def _module_dirs(root: Path) -> list[Path]:
+    root = root.resolve()
     dirs: set[Path] = set()
     for path in root.rglob("*"):
         if path.is_dir():
             continue
-        if any(part in SKIP_DIRS for part in path.parts):
+        if in_skipped_dir(root, path):
             continue
         if path.name in BUILD_FILES:
             dirs.add(path.parent)

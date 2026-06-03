@@ -16,8 +16,12 @@ import sys
 from pathlib import Path
 
 
+# База данных скиллов внутри проекта (НЕ dot-папка — иначе рантайм режет доступ).
+DATA_DIR = "ground"
+
+
 def pipeline_dir(project: Path, skill: str) -> Path:
-    return project / ".gigacode" / "statements" / skill / "pipeline"
+    return project / DATA_DIR / "statements" / skill / "pipeline"
 
 
 def summarize(manifest: dict) -> dict:

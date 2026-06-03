@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Iterable
 
 SKIP_DIRS = {"build", "out", "target", ".gradle", ".idea", "node_modules", ".git", "bin"}
+# Каталог, куда скиллы складывают свои данные (scan-JSON, pipeline-state). НЕ dot-папка
+# (иначе рантайм режет доступ по path-гарду), но сканер не должен заходить в свой вывод.
+DATA_DIR = "ground"
 BUILD_FILES = ("build.gradle", "build.gradle.kts", "pom.xml")
 
 _COMMENT_BLOCK_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
@@ -28,11 +31,30 @@ def read_text(path: Path) -> str:
         return ""
 
 
+def is_skipped_dir(part: str) -> bool:
+    # Любая dot-папка (.git, .gigacode, .idea, …), явный SKIP_DIRS и каталог данных скиллов.
+    return part.startswith(".") or part in SKIP_DIRS or part == DATA_DIR
+
+
+def in_skipped_dir(root: Path, path: Path) -> bool:
+    """True, если файл лежит внутри пропускаемого каталога.
+
+    Считаем только части пути ВНУТРИ проекта — абсолютный префикс ($HOME и т.п.)
+    может законно содержать точку (напр. ~/.gigacode/...) и не должен влиять на обход.
+    """
+    try:
+        rel_dir_parts = path.resolve().relative_to(root).parts[:-1]
+    except ValueError:
+        rel_dir_parts = path.parts[:-1]
+    return any(is_skipped_dir(part) for part in rel_dir_parts)
+
+
 def iter_files(root: Path, suffixes: tuple[str, ...]) -> Iterable[Path]:
+    root = root.resolve()
     for path in root.rglob("*"):
         if path.is_dir():
             continue
-        if any(part in SKIP_DIRS for part in path.parts):
+        if in_skipped_dir(root, path):
             continue
         if not suffixes or path.suffix in suffixes or path.name in suffixes:
             yield path

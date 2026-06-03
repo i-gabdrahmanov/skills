@@ -6,7 +6,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Импортируем общие хелперы из соседнего модуля.
+# Импортируем общие хелперы из соседних модулей.
+from common import in_skipped_dir  # noqa: E402
 from endpoints import _balanced, _find_method_signature, _strip_comments  # noqa: E402
 
 
@@ -227,11 +228,11 @@ def parse_file(path: Path) -> tuple[list[KafkaConsumer], list[KafkaProducer]]:
 
 def scan(root: Path) -> KafkaModel:
     model = KafkaModel()
-    skip_dirs = {"build", "out", "target", ".gradle", ".idea", "node_modules"}
+    root = root.resolve()
     for path in root.rglob("*"):
         if path.is_dir():
             continue
-        if any(part in skip_dirs for part in path.parts):
+        if in_skipped_dir(root, path):
             continue
         if path.suffix not in (".java", ".kt"):
             continue

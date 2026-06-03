@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+from common import in_skipped_dir
+
 # Аннотации маппингов: ключ — имя аннотации, значение — HTTP-метод (или None для @RequestMapping).
 MAPPING_ANNOTATIONS: dict[str, str | None] = {
     "GetMapping": "GET",
@@ -472,11 +474,11 @@ def parse_file(path: Path) -> Controller | None:
 
 def scan(root: Path) -> list[Controller]:
     controllers: list[Controller] = []
-    skip_dirs = {"build", "out", "target", ".gradle", ".idea", "node_modules"}
+    root = root.resolve()
     for path in root.rglob("*"):
         if path.is_dir():
             continue
-        if any(part in skip_dirs for part in path.parts):
+        if in_skipped_dir(root, path):
             continue
         if path.suffix not in (".java", ".kt"):
             continue

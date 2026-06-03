@@ -7,7 +7,7 @@ Usage:
         --steps <json-string-or-@file> \\
         [--context <json-string-or-@file>]
 
-Creates: <project>/.gigacode/statements/<skill>/pipeline/manifest.json
+Creates: <project>/ground/statements/<skill>/pipeline/manifest.json
 
 Steps format (JSON array):
     [
@@ -39,8 +39,13 @@ def iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# База данных скиллов внутри проекта (НЕ dot-папка — иначе рантайм режет доступ
+# по path-гарду и seatbelt). Единый каталог для всех скиллов конвейера.
+DATA_DIR = "ground"
+
+
 def pipeline_dir(project: Path, skill: str) -> Path:
-    return project / ".gigacode" / "statements" / skill / "pipeline"
+    return project / DATA_DIR / "statements" / skill / "pipeline"
 
 
 def main():
@@ -73,7 +78,7 @@ def main():
             print("Use read.py to inspect, or --force to archive and recreate", file=sys.stderr)
             sys.exit(3)
         # Archive existing
-        archive_dir = project / ".gigacode" / "statements" / args.skill / "archived"
+        archive_dir = project / DATA_DIR / "statements" / args.skill / "archived"
         archive_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         archive_target = archive_dir / f"pipeline-{ts}"

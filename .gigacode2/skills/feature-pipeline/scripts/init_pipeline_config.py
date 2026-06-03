@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scaffold <project>/.gigacode/pipeline.json — единый параметр-стор конвейера.
+"""Scaffold <project>/ground/pipeline.json — единый параметр-стор конвейера.
 
 Авто-детектит, что может (build-система, модули, пакет, версии, инструмент миграций),
 и оставляет плейсхолдеры (null) для того, что должен заполнить человек/оркестратор:
@@ -212,7 +212,7 @@ def main():
         print(json.dumps({"error": f"нет директории {root}"}, ensure_ascii=False)); sys.exit(1)
 
     detected = build_config(root)
-    dest = os.path.join(root, ".gigacode", "pipeline.json")
+    dest = os.path.join(root, "ground", "pipeline.json")
 
     if args.dry:
         print(json.dumps(detected, ensure_ascii=False, indent=2)); return

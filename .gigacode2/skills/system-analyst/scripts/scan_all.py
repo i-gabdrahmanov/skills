@@ -128,7 +128,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Deterministic system scan (ground truth for self-check).")
     ap.add_argument("roots", nargs="+", help="project root(s)")
     ap.add_argument("-o", "--out", default=None,
-                    help="output dir (default: <root>/.gigacode/statements/system-analysis/scan)")
+                    help="output dir (default: <root>/ground/statements/system-analysis/scan)")
     ap.add_argument("--quiet", action="store_true", help="do not print the summary table")
     args = ap.parse_args()
 
@@ -141,7 +141,7 @@ def main() -> int:
             return 1
         _merge(cats, scan_root(r, prefix=r.name if multi else ""))
 
-    out = Path(args.out) if args.out else roots[0] / ".gigacode/statements/system-analysis/scan"
+    out = Path(args.out) if args.out else roots[0] / "ground/statements/system-analysis/scan"
     out.mkdir(parents=True, exist_ok=True)
     for name, cat in cats.items():
         (out / f"{name}.json").write_text(json.dumps(cat, ensure_ascii=False, indent=2), encoding="utf-8")

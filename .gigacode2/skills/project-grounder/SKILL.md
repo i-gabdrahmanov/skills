@@ -26,7 +26,7 @@ description: >
 ## 0. Предусловия
 
 - Текущая директория — корень репо кода (Java/Spring).
-- `<project>/.gigacode/pipeline.json` должен существовать (создаётся скриптом
+- `<project>/ground/pipeline.json` должен существовать (создаётся скриптом
   инициализации `feature-pipeline`; если его нет, сообщи и остановись).
 - Скилл `pipeline-state` доступен — нужен для шага 01-grounding.
 - Скилл `system-analyst` доступен — запускается если обзора нет.
@@ -36,7 +36,7 @@ description: >
 ## 1. Читаем конфиг
 
 ```bash
-cat "$(pwd)/.gigacode/pipeline.json"
+cat "$(pwd)/ground/pipeline.json"
 ```
 
 Возьми:
@@ -46,7 +46,7 @@ cat "$(pwd)/.gigacode/pipeline.json"
   работает; просто `$(pwd)` вместо `$(git rev-parse --show-toplevel)`).
 
 Если `pipeline.json` не найден — сообщи пользователю:
-> "Не найден `.gigacode/pipeline.json`. Запусти сначала `feature-pipeline`, чтобы
+> "Не найден `ground/pipeline.json`. Запусти сначала `feature-pipeline`, чтобы
 >  проект был инициализирован, или создай конфиг вручную."
 Остановись.
 
@@ -94,7 +94,7 @@ config_path.parent.mkdir(parents=True, exist_ok=True)
 
 project = pathlib.Path.cwd()
 # Читаем docs_path из pipeline.json
-pipeline = json.loads((project / ".gigacode/pipeline.json").read_text())
+pipeline = json.loads((project / "ground/pipeline.json").read_text())
 docs_path = pipeline["docs"]["docs_path"]
 if not pathlib.Path(docs_path).is_absolute():
     docs_path = str((project / docs_path).resolve())

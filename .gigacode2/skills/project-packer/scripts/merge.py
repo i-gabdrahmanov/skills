@@ -12,6 +12,7 @@ from pathlib import Path
 EXCLUDED_DIRS = {
     '.git', 'target', 'build', '.gradle', '.venv', '.idea',
     'node_modules', '__pycache__', '.gigacode', '.gigaide', '.mvn',
+    'ground',  # каталог данных скиллов (scan-JSON, pipeline-state) — не упаковывать
 }
 
 MAX_CHUNK_BYTES = 3 * 1024 * 1024  # 3 MB

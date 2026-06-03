@@ -108,7 +108,7 @@ JSON по контракту (см. `contracts.md §3` в feature-pipeline):
 ```bash
 python3 ~/.gigacode/skills/jira-task-writer/scripts/check_jira.py \
     "<папка фичи>/task-plan.json" --result "<папка фичи>/jira-tasks-result.json" \
-    --pipeline-config "<project>/.gigacode/pipeline.json"
+    --pipeline-config "<project>/ground/pipeline.json"
 ```
 Проверяет: создано 1 Story + по Sub-task на каждый `task_id` (при `skipped`/jira off — skip).
 При `fail` — назови задачи без ключа и дозаведи недостающее.

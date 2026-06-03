@@ -35,10 +35,10 @@ new-components); этот SKILL.md — исполняемая инструкци
 
 ### 0.1 Конфигурация проекта (делай это первым)
 
-Все параметры конвейера живут в `<project>/.gigacode/pipeline.json` — единый стор, который
+Все параметры конвейера живут в `<project>/ground/pipeline.json` — единый стор, который
 путешествует с проектом. Полная схема и правила — [`references/config.md`](references/config.md).
 
-1. Прочитай `<project>/.gigacode/pipeline.json`.
+1. Прочитай `<project>/ground/pipeline.json`.
 2. **Если файла нет** — создай:
    ```bash
    python ~/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.py --project "$(pwd)"
@@ -60,7 +60,7 @@ new-components); этот SKILL.md — исполняемая инструкци
 Каждый прогон — пайплайн из шагов (см. манифест ниже). Если субагент упёрся в лимит или
 процесс прервался — без сохранения state теряется всё сделанное.
 
-Конвенция: `<project>/.gigacode/statements/feature-pipeline/pipeline/`.
+Конвенция: `<project>/ground/statements/feature-pipeline/pipeline/`.
 
 **В самом начале**, до вопросов и субагентов, проверь state:
 ```bash
@@ -217,7 +217,7 @@ read_file("~/.gigacode/skills/jira-task-writer/SKILL.md")
 ```bash
 python3 ~/.gigacode/skills/jira-task-writer/scripts/check_jira.py \
     "<папка фичи>/task-plan.json" --result "<папка фичи>/jira-tasks-result.json" \
-    --pipeline-config "<project>/.gigacode/pipeline.json"
+    --pipeline-config "<project>/ground/pipeline.json"
 ```
 Паритет: 1 Story + N задач, у каждой задачи есть key (при `skipped`/jira off — skip).
 Обнови `03-jira`.
@@ -234,7 +234,7 @@ python3 ~/.gigacode/skills/jira-task-writer/scripts/check_jira.py \
    ```
    read_file("~/.gigacode/skills/java-spring-dev/SKILL.md")
    ```
-   Если в репо есть `<project>/.gigacode/conventions.md` — передай её как раскладку слоёв
+   Если в репо есть `<project>/ground/conventions.md` — передай её как раскладку слоёв
    проекта (она приоритетнее generic-шаблона скилла). Создай Java-слои задачи
    (entity→repo→dto→mapper→service→controller — только те, что в `task.layers`). Diff виден
    пользователю.
@@ -316,8 +316,8 @@ python3 ~/.gigacode/skills/system-analyst/scripts/scan_all.py \
 ```bash
 python3 ~/.gigacode/skills/feature-pipeline/scripts/check_delivery.py \
     "<папка фичи>/task-plan.json" \
-    --manifest "<project>/.gigacode/statements/feature-pipeline/pipeline/manifest.json" \
-    --pipeline-config "<project>/.gigacode/pipeline.json"
+    --manifest "<project>/ground/statements/feature-pipeline/pipeline/manifest.json" \
+    --pipeline-config "<project>/ground/pipeline.json"
 ```
 По закрытому `07-deliver-<id>` на каждую задачу (при bitbucket off — skip). Обнови
 `07-deliver-*` и `07-report`.

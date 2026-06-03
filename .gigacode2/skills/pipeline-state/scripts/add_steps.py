@@ -38,8 +38,12 @@ def iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# База данных скиллов внутри проекта (НЕ dot-папка — иначе рантайм режет доступ).
+DATA_DIR = "ground"
+
+
 def pipeline_dir(project: Path, skill: str) -> Path:
-    return project / ".gigacode" / "statements" / skill / "pipeline"
+    return project / DATA_DIR / "statements" / skill / "pipeline"
 
 
 def main():
