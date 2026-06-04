@@ -35,7 +35,8 @@
     "UserPromptSubmit": [
       {"hooks": [
         {"type": "command", "command": "python3 $HOME/.gigacode/hooks/prompt-guard.py", "name": "prompt-guard"},
-        {"type": "command", "command": "python3 $HOME/.gigacode/hooks/cost-breaker.py", "name": "cost-breaker"}
+        {"type": "command", "command": "python3 $HOME/.gigacode/hooks/cost-breaker.py", "name": "cost-breaker"},
+        {"type": "command", "command": "python3 $HOME/.gigacode/hooks/log-agent.py", "name": "agent-logger"}
       ]}
     ],
     "SubagentStart": [

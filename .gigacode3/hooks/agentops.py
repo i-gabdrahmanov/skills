@@ -38,11 +38,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Trust metrics from JSONL audit.")
     ap.add_argument("--root", default=".")
     ap.add_argument("--run", help="конкретный run-dir; иначе агрегируем все agents.jsonl")
+    ap.add_argument("--archive", help="каталог единого архива (agents-YYYYMM.jsonl) — анализ всех прогонов")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
     root = Path(args.root).resolve()
-    if args.run:
+    if args.archive:
+        files = sorted(glob.glob(str(Path(args.archive).expanduser() / "agents-*.jsonl")))
+    elif args.run:
         files = [str(Path(args.run) / "agents.jsonl")]
     else:
         files = glob.glob(str(root / "ground" / "ai-logs" / "**" / "agents.jsonl"), recursive=True)

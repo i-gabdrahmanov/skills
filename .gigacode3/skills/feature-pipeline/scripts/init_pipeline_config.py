@@ -165,6 +165,9 @@ def build_config(root):
             "coverage_report": "build/reports/jacoco/test/jacocoTestReport.xml" if gradle else "target/site/jacoco/jacoco.xml",
             "jacoco_configured": has_jacoco,
             "token_budget": 2000000,          # PDLC v3.5 cost circuit breaker (warn 80% / stop 120%)
+            "tdd": True,                      # TDD по умолчанию: тесты (RED) → код (GREEN); см. check_tests_red.py
+            "compile_test_command": "./gradlew compileTestJava" if gradle else "mvn -q test-compile",
+            "test_layer": "service-unit",     # предпочитать Mockito-юниты; избегать @DataJpaTest (initializationError)
         },
         "evidence": {
             "threshold": 0.95,                # min completeness evidence bundle перед доставкой

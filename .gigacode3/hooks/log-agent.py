@@ -29,7 +29,8 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-TRUNC = 800  # макс длина усечённого payload (символов)
+import os as _os
+TRUNC = int(_os.environ.get("GIGACODE_LOG_TRUNC", "4000"))  # длина payload; для анализа крупнее (env-override)
 
 
 def _safe(s) -> str:
@@ -137,14 +138,20 @@ def _human(data: dict, label: str) -> str:
         bits.append("agent=" + str(data.get("agent_type", "")))
         if ev == "SubagentStop" and data.get("last_assistant_message"):
             bits.append(_trunc(data.get("last_assistant_message")))
+    elif ev == "UserPromptSubmit":
+        bits.append("PROMPT " + _trunc(data.get("prompt")))
+    elif ev in ("Stop", "SessionEnd") and data.get("last_assistant_message"):
+        bits.append("FINAL " + _trunc(data.get("last_assistant_message")))
     return "  ".join(b for b in bits if b) + "\n"
 
 
-def _record(data: dict, label: str) -> str:
+def _record(data: dict, label: str, root: str = "") -> str:
     rec = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "event": data.get("hook_event_name"),
         "session_id": data.get("session_id"),
+        "project": os.path.basename(root) if root else None,
+        "cwd": data.get("cwd"),
         "agent": label,
         "agent_type": data.get("agent_type"),
         "agent_id": data.get("agent_id"),
@@ -159,8 +166,12 @@ def _record(data: dict, label: str) -> str:
         rec["error"] = _trunc(data.get("error"))
     if data.get("hook_event_name") == "SubagentStop":
         rec["agent_transcript_path"] = data.get("agent_transcript_path")
-        if data.get("last_assistant_message"):
-            rec["last_assistant_message"] = _trunc(data.get("last_assistant_message"))
+    if data.get("last_assistant_message"):
+        rec["last_assistant_message"] = _trunc(data.get("last_assistant_message"))
+    if "prompt" in data:
+        rec["prompt"] = _trunc(data.get("prompt"))
+    if "permission_mode" in data:
+        rec["permission_mode"] = data.get("permission_mode")
     return json.dumps(rec, ensure_ascii=False) + "\n"
 
 
@@ -173,14 +184,24 @@ def main() -> int:
         root = _project_root(data.get("cwd", ""))
         run = _run_dir(root, data)
         label = _agent_label(data)
-        jline, hline = _record(data, label), _human(data, label)
+        jline, hline = _record(data, label, root), _human(data, label)
         _append(os.path.join(run, "agents.jsonl"), jline)
         _append(os.path.join(run, "agents.log"), hline)
         _append(os.path.join(run, "by-agent", label + ".jsonl"), jline)
         _append(os.path.join(run, "by-agent", label + ".log"), hline)
+        # единый кросс-прогонный/кросс-проектный архив для анализа (монтажная ротация)
+        _append(_archive_path(), jline)
     except Exception:
         return 0  # никогда не ломаем прогон из-за логирования
     return 0
+
+
+def _archive_path() -> str:
+    """Единый лог всех агентов/субагентов по всем прогонам и проектам — для анализа.
+    GIGACODE_AILOG_ARCHIVE (env) переопределяет каталог; иначе <home>/ai-logs-archive рядом с hooks."""
+    base = os.environ.get("GIGACODE_AILOG_ARCHIVE") or \
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ai-logs-archive")
+    return os.path.join(base, "agents-" + datetime.now().strftime("%Y%m") + ".jsonl")
 
 
 if __name__ == "__main__":
