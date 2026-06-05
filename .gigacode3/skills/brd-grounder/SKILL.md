@@ -100,7 +100,7 @@ ls docs/system-analysis/README.md 2>/dev/null && echo EXISTS || echo MISSING
 - **Обзора нет, но это репо кода** — прогони дешёвый детерминированный скан (без LLM):
 
   ```bash
-  python3 ~/.gigacode/skills/system-analyst/scripts/scan_all.py "$(pwd)" -o /tmp/brd-grounding-scan 2>/dev/null
+  python3 ~/.gigacode/skills/system-analyst/scripts/scan_all.py -o /tmp/brd-grounding-scan 2>/dev/null
   ```
 
   и возьми из `*.json` факты по ключевым терминам (есть ли уже такая сущность/эндпойнт/

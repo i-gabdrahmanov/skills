@@ -1,6 +1,6 @@
 # Control plane на хуках (PDLC v3.5) — деплой
 
-Хуки переносят enforcement пайплайна из текста SKILL.md в **рантайм** и реализуют harness v3.5:
+Хуки переносят enforcement пайплайна из текста SKILL.md в **рантайм** и реализуют Forge v3.5:
 risk ladder R0–R5, evidence bundle, cost circuit breaker, security-хуки. Главный принцип концепции:
 **hooks = enforcement, CLAUDE.md/SKILL.md = только guidance** (модель текст может проигнорировать).
 Это конфиг рантайма, НЕ скиллы; читается запущенным бинарём из своего конфиг-дома. Скрипты
@@ -11,7 +11,8 @@ path-агностичны: состояние берут из `<project>/ground/
 
 | Скрипт | Событие | Назначение | Блок |
 |---|---|---|---|
-| `gate-guard.py` (+`risk_ladder.py`,`risk-policy.json`) | PreToolUse Bash/Write/Edit | permission gateway, risk ladder R0–R5, **deny-first** | exit 2 |
+| `gate-guard.py` (+`risk_ladder.py`,`risk-policy.json`) | PreToolUse Bash/Write/Edit | permission gateway, risk ladder R0–R5, **deny-first**; форсит выбор критичности | exit 2 |
+| `tdd-guard.py` | PreToolUse Write/Edit | форсит TDD (блок `src/main` пока RED pending) + тест-стратегию (блок `@DataJpaTest`/`@SpringBootTest` при `test_layer=service-unit`) | exit 2 |
 | `destructive-blocker.py` | PreToolUse `^Bash$` | чёрный список (`rm -rf /`, force-push, DROP…) | exit 2 |
 | `pii-boundary.py` | PreToolUse Write/Edit/Bash | блок записи PII/секретов вне scope | exit 2 |
 | `evidence-enforcer.py` | PreToolUse `^Bash$` | блок доставки без полного evidence bundle | exit 2 |
@@ -22,14 +23,15 @@ path-агностичны: состояние берут из `<project>/ground/
 | `phase-gate.py` | Stop | блок завершения с висящим `in_progress` | block |
 | `log-agent.py` | все | append-only JSONL аудит (sync) | нет |
 
-Не-хуки рядом: `agentops.py` (Trust-метрики из JSONL), `evals/run-evals.py` (eval-набор),
-`run-hook-tests.sh` (базовые тесты), `watch-agents.sh` (живой просмотр), `settings.hooks.json` (эталон блока).
+Не-хуки рядом: `preflight.py` (проверка «харнес активен?» ПЕРЕД пайплайном — ловит «0 hook entries»),
+`doctor.py` (статическая диагностика), `validate_skills.py`, `agentops.py` (Trust-метрики),
+`evals/run-evals.py` (eval-набор), `watch-agents.sh` (живой просмотр), `settings.hooks.json` (эталон).
 
 ## Порядок и sequential
 
 PreToolUse `^Bash$` идёт **sequential**: destructive-blocker → cost-breaker → evidence-enforcer →
-gate-guard → log. Любой из первых четырёх может заблокировать (exit 2) до выполнения команды. Логгер —
-всегда последний и неблокирующий. Точный блок — в `settings.hooks.json`.
+gate-guard → log. Write/Edit: pii-boundary → **tdd-guard** → gate-guard → log. Любой блокирующий
+может остановить (exit 2) до действия. Логгер — всегда последний и неблокирующий. Точный блок — в `settings.hooks.json`.
 
 ## Три расположения
 
@@ -55,6 +57,19 @@ bash ~/.gigacode3/deploy.sh ~/.qwen      # локальный тест-дом
 > так: скиллы залили на проектный уровень, а блок `hooks` в `settings.json` НЕ влили → рантайм стартовал
 > с `[HOOK_REGISTRY] 0 hook entries`, весь control-plane молчал. `deploy.sh` исключает этот класс ошибок.
 
+## ⚠️ ЗАПУСК: хуки за флагом `--experimental-hooks` (форк GigaCode)
+
+В форке GigaCode хуки — **экспериментальная опция**, гейтятся CLI-флагом. Без него рантайм стартует с
+`[HOOK_REGISTRY] 0 hook entries` — весь control-plane молчит (это и был провал pprb-kid). **Запускай ВСЕГДА с флагом:**
+```bash
+gigacode --experimental-hooks -p "<задача>"
+# или интерактивно:
+gigacode --experimental-hooks
+```
+Флаг — это флаг **запуска бинаря**, его нельзя прописать в settings.json. `deploy.sh`/`doctor.py` его не
+ставят (не могут — это аргумент процесса); `preflight.py` ловит отсутствие по firing-evidence.
+(В апстриме Qwen флага нет — хуки on по умолчанию; это особенность форка.)
+
 ## Диагностика ПЕРЕД прогоном (обязательно)
 
 ```bash
@@ -63,7 +78,7 @@ python3 ~/.gigacode/hooks/doctor.py --home ~/.gigacode
 Проверяет: блок `hooks` непустой, `disableAllHooks` снят, все хук-скрипты на месте, пути в settings
 валидны, **skills co-located** рядом с hooks, gate-скрипты достижимы, **все скиллы валидны**
 (frontmatter name/description — иначе рантайм молча скипнет), evals зелёные. Ловит «0 hook entries»,
-«skills не рядом» и «мёртвые скиллы» ДО запуска. exit≠0 → harness не готов, гони `deploy.sh`.
+«skills не рядом» и «мёртвые скиллы» ДО запуска. exit≠0 → Forge не готов, гони `deploy.sh`.
 
 Отдельно валидатор скиллов:
 ```bash
@@ -73,7 +88,7 @@ python3 ~/.gigacode/hooks/validate_skills.py --skills ~/.gigacode/skills   # + -
 Дополнительно:
 ```bash
 python3 ~/.gigacode/hooks/agentops.py --root <project>   # Trust-метрики из аудита
-bash ~/.gigacode/hooks/watch-agents.sh "$(pwd)"          # живой просмотр (отдельный терминал)
+bash ~/.gigacode/hooks/watch-agents.sh          # живой просмотр (отдельный терминал)
 ```
 
 ## Конфиг проекта (`ground/pipeline.json`)

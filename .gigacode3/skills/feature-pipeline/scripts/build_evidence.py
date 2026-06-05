@@ -28,8 +28,8 @@ def _load(p: Path):
         return None
 
 
-def _step_dir(root: Path) -> Path:
-    return root / "ground" / "statements" / "feature-pipeline" / "pipeline"
+def _step_dir(root: Path, feature: str = "pipeline") -> Path:
+    return root / "ground" / "statements" / "feature-pipeline" / feature
 
 
 def _completeness(bundle: dict) -> float:
@@ -46,6 +46,7 @@ def main() -> int:
     ap.add_argument("plan")
     ap.add_argument("--task", required=True)
     ap.add_argument("--root", default=".")
+    ap.add_argument("--feature", default="pipeline", help="Namespace стейта на фичу (как в pipeline-state)")
     ap.add_argument("--rationale", default="")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
@@ -53,7 +54,7 @@ def main() -> int:
     root = Path(args.root).resolve()
     plan = _load(Path(args.plan)) or {}
     task = next((t for t in plan.get("tasks", []) if t.get("id") == args.task), {})
-    sd = _step_dir(root)
+    sd = _step_dir(root, args.feature)
 
     build_out = _load(sd / f"04-build-{args.task}.json") or {}
     tests_out = _load(sd / "05-tests.json") or {}

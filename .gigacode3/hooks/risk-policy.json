@@ -69,7 +69,7 @@
   },
 
   "agent_caps": {
-    "_comment": "Separation of duties: какой максимальный риск разрешён роли (agent_type, regex). Если действие выше cap роли — deny.",
+    "_comment": "Separation of duties по agent_type (regex)→max-risk. ВНИМАНИЕ: сейчас НЕАКТИВНО — все субагенты пайплайна дёргаются как subagent_type=general-purpose, поэтому agent_type всегда 'general-purpose' и эти правила не матчат. Заработает, только если ввести кастомные subagent_type (зарегистрированные агенты). Оставлено как future-proof.",
     "(?i)test|coverage|verify": "R1",
     "(?i)spec|uml|document": "R1",
     "(?i)explore|grounder|analyst": "R1",

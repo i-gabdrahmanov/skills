@@ -15,26 +15,9 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
-from pathlib import Path
 
-SKILL = "feature-pipeline"
-
-
-def _project_root(cwd: str) -> Path:
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=cwd or None, capture_output=True, text=True, timeout=3,
-        )
-        top = out.stdout.strip()
-        if out.returncode == 0 and top:
-            return Path(top)
-    except Exception:
-        pass
-    return Path(cwd or os.getcwd())
+import risk_ladder as R
 
 
 def main() -> int:
@@ -47,9 +30,9 @@ def main() -> int:
         if data.get("stop_hook_active"):
             return 0
 
-        root = _project_root(data.get("cwd", ""))
-        mp = root / "ground" / "statements" / SKILL / "pipeline" / "manifest.json"
-        if not mp.exists():
+        root = R.project_root(data.get("cwd", ""))
+        mp = R.active_manifest(root)  # активная фича (newest манифест, кроме archived)
+        if not mp or not mp.exists():
             return 0
         manifest = json.loads(mp.read_text(encoding="utf-8"))
 

@@ -1,37 +1,33 @@
 #!/usr/bin/env python3
 """context-injector.py — SubagentStart-хук: авто-инъекция контекста субагенту.
 
-Вместо ручной передачи контекста из промпта оркестратора — рантайм сам подкладывает
-нужные артефакты субагенту по его типу через additionalContext.
+Рантайм подкладывает субагенту grounding-выжимку и конвенции, чтобы он проектировал/кодил по
+актуальному срезу системы, не перечитывая код.
 
-Таблица INJECT: agent_type-regex → список project-relative файлов. Инъектим только те,
-что РЕАЛЬНО существуют в проекте (иначе ничего — не шумим). Контент усекаем, чтобы не
-раздувать контекст субагента.
+ВАЖНО (по исходникам Qwen): рантайм читает контекст ТОЛЬКО из `hookSpecificOutput.additionalContext`
+(`getAdditionalContext()` в core/hooks/types.ts), а на SubagentStart кладёт его в контекст субагента
+(`agent.ts`: contextState 'hook_context'). Поэтому печатаем именно `hookSpecificOutput.additionalContext`.
 
-Вывод: JSON в stdout `{"additionalContext": "<текст>"}` (пусто/нет вывода → нет инъекции).
-Всегда exit 0.
+НЕ зависим от `agent_type`: в пайплайне все субагенты дёргаются как `subagent_type=general-purpose`,
+поэтому матчинг по типу не работал бы. Инъектим то, что есть в проекте, всем субагентам (выжимка дёшева;
+роль субагента и так задаётся его промптом от оркестратора).
+
+Вывод: `{"hookSpecificOutput": {"additionalContext": "<текст>"}}` (пусто → нет вывода). Всегда exit 0.
 """
 from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
 
 PER_FILE_LIMIT = 6000  # символов на файл
 
-# agent_type (regex, case-insensitive) → файлы для инъекции (project-relative).
-INJECT: list[tuple[str, list[str]]] = [
-    # тех-дизайн и разработка опираются на компактную выжимку системы
-    (r"tech.?design|design", ["docs/system-analysis/grounding-excerpt.json"]),
-    (r"java.?spring|build|dev|developer", [
-        "docs/system-analysis/grounding-excerpt.json",
-        "ground/conventions.md",
-    ]),
-    (r"jira", ["ground/pipeline.json"]),
-    (r"spec|uml|document", ["docs/system-analysis/grounding-excerpt.json"]),
+# Файлы для инъекции (project-relative), в порядке важности. Берём те, что реально есть.
+INJECT_FILES = [
+    "docs/system-analysis/grounding-excerpt.json",  # компактный срез системы (главное для дизайна/кода)
+    "ground/conventions.md",                         # раскладка слоёв проекта (приоритет над generic)
 ]
 
 
@@ -49,33 +45,16 @@ def _project_root(cwd: str) -> Path:
     return Path(cwd or os.getcwd())
 
 
-def _files_for(agent_type: str) -> list[str]:
-    files: list[str] = []
-    for pattern, paths in INJECT:
-        if re.search(pattern, agent_type, re.I):
-            files += paths
-    # уникализируем, сохраняя порядок
-    seen, out = set(), []
-    for f in files:
-        if f not in seen:
-            seen.add(f)
-            out.append(f)
-    return out
-
-
 def main() -> int:
     try:
         raw = sys.stdin.read()
         data = json.loads(raw) if raw.strip() else {}
         if not isinstance(data, dict):
             return 0
-        agent_type = str(data.get("agent_type") or "")
-        if not agent_type:
-            return 0
         root = _project_root(data.get("cwd", ""))
 
         chunks: list[str] = []
-        for rel in _files_for(agent_type):
+        for rel in INJECT_FILES:
             p = root / rel
             if not p.exists():
                 continue
@@ -89,7 +68,8 @@ def main() -> int:
 
         if not chunks:
             return 0
-        print(json.dumps({"additionalContext": "\n\n".join(chunks)}, ensure_ascii=False))
+        print(json.dumps({"hookSpecificOutput": {"additionalContext": "\n\n".join(chunks)}},
+                         ensure_ascii=False))
     except Exception:
         return 0
     return 0

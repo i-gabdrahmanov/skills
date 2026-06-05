@@ -71,7 +71,8 @@ def _project_root(cwd: str) -> str:
 def _run_dir(root: str, data: dict) -> str:
     base = os.path.join(root, "ground", "ai-logs")
     # активный пайплайн = самый свежий манифест pipeline-state
-    manifests = glob.glob(os.path.join(root, "ground", "statements", "*", "pipeline", "manifest.json"))
+    manifests = [m for m in glob.glob(os.path.join(root, "ground", "statements", "*", "*", "manifest.json"))
+                 if os.sep + "archived" + os.sep not in m]
     newest, newest_mtime = None, -1.0
     for m in manifests:
         try:

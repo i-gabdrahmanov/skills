@@ -22,8 +22,30 @@ from _util import repo_root
 DATA_DIR = "ground"
 
 
-def pipeline_dir(project: Path, skill: str) -> Path:
-    return project / DATA_DIR / "statements" / skill / "pipeline"
+def pipeline_dir(project: Path, skill: str, feature: str = "pipeline") -> Path:
+    return project / DATA_DIR / "statements" / skill / feature
+
+
+def list_features(project: Path, skill: str) -> dict:
+    """Без --feature: перечислить все фичи скилла (кроме archived) с их статусами — для резюма."""
+    base = project / DATA_DIR / "statements" / skill
+    feats = []
+    if base.is_dir():
+        for d in sorted(base.iterdir()):
+            if not d.is_dir() or d.name == "archived":
+                continue
+            mp = d / "manifest.json"
+            if not mp.exists():
+                continue
+            try:
+                man = json.load(open(mp, encoding="utf-8"))
+            except Exception:
+                continue
+            s = summarize(man)
+            feats.append({"feature": d.name, "status": s["status"], "counts": s.get("counts")})
+    overall = "no_state" if not feats else (
+        "in_flight" if any(f["status"] == "in_flight" for f in feats) else "completed")
+    return {"status": overall, "skill": skill, "features": feats}
 
 
 def summarize(manifest: dict) -> dict:
@@ -96,6 +118,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--project", default=None, help="Project root (default: git toplevel или cwd)")
     p.add_argument("--skill", required=True)
+    p.add_argument("--feature", default="pipeline", help="Фича (slug/Jira-key). По умолчанию 'pipeline' (совместимость).")
+    p.add_argument("--list", action="store_true", help="Перечислить ВСЕ фичи скилла с их статусами (для резюма §0.5)")
     g = p.add_mutually_exclusive_group()
     g.add_argument("--full", action="store_true", help="Return full manifest")
     g.add_argument("--excerpt-of", help="Return compact excerpt of given step's output")
@@ -103,11 +127,17 @@ def main():
     args = p.parse_args()
 
     project = Path(args.project or repo_root()).resolve()
-    pdir = pipeline_dir(project, args.skill)
+
+    # --list → какие фичи в работе/завершены (резюм §0.5), независимо от конкретной фичи.
+    if args.list:
+        print(json.dumps(list_features(project, args.skill), ensure_ascii=False, indent=2))
+        sys.exit(0)
+
+    pdir = pipeline_dir(project, args.skill, args.feature)
     manifest_path = pdir / "manifest.json"
 
     if not manifest_path.exists():
-        print(json.dumps({"status": "no_state", "expected_at": str(manifest_path)}, ensure_ascii=False))
+        print(json.dumps({"status": "no_state", "feature": args.feature, "expected_at": str(manifest_path)}, ensure_ascii=False))
         sys.exit(0)
 
     with open(manifest_path) as f:

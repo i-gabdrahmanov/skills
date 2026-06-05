@@ -42,6 +42,28 @@ def load_policy() -> dict:
         return {}
 
 
+def pipeline_cfg(root: Path) -> dict:
+    try:
+        return json.loads((root / "ground" / "pipeline.json").read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def auto_max_risk(root: Path) -> str:
+    """Порог авто-прохода: из pipeline.json autonomy.auto_max_risk (выбор критичности фичи),
+    иначе из risk-policy.json autonomy_auto_max, иначе R1."""
+    cfg = (pipeline_cfg(root).get("autonomy") or {})
+    lvl = cfg.get("auto_max_risk")
+    if isinstance(lvl, str) and lvl in _LEVELS:
+        return lvl
+    return load_policy().get("autonomy_auto_max", "R1")
+
+
+def criticality_set(root: Path) -> bool:
+    """Выбрана ли критичность фичи (autonomy.criticality в pipeline.json)."""
+    return bool((pipeline_cfg(root).get("autonomy") or {}).get("criticality"))
+
+
 def project_root(cwd: str) -> Path:
     try:
         out = subprocess.run(
@@ -122,8 +144,33 @@ def agent_cap(agent_type: str | None) -> str | None:
 
 
 # ── проверки выполнения требований уровня ─────────────────────────────────────────────
+def active_manifest(root: Path) -> Path | None:
+    """Активная фича = самый свежий manifest под statements/<SKILL>/*/ (кроме archived).
+    Совместимо со старым layout (.../pipeline/manifest.json) и новым (.../<feature>/manifest.json)."""
+    base = root / "ground" / "statements" / SKILL
+    newest, mt = None, -1.0
+    try:
+        for d in base.iterdir():
+            if not d.is_dir() or d.name == "archived":
+                continue
+            mp = d / "manifest.json"
+            if not mp.exists():
+                continue
+            try:
+                m = mp.stat().st_mtime
+            except OSError:
+                continue
+            if m > mt:
+                newest, mt = mp, m
+    except Exception:
+        return None
+    return newest
+
+
 def manifest_status(root: Path) -> dict:
-    p = root / "ground" / "statements" / SKILL / "pipeline" / "manifest.json"
+    p = active_manifest(root)
+    if not p:
+        return {}
     try:
         man = json.loads(p.read_text(encoding="utf-8"))
         return {s.get("id"): s.get("status") for s in man.get("steps", [])}
@@ -132,7 +179,7 @@ def manifest_status(root: Path) -> dict:
 
 
 def manifest_exists(root: Path) -> bool:
-    return (root / "ground" / "statements" / SKILL / "pipeline" / "manifest.json").exists()
+    return active_manifest(root) is not None
 
 
 def approval_exists(root: Path, key: str) -> bool:

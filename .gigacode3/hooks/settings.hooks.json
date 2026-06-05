@@ -11,6 +11,7 @@
       ]},
       {"matcher": "(Write|Edit|WriteFile|NotebookEdit)", "sequential": true, "hooks": [
         {"type": "command", "command": "python3 $HOME/.gigacode/hooks/pii-boundary.py", "name": "pii-boundary"},
+        {"type": "command", "command": "python3 $HOME/.gigacode/hooks/tdd-guard.py", "name": "tdd-guard"},
         {"type": "command", "command": "python3 $HOME/.gigacode/hooks/gate-guard.py", "name": "gate-guard"},
         {"type": "command", "command": "python3 $HOME/.gigacode/hooks/log-agent.py", "name": "agent-logger"}
       ]},

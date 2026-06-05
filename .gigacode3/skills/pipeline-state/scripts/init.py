@@ -46,8 +46,10 @@ def iso_now() -> str:
 DATA_DIR = "ground"
 
 
-def pipeline_dir(project: Path, skill: str) -> Path:
-    return project / DATA_DIR / "statements" / skill / "pipeline"
+def pipeline_dir(project: Path, skill: str, feature: str = "pipeline") -> Path:
+    # feature намеспейсит стейт на фичу: statements/<skill>/<feature>/.
+    # Дефолт "pipeline" сохраняет прежнее поведение (system-analyst/minor-defect-fix).
+    return project / DATA_DIR / "statements" / skill / feature
 
 
 def main():
@@ -57,6 +59,7 @@ def main():
     p.add_argument("--steps", required=True, help="Steps JSON array or @file")
     p.add_argument("--context", default="{}", help="Context JSON object or @file (optional)")
     p.add_argument("--force", action="store_true", help="Archive existing manifest and create fresh")
+    p.add_argument("--feature", default="pipeline", help="Namespace стейта на фичу (slug/Jira-key). По умолчанию 'pipeline'.")
     args = p.parse_args()
 
     project = Path(args.project or repo_root()).resolve()
@@ -71,7 +74,7 @@ def main():
         print("ERROR: --steps must be a non-empty JSON array", file=sys.stderr)
         sys.exit(2)
 
-    pdir = pipeline_dir(project, args.skill)
+    pdir = pipeline_dir(project, args.skill, args.feature)
     manifest_path = pdir / "manifest.json"
 
     if manifest_path.exists():
@@ -79,11 +82,11 @@ def main():
             print(f"ERROR: manifest already exists at {manifest_path}", file=sys.stderr)
             print("Use read.py to inspect, or --force to archive and recreate", file=sys.stderr)
             sys.exit(3)
-        # Archive existing
+        # Archive existing (per-feature)
         archive_dir = project / DATA_DIR / "statements" / args.skill / "archived"
         archive_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        archive_target = archive_dir / f"pipeline-{ts}"
+        archive_target = archive_dir / f"{args.feature}-{ts}"
         pdir.rename(archive_target)
         print(f"Archived previous state to {archive_target}", file=sys.stderr)
 
@@ -108,6 +111,7 @@ def main():
     manifest = {
         "version": 1,
         "skill": args.skill,
+        "feature": args.feature,
         "pipeline_id": pipeline_id,
         "started_at": now,
         "last_update": now,

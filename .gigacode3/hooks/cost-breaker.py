@@ -43,7 +43,8 @@ def _project_root(cwd: str):
 def _run_dir(root: str, data: dict) -> str:
     """Та же логика группировки, что в log-agent (свежий manifest → feature/iter, иначе _adhoc)."""
     base = os.path.join(root, "ground", "ai-logs")
-    manifests = glob.glob(os.path.join(root, "ground", "statements", "*", "pipeline", "manifest.json"))
+    manifests = [m for m in glob.glob(os.path.join(root, "ground", "statements", "*", "*", "manifest.json"))
+                 if os.sep + "archived" + os.sep not in m]
     newest, mt = None, -1.0
     for m in manifests:
         try:
@@ -162,9 +163,9 @@ def main() -> int:
                       file=sys.stderr)
                 return 2
             if ratio >= WARN_RATIO:
-                print(json.dumps({"additionalContext":
+                print(json.dumps({"hookSpecificOutput": {"additionalContext":
                     f"⚠️ cost-breaker: израсходовано {ratio:.0%} токен-бюджета "
-                    f"({spent}/{budget}). Будь экономнее, избегай лишних шагов."},
+                    f"({spent}/{budget}). Будь экономнее, избегай лишних шагов."}},
                     ensure_ascii=False))
             return 0
         return 0

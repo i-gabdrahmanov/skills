@@ -34,8 +34,8 @@
 
 ## Как собирается и проверяется
 
-- Сборка: `feature-pipeline/scripts/build_evidence.py <task-plan> --task <id> --root .`
-  — тянет данные из `ground/statements/feature-pipeline/pipeline/{04-build-<id>,05-tests,07-deliver-<id>}.json`
+- Сборка: `feature-pipeline/scripts/build_evidence.py <task-plan> --task <id> --feature <slug> --root .`
+  — тянет данные из `ground/statements/feature-pipeline/<slug>/{04-build-<id>,05-tests,07-deliver-<id>}.json`
   и из task-plan; пишет пакет, считает completeness.
 - Гейт: `check_evidence.py <task-plan> --root . --pipeline-config ground/pipeline.json` → exit 2 если
   на любую задачу пакета нет или completeness ниже порога.

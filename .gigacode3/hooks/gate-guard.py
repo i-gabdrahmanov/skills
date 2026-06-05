@@ -52,14 +52,25 @@ def main() -> int:
         command = info["command"]
         kind = _kind(tool_name, command)
 
-        # R0/R1 — авто (читающие команды, docs, тесты). Не вмешиваемся.
-        if R.level_order(level) <= R.level_order(R.load_policy().get("autonomy_auto_max", "R1")):
+        # R0/R1 (или ниже порога критичности фичи) — авто. Не вмешиваемся.
+        if R.level_order(level) <= R.level_order(R.auto_max_risk(root)):
             return 0
+
+        in_pipeline = R.manifest_exists(root)
 
         # вне пайплайна (нет manifest) — gateway не форсит пайплайн-требования, но
         # deny-first для R4+ всё равно держим (необратимое без контекста — опасно).
-        if not R.manifest_exists(root) and R.level_order(level) < R.level_order("R4"):
+        if not in_pipeline and R.level_order(level) < R.level_order("R4"):
             return 0
+
+        # В пайплайне рисковое действие (R2+) нельзя делать, пока НЕ выбрана критичность фичи.
+        # Это форсит шаг «выбор критичности» — он не выполнялся на прогонах.
+        if in_pipeline and not R.criticality_set(root):
+            return _block(
+                "не выбрана критичность фичи. Задай autonomy.criticality + autonomy.auto_max_risk "
+                "в ground/pipeline.json (Гейт критичности после BRD), затем продолжай. "
+                f"Действие risk={level} ({info['reason']})."
+            )
 
         # separation of duties: действие выше cap роли субагента → deny
         cap = R.agent_cap(agent_type)

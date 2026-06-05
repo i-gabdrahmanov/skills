@@ -205,7 +205,8 @@ def build_config(root):
             "mode": "gated",                  # gated | autopilot-to-pr | until-commit
             "gates": ["brd", "design", "jira", "commit", "pr", "report"],
             "level": "L2",                    # PDLC v3.5 L0–L5 (лестница автономии)
-            "auto_max_risk": "R1",            # действия <= этого риска проходят авто (см. risk-policy)
+            "criticality": None,              # low|medium|high — ВЫБРАТЬ на «Гейте критичности» после BRD
+            "auto_max_risk": "R1",            # порог авто-прохода; задаётся выбором критичности (low→R2, med→R1, high→R0)
         },
     }
     # список незаполненного, по которому оркестратор спросит пользователя

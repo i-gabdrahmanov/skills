@@ -44,19 +44,20 @@ def iso_now() -> str:
 DATA_DIR = "ground"
 
 
-def pipeline_dir(project: Path, skill: str) -> Path:
-    return project / DATA_DIR / "statements" / skill / "pipeline"
+def pipeline_dir(project: Path, skill: str, feature: str = "pipeline") -> Path:
+    return project / DATA_DIR / "statements" / skill / feature
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--project", default=None, help="Project root (default: git toplevel или cwd)")
     p.add_argument("--skill", required=True)
+    p.add_argument("--feature", default="pipeline", help="Namespace стейта на фичу (как в init.py)")
     p.add_argument("--steps", required=True, help="Steps JSON array or @file")
     args = p.parse_args()
 
     project = Path(args.project or repo_root()).resolve()
-    pdir = pipeline_dir(project, args.skill)
+    pdir = pipeline_dir(project, args.skill, args.feature)
     manifest_path = pdir / "manifest.json"
 
     if not manifest_path.exists():

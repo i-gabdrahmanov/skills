@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deploy.sh — развернуть harness (hooks + skills, co-located) в дом рантайма и влить блок hooks.
+# deploy.sh — развернуть Forge (hooks + skills, co-located) в дом рантайма и влить блок hooks.
 # Чинит корневые причины провального прогона: хуки не зарегистрированы (0 entries) и skills не рядом.
 #
 # Usage:
@@ -14,13 +14,14 @@ HOME_DIR="${1:-$HOME/.gigacode}"
 HOME_DIR="${HOME_DIR/#\~/$HOME}"
 mkdir -p "$HOME_DIR/hooks" "$HOME_DIR/skills"
 
-echo "== deploy harness → $HOME_DIR =="
+echo "== deploy Forge → $HOME_DIR =="
 
 # 1. co-location: hooks И skills в ОДИН дом (иначе гейты не найдут ../skills)
 cp -a "$SRC/hooks/." "$HOME_DIR/hooks/"
 cp -a "$SRC/skills/." "$HOME_DIR/skills/"
-[ -f "$SRC/HARNESS.md" ] && cp "$SRC/HARNESS.md" "$HOME_DIR/HARNESS.md"  # источник правды рядом
-[ -f "$SRC/smoke-cli.sh" ] && cp "$SRC/smoke-cli.sh" "$HOME_DIR/smoke-cli.sh"  # runtime-смоук рядом
+for d in FORGE.md GUIDE.md AGENT-RUNBOOK.md smoke-cli.sh; do
+  [ -f "$SRC/$d" ] && cp "$SRC/$d" "$HOME_DIR/$d"   # доки и runtime-смоук рядом с обвязкой
+done
 chmod +x "$HOME_DIR/hooks/"*.py "$HOME_DIR/hooks/"*.sh "$HOME_DIR/hooks/evals/"*.py 2>/dev/null || true
 echo "  ✓ скопированы hooks/ и skills/ (co-located)"
 
