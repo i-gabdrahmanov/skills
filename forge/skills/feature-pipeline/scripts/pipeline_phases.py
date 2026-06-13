@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+"""pipeline_phases.py — ЕДИНЫЙ источник истины фазовой машины feature-pipeline.
+
+Здесь и только здесь живут:
+  • PREFIX_PHASE / MAIN_PHASES / REQUIRED_JUDGES_MASK
+  • guess_phase / match_required_judges
+  • метаданные фаз (allowed_skills / blocked_tools / blocked_paths / required_artifacts)
+  • build_gate / build_defs — единственная реализация «manifest/steps → gate.json/phase-defs»
+  • active_feature / gate_dir — резолв per-feature стейта (для namespacing gate)
+
+Все скрипты (add_steps, preflight-validate, phase_sync, init_phase_gate) импортируют отсюда,
+чтобы PREFIX_PHASE/порядок фаз/маска судей не расходились между копиями (раньше так ловили
+06-doc и неканонический порядок фаз). Хуки (другая база деплоя) импортируют best-effort с
+inline-fallback, который пинится тестом test_phase_consistency.py.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Optional
+
+# ── Маппинг префиксов шагов → фазы ────────────────────────────────────
+PREFIX_PHASE = {
+    "00-": "00-brd",
+    "01-": "01-grounding",
+    "02-eval-plan": "02-eval-plan",       # отдельная фаза между design и jira
+    "02-": "02-design",
+    "03-": "03-jira",
+    "04-": "04-tdd",
+    "05-": "05-verify",
+    "06-": "06-document",
+    "07-deliver-": "07-deliver",
+    "07-report": "07-report",
+    "07-": "07-deliver",
+}
+
+# Главные фазы в КАНОНИЧЕСКОМ порядке (по нему сортируется gate, а не по появлению шагов).
+MAIN_PHASES = ["00-brd", "01-grounding", "02-design", "02-eval-plan",
+               "03-jira", "04-tdd", "05-verify", "06-document",
+               "07-deliver", "07-report"]
+
+# Маска судей по id шага. Имена ДОЛЖНЫ совпадать с вердиктами run_judge.py (<phase>-judge.json).
+REQUIRED_JUDGES_MASK = {
+    "02-design":    ["design-judge"],
+    "02-eval-plan": ["eval-judge"],
+    "04-test-*":    ["red-judge"],
+    "04-build-*":   ["build-judge"],
+    "05-tests":     ["coverage-judge"],
+    "06-spec":      ["spec-judge"],
+    "07-deliver-*": ["delivery-judge"],
+}
+
+
+def guess_phase(step_id: str) -> str:
+    """id шага ('04-test-foo') → id фазы ('04-tdd'). Длинный префикс побеждает."""
+    for prefix, phase in sorted(PREFIX_PHASE.items(), key=lambda x: -len(x[0])):
+        if step_id.startswith(prefix):
+            return phase
+    return step_id
+
+
+def match_required_judges(step_id: str) -> list:
+    """required_judges для шага по маске (точное совпадение → wildcard *)."""
+    if step_id in REQUIRED_JUDGES_MASK:
+        return list(REQUIRED_JUDGES_MASK[step_id])
+    for mask, judges in REQUIRED_JUDGES_MASK.items():
+        if mask.endswith("*") and step_id.startswith(mask[:-1]):
+            return list(judges)
+    return []
+
+
+# ── Метаданные фаз (phase-defs) ───────────────────────────────────────
+def blocked_tools(phase_id: str) -> list:
+    return ["Read", "GrepSearch", "Glob", "Grep"] if phase_id == "01-grounding" else []
+
+
+def blocked_paths(phase_id: str) -> list:
+    return ["src/"] if phase_id == "01-grounding" else []
+
+
+def allowed_skills(phase_id: str) -> list:
+    return {
+        "00-brd":       ["brd-grounder", "brd-interview", "business-requirements"],
+        "01-grounding": ["system-analyst", "Explore"],
+        "02-design":    ["tech-design", "java-uml-spec"],
+        "02-eval-plan": ["general-purpose"],
+        "03-jira":      ["jira-task-writer"],
+        "04-tdd":       ["java-spring-dev", "bugfix-developer", "minor-defect-fix", "Explore"],
+        "05-verify":    ["Explore"],
+        "06-document":  ["java-uml-spec", "Explore"],
+        "07-deliver":   ["Explore"],
+        "07-report":    ["Explore"],
+    }.get(phase_id, [])
+
+
+def required_artifacts(phase_id: str) -> list:
+    return {
+        "00-brd":       ["docs/brd.md"],
+        "01-grounding": ["ground/grounding-index.json"],
+        "02-design":    ["docs/task-plan.json", "docs/tech-design.md"],
+        "02-eval-plan": ["docs/eval-plan.json",
+                         "ground/statements/feature-pipeline/**/judges/eval-judge.json"],
+    }.get(phase_id, [])
+
+
+def _ordered_unique_phases(steps: list) -> list:
+    """Уникальные фазы по шагам, отсортированные по каноническому MAIN_PHASES."""
+    seen = []
+    for step in steps:
+        pid = guess_phase(step.get("id", ""))
+        if pid not in seen:
+            seen.append(pid)
+    seen.sort(key=lambda p: MAIN_PHASES.index(p) if p in MAIN_PHASES else 999)
+    return seen
+
+
+def build_gate(steps: list, manifest: Optional[dict] = None,
+               existing_meta: Optional[dict] = None,
+               defs_meta: Optional[dict] = None) -> dict:
+    """Единственная реализация «steps/manifest → gate.json».
+
+    existing_meta: {phase_id: {"skip_allowed": bool}} — сохранить ранее заданные значения.
+    defs_meta:     {phase_id: {"required_artifacts": [...]}} — из phase-defs (иначе дефолт).
+    Порядок фаз — КАНОНИЧЕСКИЙ (MAIN_PHASES), статусы восстанавливаются из манифеста.
+    """
+    existing_meta = existing_meta or {}
+    defs_meta = defs_meta or {}
+    step_status = {}
+    if manifest:
+        step_status = {s["id"]: s["status"] for s in manifest.get("steps", [])}
+
+    phases = []
+    for pid in _ordered_unique_phases(steps):
+        em = existing_meta.get(pid, {})
+        dm = defs_meta.get(pid, {})
+        phases.append({
+            "id": pid,
+            "label": next((s.get("title", pid) for s in steps if guess_phase(s.get("id", "")) == pid), pid),
+            "skip_allowed": em.get("skip_allowed", pid != "01-grounding"),
+            "status": "pending",
+            "depends_on": [],
+            "artifacts": dm.get("required_artifacts", required_artifacts(pid)),
+        })
+
+    # depends_on — каждая главная фаза зависит от предыдущей главной
+    present = [p["id"] for p in phases]
+    main_order = [m for m in MAIN_PHASES if m in present]
+    for i, pid in enumerate(main_order):
+        if i == 0:
+            continue
+        for p in phases:
+            if p["id"] == pid:
+                p["depends_on"].append(main_order[i - 1])
+                break
+
+    # Статусы из манифеста: фаза completed/skipped, если ВСЕ её шаги такие.
+    if step_status:
+        for phase in phases:
+            phase_steps = [s["id"] for s in steps if guess_phase(s.get("id", "")) == phase["id"]]
+            if not phase_steps:
+                continue
+            if all(step_status.get(sid) in ("completed", "skipped") for sid in phase_steps):
+                phase["status"] = "completed"
+
+    # current_phase — первая не-completed (по каноническому порядку)
+    current_phase = ""
+    for phase in phases:
+        if phase["status"] != "completed":
+            current_phase = phase["id"]
+            phase["status"] = "in_progress"
+            break
+
+    return {
+        "pipeline_id": (manifest or {}).get("pipeline_id", ""),
+        "feature": (manifest or {}).get("feature",
+                    ((manifest or {}).get("context") or {}).get("feature", "")),
+        "schema": "phase-gate@1",
+        "current_phase": current_phase,
+        "phases": phases,
+    }
+
+
+def build_defs(steps: list) -> dict:
+    """Единственная реализация «steps → phase-defs.json»."""
+    defs = []
+    for pid in _ordered_unique_phases(steps):
+        defs.append({
+            "id": pid,
+            "allowed_skills": allowed_skills(pid),
+            "blocked_tools_until_complete": blocked_tools(pid),
+            "blocked_paths": blocked_paths(pid),
+            "required_artifacts": required_artifacts(pid),
+        })
+    return {"schema": "phase-defs@1", "phases": defs}
+
+
+# ── Per-feature резолв стейта (C1: gate под фичу) ─────────────────────
+def active_feature(root: Path, skill: str = "feature-pipeline") -> str:
+    """Активная фича = самый свежий manifest.json в ground/statements/<skill>/<feature>/.
+    'pipeline' (back-compat) если ни одного манифеста нет."""
+    base = Path(root) / "ground" / "statements" / skill
+    if not base.is_dir():
+        return "pipeline"
+    best, best_mtime = None, -1.0
+    for d in base.iterdir():
+        if not d.is_dir() or d.name == "archived":
+            continue
+        mp = d / "manifest.json"
+        if not mp.exists():
+            continue
+        try:
+            mtime = mp.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > best_mtime:
+            best, best_mtime = d.name, mtime
+    return best or "pipeline"
+
+
+def gate_dir(root: Path, feature: str) -> Path:
+    """Каталог фазовой машины фичи: ground/phases/<feature>/."""
+    return Path(root) / "ground" / "phases" / feature
+
+
+def gate_path(root: Path, feature: str) -> Path:
+    """Путь к gate.json фичи; при отсутствии — legacy ground/phases/gate.json (back-compat)."""
+    per_feature = gate_dir(root, feature) / "gate.json"
+    if per_feature.exists():
+        return per_feature
+    legacy = Path(root) / "ground" / "phases" / "gate.json"
+    if legacy.exists():
+        return legacy
+    return per_feature  # для записи нового
+
+
+def defs_path(root: Path, feature: str) -> Path:
+    per_feature = gate_dir(root, feature) / "phase-defs.json"
+    if per_feature.exists():
+        return per_feature
+    legacy = Path(root) / "ground" / "phases" / "phase-defs.json"
+    if legacy.exists():
+        return legacy
+    return per_feature

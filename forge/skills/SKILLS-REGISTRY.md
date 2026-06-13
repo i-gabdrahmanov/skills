@@ -1,0 +1,50 @@
+# Skills Registry — Context Supply Chain (PDLC v3.5)
+
+Концепция (стр. 180, 294): AGENTS.md / skills / evals — это **supply chain**. У каждого артефакта
+должен быть **owner**, **validity** (срок переоценки), **scope** (где применим) и **eval coverage**.
+Иначе они тихо устаревают и начинают вредить. Этот реестр — лёгкая реализация: один источник правды
+по жизненному циклу скиллов gigacode3 (без правки 22 frontmatter).
+
+- **Owner**: `@team` — заменить на реального владельца на целевой машине.
+- **Validity**: дата следующей ревизии (пересмотреть актуальность к этой дате).
+- **Scope**: к каким проектам/контексту применим.
+- **Evals**: чем покрыт (есть ли детерминированная проверка/гейт/eval).
+
+| Skill | Owner | Validity | Scope | Evals |
+|---|---|---|---|---|
+| feature-pipeline | @team | 2026-12 | Java/Spring фичи end-to-end | gate-скрипты + hooks/evals |
+| pipeline-state | @team | 2026-12 | оркестраторы >3 субагентов | косвенно через evals |
+| project-grounder | @team | 2026-12 | фаза grounding | verify_coverage.py |
+| system-analyst | @team | 2026-12 | скан Java/Spring сервиса | verify_coverage.py |
+| tech-design | @team | 2026-12 | BRD → план + SDD | check_taskplan.py, check_sdd.py |
+| java-spring-dev | @team | 2026-12 | генерация Java-кода | check_build.py |
+| jira-task-writer | @team | 2026-12 | создание задач Jira | check_jira.py |
+| minor-defect-fix | @team | 2026-12 | минорный дефект из Jira | check_coverage.py |
+| defect-analyzer | @team | 2026-12 | анализ дефекта | — |
+| bugfix-developer | @team | 2026-12 | минимальный фикс | — |
+| brd-interview | @team | 2026-12 | сбор требований интервью | — |
+| brd-grounder | @team | 2026-12 | grounding для BRD | — |
+| business-requirements | @team | 2026-12 | BRD из идеи | — |
+| java-uml-spec | @team | 2026-12 | MD-спека + UML | — |
+| project-packer | @team | 2026-12 | упаковка исходников | — |
+| project-assembler | @team | 2026-12 | сборка проекта из склейки | — |
+| project-grounder | @team | 2026-12 | см. выше | — |
+| gigacode-migrator | @team | 2026-12 | миграция скиллов Claude→GigaCode | dry-run |
+| skill-creator | @team | 2026-12 | создание/правка скиллов | — |
+| plantuml-to-png | @team | 2026-12 | PlantUML→PNG | — |
+| pdf / pptx | @team | 2026-12 | работа с PDF/PPTX | — |
+
+## Control-plane хуки (тоже часть supply chain)
+
+| Hook | Owner | Validity | Назначение | Evals |
+|---|---|---|---|---|
+| gate-guard + risk_ladder + risk-policy.json | @team | 2026-12 | risk ladder R0–R5, deny-first | hooks/evals/run-evals.py |
+| destructive-blocker | @team | 2026-12 | блок деструктивных команд | run-evals.py |
+| pii-boundary | @team | 2026-12 | граница PII при записи | run-evals.py |
+| prompt-guard | @team | 2026-12 | детект prompt-injection | run-evals.py |
+| cost-breaker | @team | 2026-12 | token budget circuit breaker | run-evals.py |
+| evidence-enforcer | @team | 2026-12 | полнота evidence перед доставкой | косвенно |
+| state-recorder / context-injector / phase-gate / log-agent | @team | 2026-12 | state/context/stop/audit | run-evals.py |
+
+> При изменении любого скилла/хука — обнови строку (validity, evals). Реестр ревьюится на каждой
+> validity-дате; протухшие артефакты деактивируются, а не оставляются «как есть».

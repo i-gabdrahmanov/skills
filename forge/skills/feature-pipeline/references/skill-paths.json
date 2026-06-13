@@ -1,0 +1,138 @@
+{
+  "_comment": "Единый конфиг путей для всех скиллов пайплайна. Все пути относительные от корня проекта. Резолвятся через os.path.join(project_root, path).",
+
+  "hooks": {
+    "preflight": ".gigacode/hooks/preflight.py",
+    "deploy_md": ".gigacode/hooks/DEPLOY.md",
+    "dir": ".gigacode/hooks"
+  },
+
+  "skills": {
+    "feature-pipeline": {
+      "dir": ".gigacode/skills/feature-pipeline",
+      "skill_md": ".gigacode/skills/feature-pipeline/SKILL.md",
+      "references": {
+        "config_md": ".gigacode/skills/feature-pipeline/references/config.md",
+        "contracts_md": ".gigacode/skills/feature-pipeline/references/contracts.md",
+        "subagent_prompts_md": ".gigacode/skills/feature-pipeline/references/subagent-prompts.md"
+      },
+      "scripts": {
+        "init_pipeline_config": ".gigacode/skills/feature-pipeline/scripts/init_pipeline_config.py",
+        "build_evals_from_design": ".gigacode/skills/feature-pipeline/scripts/build_evals_from_design.py",
+        "run_judge": ".gigacode/skills/feature-pipeline/scripts/run_judge.py",
+        "add_steps": ".gigacode/skills/feature-pipeline/scripts/add_steps.py",
+        "preflight_validate": ".gigacode/skills/feature-pipeline/scripts/preflight-validate.py",
+        "check_paths": ".gigacode/skills/feature-pipeline/scripts/check_paths.py",
+        "pipeline_phases": ".gigacode/skills/feature-pipeline/scripts/pipeline_phases.py",
+        "skill_paths": ".gigacode/skills/feature-pipeline/scripts/skill_paths.py",
+        "doctor": ".gigacode/skills/feature-pipeline/scripts/doctor.py"
+      }
+    },
+
+    "system-analyst": {
+      "dir": ".gigacode/skills/system-analyst",
+      "skill_md": ".gigacode/skills/system-analyst/SKILL.md",
+      "references": {
+        "subagents_md": ".gigacode/skills/system-analyst/references/subagents.md",
+        "output_templates_md": ".gigacode/skills/system-analyst/references/output-templates.md"
+      },
+      "scripts": {
+        "scan_all": ".gigacode/skills/system-analyst/scripts/scan_all.py",
+        "check_grounding": ".gigacode/skills/system-analyst/scripts/check_grounding.py",
+        "verify_coverage": ".gigacode/skills/system-analyst/scripts/verify_coverage.py"
+      }
+    },
+
+    "tech-design": {
+      "dir": ".gigacode/skills/tech-design",
+      "skill_md": ".gigacode/skills/tech-design/SKILL.md",
+      "references": {
+        "design_template_md": ".gigacode/skills/tech-design/references/design-template.md",
+        "task_plan_schema_md": ".gigacode/skills/tech-design/references/task-plan-schema.md",
+        "sdd_template_md": ".gigacode/skills/tech-design/references/sdd-template.md"
+      },
+      "scripts": {
+        "check_taskplan": ".gigacode/skills/tech-design/scripts/check_taskplan.py",
+        "check_sdd": ".gigacode/skills/tech-design/scripts/check_sdd.py"
+      }
+    },
+
+    "pipeline-state": {
+      "dir": ".gigacode/skills/pipeline-state",
+      "skill_md": ".gigacode/skills/pipeline-state/SKILL.md",
+      "scripts": {
+        "init": ".gigacode/skills/pipeline-state/scripts/init.py",
+        "read": ".gigacode/skills/pipeline-state/scripts/read.py",
+        "update": ".gigacode/skills/pipeline-state/scripts/update.py",
+        "add_steps": ".gigacode/skills/pipeline-state/scripts/add_steps.py"
+      }
+    },
+
+    "minor-defect-fix": {
+      "dir": ".gigacode/skills/minor-defect-fix",
+      "skill_md": ".gigacode/skills/minor-defect-fix/SKILL.md",
+      "config_json": ".gigacode/skills/minor-defect-fix/config.json",
+      "references": {
+        "jira_workflow_md": ".gigacode/skills/minor-defect-fix/references/jira-workflow.md",
+        "bitbucket_workflow_md": ".gigacode/skills/minor-defect-fix/references/bitbucket-workflow.md",
+        "coverage_md": ".gigacode/skills/minor-defect-fix/references/coverage.md"
+      },
+      "scripts": {
+        "check_coverage": ".gigacode/skills/minor-defect-fix/scripts/check_coverage.py"
+      }
+    },
+
+    "jira-task-writer": {
+      "dir": ".gigacode/skills/jira-task-writer",
+      "skill_md": ".gigacode/skills/jira-task-writer/SKILL.md",
+      "references": {
+        "jira_create_workflow_md": ".gigacode/skills/jira-task-writer/references/jira-create-workflow.md",
+        "jira_config_schema_md": ".gigacode/skills/jira-task-writer/references/jira-config-schema.md"
+      },
+      "scripts": {
+        "check_jira": ".gigacode/skills/jira-task-writer/scripts/check_jira.py",
+        "jira_discover": ".gigacode/skills/jira-task-writer/scripts/jira_discover.py"
+      }
+    },
+
+    "java-spring-dev": {
+      "dir": ".gigacode/skills/java-spring-dev",
+      "skill_md": ".gigacode/skills/java-spring-dev/SKILL.md"
+    },
+
+    "brd-interview": {
+      "dir": ".gigacode/skills/brd-interview",
+      "skill_md": ".gigacode/skills/brd-interview/SKILL.md"
+    },
+
+    "business-requirements": {
+      "dir": ".gigacode/skills/business-requirements",
+      "skill_md": ".gigacode/skills/business-requirements/SKILL.md"
+    },
+
+    "defect-analyzer": {
+      "dir": ".gigacode/skills/defect-analyzer",
+      "skill_md": ".gigacode/skills/defect-analyzer/SKILL.md"
+    },
+
+    "bugfix-developer": {
+      "dir": ".gigacode/skills/bugfix-developer",
+      "skill_md": ".gigacode/skills/bugfix-developer/SKILL.md"
+    },
+
+    "java-uml-spec": {
+      "dir": ".gigacode/skills/java-uml-spec"
+    }
+  },
+
+  "ground": {
+    "pipeline_json": "ground/pipeline.json",
+    "dir": "ground",
+    "statements_dir": "ground/statements"
+  },
+
+  "docs": {
+    "feature_pipeline_dir": "docs/feature-pipeline",
+    "system_analysis_dir": "docs/system-analysis"
+  }
+}

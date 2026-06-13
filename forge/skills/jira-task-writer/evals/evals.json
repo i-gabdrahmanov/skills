@@ -1,0 +1,26 @@
+{
+  "skill_name": "jira-task-writer",
+  "evals": [
+    {
+      "id": "contract-check",
+      "type": "deterministic",
+      "description": "Проверка контракта SKILL.md — запрет ask_user_question, pending_questions, защита от зацикливания",
+      "command": "python3 .gigacode/skills/jira-task-writer/scripts/check_jira_contract.py .gigacode/skills/jira-task-writer/SKILL.md",
+      "expected_exit": 0
+    },
+    {
+      "id": "orchestration-rules",
+      "type": "deterministic",
+      "description": "Проверка правил синхронизации в feature-pipeline SKILL.md",
+      "command": "python3 -c 'import re,sys;c=open(\".gigacode/skills/feature-pipeline/SKILL.md\").read();chk=[(\"Синхронизация agent()\",\"Синхронизация agent()\"),(\"pending_questions\",\"pending_questions\"),(\"Защита от пустого ответа\",\"не более 1.*раза\"),(\"Защита fallback\",\"второй пустой\"),(\"Фаза 2.5 порядок\",\"сначала прочитай.*потом запускай\")];fail=0;sys.exit(0 if all((lambda p:bool(re.search(p,c,re.DOTALL|re.IGNORECASE)))(p) for n,p in chk) else (print(f\"FAIL: {n}\") or 1 for n,p in chk if not re.search(p,c,re.DOTALL|re.IGNORECASE)) or 1)',
+      "expected_exit": 0
+    },
+    {
+      "id": "subagent-prompt-rule",
+      "type": "deterministic",
+      "description": "Проверка общего правила для субагентов в subagent-prompts.md",
+      "command": "python3 -c 'import re;c=open(\".gigacode/skills/feature-pipeline/references/subagent-prompts.md\").read();chk=[(\"НЕ вызывать ask_user_question\",\"НЕ вызываешь.*ask_user_question\"),(\"pending_questions\",\"pending_questions\"),(\"Оркестратор задаст\",\"Оркестратор задаст вопросы\")];fail=sum(1 for n,p in chk if not re.search(p,c,re.DOTALL|re.IGNORECASE));exit(fail)',
+      "expected_exit": 0
+    }
+  ]
+}
