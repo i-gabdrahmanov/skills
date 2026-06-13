@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Feature Pipeline — GigaCode/Forge</title>
+<style>
+  :root{
+    --bg:#0b0f1a; --bg2:#111728; --card:#161d30; --line:#26304a;
+    --fg:#e6ebf5; --muted:#94a3b8; --accent:#6ea8fe; --accent2:#7ee0c1;
+    --warn:#ffcf6e; --bad:#ff7a8a; --good:#7ee0c1;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:radial-gradient(1200px 800px at 75% -10%,#1a2440 0,transparent 60%),
+               radial-gradient(900px 700px at 0% 110%,#15203a 0,transparent 55%),
+               var(--bg);
+    color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif;
+    overflow:hidden;
+  }
+  .deck{height:100vh;width:100vw;position:relative}
+  .slide{
+    position:absolute;inset:0;display:none;flex-direction:column;
+    padding:6vh 8vw;animation:fade .45s ease;justify-content:center;
+  }
+  .slide.active{display:flex}
+  @keyframes fade{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  h1{font-size:clamp(34px,5vw,62px);margin:0 0 8px;line-height:1.05;letter-spacing:-.02em}
+  h2{font-size:clamp(24px,3.4vw,40px);margin:0 0 22px;letter-spacing:-.01em}
+  h2 .num{color:var(--accent);font-variant-numeric:tabular-nums}
+  p.lead{font-size:clamp(16px,1.7vw,22px);color:var(--muted);max-width:60ch;line-height:1.5}
+  .kicker{font-family:var(--mono);font-size:13px;letter-spacing:.25em;text-transform:uppercase;
+    color:var(--accent);margin-bottom:18px}
+  .grid{display:grid;gap:16px}
+  .cols-2{grid-template-columns:1fr 1fr}
+  .cols-3{grid-template-columns:repeat(3,1fr)}
+  .cols-4{grid-template-columns:repeat(4,1fr)}
+  .card{background:linear-gradient(180deg,var(--card),#131a2b);border:1px solid var(--line);
+    border-radius:16px;padding:18px 20px}
+  .card h3{margin:0 0 8px;font-size:18px}
+  .card p{margin:0;color:var(--muted);font-size:14.5px;line-height:1.5}
+  .mono{font-family:var(--mono)}
+  code,.path{font-family:var(--mono);background:#0d1322;border:1px solid var(--line);
+    border-radius:6px;padding:1px 7px;font-size:.86em;color:var(--accent2)}
+  .pill{display:inline-block;font-family:var(--mono);font-size:12px;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line);background:#0d1322;color:var(--muted);margin:2px 4px 2px 0}
+  .flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+  .step{font-family:var(--mono);font-size:13px;padding:8px 12px;border-radius:10px;
+    background:#0e1626;border:1px solid var(--line);white-space:nowrap}
+  .step b{color:var(--accent)}
+  .arrow{color:var(--muted);font-size:18px}
+  .gate{border-color:#3a2f12;background:#1b1606;color:var(--warn)}
+  table{border-collapse:collapse;width:100%;font-size:14.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.06em}
+  td .mono{color:var(--accent2)}
+  ul.clean{margin:6px 0 0;padding:0;list-style:none}
+  ul.clean li{padding:7px 0 7px 26px;position:relative;color:var(--muted);font-size:15.5px;line-height:1.45}
+  ul.clean li::before{content:"";position:absolute;left:2px;top:14px;width:8px;height:8px;border-radius:2px;
+    background:var(--accent)}
+  ul.clean li b{color:var(--fg);font-weight:600}
+  .ok::before{background:var(--good)!important}
+  .tag-good{color:var(--good)} .tag-bad{color:var(--bad)} .tag-warn{color:var(--warn)}
+  .big{font-size:clamp(40px,7vw,90px);font-weight:800;letter-spacing:-.03em;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;
+    background-clip:text;color:transparent}
+  .sub{color:var(--muted);font-size:18px;margin-top:4px}
+  .center{align-items:center;text-align:center}
+  .footer{position:fixed;bottom:18px;left:0;right:0;display:flex;justify-content:space-between;
+    padding:0 26px;align-items:center;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .dots{display:flex;gap:7px}
+  .dot{width:8px;height:8px;border-radius:50%;background:#2a3551;cursor:pointer;transition:.2s}
+  .dot.active{background:var(--accent);transform:scale(1.35)}
+  .brand{display:flex;gap:9px;align-items:center}
+  .logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--accent2));
+    display:grid;place-items:center;color:#06121f;font-weight:800;font-size:15px}
+  .nav-hint{opacity:.7}
+  .metric{font-size:clamp(30px,4vw,52px);font-weight:800;color:var(--accent2);line-height:1}
+  .metric+span{color:var(--muted);font-size:14px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:center}
+  .badge{font-family:var(--mono);font-size:12px;border:1px solid var(--line);border-radius:8px;
+    padding:6px 10px;background:#0d1322}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;color:var(--muted);font-size:13px}
+  .legend span{display:inline-flex;gap:7px;align-items:center}
+  .sq{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .progress{position:fixed;top:0;left:0;height:3px;background:linear-gradient(90deg,var(--accent),var(--accent2));
+    transition:width .35s ease;z-index:50}
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="deck" id="deck">
+
+  <!-- 1 -->
+  <section class="slide active center">
+    <div class="kicker">GigaCode · Forge</div>
+    <h1>Feature&nbsp;Pipeline</h1>
+    <p class="lead" style="margin:0 auto">Конвейер, который превращает бизнес-требования в готовый код:
+      от идеи и требований до проверенных изменений и отчёта в Jira — с понятными точками подтверждения
+      и автоматическими проверками качества на каждом шаге.</p>
+    <div style="margin-top:26px">
+      <span class="pill">от идеи до готового кода</span>
+      <span class="pill">подтверждение человеком</span>
+      <span class="pill">качество встроено</span>
+      <span class="pill">продолжает после сбоя</span>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section class="slide">
+    <div class="kicker">Что это</div>
+    <h2>От идеи до готовых изменений — за один управляемый проход</h2>
+    <div class="two">
+      <div>
+        <ul class="clean">
+          <li><b>Один проход — одна фича.</b> На входе проверка масштаба: крупное и не-фичи отсекаются.</li>
+          <li><b>Работает сам между точками подтверждения</b>, но ничего необратимого (задачи в Jira, публикация, отчёт) — без явного «да».</li>
+          <li><b>Каждая тяжёлая фаза — отдельный агент</b>, чтобы не терять фокус и не перегружать процесс.</li>
+          <li><b>Переживает сбой</b> — продолжает с того же шага, ничего не теряется.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>С чего начинается</h3>
+        <p><b>Свободная идея</b> → короткое интервью или быстрый сбор требований.</p>
+        <p style="margin-top:10px"><b>Задача из Jira</b> → требования собираются из неё, а номер задачи
+           автоматически попадает во все документы и ветки.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 -->
+  <section class="slide">
+    <div class="kicker">Поток работы</div>
+    <h2>Десять понятных этапов</h2>
+    <div class="flow">
+      <div class="step"><b>1</b> Требования</div><span class="arrow">→</span>
+      <div class="step"><b>2</b> Обзор системы</div><span class="arrow">→</span>
+      <div class="step"><b>3</b> Проектирование</div><span class="arrow">→</span>
+      <div class="step"><b>4</b> План проверок</div><span class="arrow">→</span>
+      <div class="step"><b>5</b> Задачи в Jira</div><span class="arrow">→</span>
+      <div class="step"><b>6</b> Тесты и код</div><span class="arrow">→</span>
+      <div class="step"><b>7</b> Проверка</div><span class="arrow">→</span>
+      <div class="step"><b>8</b> Документация</div><span class="arrow">→</span>
+      <div class="step"><b>9</b> Доставка</div><span class="arrow">→</span>
+      <div class="step gate">📣 Отчёт</div>
+    </div>
+    <div class="legend">
+      <span><span class="sq" style="background:var(--accent)"></span> автоматический шаг</span>
+      <span><span class="sq" style="background:var(--warn)"></span> подтверждение человеком (точки 1–6)</span>
+    </div>
+    <p class="lead" style="margin-top:20px">Набор этапов настраивается под проект. Отдельные шаги
+      по каждой задаче появляются после этапа проектирования — когда уже известна разбивка работы.</p>
+  </section>
+
+  <!-- 4 -->
+  <section class="slide">
+    <div class="kicker">Кто что делает</div>
+    <h2>Ведущий агент и узкие помощники</h2>
+    <table>
+      <tr><th>Этап</th><th>Кто делает</th><th>Подтверждение</th></tr>
+      <tr><td>Сбор требований</td><td>специалист по требованиям</td><td class="tag-warn">точка 1</td></tr>
+      <tr><td>Обзор системы</td><td>аналитик архитектуры</td><td>—</td></tr>
+      <tr><td>Проектирование</td><td>технический архитектор</td><td class="tag-warn">точка 2</td></tr>
+      <tr><td>Постановка задач</td><td>помощник по Jira</td><td class="tag-warn">точка 3</td></tr>
+      <tr><td>Тесты и код</td><td>разработчик (тесты раньше кода)</td><td>—</td></tr>
+      <tr><td>Проверка</td><td>прогон тестов и замер покрытия</td><td>—</td></tr>
+      <tr><td>Документация</td><td>составитель спецификации</td><td>—</td></tr>
+      <tr><td>Доставка</td><td>ведущий агент (Jira и Bitbucket)</td><td class="tag-warn">точки 4–6</td></tr>
+    </table>
+  </section>
+
+  <!-- 5 -->
+  <section class="slide">
+    <div class="kicker">Учёт состояния</div>
+    <h2>Процесс всегда знает, где он находится</h2>
+    <div class="grid cols-2">
+      <div class="card">
+        <h3>Журнал работы <span class="pill">у каждой фичи свой</span></h3>
+        <p style="margin-top:8px">Какие шаги сделаны, что в работе, что зависит от чего и какие проверки
+           нужны. Благодаря этому после сбоя можно продолжить ровно с того места, где остановились.</p>
+      </div>
+      <div class="card">
+        <h3>Карта этапов <span class="pill">у каждой фичи своя</span></h3>
+        <p style="margin-top:8px">На каком этапе мы сейчас, что уже пройдено и что нельзя начинать раньше
+           времени. За соблюдение порядка следит автоматический контроль.</p>
+      </div>
+    </div>
+    <p class="lead" style="margin-top:18px">У каждой фичи — собственная история: параллельные задачи
+      не мешают друг другу. Порядок этапов единый и предсказуемый для всех.</p>
+  </section>
+
+  <!-- 6 -->
+  <section class="slide">
+    <div class="kicker">Встроенный контроль</div>
+    <h2>Правила соблюдаются автоматически, а не «на честном слове»</h2>
+    <p class="lead" style="margin-bottom:18px">Инструкция текстом — это лишь рекомендация, её можно
+      проигнорировать. Здесь правила встроены в процесс: опасное или преждевременное действие
+      останавливается ещё до того, как произойдёт.</p>
+    <div class="grid cols-3">
+      <div class="card"><h3>Контроль действий</h3><p>Оценивает риск каждого действия; рискованное запрещает, пока не выполнены условия, и проверяет права.</p></div>
+      <div class="card"><h3>Тесты раньше кода</h3><p>Не даёт писать рабочий код, пока для задачи не написан падающий тест.</p></div>
+      <div class="card"><h3>Проверки раньше кода</h3><p>Не даёт писать код, пока не готовы автоматические проверки задачи.</p></div>
+      <div class="card"><h3>Доставка с доказательствами</h3><p>Не публикует изменения без подтверждающих материалов: тестов и покрытия.</p></div>
+      <div class="card"><h3>Учёт прогресса</h3><p>Сам отмечает выполненные шаги — прогресс не теряется при сбое.</p></div>
+      <div class="card"><h3>Бюджет и безопасность</h3><p>Следит за расходом, защищает персональные данные, запрещает опасные команды.</p></div>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section class="slide">
+    <div class="kicker">Качество</div>
+    <h2>Автопроверки не дают закрыть шаг, пока он не готов</h2>
+    <div class="two">
+      <div>
+        <p class="lead">У каждого этапа — обязательная проверка качества. Шаг считается завершённым
+          только когда проверка пройдена <span class="tag-good">успешно</span>.</p>
+        <div style="margin-top:14px">
+          <span class="pill">проектирование</span><span class="pill">план проверок</span>
+          <span class="pill">тесты</span><span class="pill">сборка</span>
+          <span class="pill">покрытие</span><span class="pill">документация</span>
+          <span class="pill">готовность к доставке</span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Как это работает</h3>
+        <p><b>Автоматические</b> — система проверяет сама: компиляция, тесты, покрытие, документация.</p>
+        <p style="margin-top:10px"><b>Экспертные</b> — оценку даёт отдельный агент-проверяющий, а результат
+           фиксируется в общем журнале.</p>
+        <p style="margin-top:10px">Если не пройдено — до трёх попыток исправления с памятью о прошлых
+           ошибках, без правок «на коленке».</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8 -->
+  <section class="slide">
+    <div class="kicker">Доставка</div>
+    <h2>Аккуратная доставка по задачам — с тремя подтверждениями</h2>
+    <div class="flow" style="margin-bottom:8px">
+      <div class="step">основная ветка</div><span class="arrow">→</span>
+      <div class="step"><b>ветка задачи 1</b></div><span class="arrow">→</span>
+      <div class="step"><b>ветка задачи 2</b> (поверх первой)</div><span class="arrow">→</span>
+      <div class="step gate">запросы на слияние → отчёт</div>
+    </div>
+    <div class="grid cols-3" style="margin-top:16px">
+      <div class="card"><h3 class="tag-warn">Точка 1</h3><p>Показывает план изменений по всем задачам. Сохраняет — только после согласия.</p></div>
+      <div class="card"><h3 class="tag-warn">Точка 2</h3><p>Публикует изменения по порядку и создаёт связанные запросы на слияние — по одному на задачу.</p></div>
+      <div class="card"><h3 class="tag-warn">Точка 3</h3><p>Готовит отчёт в задаче: что сделано, файлы, тесты, покрытие, ссылки.</p></div>
+    </div>
+  </section>
+
+  <!-- 9 -->
+  <section class="slide">
+    <div class="kicker">Устойчивость</div>
+    <h2>Почему это надёжно</h2>
+    <div class="grid cols-2">
+      <div class="card"><h3>Продолжение после сбоя</h3><p>У каждой фичи свой журнал. После обрыва видно, что в работе,
+        и можно продолжить ровно с того же шага.</p></div>
+      <div class="card"><h3>Чистый фокус</h3><p>Тяжёлые операции (сборка, тесты, сканирование) выполняют отдельные
+        агенты; в общий процесс идёт только итог.</p></div>
+      <div class="card"><h3>Защита от пропусков</h3><p>Нельзя перескочить этап; автоматические проверки замечают
+        незавершённую работу до того, как шаг закроется.</p></div>
+      <div class="card"><h3>Самопроверка перед стартом</h3><p>Система сверяет собственную настройку и заранее
+        предупреждает о проблемах — а не падает посреди работы.</p></div>
+    </div>
+  </section>
+
+  <!-- 10 -->
+  <section class="slide">
+    <div class="kicker">Ценность</div>
+    <h2>Один процесс — три выигрыша</h2>
+    <div class="grid cols-3">
+      <div class="card">
+        <h3>👨‍💻 Разработчику</h3>
+        <p>Каркас, контекст системы и тесты готовы — он проверяет и доводит, а не пишет с нуля.
+           Меньше рутины, больше инженерии.</p>
+      </div>
+      <div class="card">
+        <h3>📐 Аналитику</h3>
+        <p>Требование видно на каждом шаге: требования → проектирование → задачи → проверки → код.
+           Прозрачность и проверяемость.</p>
+      </div>
+      <div class="card">
+        <h3>📊 Бизнесу</h3>
+        <p>Скорость под контролем риска: ничего необратимого без «да», качество — гейт,
+           а не надежда.</p>
+      </div>
+    </div>
+    <p class="lead" style="margin-top:18px">Дальше — по каждой роли подробно.</p>
+  </section>
+
+  <!-- 11 -->
+  <section class="slide">
+    <div class="kicker">Ценность · разработчик</div>
+    <h2>👨‍💻 Меньше рутины, больше инженерии</h2>
+    <ul class="clean">
+      <li class="ok"><b>Старт не с нуля:</b> требования, проект решения, разбивка на задачи и каркас тестов уже готовы — остаётся инженерная суть.</li>
+      <li class="ok"><b>Контекст системы под рукой:</b> подсказывает уже существующие сущности, методы и структуру базы — меньше дублей и «изобретённого заново».</li>
+      <li class="ok"><b>Тесты впереди кода:</b> сначала тест, потом код, который его проходит; покрытие проверяется автоматически — «зелёное» не на словах.</li>
+      <li class="ok"><b>Не сломать соседнее:</b> изменения строго по плану задач, без лишних усложнений.</li>
+      <li class="ok"><b>Чистая доставка:</b> по одному запросу на слияние на задачу, аккуратные коммиты в стиле проекта, ссылка на задачу везде — ревью проще.</li>
+      <li class="ok"><b>Меньше «красных» ревью:</b> проверки сборки, покрытия и документации ловят проблемы заранее.</li>
+    </ul>
+  </section>
+
+  <!-- 12 -->
+  <section class="slide">
+    <div class="kicker">Ценность · аналитик</div>
+    <h2>📐 Видно, как требование доходит до кода</h2>
+    <ul class="clean">
+      <li class="ok"><b>Требования из диалога или короткой идеи:</b> понятный документ, плюс автоматический поиск по рынку, конкурентам и регуляторике.</li>
+      <li class="ok"><b>Сквозная трассировка:</b> бизнес-требование → проектирование → задачи → код — видно, что откуда выросло.</li>
+      <li class="ok"><b>Требования проверяемы:</b> критерии приёмки превращаются в автоматические проверки — критерий = тест.</li>
+      <li class="ok"><b>Утверждение до кода:</b> на точках подтверждения видны допущения и открытые вопросы — направление согласуется заранее.</li>
+      <li class="ok"><b>Единый источник правды:</b> требования, проектирование и спецификация лежат рядом с фичей в репозитории.</li>
+      <li class="ok"><b>Живая документация:</b> описание системы обновляется автоматически после каждой фичи.</li>
+    </ul>
+  </section>
+
+  <!-- 13 -->
+  <section class="slide">
+    <div class="kicker">Ценность · бизнес</div>
+    <h2>📊 Скорость под контролем риска</h2>
+    <ul class="clean">
+      <li class="ok"><b>Предсказуемость:</b> от идеи до готовых изменений — один управляемый проход с понятными точками контроля.</li>
+      <li class="ok"><b>Риск под контролем:</b> ничего необратимого без подтверждения; усиленные проверки для входа в систему, платежей, персональных данных и инфраструктуры.</li>
+      <li class="ok"><b>Качество обязательно, а не на удачу:</b> тесты, покрытие и подтверждающие материалы — условие доставки.</li>
+      <li class="ok"><b>Прозрачность и аудит:</b> каждый шаг фиксируется, в задаче — отчёт со ссылками на изменения, тесты и покрытие.</li>
+      <li class="ok"><b>Ниже стоимость:</b> ошибки ловятся до доставки, рутина снята с сильных инженеров — меньше переделок.</li>
+      <li class="ok"><b>Масштабируемость:</b> один повторяемый процесс на команду, переносится вместе с проектом.</li>
+    </ul>
+  </section>
+
+  <!-- 14 -->
+  <section class="slide center">
+    <div class="kicker">Где это живёт</div>
+    <h2>Всё внутри проекта — под контролем версий</h2>
+    <div class="grid cols-3" style="width:100%">
+      <div class="card"><div class="metric">Процесс</div><span>правила и шаги — внутри проекта, в системе версий</span></div>
+      <div class="card"><div class="metric">Данные</div><span>история и состояние — рядом, едут вместе с проектом</span></div>
+      <div class="card"><div class="metric">0</div><span>скрытых зависимостей от системных папок</span></div>
+    </div>
+    <p class="lead" style="margin:22px auto 0">Ничего не спрятано на конкретной машине: процесс и данные
+      переносятся вместе с проектом, история изменений — в системе контроля версий.</p>
+  </section>
+
+  <!-- 13 -->
+  <section class="slide center">
+    <h1 class="big">Forge Feature Pipeline</h1>
+    <p class="sub">Требования → проектирование → проверки → тесты → код → документация → доставка → отчёт</p>
+    <div style="margin-top:26px">
+      <span class="badge">предсказуемо</span>
+      <span class="badge">качество-гейт</span>
+      <span class="badge">трассируемо</span>
+      <span class="badge">под git · переносимо</span>
+    </div>
+    <p class="lead" style="margin:28px auto 0">Ценность для всех: разработчику — инженерия вместо рутины,
+      аналитику — трассируемость, бизнесу — скорость под контролем риска. Спасибо за внимание.</p>
+  </section>
+
+</div>
+
+<div class="footer">
+  <div class="brand"><div class="logo">F</div><span>Feature Pipeline · Forge / GigaCode</span></div>
+  <div class="dots" id="dots"></div>
+  <div class="nav-hint">← → · Space · клик</div>
+</div>
+
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  const dotsBox=document.getElementById('dots');
+  const progress=document.getElementById('progress');
+  let i=0;
+  slides.forEach((_,idx)=>{const d=document.createElement('div');d.className='dot'+(idx===0?' active':'');
+    d.onclick=()=>go(idx);dotsBox.appendChild(d);});
+  const dots=[...dotsBox.children];
+  function go(n){
+    i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach((s,idx)=>s.classList.toggle('active',idx===i));
+    dots.forEach((d,idx)=>d.classList.toggle('active',idx===i));
+    progress.style.width=((i)/(slides.length-1)*100)+'%';
+  }
+  function next(){go(i+1)} function prev(){go(i-1)}
+  document.addEventListener('keydown',e=>{
+    if(['ArrowRight','PageDown',' '].includes(e.key)){e.preventDefault();next();}
+    else if(['ArrowLeft','PageUp'].includes(e.key)){e.preventDefault();prev();}
+    else if(e.key==='Home')go(0); else if(e.key==='End')go(slides.length-1);
+  });
+  document.getElementById('deck').addEventListener('click',e=>{
+    if(e.target.closest('.dot'))return;
+    const x=e.clientX/window.innerWidth; x>0.35?next():prev();
+  });
+  go(0);
+</script>
+</body>
+</html>
