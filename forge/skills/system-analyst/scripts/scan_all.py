@@ -31,6 +31,7 @@ import domain  # noqa: E402
 import endpoints as endpoints_mod  # noqa: E402
 import integration  # noqa: E402
 import kafka as kafka_mod  # noqa: E402
+import reuse as reuse_mod  # noqa: E402
 import structure  # noqa: E402
 from common import attribute_module, repo_root  # noqa: E402
 
@@ -98,6 +99,19 @@ def scan_root(root: Path, prefix: str = "") -> dict:
                "migration_tool": dbres["migration_tool"], "migration_count": dbres["migration_count"],
                "counts_by_module": {}, "items": db_items},
     }
+
+    # reuse — каталог переиспользования (ADVISORY): внешние зависимости + util-классы проекта.
+    dep_items = reuse_mod.scan_dependencies(root)
+    util_items = reuse_mod.scan_project_utils(root)
+    dep_counts = _attribute(dep_items, index, prefix)
+    util_counts = _attribute(util_items, index, prefix)
+    reuse_counts = {m: dep_counts.get(m, 0) + util_counts.get(m, 0)
+                    for m in set(dep_counts) | set(util_counts)}
+    cats["reuse"] = {"category": "reuse", "hard": False,
+                     "total": len(dep_items) + len(util_items),
+                     "gate_total": len(dep_items) + len(util_items),
+                     "dependencies": dep_items, "project_utils": util_items,
+                     "counts_by_module": reuse_counts, "items": []}
     # gate_total для domain = только @Entity (без mapped_superclass), чтобы сверка была like-for-like.
     cats["domain"]["gate_total"] = sum(1 for i in cats["domain"]["items"] if i.get("kind") == "entity")
     return cats
@@ -122,6 +136,10 @@ def _merge(into: dict, src: dict) -> None:
                 into[name]["counts_by_module"][k] = into[name]["counts_by_module"].get(k, 0) + v
             if "profiles" in cat:
                 into[name]["profiles"] = sorted(set(into[name].get("profiles", [])) | set(cat["profiles"]))
+            # reuse держит две под-группы вместо items — сливаем их отдельно (multi-root)
+            for sub in ("dependencies", "project_utils"):
+                if sub in cat:
+                    into[name].setdefault(sub, []).extend(cat[sub])
 
 
 def main() -> int:
@@ -157,6 +175,8 @@ def main() -> int:
         "profiles": len(cats["config"].get("profiles", [])),
         "cross_cutting": cats["cross_cutting"]["total"],
         "tables": cats["db"]["total"],
+        "dependencies": len(cats["reuse"]["dependencies"]),
+        "project_utils": len(cats["reuse"]["project_utils"]),
     }
     summary = {
         "generated_at": datetime.now(timezone.utc).isoformat(),

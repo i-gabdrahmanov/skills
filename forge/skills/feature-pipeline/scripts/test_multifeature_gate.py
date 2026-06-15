@@ -34,8 +34,8 @@ DYN = [
     {"id": "04-build-T1", "depends_on": []},
     {"id": "07-deliver-T1", "depends_on": []},
 ]
-JUDGES = ["design-judge", "eval-judge", "coverage-judge", "spec-judge",
-          "red-judge", "build-judge", "delivery-judge"]
+JUDGES = ["brd-judge", "design-judge", "eval-judge", "coverage-judge", "spec-judge",
+          "red-judge", "build-judge", "reuse-judge", "delivery-judge"]
 ALL_STEPS = [s["id"] for s in STATIC] + [s["id"] for s in DYN]
 
 

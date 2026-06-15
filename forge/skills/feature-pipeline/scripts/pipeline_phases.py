@@ -16,6 +16,7 @@ inline-fallback, который пинится тестом test_phase_consisten
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -39,16 +40,18 @@ MAIN_PHASES = ["00-brd", "01-grounding", "02-design", "02-eval-plan",
                "03-jira", "04-tdd", "05-verify", "06-document",
                "07-deliver", "07-report"]
 
-# Маска судей по id шага. Имена ДОЛЖНЫ совпадать с вердиктами run_judge.py (<phase>-judge.json).
-REQUIRED_JUDGES_MASK = {
-    "02-design":    ["design-judge"],
-    "02-eval-plan": ["eval-judge"],
-    "04-test-*":    ["red-judge"],
-    "04-build-*":   ["build-judge"],
-    "05-tests":     ["coverage-judge"],
-    "06-spec":      ["spec-judge"],
-    "07-deliver-*": ["delivery-judge"],
-}
+# Маска судей по id шага. ЕДИНЫЙ источник — references/judges-registry.json (pipeline-state),
+# читается через judges_registry. Раньше маска дублировалась здесь, в init.py и
+# patch_manifest_judges.py и расходилась (00-brd добавили не во все копии). Имена судей ДОЛЖНЫ
+# совпадать с вердиктами run_judge.py (<phase>-judge.json).
+_PSTATE_SCRIPTS = Path(__file__).resolve().parents[1].parent / "pipeline-state" / "scripts"
+if str(_PSTATE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_PSTATE_SCRIPTS))
+try:
+    import judges_registry as _judges_registry
+    REQUIRED_JUDGES_MASK = _judges_registry.step_masks()
+except Exception:  # реестр недоступен (pipeline-state не развёрнут рядом) — деградируем мягко
+    REQUIRED_JUDGES_MASK = {}
 
 
 def guess_phase(step_id: str) -> str:

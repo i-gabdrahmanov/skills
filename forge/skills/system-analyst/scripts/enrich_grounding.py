@@ -195,6 +195,7 @@ def _build_excerpt(analysis_dir: Path, scan_dir: Path | None, feature_slug: str)
             "async": [],
             "external_clients": [],
             "tables": [],
+            "reuse": {"dependencies": [], "project_utils": []},
             "gate_total": 0,
         }
 
@@ -321,6 +322,23 @@ def _build_excerpt(analysis_dir: Path, scan_dir: Path | None, feature_slug: str)
                 gd = _read_json(gf)
                 gate_total += len(gd.get("items", []))
         excerpt["gate_total"] = gate_total
+
+        # reuse — компактный каталог переиспользования (rebuild из scan/reuse.json, без дельты:
+        # зависимости/утилиты меняются редко). Только координаты и имена классов — компактно.
+        reuse_file = scan_dir / "reuse.json"
+        if reuse_file.exists():
+            rd = _read_json(reuse_file)
+            deps = []
+            for d in rd.get("dependencies", []):
+                coord = d.get("artifact", "?")
+                if d.get("version"):
+                    coord = f"{coord}:{d['version']}"
+                deps.append(coord)
+            utils = []
+            for u in rd.get("project_utils", []):
+                pkg = u.get("package", "")
+                utils.append(f"{pkg + '.' if pkg else ''}{u.get('class', '?')}")
+            excerpt["reuse"] = {"dependencies": deps, "project_utils": utils}
 
     # 2. Если scan-файлов нет — парсим MD (слабая эвристика)
     if not (scan_dir and scan_dir.exists()):

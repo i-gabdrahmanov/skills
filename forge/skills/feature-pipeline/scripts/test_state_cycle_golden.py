@@ -42,8 +42,8 @@ DYNAMIC_STEPS = [
     {"id": "07-deliver-T1", "depends_on": ["05-tests", "06-spec"]},
 ]
 # Вердикты, имена которых совпадают с required_judges всех шагов выше.
-JUDGE_VERDICTS = ["design-judge", "eval-judge", "coverage-judge", "spec-judge",
-                  "red-judge", "build-judge", "delivery-judge"]
+JUDGE_VERDICTS = ["brd-judge", "design-judge", "eval-judge", "coverage-judge", "spec-judge",
+                  "red-judge", "build-judge", "reuse-judge", "delivery-judge"]
 
 UPDATE_ORDER = ["00-brd", "01-grounding", "02-design", "02-eval-plan", "03-jira",
                 "04-test-T1", "04-build-T1", "05-tests", "06-spec",

@@ -109,6 +109,40 @@ def run_checks(project_root: Path | None = None) -> dict:
         checks.append({"name": "registry-paths-exist", "status": "SKIP",
                        "detail": "нет project/.gigacode (source-репо)"})
 
+    # 6. Shell-lint: в fenced-блоках SKILL.md нет конструкций, которые режет рантайм Qwen
+    #    ($(...), backticks, here-strings <<<). common.py:repo_root уже обходит это для git.
+    import re as _re
+    fenced_re = _re.compile(r"```.*?```", _re.DOTALL)
+    forbidden = [("$(", "command substitution $()"), ("<<<", "here-string <<<")]
+    shell_hits = []
+    for md in sorted(REPO.glob("skills/*/SKILL.md")):
+        text = md.read_text(encoding="utf-8", errors="replace")
+        for block in fenced_re.findall(text):
+            body = block[3:-3]  # без ограничителей ```
+            for tok, label in forbidden:
+                if tok in body:
+                    shell_hits.append(f"{md.parent.name}/SKILL.md: {label}")
+                    break
+    if shell_hits:
+        fail("shell-lint-skill-md", f"запретные shell-конструкции (Qwen режет): {shell_hits[:5]}")
+    else:
+        ok("shell-lint-skill-md")
+
+    # 7. Хардкод путей: реальные пути ~/.gigacode/skills|hooks в SKILL.md (канон —
+    #    <project>/.gigacode). Guideline-строки вида «не используй ~/.gigacode/...» (с …)
+    #    легитимны и не считаются нарушением.
+    hardcode_re = _re.compile(r"~/\.gigacode/(?:skills|hooks)\b")
+    path_hits = []
+    for md in sorted(REPO.glob("skills/*/SKILL.md")):
+        text = md.read_text(encoding="utf-8", errors="replace")
+        if hardcode_re.search(text):
+            path_hits.append(f"{md.parent.name}/SKILL.md")
+    if path_hits:
+        fail("no-hardcoded-home-paths",
+             f"~/.gigacode-хардкод (используй <project>/.gigacode): {path_hits}")
+    else:
+        ok("no-hardcoded-home-paths")
+
     return {"passed": not problems, "checks": checks, "problems": problems}
 
 

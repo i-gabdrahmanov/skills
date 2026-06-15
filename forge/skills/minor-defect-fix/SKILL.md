@@ -320,6 +320,21 @@ prompt:
 Если spotless падает на форматировании — предложи пользователю явно
 `./gradlew spotlessApply`. Не запускай молча.
 
+### 8.1 Судья качества (reuse-judge) — advisory
+
+После pre-commit прогони судью качества — он ловит «велосипеды» (код, дублирующий доступные в
+проекте библиотеки/util). В минорном дефекте философия — **минимальное изменение**, поэтому
+здесь судья **advisory**: показываем findings пользователю, но не блокируем.
+
+```bash
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py reuse <JIRA-KEY> \
+  --diff-base HEAD --project-root <toplevel>
+```
+- Если каталога `docs/system-analysis/scan/reuse.json` нет — создай его (первый запуск)
+  через project-grounder/system-analyst, либо пропусти проверку с пометкой.
+- exit 1 (есть велосипеды) — покажи список `BLOCKING:`/`WARN:` пользователю и спроси, заменить
+  ли на библиотеку/util из каталога. Не правь молча и не блокируй коммит автоматически.
+
 ---
 
 ## 9. Спецификация — спецадаптер

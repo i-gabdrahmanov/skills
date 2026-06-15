@@ -228,7 +228,7 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
 
 ### 0.6 Правило ре-итерации (режим исправления после judge FAIL)
 
-Если любой judge (eval/red/build/spec/delivery) вернул FAIL — **НЕ прави артефакты inline**
+Если любой judge (brd/eval/red/build/reuse/spec/delivery) вернул FAIL — **НЕ прави артефакты inline**
 в основном агенте. Используй **perpetual error store**:
 
 **Файл:** `ground/statements/feature-pipeline/<slug>/judges/errors.json`
@@ -345,8 +345,35 @@ deliver→`check_delivery.py`. Шаг не
 дальше: `tech-design` копирует его в шапку `tech-design.md` и `sdd.md`. Если задача не из Jira —
 строку опускаем во всех документах.
 
-**Гейт 1.** Покажи 2-3 ключевых допущения и самый критичный открытый вопрос из раздела BRD «Открытые вопросы» (номер раздела зависит от шаблона — ссылайся по названию).
-Спроси: «утверждаем BRD / доработать?». Дальше — только после «да». Обнови `00-brd`.
+### Judge-gate: brd-judge (обязательно, ДО Гейта 1)
+
+**Сразу после создания `brd.md`, до показа Гейта 1** запусти brd-judge — он гарантирует, что БТ
+написаны языком бизнеса, а не как спецификация с кодом. Гибрид: LLM-субагент (стиль) +
+детерминированная проверка код-токенов.
+
+Шаг 1 — LLM-субагент (контракт — §7.6 subagent-prompts.md):
+```
+agent(subagent_type="general-purpose", description="brd-judge for <slug>",
+      prompt="<контракт brd-judge из §7.6 subagent-prompts.md + путь к brd.md>")
+```
+Шаг 2 — ингест вердикта субагента и детерминированная проверка код-токенов:
+```
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py brd <slug> \
+  --from-output <verdict.json> --project-root <project>
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py brd <slug> \
+  --recheck --project-root <project>
+```
+Оба должны быть PASS (exit 0). Вердикт — в `judges/brd-judge.json`.
+
+**FAIL → ре-итерация** (раздел 0.6): ошибки в `errors.json`, верни BRD-скилл на доработку
+(перепиши требования языком бизнеса, удали код-детали — они идут в `tech-design`, не в BRD).
+Не закрывай `00-brd`, пока brd-judge не PASS.
+
+**Важно:** brd-judge — это gate, а не опция. Если `brd.md` создан, но brd-judge не запущен —
+шаг `00-brd` не закрывается (его `required_judges: ["brd-judge"]`).
+
+**Гейт 1.** Покажи вердикт brd-judge (PASS/предупреждения), 2-3 ключевых допущения и самый критичный открытый вопрос из раздела BRD «Открытые вопросы» (номер раздела зависит от шаблона — ссылайся по названию).
+Спроси: «утверждаем BRD / доработать?». Дальше — только после «да». Обнови `00-brd` (`gates: {"brd-judge": "PASS"}`).
 
 ### Гейт критичности (ОБЯЗАТЕЛЬНО, сразу после утверждения BRD)
 
@@ -730,6 +757,30 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py build <
 ```bash
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_build.py "<папка>/task-plan.json" --task <taskId>
 ```
+
+### 7.5 Judge-gate GREEN: reuse-judge (после build-judge, ДО закрытия шага)
+
+После того как build-judge дал PASS — запусти reuse-judge (судья качества: нет велосипедов,
+дублирующих доступные библиотеки/util проекта). Гибрид: LLM-субагент + детерминированный regex.
+
+Шаг 1 — LLM-субагент (контракт — §7.7 subagent-prompts.md):
+```
+agent(subagent_type="general-purpose", description="reuse-judge for <slug>",
+      prompt="<контракт reuse-judge из §7.7 + git diff + путь к scan/reuse.json>")
+```
+Шаг 2 — ингест вердикта и детерминированная проверка велосипедов по git diff:
+```bash
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py reuse <slug> \
+  --from-output verdict.json --diff-base <base> --project-root <project>
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py reuse <slug> \
+  --recheck --diff-base <base> --project-root <project>
+```
+`<base>` — родительская ветка/коммит задачи (как в check_coverage). Если каталога
+`scan/reuse.json` нет — он создаётся в фазе 1 (grounding) через project-grounder.
+
+**FAIL → ре-итерация** (раздел 0.6): ошибки в errors.json, верни код java-spring-dev на
+доработку — замени велосипед на библиотеку/util из каталога. Закрывай `04-build-<taskId>`
+только когда **оба** судьи (build-judge И reuse-judge) PASS (`required_judges` шага — оба).
 
 Обнови `04-build-<taskId>` (completed) при pass.
 

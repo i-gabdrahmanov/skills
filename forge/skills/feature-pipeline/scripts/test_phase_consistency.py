@@ -38,6 +38,7 @@ PM = _load("skills/pipeline-state/scripts/patch_manifest_judges.py", "ps_patch")
 AS_FP = _load("skills/feature-pipeline/scripts/add_steps.py", "fp_add_steps")
 PV = _load("skills/feature-pipeline/scripts/preflight-validate.py", "fp_preflight")
 RJ = _load("skills/feature-pipeline/scripts/run_judge.py", "fp_run_judge")
+JR = _load("skills/pipeline-state/scripts/judges_registry.py", "ps_judges_registry")
 
 
 class CanonicalSource(unittest.TestCase):
@@ -48,14 +49,16 @@ class CanonicalSource(unittest.TestCase):
             self.assertEqual(mod.MAIN_PHASES, PP.MAIN_PHASES, f"{mod.__name__}.MAIN_PHASES")
         self.assertEqual(AS_FP.REQUIRED_JUDGES_MASK, PP.REQUIRED_JUDGES_MASK)
 
-    def test_inline_copies_match_pp(self):
-        # patch_manifest_judges держит свою копию маски — должна совпадать с канон.
-        self.assertEqual(PM.REQUIRED_JUDGES_MASK, PP.REQUIRED_JUDGES_MASK)
-        # init.py и state-recorder держат inline-копии — сверяем по исходнику
+    def test_loaders_match_registry(self):
+        # ЕДИНЫЙ источник — judges-registry.json. Все загрузчики обязаны совпасть с ним.
+        reg = JR.step_masks()
+        self.assertTrue(reg, "judges-registry.json пуст или не найден")
+        self.assertEqual(PP.REQUIRED_JUDGES_MASK, reg, "pipeline_phases расходится с реестром")
+        self.assertEqual(PM.REQUIRED_JUDGES_MASK, reg, "patch_manifest_judges расходится с реестром")
+        # init.py больше не держит inline-копию — читает реестр через judges_registry
         init_src = _src("skills/pipeline-state/scripts/init.py")
-        for judges in PP.REQUIRED_JUDGES_MASK.values():
-            for j in judges:
-                self.assertIn(f'"{j}"', init_src, f"init.py mask должен содержать {j}")
+        self.assertIn("judges_registry", init_src,
+                      "init.py должен читать маску из judges_registry (единый источник)")
 
 
 class TestJudgeNames(unittest.TestCase):
@@ -82,11 +85,11 @@ class TestJudgeNames(unittest.TestCase):
                     f'"{name}"', src,
                     f"{rel} всё ещё содержит мёртвое имя судьи '{name}' (P0-1).")
 
-    def test_init_uses_correct_names(self):
-        """init.py определяет маску внутри main() — проверяем по исходнику."""
-        src = _src("skills/pipeline-state/scripts/init.py")
-        self.assertIn('"design-judge"', src)
-        self.assertIn('"coverage-judge"', src)
+    def test_registry_has_core_judges(self):
+        """Ключевые судьи присутствуют в едином реестре judges-registry.json."""
+        all_judges = {j for js in JR.step_masks().values() for j in js}
+        self.assertIn("design-judge", all_judges)
+        self.assertIn("coverage-judge", all_judges)
 
 
 class TestMaskConsistency(unittest.TestCase):

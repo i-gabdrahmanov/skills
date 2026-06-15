@@ -26,6 +26,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import judges_registry
 from _util import repo_root
 
 
@@ -95,37 +96,14 @@ def main():
     now = iso_now()
     pipeline_id = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
 
-    # Маска: какие судьи требуются для каких типов шагов.
-    # Маска применяется по id шага (полное совпадение или * в конце).
-    # '*' в маске — wildcard: "04-build-*" матчит "04-build-T1", "04-build-T2" и т.д.
-    REQUIRED_JUDGES_MASK = {
-        # Имена ДОЛЖНЫ совпадать с вердиктами run_judge.py (<phase>-judge.json).
-        "02-design":       ["design-judge"],
-        "02-eval-plan":    ["eval-judge"],
-        "04-test-*":       ["red-judge"],
-        "04-build-*":      ["build-judge"],
-        "05-tests":        ["coverage-judge"],
-        "06-spec":         ["spec-judge"],
-        "07-deliver-*":    ["delivery-judge"],
-    }
-
-    def _match_mask(step_id: str) -> list:
-        """Возвращает список required_judges для step_id по маске, или []."""
-        # Прямое совпадение
-        if step_id in REQUIRED_JUDGES_MASK:
-            return list(REQUIRED_JUDGES_MASK[step_id])
-        # Wildcard-совпадение (заканчивается на *)
-        for mask, judges in REQUIRED_JUDGES_MASK.items():
-            if mask.endswith("*") and step_id.startswith(mask[:-1]):
-                return list(judges)
-        return []
-
+    # Маска required_judges — из единого реестра references/judges-registry.json
+    # (judges_registry.match_step). Раньше дублировалась здесь и в patch_manifest_judges.py.
     steps = []
     for s in steps_data:
         if "id" not in s:
             print(f"ERROR: step missing 'id': {s}", file=sys.stderr)
             sys.exit(2)
-        req = _match_mask(s["id"])
+        req = judges_registry.match_step(s["id"])
         step = {
             "id": s["id"],
             "title": s.get("title", s["id"]),

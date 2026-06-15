@@ -11,6 +11,7 @@ Usage:
     run_judge.py <phase> <slug> [--recheck] [--out <path>]
 
 Phases:
+    brd        — проверка БТ на язык бизнеса (нет код-токенов); поддерживает --brd <path>
     eval       — проверка eval-plan.json
     red        — проверка RED-тестов (только если есть файл вердикта от субагента)
     build      — проверка build-артефактов
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,6 +49,9 @@ GROUND_DIR: Path | None = None
 FEATURE_DOCS_DIR: Path | None = None
 SYSTEM_ANALYSIS_DIR: Path | None = None
 SKILL_NAME: str = "feature-pipeline"
+BRD_OVERRIDE: Path | None = None  # явный путь к brd.md (--brd) для standalone-проверки
+REUSE_SCAN_OVERRIDE: Path | None = None  # явный путь к scan/reuse.json (--reuse-scan)
+DIFF_BASE: str = "HEAD"  # база git diff для фазы reuse (--diff-base)
 
 
 def _set_paths(project_root: Path, skill: str = "feature-pipeline") -> None:
@@ -165,6 +170,45 @@ def _make_verdict(
         "warnings": warnings,
         "summary": summary,
     }
+
+
+_VALID_STATUSES = {"PASS", "FAIL", "WARN", "SKIP"}
+
+
+def validate_verdict(obj) -> tuple[bool, list]:
+    """Строгая проверка JSON-вердикта по схеме judge-verdict@1 (fail-closed для Qwen).
+
+    На слабой модели субагент часто отдаёт битый/неполный JSON. Раньше проверяли только
+    наличие ключа 'passed' — теперь валидируем структуру и при невалидности блокируем.
+    Возвращает (ok, errors).
+    """
+    errors: list[str] = []
+    if not isinstance(obj, dict):
+        return False, ["вердикт должен быть JSON-объектом"]
+    if "passed" not in obj:
+        errors.append("нет обязательного поля 'passed'")
+    elif not isinstance(obj["passed"], bool):
+        errors.append("'passed' должно быть boolean (true/false)")
+    checks = obj.get("checks")
+    if checks is not None:
+        if not isinstance(checks, list):
+            errors.append("'checks' должно быть массивом")
+        else:
+            for i, c in enumerate(checks):
+                if not isinstance(c, dict):
+                    errors.append(f"checks[{i}] должен быть объектом")
+                    continue
+                if "name" not in c:
+                    errors.append(f"checks[{i}] без 'name'")
+                st = c.get("status")
+                if st is not None and st not in _VALID_STATUSES:
+                    errors.append(f"checks[{i}].status='{st}' не из {sorted(_VALID_STATUSES)}")
+    for key in ("blocking_issues", "warnings"):
+        if key in obj and not isinstance(obj[key], list):
+            errors.append(f"'{key}' должно быть массивом")
+    if "summary" in obj and not isinstance(obj["summary"], str):
+        errors.append("'summary' должно быть строкой")
+    return (len(errors) == 0), errors
 
 
 # ====== PHASE CHECKS ======
@@ -489,34 +533,98 @@ def check_red(slug: str, feature_dir: Path | None) -> dict:
     return _make_verdict("red-judge", slug, all_passed, checks, blocking_issues, [], summary)
 
 
+def _changed_src_files(base: str = "HEAD", main_only: bool = True) -> list:
+    """Изменённые *.java файлы (vs base). main_only — только src/main."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "diff", "--name-only", base, "--", "*.java"],
+                           cwd=str(PROJECT_ROOT), capture_output=True, text=True, timeout=30)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return []
+    if r.returncode != 0:
+        return []
+    files = []
+    for f in r.stdout.splitlines():
+        if main_only and "src/main" not in f:
+            continue
+        p = PROJECT_ROOT / f
+        if p.exists():
+            files.append(p)
+    return files
+
+
+_STUB_RE = re.compile(r"UnsupportedOperationException|not\s+implemented", re.IGNORECASE)
+_TODO_RE = re.compile(r"\b(TODO|FIXME)\b")
+
+
+def _build_floor() -> tuple:
+    """Детерминированный пол build-judge: ловит stubs даже без/при битом LLM-вердикте."""
+    checks, blocking, warnings = [], [], []
+    files = _changed_src_files()
+    stubs, todos = [], []
+    for p in files:
+        try:
+            txt = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for ln in txt.splitlines():
+            if _STUB_RE.search(ln):
+                stubs.append(f"{p.name}: {ln.strip()[:80]}")
+            elif _TODO_RE.search(ln):
+                todos.append(f"{p.name}: {ln.strip()[:80]}")
+    if stubs:
+        checks.append({"name": "Нет stubs (детерминированно)", "status": "FAIL",
+                       "detail": "; ".join(stubs[:5]), "severity": "error"})
+        blocking.extend(f"stub в production: {s}" for s in stubs[:5])
+    else:
+        checks.append({"name": "Нет stubs (детерминированно)", "status": "PASS",
+                       "detail": f"{len(files)} изменённых файлов src/main", "severity": "error"})
+    if todos:
+        warnings.extend(f"TODO/FIXME: {t}" for t in todos[:5])
+    return checks, blocking, warnings
+
+
 def check_build(slug: str, feature_dir: Path | None) -> dict:
-    """Проверка build: проверяет вердикт от build-judge субагента."""
+    """build-judge — гибрид: вердикт LLM-субагента + детерминированный пол (stubs).
+
+    Пол работает даже если LLM-вердикт отсутствует/невалиден — LLM не может «протащить»
+    stubs, объявив passed=true (важно на слабой модели Qwen)."""
+    floor_checks, floor_block, floor_warn = _build_floor()
     if feature_dir is None:
         return _make_verdict(
             "build-judge", slug, False,
-            [{"name": "Feature directory exists", "status": "FAIL",
-              "detail": "Папка фичи не найдена", "severity": "error"}],
-            ["Папка фичи не найдена"], [], "Папка фичи не найдена"
+            floor_checks + [{"name": "Feature directory exists", "status": "FAIL",
+                             "detail": "Папка фичи не найдена", "severity": "error"}],
+            floor_block + ["Папка фичи не найдена"], floor_warn, "Папка фичи не найдена"
         )
-    verdict_path = _find_judge_verdict(slug, "build-judge")
-    verdict = _load_json(verdict_path)
+    verdict = _load_json(_find_judge_verdict(slug, "build-judge"))
 
     if not verdict:
         return _make_verdict(
             "build-judge", slug, False,
-            [{"name": "Build-judge verdict from subagent", "status": "FAIL",
-              "detail": "Вердикт build-judge не найден. Запусти субагента build-judge.",
-              "severity": "error"}],
-            ["build-judge вердикт отсутствует — реализация не проверена"],
-            [], "BUILD-judge не запущен: вердикт не найден"
+            floor_checks + [{"name": "Build-judge verdict from subagent", "status": "FAIL",
+                             "detail": "Вердикт build-judge не найден. Запусти субагента.",
+                             "severity": "error"}],
+            floor_block + ["build-judge вердикт отсутствует — реализация не проверена"],
+            floor_warn, "BUILD-judge не запущен: вердикт не найден"
         )
 
-    passed = verdict.get("passed", False)
-    checks = verdict.get("checks", [])
-    blocking = verdict.get("blocking_issues", [])
-    warnings = verdict.get("warnings", [])
-    summary = verdict.get("summary", "BUILD-judge: см. вердикт субагента")
+    ok, verr = validate_verdict(verdict)
+    if not ok:
+        return _make_verdict(
+            "build-judge", slug, False,
+            floor_checks + [{"name": "Вердикт build-judge валиден", "status": "FAIL",
+                             "detail": "; ".join(verr), "severity": "error"}],
+            floor_block + [f"вердикт build-judge невалиден: {'; '.join(verr)}"],
+            floor_warn, "BUILD-judge: невалидный вердикт субагента (fail-closed)"
+        )
 
+    checks = list(verdict.get("checks", [])) + floor_checks
+    blocking = list(verdict.get("blocking_issues", [])) + floor_block
+    warnings = list(verdict.get("warnings", [])) + floor_warn
+    passed = bool(verdict.get("passed", False)) and not floor_block
+    summary = (verdict.get("summary", "BUILD-judge: см. вердикт субагента")
+               + f" | пол: {'OK' if not floor_block else str(len(floor_block)) + ' blocking'}")
     return _make_verdict("build-judge", slug, passed, checks, blocking, warnings, summary)
 
 
@@ -622,27 +730,70 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
     return _make_verdict("spec-judge", slug, passed, checks, blocking_issues, warnings, summary)
 
 
+_SECRET_RE = re.compile(
+    r"(?:password|passwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|token)\s*[=:]\s*"
+    r"['\"][^'\"\n]{6,}['\"]"
+    r"|AKIA[0-9A-Z]{16}"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----",
+    re.IGNORECASE)
+
+
+def _delivery_floor() -> tuple:
+    """Детерминированный пол delivery-judge: ловит секреты в изменённых файлах."""
+    checks, blocking, warnings = [], [], []
+    files = _changed_src_files(main_only=False)
+    secrets = []
+    for p in files:
+        try:
+            txt = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for ln in txt.splitlines():
+            if _SECRET_RE.search(ln):
+                secrets.append(f"{p.name}: {ln.strip()[:60]}")
+    if secrets:
+        checks.append({"name": "Нет секретов (детерминированно)", "status": "FAIL",
+                       "detail": "; ".join(secrets[:5]), "severity": "error"})
+        blocking.extend(f"возможный секрет в коде: {s}" for s in secrets[:5])
+    else:
+        checks.append({"name": "Нет секретов (детерминированно)", "status": "PASS",
+                       "detail": f"{len(files)} изменённых файлов", "severity": "error"})
+    return checks, blocking, warnings
+
+
 def check_delivery(slug: str, feature_dir: Path | None) -> dict:
-    """Проверка готовности к доставке: проверяет вердикт от delivery-judge субагента."""
-    verdict_path = _find_judge_verdict(slug, "delivery-judge")
-    verdict = _load_json(verdict_path)
+    """delivery-judge — гибрид: вердикт LLM-субагента + детерминированный пол (секреты).
+
+    Секреты блокируют доставку даже если LLM-вердикт отсутствует/невалиден."""
+    floor_checks, floor_block, floor_warn = _delivery_floor()
+    verdict = _load_json(_find_judge_verdict(slug, "delivery-judge"))
 
     if not verdict:
         return _make_verdict(
             "delivery-judge", slug, False,
-            [{"name": "Delivery-judge verdict from subagent", "status": "FAIL",
-              "detail": "Вердикт delivery-judge не найден. Запусти субагента delivery-judge.",
-              "severity": "error"}],
-            ["delivery-judge вердикт отсутствует — доставка не проверена"],
-            [], "DELIVERY-judge не запущен: вердикт не найден"
+            floor_checks + [{"name": "Delivery-judge verdict from subagent", "status": "FAIL",
+                             "detail": "Вердикт delivery-judge не найден. Запусти субагента.",
+                             "severity": "error"}],
+            floor_block + ["delivery-judge вердикт отсутствует — доставка не проверена"],
+            floor_warn, "DELIVERY-judge не запущен: вердикт не найден"
         )
 
-    passed = verdict.get("passed", False)
-    checks = verdict.get("checks", [])
-    blocking = verdict.get("blocking_issues", [])
-    warnings = verdict.get("warnings", [])
-    summary = verdict.get("summary", "DELIVERY-judge: см. вердикт субагента")
+    ok, verr = validate_verdict(verdict)
+    if not ok:
+        return _make_verdict(
+            "delivery-judge", slug, False,
+            floor_checks + [{"name": "Вердикт delivery-judge валиден", "status": "FAIL",
+                             "detail": "; ".join(verr), "severity": "error"}],
+            floor_block + [f"вердикт delivery-judge невалиден: {'; '.join(verr)}"],
+            floor_warn, "DELIVERY-judge: невалидный вердикт субагента (fail-closed)"
+        )
 
+    checks = list(verdict.get("checks", [])) + floor_checks
+    blocking = list(verdict.get("blocking_issues", [])) + floor_block
+    warnings = list(verdict.get("warnings", [])) + floor_warn
+    passed = bool(verdict.get("passed", False)) and not floor_block
+    summary = (verdict.get("summary", "DELIVERY-judge: см. вердикт субагента")
+               + f" | пол: {'OK' if not floor_block else str(len(floor_block)) + ' blocking'}")
     return _make_verdict("delivery-judge", slug, passed, checks, blocking, warnings, summary)
 
 
@@ -777,9 +928,235 @@ def check_coverage(slug: str, feature_dir: Path | None) -> dict:
     return _make_verdict("coverage-judge", slug, passed, checks, blocking, [], summary)
 
 
+# Детерминированный слой brd-judge: код-токены, которым не место в БТ.
+# (имя проверки, regex, re-флаги, severity). severity=error → blocking, warning → не блокирует.
+# SQL и ALL_CAPS — регистрозависимы намеренно: чтобы не ловить обычную бизнес-прозу
+# («from», «where») и акронимы без подчёркивания (REST, API, SLA, BRD).
+BRD_CODE_PATTERNS = [
+    ("Java-аннотации и типы",
+     r"@[A-Z][a-zA-Z]+\b"
+     r"|\b(SQLException|RuntimeException|IllegalStateException|Throwable|Optional|"
+     r"HashMap|ArrayList|LinkedList|UUID|BigDecimal)\b"
+     r"|\b\w+\.java\b", 0, "error"),
+    ("SQL/JPQL",
+     r"\b(SELECT|INSERT|UPDATE|DELETE|JOIN|WHERE|FROM|GROUP BY|ORDER BY)\b"
+     r"|\b\w+\.sql\b|\bJPQL\b", 0, "error"),
+    ("Сигнатуры методов",
+     r"\b\w*[a-z][A-Z]\w*\([^)\n]*\)|\b[a-z]+_[a-z][\w]*\([^)\n]*\)", 0, "error"),
+    ("Пакеты/неймспейсы",
+     r"\b[a-z][a-z0-9]+(?:\.[a-z][a-z0-9]+){2,}\b", 0, "error"),
+    ("Топики/очереди/метрики (ALL_CAPS)",
+     r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b", 0, "error"),
+    ("Имена классов (CamelCase)",
+     r"\b[A-Z][a-z]+(?:[A-Z][a-z]+)+\b", 0, "warning"),
+]
+
+
+def _resolve_brd_path(slug: str, feature_dir: Path | None) -> Path | None:
+    """Резолвит путь к документу БТ: --brd → feature_dir/brd.md → <slug>-brd.md."""
+    if BRD_OVERRIDE is not None:
+        p = BRD_OVERRIDE if BRD_OVERRIDE.is_absolute() else (PROJECT_ROOT / BRD_OVERRIDE)
+        return p if p.exists() else None
+    if feature_dir is not None:
+        cand = feature_dir / "brd.md"
+        if cand.exists():
+            return cand
+    fallback = FEATURE_DOCS_DIR / f"{slug}-brd.md"
+    if fallback.exists():
+        return fallback
+    return None
+
+
+def check_brd(slug: str, feature_dir: Path | None) -> dict:
+    """Детерминированный слой судьи БТ: ловит литеральные код-токены в документе БТ.
+
+    Семантику («написано как спецификация, а не как БТ») проверяет LLM-судья brd-judge —
+    его вердикт ингестится через --from-output. Здесь — дешёвый regex-гейт, который
+    работает и standalone (вне feature-pipeline) через флаг --brd.
+    """
+    brd_path = _resolve_brd_path(slug, feature_dir)
+    if brd_path is None:
+        return _make_verdict(
+            "brd-judge", slug, False,
+            [{"name": "BRD exists", "status": "FAIL",
+              "detail": "brd.md не найден (искал: --brd / feature_dir/brd.md / <slug>-brd.md)",
+              "severity": "error"}],
+            ["Документ БТ не найден — нечего проверять"],
+            [], "BRD отсутствует"
+        )
+
+    text = brd_path.read_text(encoding="utf-8", errors="replace")
+    checks = []
+    blocking_issues = []
+    warnings = []
+
+    # 1. Fenced-блоки кода (```) — в БТ их быть не должно
+    fenced = re.findall(r"```.*?```", text, re.DOTALL)
+    if fenced:
+        checks.append({"name": "Нет блоков кода (```)", "status": "FAIL",
+                       "detail": f"Найдено {len(fenced)} fenced-блок(ов) кода",
+                       "severity": "error"})
+        blocking_issues.append(
+            f"БТ содержит {len(fenced)} блок(ов) кода (```) — удали, опиши бизнес-эффект")
+    else:
+        checks.append({"name": "Нет блоков кода (```)", "status": "PASS",
+                       "detail": "fenced-блоков нет", "severity": "error"})
+
+    # Сканируем текст без fenced-блоков (чтобы не дублировать их содержимое в токенах)
+    scan = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+
+    for name, pattern, flags, severity in BRD_CODE_PATTERNS:
+        found: list[str] = []
+        for m in re.finditer(pattern, scan, flags):
+            tok = m.group(0).strip()
+            if tok and tok not in found:
+                found.append(tok)
+            if len(found) >= 8:
+                break
+        if found:
+            sample = ", ".join(f"`{t}`" for t in found)
+            if severity == "error":
+                checks.append({"name": name, "status": "FAIL",
+                               "detail": f"Найдено: {sample}", "severity": "error"})
+                blocking_issues.append(
+                    f"{name}: {sample} — это реализация, опиши бизнес-эффект и правило")
+            else:
+                checks.append({"name": name, "status": "WARN",
+                               "detail": f"Найдено: {sample}", "severity": "warning"})
+                warnings.append(
+                    f"{name}: {sample} — проверь, не код ли это (спорное решает LLM-судья)")
+        else:
+            checks.append({"name": name, "status": "PASS",
+                           "detail": "не найдено", "severity": severity})
+
+    passed = len(blocking_issues) == 0
+    summary = f"{sum(1 for c in checks if c['status'] == 'PASS')}/{len(checks)} checks passed."
+    if blocking_issues:
+        summary += f" {len(blocking_issues)} blocking issue(s)."
+    if warnings:
+        summary += f" {len(warnings)} warning(s)."
+
+    return _make_verdict("brd-judge", slug, passed, checks, blocking_issues, warnings, summary)
+
+
+# Детерминированный слой reuse-judge: «велосипеды» — код, дублирующий доступные библиотеки/stdlib.
+# (имя, regex, замена, libs|None). libs=None → замена из stdlib (всегда доступна) → severity warning
+# (эвристика, спорное добивает LLM); libs=(...) → blocking, если хоть одна есть в каталоге зависимостей.
+REUSE_PATTERNS = [
+    ("Ручная проверка пустоты/null коллекции",
+     r"\w+\s*[!=]=\s*null\s*(?:&&|\|\|)\s*!?\s*\w+\.isEmpty\(\)",
+     "CollectionUtils.isEmpty()/isNotEmpty()",
+     ("commons-collections", "commons-collections4", "spring-core", "guava")),
+    ("Ручная проверка пустой/blank строки",
+     r"\.trim\(\)\s*\.isEmpty\(\)|\.equals\(\"\"\)|\"\"\.equals\(",
+     "StringUtils.isBlank()/isEmpty()",
+     ("commons-lang3", "spring-core", "guava")),
+    ("Ручной null-default (тернарник)",
+     r"\w+\s*!=\s*null\s*\?\s*\w+\s*:\s*\w+",
+     "Objects.requireNonNullElse() / Optional.ofNullable()",
+     None),
+    ("Ручной null-check с throw",
+     r"if\s*\(\s*\w+\s*==\s*null\s*\)\s*\{?\s*throw",
+     "Objects.requireNonNull()",
+     None),
+]
+
+
+def _git_diff_added(base: str) -> list:
+    """Список (file, added_line) добавленных строк по `git diff <base>` для *.java."""
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["git", "diff", "--unified=0", base, "--", "*.java"],
+            cwd=str(PROJECT_ROOT), capture_output=True, text=True, timeout=60,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return []
+    if r.returncode != 0:
+        return []
+    out = []
+    cur = None
+    for line in r.stdout.splitlines():
+        if line.startswith("+++ b/"):
+            cur = line[6:]
+        elif line.startswith("+") and not line.startswith("+++"):
+            out.append((cur or "?", line[1:]))
+    return out
+
+
+def _load_reuse_deps() -> set:
+    """Множество имён зависимостей (artifact и group) из scan/reuse.json."""
+    p = REUSE_SCAN_OVERRIDE if REUSE_SCAN_OVERRIDE else (
+        PROJECT_ROOT / "docs" / "system-analysis" / "scan" / "reuse.json")
+    data = _load_json(Path(p))
+    deps: set = set()
+    if data:
+        for it in data.get("dependencies", []):
+            if it.get("artifact"):
+                deps.add(it["artifact"])
+            if it.get("group"):
+                deps.add(it["group"])
+    return deps
+
+
+def check_reuse(slug: str, feature_dir: Path | None) -> dict:
+    """Детерминированный слой судьи качества: ловит велосипеды в добавленном production-коде.
+
+    Семантику («новый helper дублирует существующий util проекта/библиотеки») добивает LLM
+    reuse-judge через --from-output. Здесь — дешёвый regex по git diff, работает и standalone
+    (minor-defect-fix) через --diff-base.
+    """
+    added = [(f, t) for (f, t) in _git_diff_added(DIFF_BASE) if "src/main" in (f or "")]
+    checks: list = []
+    blocking_issues: list = []
+    warnings: list = []
+
+    if not added:
+        checks.append({"name": "Изменённый production-код", "status": "SKIP",
+                       "detail": f"нет добавленных строк в src/main (base={DIFF_BASE})",
+                       "severity": "info"})
+        return _make_verdict("reuse-judge", slug, True, checks, [], [],
+                             "Нет production-изменений для проверки")
+
+    deps = _load_reuse_deps()
+    for name, pattern, replacement, libs in REUSE_PATTERNS:
+        hits = []
+        for f, t in added:
+            if re.search(pattern, t):
+                hits.append((f, t.strip()[:120]))
+            if len(hits) >= 6:
+                break
+        if not hits:
+            checks.append({"name": name, "status": "PASS", "detail": "не найдено",
+                           "severity": "info"})
+            continue
+        sample = "; ".join(f"{f}: `{txt}`" for f, txt in hits)
+        lib_available = any(any(l in d for d in deps) for l in libs) if libs else False
+        if libs is not None and lib_available:
+            checks.append({"name": name, "status": "FAIL",
+                           "detail": f"{replacement} доступен в зависимостях; {sample}",
+                           "severity": "error"})
+            blocking_issues.append(f"{name}: используй {replacement} вместо велосипеда ({sample})")
+        else:
+            checks.append({"name": name, "status": "WARN",
+                           "detail": f"рассмотри {replacement}; {sample}",
+                           "severity": "warning"})
+            warnings.append(f"{name}: рассмотри {replacement} ({sample})")
+
+    passed = len(blocking_issues) == 0
+    summary = f"{sum(1 for c in checks if c['status'] == 'PASS')}/{len(checks)} checks passed."
+    if blocking_issues:
+        summary += f" {len(blocking_issues)} blocking issue(s)."
+    if warnings:
+        summary += f" {len(warnings)} warning(s)."
+    return _make_verdict("reuse-judge", slug, passed, checks, blocking_issues, warnings, summary)
+
+
 # ====== MAIN ======
 
 PHASE_MAP = {
+    "brd": check_brd,
+    "reuse": check_reuse,
     "eval": check_eval,
     "red": check_red,
     "build": check_build,
@@ -805,6 +1182,14 @@ def main():
                         help="Путь к docs/feature-pipeline (по умолчанию <project-root>/docs/feature-pipeline)")
     parser.add_argument("--system-analysis-dir", default=None,
                         help="Путь к docs/system-analysis (по умолчанию <project-root>/docs/system-analysis)")
+    parser.add_argument("--brd", default=None,
+                        help="Явный путь к документу БТ для фазы brd (standalone-проверка, "
+                             "напр. business-requirements/<slug>.md). Относительный путь — от --project-root.")
+    parser.add_argument("--diff-base", default="HEAD",
+                        help="База git diff для фазы reuse (по умолчанию HEAD).")
+    parser.add_argument("--reuse-scan", default=None,
+                        help="Путь к scan/reuse.json (каталог зависимостей) для фазы reuse "
+                             "(по умолчанию docs/system-analysis/scan/reuse.json).")
     parser.add_argument("--recheck", action="store_true",
                         help="Перепроверить существующий вердикт (exit 1 если нет или failed)")
     parser.add_argument("--from-output", default=None,
@@ -833,6 +1218,15 @@ def main():
     else:
         SYSTEM_ANALYSIS_DIR = project_root / "docs" / "system-analysis"
 
+    if args.brd:
+        global BRD_OVERRIDE
+        BRD_OVERRIDE = Path(args.brd)
+
+    global DIFF_BASE, REUSE_SCAN_OVERRIDE
+    DIFF_BASE = args.diff_base
+    if args.reuse_scan:
+        REUSE_SCAN_OVERRIDE = Path(args.reuse_scan)
+
     feature_dir = _find_feature_dir(args.slug)
     if not feature_dir:
         print(f"WARN: Папка фичи не найдена в {FEATURE_DOCS_DIR}", file=sys.stderr)
@@ -850,10 +1244,15 @@ def main():
         except (OSError, json.JSONDecodeError) as e:
             print(f"ERROR: не удалось прочитать --from-output: {e}", file=sys.stderr)
             sys.exit(2)
-        if not isinstance(subagent, dict) or "passed" not in subagent:
-            print("ERROR: вердикт субагента должен быть JSON-объектом с полем 'passed'",
-                  file=sys.stderr)
-            sys.exit(2)
+        ok, verr = validate_verdict(subagent)
+        if not ok:
+            print("ERROR: вердикт субагента не прошёл валидацию схемы judge-verdict@1 "
+                  "(fail-closed). Верни валидный JSON: обязателен boolean 'passed', "
+                  "'checks' — массив {name,status∈PASS/FAIL/WARN/SKIP}, "
+                  "'blocking_issues'/'warnings' — массивы.", file=sys.stderr)
+            for e in verr:
+                print(f"  - {e}", file=sys.stderr)
+            sys.exit(1)
         verdict = _make_verdict(
             judge_name, args.slug, bool(subagent.get("passed")),
             subagent.get("checks", []),
@@ -874,8 +1273,10 @@ def main():
 
     # --recheck: перепроверяем реально (для eval/spec/red с детерминированными проверками)
     if args.recheck:
-        # Для eval и spec — запускаем полную проверку заново (не кэш)
-        if args.phase in ("eval", "spec", "red", "coverage"):
+        # Для детерминированных и гибридных фаз — полная проверка заново (не кэш).
+        # build/delivery — гибрид: check_* загружает сохранённый LLM-вердикт и применяет
+        # детерминированный пол (stubs/секреты), поэтому recheck обязан их пересчитывать.
+        if args.phase in ("brd", "reuse", "eval", "spec", "red", "coverage", "build", "delivery"):
             try:
                 verdict = PHASE_MAP[args.phase](args.slug, feature_dir)
             except Exception as e:

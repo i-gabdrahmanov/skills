@@ -30,6 +30,7 @@ ADVISORY = {
     "async_producers": "async",
     "integration": "external_clients",
     "db": "tables",
+    "reuse": "reuse",
 }
 
 
@@ -45,6 +46,9 @@ def _reported_count(reported: dict, key: str, cat: str) -> int:
         if alias in reported["counts"]:
             return int(reported["counts"][alias])
     val = reported.get(key, [])
+    if cat == "reuse" and isinstance(val, dict):
+        # excerpt-секция reuse: {dependencies:[...], project_utils:[...]}
+        return len(val.get("dependencies", [])) + len(val.get("project_utils", []))
     if isinstance(val, list):
         if cat == "async_consumers":
             cons = [x for x in val if isinstance(x, dict) and x.get("direction") == "consumer"]

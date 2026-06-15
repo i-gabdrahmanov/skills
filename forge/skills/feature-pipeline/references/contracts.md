@@ -40,9 +40,11 @@
 
 | # | Судья | Фаза | Что проверяет | Блокирует |
 |---|-------|------|---------------|-----------|
+| 0 | brd-judge | 0 (после BRD) | БТ на языке бизнеса, не спека с кодом? Нет код-токенов? | Шаг `00-brd` |
 | 1 | eval-judge | 2.5 (после eval-plan) | Eval'ы покрывают acceptance? Пороги адекватны? Нет дубликатов? | Шаг `02-eval-plan` |
 | 2 | red-judge | 3 — RED (после тестов) | Тесты специфицируют acceptance? Нет assertTrue? Есть негативные сценарии? | Шаг `04-test-<taskId>` |
 | 3 | build-judge | 3 — GREEN (после кода) | Нет stubs? Нет мёртвого кода? Код = tech-design? | Шаг `04-build-<taskId>` |
+| 3b | reuse-judge | 3 — GREEN (после build-judge) | Нет велосипедов? Не дублирует доступные библиотеки/util? | Шаг `04-build-<taskId>` |
 | 4 | spec-judge | 5 (после Document) | Docs полны? Ground актуален? Нет мусора? | Шаг `06-spec` |
 | 5 | delivery-judge | 6 (перед коммитом) | Jira консистентна? Нет секретов? git status чист? | Гейт 4 (коммиты) |
 
@@ -85,9 +87,11 @@ ground/statements/feature-pipeline/<slug>/
 ├── manifest.json
 ├── steps.json
 ├── judges/
+│   ├── brd-judge.json
 │   ├── eval-judge.json
 │   ├── red-judge.json
 │   ├── build-judge.json
+│   ├── reuse-judge.json
 │   ├── spec-judge.json
 │   └── delivery-judge.json
 ```
@@ -97,13 +101,25 @@ ground/statements/feature-pipeline/<slug>/
 Подробные инструкции по вызову каждого судьи — в SKILL.md feature-pipeline.
 Кратко:
 
+0. **brd-judge**: после создания `brd.md`, перед Гейтом 1 (закрытием `00-brd`).
+   Гибрид: детерминированный `run_judge.py brd` (код-токены) + LLM-субагент (стиль БТ vs спека).
 1. **eval-judge**: после `build_evals_from_design.py`, перед закрытием `02-eval-plan`
 2. **red-judge**: после субагента-тестописателя, ДО стабов, перед закрытием `04-test-<taskId>`
 3. **build-judge**: после реализации + зелёных тестов, перед закрытием `04-build-<taskId>`
+3b. **reuse-judge**: после build-judge (PASS), перед закрытием `04-build-<taskId>` —
+    гибрид: `run_judge.py reuse` (regex велосипедов по git diff) + LLM по каталогу `scan/reuse.json`
 4. **spec-judge**: после спецадаптера + enrich_grounding, перед закрытием `06-spec`
 5. **delivery-judge**: перед Гейтом 4 (до показа плана коммитов)
 
 ## 7. Критерии FAIL по каждому судье
+
+### 7.0 brd-judge
+- В тексте БТ есть код-токен: имя класса/сущности/поля/таблицы, метод/сигнатура, SQL/JPQL,
+  пакет, фрагмент кода, имя метрики, название топика/очереди, тип исключения
+- Есть fenced-блок кода (```)
+- Требование описывает реализацию (последовательность вызовов), а не бизнес-эффект/правило
+- Внутренние имена модулей/сервисов поданы как дизайн, а не как внешняя система по имени
+- Документ БТ (brd.md / <slug>-brd.md) не найден
 
 ### 7.1 eval-judge
 - Хотя бы одна задача без compile eval'а
@@ -125,6 +141,13 @@ ground/statements/feature-pipeline/<slug>/
 - @Transactional + Kafka без afterCommit (если это проблема)
 - Код не компилируется
 - Новые checkstyle-нарушения
+
+### 7.3b reuse-judge
+- Новый код вручную дублирует доступную библиотечную утилиту (библиотека есть в
+  `scan/reuse.json.dependencies`): ручная проверка коллекции/строки на null/пустоту,
+  ручной null-default/null-check вместо `CollectionUtils`/`StringUtils`/`Objects`/`Optional`
+- Новый util/helper-класс дублирует существующий `project_util` из каталога
+- (WARN, не блок) stdlib-замена по эвристике; похожий util с другой сигнатурой
 
 ### 7.4 spec-judge
 - brd.md, tech-design.md или task-plan.json отсутствуют

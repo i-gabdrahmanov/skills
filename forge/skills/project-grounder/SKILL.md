@@ -61,7 +61,7 @@ cat ground/pipeline.json
 Не проверяй один путь руками — используй детектор, он ищет grounding в типовых местах
 (`system-analysis/`, `ground/**`, `.grounding/`) и не даёт повторять грундинг снова и снова:
 ```bash
-python3 ~/.gigacode/skills/system-analyst/scripts/check_grounding.py --root . --json
+python3 <project>/.gigacode/skills/system-analyst/scripts/check_grounding.py --root . --json
 ```
 - **exit 0** → §2a (есть, переиспользуй). Вердикт содержит `kind` (excerpt|scan|overview|legacy),
   `path`, `excerpt_path`.
@@ -148,14 +148,15 @@ EOF
 без LLM:
 
 ```bash
-python3 ~/.gigacode/skills/system-analyst/scripts/scan_all.py \
+python3 <project>/.gigacode/skills/system-analyst/scripts/scan_all.py \
     -o "<docs_path>/system-analysis/scan"
 ```
 
 Собери excerpt **напрямую из `scan/*.json`** (полные `items[]`, ничего не сокращая):
 `entities` ← `domain.json`, `api_endpoints` ← `api.json`, `async` ← `async_consumers.json`
 + `async_producers.json`, `external_clients` ← `integration.json`, `tables` ← `db.json`,
-`modules` ← `structure.json`.
+`modules` ← `structure.json`, `reuse` ← `reuse.json` (каталог переиспользования —
+зависимости и util-классы; компактно: координаты `artifact:version` и имена классов).
 
 Структура JSON:
 
@@ -177,9 +178,16 @@ python3 ~/.gigacode/skills/system-analyst/scripts/scan_all.py \
   "external_clients": [
     {"name": "UpzClient", "target": "upz-adapter", "module": "service-dbservice"}
   ],
-  "tables": ["artifact", "task", "document"]
+  "tables": ["artifact", "task", "document"],
+  "reuse": {
+    "dependencies": ["commons-lang3:3.14.0", "spring-boot-starter-web:3.2.1"],
+    "project_utils": ["com.x.common.DateUtils", "com.x.common.JsonHelper"]
+  }
 }
 ```
+
+> Каталог `reuse` нужен судье качества `reuse-judge` и разработчику: знать, что уже доступно
+> на classpath и какие util-классы есть в проекте, чтобы не писать велосипеды.
 
 Сохрани в `<docs_path>/system-analysis/grounding-excerpt.json`.
 
@@ -188,7 +196,7 @@ python3 ~/.gigacode/skills/system-analyst/scripts/scan_all.py \
 Сверь выжимку против ground truth, прежде чем отдавать дальше:
 
 ```bash
-python3 ~/.gigacode/skills/system-analyst/scripts/verify_coverage.py \
+python3 <project>/.gigacode/skills/system-analyst/scripts/verify_coverage.py \
     --scan "<docs_path>/system-analysis/scan" \
     --reported "<docs_path>/system-analysis/grounding-excerpt.json"
 ```
@@ -210,7 +218,7 @@ python3 ~/.gigacode/skills/system-analyst/scripts/verify_coverage.py \
 git toplevel или cwd; `--project <путь>` нужен только если корень другой):
 
 ```bash
-python ~/.gigacode/skills/pipeline-state/scripts/update.py \
+python <project>/.gigacode/skills/pipeline-state/scripts/update.py \
     --skill feature-pipeline \
     --step-id 01-grounding \
     --status completed \
@@ -262,8 +270,8 @@ python ~/.gigacode/skills/pipeline-state/scripts/update.py \
 
 ## Ссылки
 
-- `~/.gigacode/skills/system-analyst/SKILL.md` — полный цикл анализа
-- `~/.gigacode/skills/system-analyst/scripts/scan_all.py` — детерминированный скан (ground truth для excerpt)
-- `~/.gigacode/skills/system-analyst/scripts/verify_coverage.py` — gate самопроверки полноты
-- `~/.gigacode/skills/pipeline-state/scripts/` — init/read/update
+- `<project>/.gigacode/skills/system-analyst/SKILL.md` — полный цикл анализа
+- `<project>/.gigacode/skills/system-analyst/scripts/scan_all.py` — детерминированный скан (ground truth для excerpt)
+- `<project>/.gigacode/skills/system-analyst/scripts/verify_coverage.py` — gate самопроверки полноты
+- `<project>/.gigacode/skills/pipeline-state/scripts/` — init/read/update
 - `docs/feature-pipeline/contracts.md §6` — стык 1→2 (что именно передаётся дизайнеру)

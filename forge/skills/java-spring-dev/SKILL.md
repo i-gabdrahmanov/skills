@@ -232,6 +232,21 @@ public class SeasonController {
 }
 ```
 
+## Reuse — don't reinvent the wheel
+
+Before writing utility code (null/empty checks, string ops, collections, dates, JSON), check the
+project's **reuse catalog** — the `reuse` section in `grounding-excerpt.json` and
+`docs/system-analysis/scan/reuse.json` (`dependencies` + `project_utils`), injected by the
+`context-injector` hook. Use what's already on the classpath or an existing project util instead
+of hand-rolling:
+- collection null/empty → `CollectionUtils.isEmpty()` (if commons-collections / spring on classpath)
+- blank/empty string → `StringUtils.isBlank()` (commons-lang3 / spring)
+- null-default / null-check → `Objects.requireNonNullElse()` / `Optional` / `Objects.requireNonNull()` (JDK)
+- prefer an existing `*Util`/`*Helper` from `project_utils` over a new one
+
+This is enforced after the fact by **reuse-judge** (it blocks on wheels duplicating available
+libraries). Writing it right the first time avoids a re-iteration.
+
 ## Checklist for a new feature
 
 When asked to add a new entity or feature, always produce all layers:

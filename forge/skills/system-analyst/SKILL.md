@@ -256,13 +256,26 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/scan_all.py \
 
 На выходе — каталог `scan/`: `domain.json`, `api.json`, `async_consumers.json`,
 `async_producers.json`, `integration.json`, `config.json`, `cross_cutting.json`,
-`db.json`, `structure.json`, `summary.json`. У каждой категории — `total`,
+`db.json`, `reuse.json`, `structure.json`, `summary.json`. У каждой категории — `total`,
 `gate_total`, `counts_by_module`, полный `items[]`.
 
 - **HARD** (точный счёт, проверяется гейтом): `domain` (@Entity), `api` (эндпойнты),
   `async_consumers` (@KafkaListener).
 - **ADVISORY** (нечёткая семантика «что считать единицей» — гейт только предупреждает):
-  integration, config, cross_cutting, db, async_producers.
+  integration, config, cross_cutting, db, async_producers, **reuse**.
+
+> **`reuse.json` — каталог переиспользования** (для судьи качества `reuse-judge` и
+> разработчика): `dependencies` (внешние библиотеки из build.gradle/pom — что доступно на
+> classpath) + `project_utils` (внутрипроектные util/helper-классы с публичными сигнатурами).
+> Строится за один детерминированный проход по всем модулям — фан-аут не нужен.
+>
+> **Опционально (большой/микросервисный проект): LLM-синтезатор `reuse-mapper`.** Для курации
+> каталога (что именно даёт каждая зависимость — commons-lang3→StringUtils/ObjectUtils, guava→…;
+> поиск дублей util-классов) добавь синтезатор-субагента, который читает срез `scan/reuse.json`
+> своих модулей и пишет человекочитаемый `docs/system-analysis/reuse-catalog.md`. Фан-аут — по
+> тому же правилу масштабирования, что и остальные синтезаторы (см. «Масштабирование»: >10
+> модулей → волнами; несколько микросервис-репо → субагент на корень/группу). Малый проект —
+> один проход без фан-аута, детерминированного `reuse.json` достаточно.
 
 Сохрани шаг `01b-scan` в pipeline-state (output = `summary.json`).
 
