@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 preflight-validate.py — проверка готовности шага к выполнению: фаза,
                       субагент, судьи, порядок прохождения.

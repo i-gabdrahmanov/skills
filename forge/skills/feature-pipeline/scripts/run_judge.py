@@ -425,7 +425,9 @@ def check_red(slug: str, feature_dir: Path | None) -> dict:
     pipeline_json_path = project_root / "ground" / "pipeline.json"
     modules = []
 
-    # 1. Пытаемся вытащить модули из task-plan.json
+    # 1. Пытаемся вытащить модули из task-plan.json.
+    #    tech-design пишет модули в tasks[].modules (массив; см. check_taskplan.py),
+    #    но допускаем и единичное поле module (str) для совместимости.
     if feature_dir:
         taskplan_path = feature_dir / "task-plan.json"
         if taskplan_path.exists():
@@ -433,57 +435,86 @@ def check_red(slug: str, feature_dir: Path | None) -> dict:
                 with open(taskplan_path) as f:
                     tp = json.load(f)
                 for task in tp.get("tasks", []):
-                    m = task.get("module")
-                    if m and m not in modules:
-                        modules.append(m)
+                    mods = task.get("modules")
+                    if isinstance(mods, list):
+                        for m in mods:
+                            if m and m not in modules:
+                                modules.append(m)
+                    elif isinstance(task.get("module"), str) and task["module"]:
+                        if task["module"] not in modules:
+                            modules.append(task["module"])
             except (json.JSONDecodeError, OSError):
                 pass
 
-    # 2. Fallback — из pipeline.json
+    # 2. Fallback — из pipeline.json. Модули лежат в project.modules
+    #    (init_pipeline_config.py); top-level modules — на случай старого формата.
     if not modules and pipeline_json_path.exists():
         try:
             with open(pipeline_json_path) as f:
                 cfg = json.load(f)
-            modules = cfg.get("modules", [])
+            modules = list(cfg.get("project", {}).get("modules") or cfg.get("modules", []))
         except (json.JSONDecodeError, OSError):
             pass
 
-    if not modules:
-        return _make_verdict(
-            "red-judge", slug, False,
-            [{"name": "module discovery", "status": "FAIL",
-              "detail": "Не удалось определить модули — нет task-plan.json и pipeline.json",
-              "severity": "error"}],
-            ["Нет модулей для запуска тестов"],
-            [], "RED-judge: не найдены модули"
-        )
+    # 3. Пусто → одномодульный проект (нет settings.gradle с include): тесты гоняем
+    #    в корне (./gradlew test), а не падаем «нет модулей». None — сентинел корня.
+    single_module = not modules
+    if single_module:
+        modules = [None]
+
+    # Читаем test_layer из pipeline.json (default=service-unit для multimodule)
+    test_layer = "service-unit"
+    if pipeline_json_path.exists():
+        try:
+            with open(pipeline_json_path) as f:
+                _pcfg = json.load(f)
+            test_layer = _pcfg.get("quality", {}).get("test_layer", test_layer)
+        except (json.JSONDecodeError, OSError):
+            pass
 
     checks = []
     blocking_issues = []
+    warnings: list[str] = []
     all_passed = True
 
-    for module in modules:
-        # Нормализация имени модуля:
-        #   service-taskservice → :service:taskservice (из pipeline.json modules)
-        #   service:taskservice → :service:taskservice (из task-plan.json, уже с :)
-        #   :service:taskservice → :service:taskservice (уже нормализован)
-        gradle_path = module
-        if gradle_path.startswith(":"):
-            pass  # уже нормализован
-        elif ":" in gradle_path:
-            # service:taskservice → :service:taskservice (добавить ведущее :)
-            gradle_path = f":{gradle_path}"
-        else:
-            # Разделяем по последнему дефису, пример: service-taskservice → :service:taskservice
-            parts = gradle_path.rsplit("-", 1)
-            if len(parts) == 2:
-                # Проверяем, что это не пакет с дефисом (например my-lib)
-                gradle_path = f":{parts[0]}:{parts[1]}"
-            else:
-                gradle_path = f":{gradle_path}"
+    # Детерминированный флор: запрещённые аннотации в тест-файлах.
+    # Блокирует ДО запуска gradle — быстрее и точнее.
+    ann_checks, ann_blocking, ann_warnings = _check_forbidden_test_annotations(
+        feature_dir, test_layer
+    )
+    checks.extend(ann_checks)
+    blocking_issues.extend(ann_blocking)
+    warnings.extend(ann_warnings)
+    if ann_blocking:
+        all_passed = False
 
-        # Запускаем gradle test с фильтром на классы, содержащие 'Test'
-        gradle_cmd = ["./gradlew", f"{gradle_path}:test", "--tests", "*Test", "--no-daemon"]
+    for module in modules:
+        if module is None:
+            # Одномодульный проект — тесты в корне (без :module: префикса).
+            label = "root"
+            gradle_cmd = ["./gradlew", "test", "--tests", "*Test", "--no-daemon"]
+        else:
+            # Нормализация имени модуля:
+            #   service-taskservice → :service:taskservice (из pipeline.json modules)
+            #   service:taskservice → :service:taskservice (из task-plan.json, уже с :)
+            #   :service:taskservice → :service:taskservice (уже нормализован)
+            gradle_path = module
+            if gradle_path.startswith(":"):
+                pass  # уже нормализован
+            elif ":" in gradle_path:
+                # service:taskservice → :service:taskservice (добавить ведущее :)
+                gradle_path = f":{gradle_path}"
+            else:
+                # Разделяем по последнему дефису: service-taskservice → :service:taskservice
+                parts = gradle_path.rsplit("-", 1)
+                if len(parts) == 2:
+                    # Проверяем, что это не пакет с дефисом (например my-lib)
+                    gradle_path = f":{parts[0]}:{parts[1]}"
+                else:
+                    gradle_path = f":{gradle_path}"
+            label = module
+            gradle_cmd = ["./gradlew", f"{gradle_path}:test", "--tests", "*Test", "--no-daemon"]
+
         try:
             r = subprocess.run(
                 gradle_cmd, cwd=str(project_root),
@@ -497,32 +528,32 @@ def check_red(slug: str, feature_dir: Path | None) -> dict:
                     if "test" in line.lower() and "fail" in line.lower():
                         detail = line.strip()
                         break
-                blocking_issues.append(f"RED-judge {module}: tests FAILED ({detail})")
+                blocking_issues.append(f"RED-judge {label}: tests FAILED ({detail})")
                 all_passed = False
 
             checks.append({
-                "name": f"test:{module}",
+                "name": f"test:{label}",
                 "status": "PASS" if passed else "FAIL",
                 "detail": detail[:200],
                 "severity": "error",
             })
         except subprocess.TimeoutExpired:
             checks.append({
-                "name": f"test:{module}",
+                "name": f"test:{label}",
                 "status": "FAIL",
                 "detail": "timeout (300s)",
                 "severity": "error",
             })
-            blocking_issues.append(f"RED-judge {module}: timeout")
+            blocking_issues.append(f"RED-judge {label}: timeout")
             all_passed = False
         except FileNotFoundError:
             checks.append({
-                "name": f"test:{module}",
+                "name": f"test:{label}",
                 "status": "FAIL",
                 "detail": "gradlew not found",
                 "severity": "error",
             })
-            blocking_issues.append(f"RED-judge {module}: gradlew not found")
+            blocking_issues.append(f"RED-judge {label}: gradlew not found")
             all_passed = False
 
     passed_count = sum(1 for c in checks if c["status"] == "PASS")
@@ -530,7 +561,7 @@ def check_red(slug: str, feature_dir: Path | None) -> dict:
     if blocking_issues:
         summary += f", {len(blocking_issues)} blocking"
 
-    return _make_verdict("red-judge", slug, all_passed, checks, blocking_issues, [], summary)
+    return _make_verdict("red-judge", slug, all_passed, checks, blocking_issues, warnings, summary)
 
 
 def _changed_src_files(base: str = "HEAD", main_only: bool = True) -> list:
@@ -555,6 +586,82 @@ def _changed_src_files(base: str = "HEAD", main_only: bool = True) -> list:
 
 _STUB_RE = re.compile(r"UnsupportedOperationException|not\s+implemented", re.IGNORECASE)
 _TODO_RE = re.compile(r"\b(TODO|FIXME)\b")
+
+# Аннотации, запрещённые при test_layer=service-unit.
+# @DataJpaTest поднимает ApplicationContext → initializationError в multimodule.
+# @SpringBootTest — то же плюс требует запущенного контейнера.
+_FORBIDDEN_TEST_ANNOTATIONS = re.compile(
+    r"@(?:DataJpaTest|SpringBootTest)\b"
+)
+
+
+def _check_forbidden_test_annotations(
+    feature_dir: Path | None,
+    test_layer: str,
+) -> tuple:
+    """Детерминированный флор red-judge: запрещённые аннотации в тест-файлах.
+
+    Сканирует только файлы из task-plan artifacts с src/test в пути.
+    При test_layer=service-unit → blocking для @DataJpaTest/@SpringBootTest.
+    При других значениях → warning (в проекте может быть настроен контекст).
+    """
+    checks, blocking, warnings = [], [], []
+    if not feature_dir:
+        return checks, blocking, warnings
+
+    taskplan_path = feature_dir / "task-plan.json"
+    if not taskplan_path.exists():
+        return checks, blocking, warnings
+
+    try:
+        tp = json.loads(taskplan_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return checks, blocking, warnings
+
+    # Собираем пути тест-файлов из artifacts
+    test_artifacts: list[Path] = []
+    project_root = PROJECT_ROOT or Path.cwd()
+    for task in tp.get("tasks", []):
+        for artifact in task.get("artifacts", []):
+            if "src/test" in artifact and artifact.endswith(".java"):
+                p = project_root / artifact
+                if p.exists():
+                    test_artifacts.append(p)
+
+    if not test_artifacts:
+        return checks, blocking, warnings
+
+    hits = []
+    for p in test_artifacts:
+        try:
+            txt = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for ln in txt.splitlines():
+            m = _FORBIDDEN_TEST_ANNOTATIONS.search(ln)
+            if m:
+                hits.append(f"{p.name}: {ln.strip()[:100]}")
+
+    check_name = "Нет @DataJpaTest/@SpringBootTest (test_layer=service-unit)"
+    if hits:
+        severity = "blocking" if test_layer == "service-unit" else "warning"
+        detail = "; ".join(hits[:5])
+        if test_layer == "service-unit":
+            blocking.extend(
+                f"Запрещённая аннотация (test_layer=service-unit): {h}" for h in hits[:5]
+            )
+            checks.append({"name": check_name, "status": "FAIL",
+                           "detail": detail, "severity": "error"})
+        else:
+            warnings.append(f"@DataJpaTest/@SpringBootTest: {detail}")
+            checks.append({"name": check_name, "status": "WARN",
+                           "detail": detail, "severity": "warning"})
+    else:
+        checks.append({"name": check_name, "status": "PASS",
+                       "detail": f"Проверено {len(test_artifacts)} тест-файлов",
+                       "severity": "error"})
+
+    return checks, blocking, warnings
 
 
 def _build_floor() -> tuple:
@@ -1360,6 +1467,15 @@ def main():
     for check in verdict.get("checks", []):
         if check["status"] != "PASS":
             print(f"  [{check['status']}] {check['name']}: {check['detail']}")
+
+    # Подсказка: как вручную пропустить заблокированный гейт (последнее средство).
+    # Однострочная команда — Qwen-рантайм надёжнее выполняет команды без переносов.
+    if not verdict["passed"] and verdict.get("blocking_issues"):
+        _ovr = Path(__file__).resolve().parents[2] / "pipeline-state" / "scripts" / "override_judge.py"
+        print()
+        print("  ℹ️  Гейт можно пропустить вручную (последнее средство, после 3 ре-итераций):")
+        print(f"     python3 {_ovr} --judge {judge_name} "
+              f"--feature {args.slug} --step-id <step-id> --reason \"<обоснование>\"")
 
     sys.exit(0 if verdict["passed"] else 1)
 

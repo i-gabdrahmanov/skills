@@ -239,8 +239,10 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
 
 1. `run_judge.py <phase> <slug>` (уже exit 1 и сохранил blocking_issues в errors.json)
 2. **Прочитай errors.json** для получения `accumulated_errors` и счётчика `iterations`
-3. Если `len(iterations) >= 3` — **спроси пользователя**: «Попыток больше нет.
-   Сбросить errors.json и начать заново / отменить шаг?»
+3. Если `len(iterations) >= 3` — **спроси пользователя** (три варианта): «Попыток больше нет.
+   (a) сбросить errors.json и начать заново; (b) отменить шаг; (c) пропустить гейт вручную
+   с обоснованием (override, см. §0.6.1) — выбирай (c) только если причина FAIL внешняя и
+   не устранима правкой артефактов (нет тестовой БД, внешний сервис недоступен и т.п.)»
 4. Если `< 3` — сформируй промпт для повторного субагента:
    ```
    **⚠️ Ошибки предыдущих прогонов (из errors.json):**
@@ -260,6 +262,38 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
 > **Почему это правило:** на прошлых прогонах пайплайн делал inline-правку после judge FAIL,
 > что приводило к пропуску TDD-цикла, нарушению изоляции и потере контекста при обрыве
 > сессии. Error store решает все три проблемы.
+
+### 0.6.1 Ручной пропуск гейта (override) — последнее средство
+
+Иногда судья падает по причине, которую **нельзя устранить правкой артефактов**: нет тестовой
+БД в окружении, внешний сервис недоступен, acceptance намеренно ослаблен по согласованию.
+Тогда пользователь может разрешить пропуск гейта. Это работает для **любого** судьи на
+**любом уровне** (brd/eval/red/build/reuse/coverage/spec/delivery).
+
+**Когда применять:** только после исчерпания 3 ре-итераций (§0.6) и **только с явного
+согласия пользователя**. Не предлагай override на первом FAIL — сначала чини.
+
+**Шаг 1.** Создай override-файл (`--reason` обязателен — это аудит-след):
+```bash
+python3 <project>/.gigacode/skills/pipeline-state/scripts/override_judge.py --judge <judge-name> --feature <slug> --step-id <step-id> --reason "<почему пропуск допустим>"
+```
+
+**Шаг 2.** Закрой шаг как обычно — `update.py` увидит override, пропустит блокировку и
+запишет предупреждение в `step.override_warnings` манифеста (для аудита):
+```bash
+python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py --skill feature-pipeline --feature <slug> --step-id <step-id> --status completed
+```
+
+**Просмотр и снятие override:**
+```bash
+python3 <project>/.gigacode/skills/pipeline-state/scripts/override_judge.py --feature <slug> --list
+python3 <project>/.gigacode/skills/pipeline-state/scripts/override_judge.py --judge <judge-name> --feature <slug> --remove
+```
+
+> Override **не подделывает вердикт судьи** — FAIL остаётся в `judges/<judge>.json`. Override
+> лишь снимает блокировку закрытия шага и фиксирует, кто и почему её снял. Частичный случай:
+> если на шаге два судьи (напр. `build-judge`+`reuse-judge`), override нужен на каждый
+> упавший — без override любой оставшийся FAIL по-прежнему блокирует.
 
 ---
 

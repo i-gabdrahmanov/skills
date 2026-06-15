@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 Добавляет шаги в manifest.json пайплайна и синхронизирует gate.json.
 Идемпотентно: если шаг с таким id уже есть — не перезаписывает (кроме status).

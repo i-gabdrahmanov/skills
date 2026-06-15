@@ -46,9 +46,11 @@ TDD, фаза RED. Реализации ещё НЕТ — твоя задача 
 
 Правила:
 1. **Слой — сервисные unit-тесты с моками (Mockito): `@ExtendWith(MockitoExtension.class)`,
-   `@Mock` зависимости, `@InjectMocks` тестируемый сервис.** ИЗБЕГАЙ `@DataJpaTest` и интеграционных
-   `@SpringBootTest` (в multimodule они падают initializationError) — только если задача буквально про
-   репозиторный запрос и в проекте УЖЕ есть рабочий рабочий пример такого теста.
+   `@Mock` зависимости, `@InjectMocks` тестируемый сервис.**
+   Если `test_layer == "service-unit"` (см. design-context.json) — `@DataJpaTest` и `@SpringBootTest`
+   **ЗАПРЕЩЕНЫ БЕЗУСЛОВНО**: red-judge заблокирует шаг при их обнаружении в тест-файлах.
+   В multimodule они падают `initializationError` — это известная проблема, а не edge case.
+   Репозиторный слой мокируй через `@Mock` так же, как сервисный.
 2. По каждому acceptance — отдельный тест (happy + ошибочные ветки: null, пусто, нет прав, 404, конфликт).
    given/when/then, имена `should...When...`.
 3. **Валидные, реалистичные данные:** стройте сущности билдерами/конструкторами с корректными типами и
@@ -321,9 +323,10 @@ prompt:
    a. Есть ли assert (не assertTrue(true), не assertNotNull(null))?
    b. Маппится ли на acceptance criteria? (Given-When-Then в комментарии или имени теста)
    c. Использует ли реалистичные данные (не нули, не пустые заглушки)?
-   d. Слой корректен: @ExtendWith(MockitoExtension.class) для сервисов,
-      @DataJpaTest для репозиториев (и только если есть рабочий пример в проекте).
-   e. Нет @SpringBootTest (если это не стандарт проекта).
+   d. Слой корректен: @ExtendWith(MockitoExtension.class) для всех слоёв.
+      Если test_layer="service-unit" — @DataJpaTest и @SpringBootTest **запрещены**
+      (red-judge блокирует автоматически; не пытайся обосновать исключение).
+   e. Нет @SpringBootTest при test_layer=service-unit.
 3. Проверь покрытие acceptance:
    a. Каждый acceptance имеет хотя бы один happy-path тест.
    b. Хотя бы один негативный сценарий (ошибка, null, пустой список, 404).
@@ -337,7 +340,8 @@ prompt:
 - Есть тест с assertTrue(true) или без assert'ов
 - acceptance criteria не покрыт ни одним тестом
 - Все тесты — только happy path (нет негативных)
-- Использован @SpringBootTest без уважительной причины
+- Использован @DataJpaTest при test_layer=service-unit (блокирует red-judge)
+- Использован @SpringBootTest при test_layer=service-unit (блокирует red-judge)
 
 Верни JSON:
 {

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 phase_sync.py — синхронизация gate.json из manifest.json.
 

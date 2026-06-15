@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 prepare_design_context.py — подготавливает компактный дата-контекст для tech-design.
 
@@ -98,11 +99,16 @@ def extract_modules_from_task_plan(task_plan_path: str) -> tuple[list[str], set[
     keywords = set()
 
     for task in tp.get("tasks", []):
-        # Модули
+        # Модули. tech-design пишет их в tasks[].modules (массив; см. check_taskplan.py).
+        # affected_modules / module — на случай старого формата.
+        for mod in task.get("modules", []):
+            if isinstance(mod, str) and mod:
+                modules.add(mod.lower().replace(":", "-"))
         for mod in task.get("affected_modules", []):
-            modules.add(mod.lower().replace(":", "-"))
+            if isinstance(mod, str) and mod:
+                modules.add(mod.lower().replace(":", "-"))
         mod = task.get("module")
-        if mod:
+        if isinstance(mod, str) and mod:
             modules.add(mod.lower().replace(":", "-"))
 
         # Ключевые слова из title и acceptance
@@ -197,10 +203,12 @@ def filter_grounding(
         return result
 
     def _tables_for_modules(tables: list) -> list:
-        """Фильтрует таблицы БД."""
+        """Фильтрует таблицы БД. Строки включаем все; объекты фильтруем по модулю."""
         result = []
         for tbl in tables:
-            if _module_matches(tbl):
+            if isinstance(tbl, str):
+                result.append(tbl)
+            elif _module_matches(tbl):
                 result.append(tbl)
         return result
 
@@ -213,6 +221,9 @@ def filter_grounding(
         "async": _async_for_modules(grounding.get("async", [])),
         "external_clients": _ext_clients_for_modules(grounding.get("external_clients", [])),
         "tables": _tables_for_modules(grounding.get("tables", [])),
+        # Каталог переиспользования — целиком (не фильтруется по модулям).
+        # Java-writer и reuse-judge читают его чтобы знать доступные lib/utils.
+        "reuse": grounding.get("reuse"),
     }
 
     return context
@@ -227,6 +238,7 @@ def main():
     modules_str = None
     grounding_path = None
     out_path = None
+    pipeline_path = None
 
     for key, val in zip(args[::2], args[1::2]):
         if key == "--brd":
@@ -239,6 +251,8 @@ def main():
             grounding_path = val
         elif key == "--out":
             out_path = val
+        elif key == "--pipeline":
+            pipeline_path = val
 
     if not grounding_path:
         print(json.dumps({"error": "--grounding is required"}, ensure_ascii=False))
@@ -276,18 +290,40 @@ def main():
             m["name"].lower() for m in grounding.get("modules", [])
         }
 
-    # 2. Фильтруем
+    # 2. Читаем test_layer из pipeline.json (передаётся TDD-writer и java-writer)
+    test_layer = "service-unit"
+    _pipeline_file = Path(pipeline_path) if pipeline_path else None
+    if not _pipeline_file and task_plan_path:
+        # Автодетект ground/pipeline.json. Идём вверх от task-plan, ищем ground/pipeline.json
+        # в каждом предке — устойчиво к относительным/коротким путям (Qwen может передать
+        # просто 'task-plan.json'); .parents[2] упал бы с IndexError.
+        for _anc in Path(task_plan_path).resolve().parents:
+            _cand = _anc / "ground" / "pipeline.json"
+            if _cand.exists():
+                _pipeline_file = _cand
+                break
+    if _pipeline_file and _pipeline_file.exists():
+        try:
+            _pcfg = json.loads(_pipeline_file.read_text())
+            test_layer = _pcfg.get("quality", {}).get("test_layer", test_layer)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 3. Фильтруем
     if keywords:
         print(f"  keywords: {sorted(keywords)[:20]}...", file=sys.stderr)
     context = filter_grounding(grounding, relevant_modules, keywords)
 
-    # 3. Добавляем метаданные
+    # 4. Добавляем метаданные
     context["total_entities"] = len(grounding.get("entities", []))
     context["filtered_entities"] = len(context["entities"])
     context["total_endpoints"] = len(grounding.get("api_endpoints", []))
     context["filtered_endpoints"] = len(context["api_endpoints"])
     context["total_tables"] = len(grounding.get("tables", []))
     context["filtered_tables"] = len(context["tables"])
+    # test_layer — машиночитаемый флаг для TDD-writer и java-writer.
+    # service-unit: только Mockito (@ExtendWith(MockitoExtension.class)); @DataJpaTest/@SpringBootTest запрещены.
+    context["test_layer"] = test_layer
 
     output = json.dumps(context, ensure_ascii=False, indent=2)
 

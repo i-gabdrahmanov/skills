@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 Update a step's status in the pipeline manifest.
 
@@ -33,43 +34,112 @@ from phase_sync import sync_gate_from_manifest
 VALID_STATUSES = {"pending", "in_progress", "completed", "failed", "skipped"}
 
 
+# Абсолютный путь к override_judge.py (тот же каталог) — чтобы подсказка была
+# исполняемой как есть, без подстановки <project> рантаймом Qwen.
+_OVERRIDE_SCRIPT = Path(__file__).resolve().parent / "override_judge.py"
+
+
 def _judges_dir(project: Path, skill: str, feature: str) -> Path:
     """Путь к каталогу вердиктов судей."""
     return project / "ground" / "statements" / skill / feature / "judges"
+
+
+def _overrides_dir(project: Path, skill: str, feature: str) -> Path:
+    """Путь к каталогу ручных override-файлов."""
+    return project / "ground" / "statements" / skill / feature / "overrides"
+
+
+def _load_override(project: Path, skill: str, feature: str, judge_name: str) -> dict | None:
+    """Читает override-файл судьи, если существует. None — нет override."""
+    path = _overrides_dir(project, skill, feature) / f"{judge_name}.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 def _check_judges(step: dict, project: Path, skill: str, feature: str):
     """
     Детерминированная блокировка: если шаг помечен completed, но не все его
     required_judges пройдены — выкинуть исключение.
+
+    Исключение: если для судьи есть ручной override-файл (overrides/<judge>.json),
+    блокировка снимается и факт отклонения фиксируется в manifest-step как предупреждение.
+    Создать override: python3 override_judge.py --judge <name> --feature <slug> --reason "..."
     """
     required = step.get("required_judges", [])
     if not required:
-        return  # нет судей — не блокируем
+        return
 
     judges_dir = _judges_dir(project, skill, feature)
     blocking = []
+    overridden = []
 
     for judge_name in required:
         verdict_path = judges_dir / f"{judge_name}.json"
+
+        # 1. Нет вердикта вообще
         if not verdict_path.exists():
+            ov = _load_override(project, skill, feature, judge_name)
+            if ov:
+                overridden.append(
+                    f"⚠️  '{judge_name}' не запускался — пропущен вручную. "
+                    f"Причина: {ov.get('reason', '?')}"
+                )
+                continue
             blocking.append(
-                f"❌ Вердикт '{judge_name}.json' не найден — судья не запускался"
+                f"❌ Вердикт '{judge_name}.json' не найден — судья не запускался.\n"
+                f"   Чтобы пропустить: python3 {_OVERRIDE_SCRIPT} "
+                f"--judge {judge_name} --feature {feature} --step-id {step['id']} "
+                f"--reason \"<объяснение>\""
             )
             continue
+
+        # 2. Вердикт есть, но повреждён
         try:
-            with open(verdict_path) as f:
-                verdict = json.load(f)
+            verdict = json.loads(verdict_path.read_text())
         except (json.JSONDecodeError, OSError) as e:
-            blocking.append(
-                f"❌ Вердикт '{judge_name}.json' повреждён: {e}"
-            )
+            ov = _load_override(project, skill, feature, judge_name)
+            if ov:
+                overridden.append(
+                    f"⚠️  '{judge_name}' повреждён — пропущен вручную. "
+                    f"Причина: {ov.get('reason', '?')}"
+                )
+                continue
+            blocking.append(f"❌ Вердикт '{judge_name}.json' повреждён: {e}")
             continue
+
+        # 3. Вердикт есть, но FAIL
         if not verdict.get("passed", False):
+            ov = _load_override(project, skill, feature, judge_name)
+            if ov:
+                issues = verdict.get("blocking_issues", [])
+                overridden.append(
+                    f"⚠️  '{judge_name}' FAIL — пропущен вручную.\n"
+                    f"   Причина override: {ov.get('reason', '?')}\n"
+                    f"   Заблокированные issues ({len(issues)}): "
+                    + (issues[0][:120] if issues else "нет") +
+                    (" ..." if len(issues) > 1 else "")
+                )
+                continue
+            issues = verdict.get("blocking_issues", ["не указаны"])
             blocking.append(
-                f"❌ Вердикт '{judge_name}.json' — FAIL (passed=false). "
-                f"Blocking issues: {verdict.get('blocking_issues', ['не указаны'])}"
+                f"❌ Вердикт '{judge_name}.json' — FAIL.\n"
+                f"   Blocking issues: {issues}\n"
+                f"   Чтобы пропустить: python3 {_OVERRIDE_SCRIPT} "
+                f"--judge {judge_name} --feature {feature} --step-id {step['id']} "
+                f"--reason \"<объяснение>\""
             )
+
+    # Записываем предупреждения об override в step (для аудита)
+    if overridden:
+        step.setdefault("override_warnings", [])
+        for msg in overridden:
+            if msg not in step["override_warnings"]:
+                step["override_warnings"].append(msg)
+        print("\n".join(f"  {m}" for m in overridden), file=sys.stderr)
 
     if blocking:
         raise RuntimeError(
