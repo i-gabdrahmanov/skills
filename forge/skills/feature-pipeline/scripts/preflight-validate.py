@@ -36,10 +36,25 @@ _guess_phase = pp.guess_phase
 
 
 def _ensure_phases(project_root: str, feature: str, skill: str = "feature-pipeline") -> None:
-    """Создать ground/phases/<feature>/gate.json из manifest, если их нет."""
+    """Создать ground/phases/<feature>/gate.json из manifest, если нет; иначе —
+    ПЕРЕСИНХРОНИЗИРОВАТЬ из manifest.
+
+    Manifest — источник истины. Раньше gate.json создавался один раз и держался
+    в актуальном состоянии только через update.py→sync_gate_from_manifest. Если тот
+    sync падал (например, на Python 3.9 в phase_sync) или был пропущен (update.py до
+    первого preflight — sync был no-op без gate.json), gate.json устаревал, и
+    _check_gate_phase давал ложное «несоответствие стадий». Поэтому здесь всегда
+    подтягиваем статусы фаз/current_phase из manifest перед проверкой.
+    """
     phases_dir = str(pp.gate_dir(Path(project_root), feature))
-    # уже есть (per-feature или legacy) — ничего не делаем
+    # gate уже есть — пересинхронизируем из manifest (самоисцеление от устаревшего gate)
     if pp.gate_path(Path(project_root), feature).exists():
+        try:
+            import phase_sync  # pipeline-state/scripts уже в sys.path (через pipeline_phases)
+            phase_sync.sync_gate_from_manifest(project_root, feature, skill)
+        except Exception as e:
+            print(f"preflight-validate: WARN — не удалось пересинхронизировать gate: {e}",
+                  file=sys.stderr)
         return
     gate_path = os.path.join(phases_dir, "gate.json")
     manifest_path = os.path.join(

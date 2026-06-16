@@ -416,51 +416,106 @@ def check_eval(slug: str, feature_dir: Path | None) -> dict:
     return _make_verdict("eval-judge", slug, passed, checks, blocking_issues, warnings, summary)
 
 
+def _canon_module(m: "str | None") -> "str | None":
+    """Канонический ключ модуля: 'service:taskservice'/'service-taskservice' → 'service-taskservice'."""
+    if m is None:
+        return None
+    return m.strip().lower().replace(":", "-")
+
+
+def _module_from_test_path(path: str) -> "str | None":
+    """Выводит модуль из пути тест-артефакта.
+
+    'service/taskservice/src/test/java/...' → 'service-taskservice'.
+    Если 'src' в корне (одномодульный проект) → None (корневой gradle).
+    """
+    parts = path.replace("\\", "/").split("/")
+    if "src" in parts:
+        i = parts.index("src")
+        if i >= 2:
+            return f"{parts[i - 2]}-{parts[i - 1]}".lower()
+        if i >= 1:
+            return parts[i - 1].lower()
+    return None
+
+
+def _class_glob_from_path(path: str) -> str:
+    """Путь тест-файла → gradle --tests glob: '.../FooTest.java' → '*FooTest'."""
+    base = path.replace("\\", "/").split("/")[-1]
+    if base.endswith(".java"):
+        base = base[:-5]
+    return f"*{base}"
+
+
+def _feature_test_classes(feature_dir: Path | None, slug: str) -> dict:
+    """Тест-классы ИМЕННО этой фичи, сгруппированные по модулю.
+
+    Возвращает {canonical-module-key|None: sorted ['*ClassA', ...]}.
+    Источники: task-plan tasks[].artifacts (src/test *.java) + output шагов 04-test-*
+    (поле test_files тестописателя). Нужно, чтобы red-judge гонял только тесты фичи,
+    а не все тесты модуля (иначе чужой упавший тест роняет судью всей фичи).
+    """
+    result: dict = {}
+
+    def add(modkey, glob):
+        result.setdefault(modkey, set()).add(glob)
+
+    def ingest_artifact(art, modkeys):
+        if not isinstance(art, str):
+            return
+        norm = art.replace("\\", "/")
+        if "src/test" not in norm or not norm.endswith(".java"):
+            return
+        glob = _class_glob_from_path(norm)
+        keys = modkeys if modkeys else [_module_from_test_path(norm)]
+        for k in keys:
+            add(k, glob)
+
+    # 1. task-plan artifacts
+    if feature_dir:
+        tp_path = feature_dir / "task-plan.json"
+        if tp_path.exists():
+            try:
+                tp = json.loads(tp_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                tp = {}
+            for task in tp.get("tasks", []):
+                modkeys = []
+                mods = task.get("modules")
+                if isinstance(mods, list):
+                    modkeys = [_canon_module(m) for m in mods if m]
+                elif isinstance(task.get("module"), str) and task["module"]:
+                    modkeys = [_canon_module(task["module"])]
+                for art in task.get("artifacts", []):
+                    ingest_artifact(art, modkeys)
+
+    # 2. output шагов 04-test-* (test_files от тестописателя) — best-effort
+    if PROJECT_ROOT:
+        stmts = PROJECT_ROOT / "ground" / "statements" / SKILL_NAME / slug
+        if stmts.is_dir():
+            for outp in stmts.glob("04-test-*.json"):
+                try:
+                    data = json.loads(outp.read_text())
+                except (json.JSONDecodeError, OSError):
+                    continue
+                for tf in data.get("test_files", []):
+                    ingest_artifact(tf, [])
+
+    return {k: sorted(v) for k, v in result.items()}
+
+
 def check_red(slug: str, feature_dir: Path | None) -> dict:
     """Проверка RED-тестов: запускает gradle test с фильтром и проверяет exit code."""
     import subprocess
 
-    # Определяем модули из pipeline.json и task-plan.json
     project_root = PROJECT_ROOT
     pipeline_json_path = project_root / "ground" / "pipeline.json"
-    modules = []
 
-    # 1. Пытаемся вытащить модули из task-plan.json.
-    #    tech-design пишет модули в tasks[].modules (массив; см. check_taskplan.py),
-    #    но допускаем и единичное поле module (str) для совместимости.
-    if feature_dir:
-        taskplan_path = feature_dir / "task-plan.json"
-        if taskplan_path.exists():
-            try:
-                with open(taskplan_path) as f:
-                    tp = json.load(f)
-                for task in tp.get("tasks", []):
-                    mods = task.get("modules")
-                    if isinstance(mods, list):
-                        for m in mods:
-                            if m and m not in modules:
-                                modules.append(m)
-                    elif isinstance(task.get("module"), str) and task["module"]:
-                        if task["module"] not in modules:
-                            modules.append(task["module"])
-            except (json.JSONDecodeError, OSError):
-                pass
-
-    # 2. Fallback — из pipeline.json. Модули лежат в project.modules
-    #    (init_pipeline_config.py); top-level modules — на случай старого формата.
-    if not modules and pipeline_json_path.exists():
-        try:
-            with open(pipeline_json_path) as f:
-                cfg = json.load(f)
-            modules = list(cfg.get("project", {}).get("modules") or cfg.get("modules", []))
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    # 3. Пусто → одномодульный проект (нет settings.gradle с include): тесты гоняем
-    #    в корне (./gradlew test), а не падаем «нет модулей». None — сентинел корня.
-    single_module = not modules
-    if single_module:
-        modules = [None]
+    # Тест-классы ИМЕННО этой фичи, сгруппированные по модулю. red-judge гонит ТОЛЬКО их,
+    # а не все тесты модуля — иначе чужой упавший тест роняет судью всей фичи
+    # (DEBAG-ORDERS P1/P2: KafkaSendEventListenerTest валил фичу). Ключ — канонический
+    # модуль ('service-taskservice') или None (корень одномодульного проекта).
+    feat_classes = _feature_test_classes(feature_dir, slug)
 
     # Читаем test_layer из pipeline.json (default=service-unit для multimodule)
     test_layer = "service-unit"
@@ -488,32 +543,45 @@ def check_red(slug: str, feature_dir: Path | None) -> dict:
     if ann_blocking:
         all_passed = False
 
-    for module in modules:
+    # Нет тест-классов фичи → НЕ гнать все тесты модуля (fallback: WARN + пропуск прогона).
+    # Иначе несвязанный упавший тест модуля заблокировал бы фичу.
+    if not feat_classes:
+        warnings.append(
+            "red-judge: не удалось определить тест-классы фичи из task-plan/04-test-* — "
+            "прогон gradle пропущен (чтобы не валить фичу на несвязанных тестах модуля)"
+        )
+        checks.append({
+            "name": "test:scope",
+            "status": "WARN",
+            "detail": "нет тест-классов фичи; прогон gradle пропущен",
+            "severity": "warning",
+        })
+
+    for module in feat_classes:
+        # --tests только по тест-классам фичи в этом модуле
+        test_flags = []
+        for glob in feat_classes[module]:
+            test_flags += ["--tests", glob]
+
         if module is None:
             # Одномодульный проект — тесты в корне (без :module: префикса).
             label = "root"
-            gradle_cmd = ["./gradlew", "test", "--tests", "*Test", "--no-daemon"]
+            gradle_cmd = ["./gradlew", "test", *test_flags, "--no-daemon"]
         else:
-            # Нормализация имени модуля:
-            #   service-taskservice → :service:taskservice (из pipeline.json modules)
-            #   service:taskservice → :service:taskservice (из task-plan.json, уже с :)
-            #   :service:taskservice → :service:taskservice (уже нормализован)
+            # Нормализация имени модуля: 'service-taskservice' → ':service:taskservice'.
             gradle_path = module
             if gradle_path.startswith(":"):
                 pass  # уже нормализован
             elif ":" in gradle_path:
-                # service:taskservice → :service:taskservice (добавить ведущее :)
                 gradle_path = f":{gradle_path}"
             else:
-                # Разделяем по последнему дефису: service-taskservice → :service:taskservice
                 parts = gradle_path.rsplit("-", 1)
                 if len(parts) == 2:
-                    # Проверяем, что это не пакет с дефисом (например my-lib)
                     gradle_path = f":{parts[0]}:{parts[1]}"
                 else:
                     gradle_path = f":{gradle_path}"
             label = module
-            gradle_cmd = ["./gradlew", f"{gradle_path}:test", "--tests", "*Test", "--no-daemon"]
+            gradle_cmd = ["./gradlew", f"{gradle_path}:test", *test_flags, "--no-daemon"]
 
         try:
             r = subprocess.run(
@@ -594,6 +662,31 @@ _FORBIDDEN_TEST_ANNOTATIONS = re.compile(
     r"@(?:DataJpaTest|SpringBootTest)\b"
 )
 
+# Наследование тест-класса от базового и эвристика «интеграционной» базы.
+# Тест из DEBAG-ORDERS P3 наследовался от BaseTest (с @SpringBootTest) — аннотации в самом
+# файле нет, поэтому прямой греп её не ловил. Проверяем базовый класс транзитивно.
+_EXTENDS_RE = re.compile(r"\bclass\s+\w+[^{]*\bextends\s+([A-Za-z_]\w*)")
+_INTEGRATION_BASE_MARKERS = ("base", "abstract", "integration")
+
+
+def _looks_integration_base(name: str) -> bool:
+    """Имя базового класса намекает на интеграционный тест (Spring-контекст)?"""
+    low = name.lower()
+    if any(mark in low for mark in _INTEGRATION_BASE_MARKERS):
+        return True
+    return name.endswith("IT")  # *IT — типичный суффикс интеграционного теста
+
+
+def _find_test_class_file(project_root: Path, simple_name: str) -> "Path | None":
+    """Ищет <SimpleName>.java в src/test проекта (для транзитивной проверки базы)."""
+    try:
+        for p in project_root.rglob(f"{simple_name}.java"):
+            if "src/test" in str(p).replace("\\", "/"):
+                return p
+    except OSError:
+        return None
+    return None
+
 
 def _check_forbidden_test_annotations(
     feature_dir: Path | None,
@@ -631,20 +724,54 @@ def _check_forbidden_test_annotations(
     if not test_artifacts:
         return checks, blocking, warnings
 
-    hits = []
+    hits = []            # определённые нарушения (прямая аннотация ИЛИ база с ней)
+    base_warnings = []   # наследование от подозрительной базы, аннотацию не подтвердили
+    base_cache: dict = {}  # simple_name → (annotated: bool|None)
+
     for p in test_artifacts:
         try:
             txt = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        for ln in txt.splitlines():
-            m = _FORBIDDEN_TEST_ANNOTATIONS.search(ln)
-            if m:
-                hits.append(f"{p.name}: {ln.strip()[:100]}")
 
-    check_name = "Нет @DataJpaTest/@SpringBootTest (test_layer=service-unit)"
+        # 1. Прямая аннотация в самом тест-файле
+        direct = False
+        for ln in txt.splitlines():
+            if _FORBIDDEN_TEST_ANNOTATIONS.search(ln):
+                hits.append(f"{p.name}: {ln.strip()[:100]}")
+                direct = True
+        if direct:
+            continue  # уже зафиксировали — транзитивно не дублируем
+
+        # 2. Транзитивно: наследование от интеграционной базы (с @SpringBootTest и т.п.)
+        m = _EXTENDS_RE.search(txt)
+        if not m:
+            continue
+        base = m.group(1)
+        if not _looks_integration_base(base):
+            continue
+        if base not in base_cache:
+            base_file = _find_test_class_file(project_root, base)
+            annotated = None
+            if base_file:
+                try:
+                    btxt = base_file.read_text(encoding="utf-8", errors="replace")
+                    annotated = bool(_FORBIDDEN_TEST_ANNOTATIONS.search(btxt))
+                except OSError:
+                    annotated = None
+            base_cache[base] = annotated
+        annotated = base_cache[base]
+        if annotated is True:
+            hits.append(f"{p.name}: extends {base} (в базе @DataJpaTest/@SpringBootTest)")
+        else:
+            # База не найдена или без аннотации — только предупреждаем (без false-positive)
+            base_warnings.append(
+                f"{p.name}: extends {base} — проверь, не поднимает ли Spring-контекст; "
+                f"для service-unit перепиши на Mockito"
+            )
+
+    check_name = "Нет @DataJpaTest/@SpringBootTest (прямо/через базу; test_layer=service-unit)"
     if hits:
-        severity = "blocking" if test_layer == "service-unit" else "warning"
         detail = "; ".join(hits[:5])
         if test_layer == "service-unit":
             blocking.extend(
@@ -660,6 +787,10 @@ def _check_forbidden_test_annotations(
         checks.append({"name": check_name, "status": "PASS",
                        "detail": f"Проверено {len(test_artifacts)} тест-файлов",
                        "severity": "error"})
+
+    # Наследование от подозрительной базы — всегда advisory-warning (не блокируем по имени)
+    for w in base_warnings[:5]:
+        warnings.append(w)
 
     return checks, blocking, warnings
 

@@ -169,7 +169,7 @@ def build_config(root):
             "token_budget": 2000000,          # PDLC v3.5 cost circuit breaker (warn 80% / stop 120%)
             "tdd": True,                      # TDD по умолчанию: тесты (RED) → код (GREEN); см. check_tests_red.py
             "compile_test_command": "./gradlew compileTestJava" if gradle else "mvn -q test-compile",
-            "test_layer": "service-unit",     # предпочитать Mockito-юниты; избегать @DataJpaTest (initializationError)
+            "test_layer": "service-unit",     # по умолчанию ТОЛЬКО Mockito unit; НЕ писать JPA/@DataJpaTest/@SpringBootTest (red-judge блокирует)
         },
         "evidence": {
             "threshold": 0.95,                # min completeness evidence bundle перед доставкой

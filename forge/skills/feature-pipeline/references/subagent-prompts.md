@@ -1,4 +1,4 @@
-# Промпты субагентов фаз 4-5
+# Промпты субагентов (фазы 0, 4-5 + судьи)
 
 Субагенты работают в изолированном контексте и возвращают JSON. Передавай ровно тот
 контекст, что нужен шагу — не всю историю. Шаблоны ниже адаптированы из
@@ -25,6 +25,59 @@
 
 ---
 
+## 4.0 BRD-писатель (фаза 0 — черновение из ответов интервью)
+
+Зови **после того, как интервью с пользователем проведено inline** (оркестратор собрал
+ответы). Этот субагент делает многословную работу — пишет `brd.md` — в изолированном
+контексте, чтобы не засорять контекст оркестратора черновым текстом. Интервью НЕ ведёт
+(вопросы уже заданы); если данных всё же не хватает — возвращает `pending_questions`.
+
+```
+description: "Draft BRD for feature <slug> from interview answers"
+subagent_type: general-purpose
+
+prompt:
+Ты пишешь документ бизнес-требований (BRD) на русском по уже собранным ответам интервью.
+Пиши ЯЗЫКОМ БИЗНЕСА — без кода, имён классов/полей/таблиц, методов, SQL, топиков, метрик,
+типов исключений. Техническая раскладка — работа tech-design, не BRD (это проверит brd-judge).
+
+Контекст:
+- Фича (slug): <slug>
+- Jira-ключ (если есть): <KEY-123 или «нет»>
+- Исходная идея/описание: <текст идеи или Jira summary/description>
+- Ответы интервью (собраны оркестратором): <вопрос→ответ, списком>
+- Grounding (если есть): <путь к grounding-excerpt.json / выжимка brd-grounder: смежные БТ>
+
+Структура brd.md — по шаблону business-requirements (Контекст и проблема, Цель,
+Бизнес-ценность, Заинтересованные стороны, Scope [входит/не входит], Функциональные
+требования, Нефункциональные, Допущения, Открытые вопросы, Пользовательские сценарии).
+
+Правила:
+1. Всё, по чему нет данных из ответов/идеи — выноси в «Допущения» (что принял за данность)
+   или «Открытые вопросы» (что прояснить до разработки, с пометкой «к кому»). НЕ выдумывай
+   факты и НЕ блокируйся — пиши документ, фиксируя пробелы.
+2. Если Jira-ключ есть — первой строкой шапки `**Jira:** <KEY-123>`.
+3. Цель формулируй как бизнес-изменение/эффект, а не как решение.
+4. Не пиши реализацию (последовательность вызовов, внутренние модули как дизайн).
+
+Сохрани в `docs/feature-pipeline/<slug>/brd.md`.
+
+Верни JSON (ТОЛЬКО его — без brd.md в теле ответа, чтобы не раздувать контекст):
+{
+  "step_id": "00-brd-<slug>",
+  "brd_path": "docs/feature-pipeline/<slug>/brd.md",
+  "summary": "3-5 строк: о чём BRD",
+  "assumptions": ["ключевое допущение 1", "..."],
+  "open_questions": ["критичный открытый вопрос (к кому) 1", "..."],
+  "pending_questions": []
+}
+```
+
+После возврата — независимый **brd-judge** (§7.6) субагентом + детерминированный
+`run_judge.py brd <slug> --recheck`. Оба PASS → Гейт 1. См. SKILL.md §3.
+
+---
+
 ## 4.1 Тестописатель (TDD — RED: тесты ДО кода)
 
 Зови **до** написания production-кода задачи. Тесты пишутся первыми из `acceptance` и контракта
@@ -45,12 +98,16 @@ TDD, фаза RED. Реализации ещё НЕТ — твоя задача 
 Целевой слой/класс: <напр. OverdueTaskServiceImpl.closeEmptyRegularTasks()>
 
 Правила:
-1. **Слой — сервисные unit-тесты с моками (Mockito): `@ExtendWith(MockitoExtension.class)`,
-   `@Mock` зависимости, `@InjectMocks` тестируемый сервис.**
-   Если `test_layer == "service-unit"` (см. design-context.json) — `@DataJpaTest` и `@SpringBootTest`
-   **ЗАПРЕЩЕНЫ БЕЗУСЛОВНО**: red-judge заблокирует шаг при их обнаружении в тест-файлах.
-   В multimodule они падают `initializationError` — это известная проблема, а не edge case.
-   Репозиторный слой мокируй через `@Mock` так же, как сервисный.
+1. **По умолчанию пиши ТОЛЬКО Mockito unit-тесты** — `@ExtendWith(MockitoExtension.class)`,
+   `@Mock` зависимости, `@InjectMocks` тестируемый сервис. Это база **для ЛЮБОГО слоя задачи**
+   (dto/repository/service/controller), а не только для сервисного.
+   **JPA / persistence / Spring-context тесты НЕ пиши вообще:** ни `@DataJpaTest`, ни
+   `@SpringBootTest`, ни наследование от Spring-базы (`extends BaseTest`/`*IntegrationTest`/
+   `*IT`). В multimodule они падают `initializationError`, и red-judge их блокирует (в т.ч.
+   транзитивно через базовый класс).
+   **Репозиторий/persistence — мокируй** (`@Mock FooRepository`), а не тестируй через БД.
+   Единственное исключение — если в `design-context.json` поле `test_layer` явно НЕ
+   `service-unit` (редкий осознанный случай); по умолчанию `test_layer == service-unit`.
 2. По каждому acceptance — отдельный тест (happy + ошибочные ветки: null, пусто, нет прав, 404, конфликт).
    given/when/then, имена `should...When...`.
 3. **Валидные, реалистичные данные:** стройте сущности билдерами/конструкторами с корректными типами и
@@ -175,6 +232,9 @@ subagent_type: general-purpose
 prompt:
 Прочитай check_coverage.py отчёт (LOW/MISSING файлы).
 Допиши тесты только под непокрытое. Не переписывай зелёные тесты.
+**Только Mockito unit-тесты** (`@ExtendWith(MockitoExtension.class)`); JPA/Spring-context
+тесты (`@DataJpaTest`/`@SpringBootTest`/наследование от Spring-базы) НЕ пиши — red-judge их
+блокирует, а покрытие добирай через моки.
 
 Корень проекта: <git toplevel>
 Фича (slug): <slug>
@@ -186,6 +246,57 @@ python3 ~/.gigacode/tools/check_coverage.py --base dev --threshold 0.80
 Выходной JSON:
   {"step_id": "cover-gaps", "files_added": [...], "coverage_ok": true}
 ```
+
+---
+
+## 4.5 Jira-писатель (фаза 2.5 — задачи в Jira)
+
+Зови **в субагенте** (не inline). Субагент читает свой скилл сам — так его подробная
+MCP-логика не попадает в контекст оркестратора, а цикл `pending_questions` отрабатывает
+штатно (именно при inline-исполнении терялся вопрос про Epic). Субагент НЕ вызывает
+`ask_user_question` — вопросы (Epic, спринт) возвращает в `pending_questions`, их задаёт
+оркестратор и перезапускает субагента с `answers`.
+
+```
+description: "Jira tasks draft for <slug>"
+subagent_type: general-purpose
+
+prompt:
+Сначала прочитай свой контракт: read_file("<project>/.gigacode/skills/jira-task-writer/SKILL.md")
+и строго следуй ему. Ты генератор черновика задач Jira — НЕ создаёшь задачи на первом
+запуске и НИКОГДА не зовёшь ask_user_question.
+
+Вход (прочитай файлы сам по путям):
+- task-plan: <папка фичи>/task-plan.json
+- brd: <папка фичи>/brd.md (или business-requirements/<slug>.md)
+- pipeline-config: <project>/ground/pipeline.json  (бери jira.* — project_key, issue_type_*,
+  epic_link_field, sprint_field; флаг jira.enabled / auto_discovered)
+- answers (если перезапуск): <ответы на прошлые pending_questions или «нет»>
+- revision (если перезапуск с правкой): <что изменить в черновике, напр. «нужна 1 задача
+  вместо 4», «объедини T2–T4 в одну подзадачу», «убери подзадачи, только Story»>
+
+Правила:
+1. Собери draft: Story (summary=task-plan.title, description из BRD §контекст/цель/критерии)
+   + Sub-task на каждую задачу task-plan (в порядке depends_on).
+   **Если пришёл `revision`** — пересобери draft с учётом правки (измени число/состав
+   подзадач, объедини, переименуй, убери). Черновик после правки — НОВЫЙ источник истины;
+   при `confirmed:true` создавай РОВНО его, не сырой task-plan. Снова верни `created:false`
+   с обновлённым draft (пользователь подтвердит уже исправленный черновик).
+2. **Epic — обязательный вопрос.** Если `jira.enabled` и создаёшь Story — ВСЕГДА включи в
+   `pending_questions` вопрос `{"id":"epic","question":"К какому Epic привязать Story? Укажи
+   ключ Epic (например EPIC-123) или 'нет'."}`, даже если `epic_link_field` не авто-обнаружен
+   (пользователь может ответить «нет»; ключ доступен через MCP). Аналогично спринт — если
+   `sprint_field` задан.
+3. Если в `answers` уже пришёл epic/sprint — НЕ переспрашивай, убери из pending_questions.
+4. Создавай задачи (через Jira MCP по §4 скилла) ТОЛЬКО когда оркестратор пришлёт
+   `confirmed: true`.
+
+Верни JSON по контракту скилла (§5): {created, draft:{story, subtasks[]}, pending_questions[], skipped}.
+```
+
+После возврата — оркестратор обрабатывает `pending_questions` через `ask_user_question`
+(по одному), затем показывает черновик и на «Да» перезапускает субагента с `confirmed:true`.
+См. SKILL.md §6.
 
 ---
 

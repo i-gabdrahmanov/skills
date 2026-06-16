@@ -37,15 +37,19 @@ def main() -> int:
     plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
     task_ids = [t.get("id") for t in plan.get("tasks", []) if t.get("id")]
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
-    by_id = {s.get("id"): s for s in manifest.get("steps", [])}
+    # Ключи нормализуем в lower: оркестратор (Qwen) иногда создаёт шаг как
+    # '07-deliver-t1', а task-id в task-plan — 'T1'. Сопоставление суффикса
+    # делаем регистронезависимо, иначе шаг «не найден» (DEBAG-ORDERS P5).
+    by_id = {(s.get("id") or "").lower(): s for s in manifest.get("steps", [])}
 
     errors = []
     for tid in task_ids:
-        step = by_id.get(f"{args.prefix}{tid}")
+        want = f"{args.prefix}{tid}"
+        step = by_id.get(want.lower())
         if step is None:
-            errors.append(f"задача {tid}: нет шага {args.prefix}{tid}")
+            errors.append(f"задача {tid}: нет шага {want}")
         elif step.get("status") != "completed":
-            errors.append(f"задача {tid}: шаг {args.prefix}{tid} = {step.get('status')}")
+            errors.append(f"задача {tid}: шаг {want} = {step.get('status')}")
 
     status = "pass" if not errors else "fail"
     verdict = {"status": status, "tasks": len(task_ids), "errors": errors}
