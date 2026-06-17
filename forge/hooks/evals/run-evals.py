@@ -214,14 +214,15 @@ def main() -> int:
         rc = make_project(tmp / "cost")
         bud = rc / "ground" / "ai-logs" / "feature-pipeline" / "iter-p1"
         bud.mkdir(parents=True, exist_ok=True)
-        (bud / "budget.json").write_text(json.dumps({"spent": 1300, "events": 5}), encoding="utf-8")
+        (bud / "budget.json").write_text(json.dumps({"total_spent": 1300, "total_events": 5}), encoding="utf-8")
         c, out = run_hook("cost-breaker.py", {"cwd": str(rc), "hook_event_name": "PreToolUse",
                         "tool_name": "Bash", "tool_input": {"command": "x"}})
         check("cost ≥120% PreToolUse → exit 0 (unlimited, без блокировки)", c == 0)
         c, out = run_hook("cost-breaker.py", {"cwd": str(rc), "hook_event_name": "Stop",
                         "stop_hook_active": False})
-        check("cost ≥120% Stop → exit 0, пишет budget-final.json", c == 0 and os.path.exists(bud / "budget-final.json"))
-        (bud / "budget.json").write_text(json.dumps({"spent": 850, "events": 5}), encoding="utf-8")
+        check("cost ≥120% Stop → exit 0, финализирует единый budget.json",
+              c == 0 and "finalized_at" in json.loads((bud / "budget.json").read_text(encoding="utf-8")))
+        (bud / "budget.json").write_text(json.dumps({"total_spent": 850, "total_events": 5}), encoding="utf-8")
         c, out = run_hook("cost-breaker.py", {"cwd": str(rc), "hook_event_name": "PreToolUse",
                         "tool_name": "Bash", "tool_input": {"command": "x"}})
         check("cost 85% → warn в hookSpecificOutput", c == 0 and has_addctx(out))

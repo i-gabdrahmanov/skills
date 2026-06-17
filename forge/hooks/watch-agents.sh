@@ -2,10 +2,12 @@
 # watch-agents.sh — смотреть единый лог агента+субагентов GigaCode в реальном времени.
 #
 # Usage:
-#   watch-agents.sh [project-dir] [--json] [--agent <label>]
+#   watch-agents.sh [project-dir] [--json]
 #     project-dir   корень проекта (по умолчанию текущий каталог)
 #     --json        следить за agents.jsonl вместо человекочитаемого agents.log
-#     --agent <l>   следить за конкретным агентом: by-agent/<l>.log (напр. main, tech-design-9c1a)
+#
+# Единый лог прогона (главный агент + все субагенты + ошибки) — agents.log/.jsonl.
+# Фильтр по конкретному агенту: watch-agents.sh | grep '\[<label>\]'.
 #
 # Автоматически находит свежайший каталог прогона под <root>/ground/ai-logs/ и tail -f его лог.
 # Если прогон ещё не начался — ждёт его появления.
@@ -13,11 +15,9 @@ set -euo pipefail
 
 PROJECT="."
 MODE="log"   # log | json
-AGENT=""     # пусто = единый файл прогона; иначе by-agent/<AGENT>
 while [ $# -gt 0 ]; do
   case "$1" in
     --json)  MODE="json"; shift ;;
-    --agent) AGENT="${2:-}"; shift 2 ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) PROJECT="$1"; shift ;;
   esac
@@ -27,7 +27,7 @@ ROOT="$(cd "$PROJECT" 2>/dev/null && (git rev-parse --show-toplevel 2>/dev/null 
 BASE="$ROOT/ground/ai-logs"
 
 ext="log"; [ "$MODE" = "json" ] && ext="jsonl"
-if [ -n "$AGENT" ]; then rel="by-agent/$AGENT.$ext"; else rel="agents.$ext"; fi
+rel="agents.$ext"
 
 echo "watch: $BASE/**/$rel   (Ctrl-C для выхода)"
 target=""

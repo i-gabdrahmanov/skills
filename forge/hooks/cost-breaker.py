@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """cost-breaker.py — token/cost circuit breaker (PDLC v3.5, стр. 156/194).
 
-Один скрипт на три события (по hook_event_name):
-  • PostToolUse / SubagentStop — TALLY: прибавить расход в budget.json (sync, лёгкий).
-    Дополнительно аккумулирует расход по фазам проекта (читает ground/phases/gate.json
-    для определения current_phase).
+Один скрипт на три события (по hook_event_name). Весь учёт — в ОДНОМ файле
+<run-dir>/budget.json: общий расход + разбивка по фазам (наглядно видно, какая
+фаза сколько потратила). Никаких budget-phases.json / budget-final.json.
+  • PostToolUse / SubagentStop — TALLY: прибавить расход в total и в текущую фазу
+    (фаза из ground/phases/gate.json), один файл под flock.
   • PreToolUse                 — ENFORCE: выводит warn при ≥80% (без блокировки).
-  • Stop                       — ENFORCE: пишет budget-final.json с постейджной
-    статистикой и общим расходом. Не блокирует.
+  • Stop                       — FINALIZE: проставляет finalized_at в budget.json
+    и отдаёт сводку по фазам в контекст. Не блокирует.
 
 Бюджет безлимитный: блокировка (exit 2 / decision:block) отключена.
 Расход берём из payload (`usage.total_tokens`/`tokens`/`usage.{input,output}_tokens`),
 если рантайм их даёт; иначе оценка: фиксированная стоимость за событие (FALLBACK_PER_EVENT).
 Бюджет — из pipeline.json (`quality.token_budget`), дефолт DEFAULT_BUDGET.
-Состояние — <run-dir>/budget.json рядом с логом (та же группировка, что в log-agent).
-Итоговая статистика — <run-dir>/budget-final.json на Stop.
+Состояние и итог — единый <run-dir>/budget.json рядом с логом (та же группировка,
+что в log-agent).
 """
 from __future__ import annotations
 
@@ -108,16 +109,10 @@ def _current_phase(root: str) -> str:
 
 
 def _bpath(root: str, data: dict) -> str:
+    """Единый файл бюджета прогона: <run-dir>/budget.json (total + разбивка по фазам)."""
     d = _run_dir(root, data)
     os.makedirs(d, exist_ok=True)
     return os.path.join(d, "budget.json")
-
-
-def _phase_state_path(root: str, data: dict) -> str:
-    """Файл аккумуляции расхода по фазам: <run-dir>/budget-phases.json."""
-    d = _run_dir(root, data)
-    os.makedirs(d, exist_ok=True)
-    return os.path.join(d, "budget-phases.json")
 
 
 def _read_state(path: str) -> dict:
@@ -127,7 +122,8 @@ def _read_state(path: str) -> dict:
         return {}
 
 
-def _add(path: str, tokens: int, budget: int) -> dict:
+def _tally(path: str, tokens: int, budget: int, phase: str) -> dict:
+    """Один файл, один flock: прибавить расход в total и в текущую фазу."""
     with open(path, "a+", encoding="utf-8") as f:
         try:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
@@ -135,13 +131,20 @@ def _add(path: str, tokens: int, budget: int) -> dict:
             try:
                 state = json.load(f)
             except Exception:
-                state = {"spent": 0, "events": 0}
-            state["spent"] = int(state.get("spent", 0)) + tokens
-            state["events"] = int(state.get("events", 0)) + 1
+                state = {}
             state["budget"] = budget
+            state["total_spent"] = int(state.get("total_spent", 0)) + tokens
+            state["total_events"] = int(state.get("total_events", 0)) + 1
+            phases = state.setdefault("phases", {})
+            key = phase or "(вне фазы)"
+            entry = phases.setdefault(key, {"spent": 0, "events": 0})
+            entry["spent"] += tokens
+            entry["events"] += 1
+            state["last_phase"] = phase or state.get("last_phase", "")
+            state["updated_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
             f.seek(0)
             f.truncate()
-            json.dump(state, f, ensure_ascii=False)
+            json.dump(state, f, ensure_ascii=False, indent=2)
             f.flush()
             return state
         finally:
@@ -151,74 +154,27 @@ def _add(path: str, tokens: int, budget: int) -> dict:
                 pass
 
 
-def _add_phase_tally(root: str, data: dict, tokens: int):
-    """Аккумулировать расход по текущей фазе в budget-phases.json."""
-    phase = _current_phase(root)
-    if not phase:
-        return
-    ppath = _phase_state_path(root, data)
-    with open(ppath, "a+", encoding="utf-8") as f:
-        try:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            f.seek(0)
-            try:
-                state = json.load(f)
-            except Exception:
-                state = {"phases": {}, "total": 0, "events": 0}
-            phases = state.setdefault("phases", {})
-            phase_entry = phases.setdefault(phase, {"spent": 0, "events": 0})
-            phase_entry["spent"] += tokens
-            phase_entry["events"] += 1
-            state["total"] = state.get("total", 0) + tokens
-            state["events"] = state.get("events", 0) + 1
-            state["last_phase"] = phase
-            f.seek(0)
-            f.truncate()
-            json.dump(state, f, ensure_ascii=False, indent=2)
-            f.flush()
-        finally:
-            try:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-            except Exception:
-                pass
+def _finalize(root: str, data: dict):
+    """На Stop: проставить finalized_at в budget.json и отдать сводку в контекст."""
+    path = _bpath(root, data)
+    state = _read_state(path)
+    if not state:
+        state = {"budget": _budget(root), "total_spent": 0, "total_events": 0, "phases": {}}
+    state["finalized_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+    state["per_event_fallback"] = FALLBACK_PER_EVENT
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2, ensure_ascii=False)
 
-
-def _write_final(root: str, data: dict):
-    """На Stop: записать budget-final.json с постейджной статистикой и общим расходом."""
-    rund = _run_dir(root, data)
-    os.makedirs(rund, exist_ok=True)
-
-    # Общий расход
-    budget_path = os.path.join(rund, "budget.json")
-    total_state = _read_state(budget_path)
-
-    # Постейджный расход
-    phase_path = os.path.join(rund, "budget-phases.json")
-    phase_state = _read_state(phase_path)
-
-    final = {
-        "type": "budget-final",
-        "generated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "budget": total_state.get("budget", _budget(root)),
-        "total_spent": total_state.get("spent", 0),
-        "total_events": total_state.get("events", 0),
-        "phases": phase_state.get("phases", {}),
-        "per_event_fallback_used": FALLBACK_PER_EVENT,
-    }
-
-    final_path = os.path.join(rund, "budget-final.json")
-    with open(final_path, "w", encoding="utf-8") as f:
-        json.dump(final, f, indent=2, ensure_ascii=False)
-
+    phases = state.get("phases", {})
     print(json.dumps({
         "hookSpecificOutput": {
             "additionalContext": (
-                f"📊 Бюджет: итоговый файл → {final_path}. "
-                f"Всего потрачено: {final['total_spent']} токенов "
-                f"({final['total_events']} событий). "
-                f"Расход по фазам:\n" + "\n".join(
+                f"📊 Бюджет прогона → {path}. "
+                f"Всего: {state.get('total_spent', 0)} токенов "
+                f"({state.get('total_events', 0)} событий). "
+                f"По фазам:\n" + "\n".join(
                     f"  • {ph}: {p['spent']} токенов ({p['events']} событий)"
-                    for ph, p in sorted(final["phases"].items())
+                    for ph, p in sorted(phases.items())
                 )
             )
         }
@@ -237,17 +193,15 @@ def main() -> int:
         path = _bpath(root, data)
 
         if ev in ("PostToolUse", "SubagentStop", "PostToolUseFailure"):
-            tok = _tokens(data)
-            _add(path, tok, budget)
-            _add_phase_tally(root, data, tok)
+            _tally(path, _tokens(data), budget, _current_phase(root))
             return 0
 
         # ENFORCE — только info, без блокировки
-        spent = int(_read_state(path).get("spent", 0))
+        spent = int(_read_state(path).get("total_spent", 0))
         ratio = spent / budget if budget else 0.0
 
         if ev == "Stop":
-            _write_final(root, data)
+            _finalize(root, data)
             return 0
 
         if ev in ("PreToolUse", "UserPromptSubmit"):
