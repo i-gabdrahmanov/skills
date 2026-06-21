@@ -43,13 +43,23 @@
       }
     },
 
+    "sdd": {
+      "dir": ".gigacode/skills/sdd",
+      "skill_md": ".gigacode/skills/sdd/SKILL.md",
+      "references": {
+        "sdd_template_md": ".gigacode/skills/sdd/references/sdd-template.md"
+      },
+      "scripts": {
+        "check_sdd_doc": ".gigacode/skills/sdd/scripts/check_sdd_doc.py"
+      }
+    },
+
     "tech-design": {
       "dir": ".gigacode/skills/tech-design",
       "skill_md": ".gigacode/skills/tech-design/SKILL.md",
       "references": {
         "design_template_md": ".gigacode/skills/tech-design/references/design-template.md",
-        "task_plan_schema_md": ".gigacode/skills/tech-design/references/task-plan-schema.md",
-        "sdd_template_md": ".gigacode/skills/tech-design/references/sdd-template.md"
+        "task_plan_schema_md": ".gigacode/skills/tech-design/references/task-plan-schema.md"
       },
       "scripts": {
         "check_taskplan": ".gigacode/skills/tech-design/scripts/check_taskplan.py",
@@ -122,6 +132,17 @@
 
     "java-uml-spec": {
       "dir": ".gigacode/skills/java-uml-spec"
+    },
+
+    "config-helper": {
+      "dir": ".gigacode/skills/config-helper",
+      "skill_md": ".gigacode/skills/config-helper/SKILL.md",
+      "references": {
+        "params_registry": ".gigacode/skills/config-helper/references/params-registry.json"
+      },
+      "scripts": {
+        "config": ".gigacode/skills/config-helper/scripts/config.py"
+      }
     }
   },
 

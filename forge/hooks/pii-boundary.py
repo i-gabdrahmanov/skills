@@ -16,26 +16,37 @@ import re
 import sys
 
 import risk_ladder as R
+import _project
 
-# куда PII писать допустимо (не блокируем)
-_ALLOWED = re.compile(r"(?i)(/test|/fixtures?/|/ground/|/__tests__/|\.test\.|/resources/test)")
+
+def _allowed_scope(target: str) -> bool:
+    """PII можно писать в тесты/фикстуры и в рабочие данные ground/."""
+    if _project.is_test_path(target):
+        return True
+    p = (target or "").replace("\\", "/")
+    segs = {s for s in p.split("/") if s}
+    return "ground" in segs or "resources" in segs and _project.is_test_path(target)
 
 
 def _content(tool_name: str, ti: dict) -> str:
-    if tool_name in ("Write", "WriteFile", "write_file"):
-        return str(ti.get("content") or "")
     if tool_name in ("Edit", "edit", "NotebookEdit"):
         return str(ti.get("new_string") or ti.get("new_source") or ti.get("content") or "")
     if tool_name in ("Bash", "run_shell_command"):
         return str(ti.get("command") or "")
-    return ""
+    # Write/WriteFile/write_file И любой нераспознанный write-подобный инструмент:
+    # сканируем самые частые поля контента (fail-closed на неизвестный tool_name).
+    return str(ti.get("content") or ti.get("new_string") or ti.get("text") or "")
 
 
 def _target(tool_name: str, ti: dict) -> str:
     if tool_name in ("Bash", "run_shell_command"):
-        m = re.search(r">>?\s*([\w./~-]+)", str(ti.get("command") or ""))
+        cmd = str(ti.get("command") or "")
+        # перенаправление в файл: > >> , tee [-a], dd of=
+        m = (re.search(r">>?\s*([\w./~-]+)", cmd)
+             or re.search(r"\btee\s+(?:-a\s+)?([\w./~-]+)", cmd)
+             or re.search(r"\bdd\b[^|]*\bof=([\w./~-]+)", cmd))
         return m.group(1) if m else ""
-    return str(ti.get("file_path") or ti.get("path") or "")
+    return str(ti.get("file_path") or ti.get("path") or ti.get("filename") or "")
 
 
 def main() -> int:
@@ -53,8 +64,8 @@ def main() -> int:
         # для Bash без редиректа в файл — нечего охранять
         if tn in ("Bash", "run_shell_command") and not target:
             return 0
-        if target and _ALLOWED.search(target):
-            return 0  # разрешённый scope
+        if target and _allowed_scope(target):
+            return 0  # разрешённый scope (тесты/фикстуры/ground)
 
         for pat in R.load_policy().get("pii_patterns", []):
             if re.search(pat, content):

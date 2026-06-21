@@ -95,6 +95,24 @@ def _evaluate_enabled_by(expr, pipeline, gates):
     return bool(_resolve_jpath(pipeline, expr, False))
 
 
+# База фаз пайплайна (id/порядок — стабильны; phases_override в pipeline.json может дополнить).
+# id фаз ДОЛЖНЫ быть подмножеством pipeline_phases.MAIN_PHASES и идти в каноническом порядке —
+# это пинит test_phase_consistency (раньше resolve_phases был вторым нескоординированным
+# источником списка фаз).
+DEFAULT_PHASES = [
+    {"id": "00-brd",          "skill": "business-requirements", "enabled_by": None,              "skip_if": None,           "gates": ["brd"],        "description": "Discovery / BRD"},
+    {"id": "01-grounding",    "skill": "system-analyst",        "enabled_by": None,              "skip_if": "grounding.exists", "gates": None,       "description": "System overview ensured"},
+    {"id": "02-sdd",          "skill": "sdd",                   "enabled_by": None,              "skip_if": None,           "gates": ["sdd"],        "description": "SDD specification"},
+    {"id": "02-design",       "skill": "tech-design",           "enabled_by": None,              "skip_if": None,           "gates": ["design"],     "description": "Tech design + task plan"},
+    {"id": "02-eval-plan",    "skill": None,                    "enabled_by": "quality.eval_enabled", "skip_if": None,     "gates": None,           "description": "Eval-plan generated"},
+    {"id": "03-jira",         "skill": "jira-task-writer",      "enabled_by": "jira.enabled",     "skip_if": None,           "gates": ["jira"],       "description": "Jira issues created"},
+    {"id": "04-tdd",          "skill": "java-spring-dev",       "enabled_by": "quality.tdd",      "skip_if": None,           "gates": None,           "description": "TDD RED→GREEN per task"},
+    {"id": "05-verify",       "skill": None,                    "enabled_by": None,              "skip_if": None,           "gates": None,           "description": "Full test run + coverage"},
+    {"id": "06-document",     "skill": "java-uml-spec",         "enabled_by": None,              "skip_if": None,           "gates": None,           "description": "Spec updated"},
+    {"id": "07-deliver",      "skill": None,                    "enabled_by": None,              "skip_if": None,           "gates": ["commit","pr","report"], "description": "Stacked PR delivery"},
+]
+
+
 def resolve_phases(project_root, feature_slug=None, gates_path=None):
     """Основная функция: возвращает список активных фаз."""
     pipeline = load_json(os.path.join(project_root, "ground", "pipeline.json"))
@@ -115,18 +133,9 @@ def resolve_phases(project_root, feature_slug=None, gates_path=None):
         if manifest:
             feature_ctx = manifest.get("context", {})
 
-    # Жёстко заданные фазы — база (хардкод минимизирован, но порядок и id стабильны)
-    phases_definitions = [
-        {"id": "00-brd",          "skill": "business-requirements", "enabled_by": None,              "skip_if": None,           "gates": ["brd"],        "description": "Discovery / BRD"},
-        {"id": "01-grounding",    "skill": "system-analyst",        "enabled_by": None,              "skip_if": "grounding.exists", "gates": None,       "description": "System overview ensured"},
-        {"id": "02-design",       "skill": "tech-design",           "enabled_by": None,              "skip_if": None,           "gates": ["design"],     "description": "Tech design + task plan"},
-        {"id": "02-eval-plan",    "skill": None,                    "enabled_by": "quality.eval_enabled", "skip_if": None,     "gates": None,           "description": "Eval-plan generated"},
-        {"id": "03-jira",         "skill": "jira-task-writer",      "enabled_by": "jira.enabled",     "skip_if": None,           "gates": ["jira"],       "description": "Jira issues created"},
-        {"id": "04-tdd",          "skill": "java-spring-dev",       "enabled_by": "quality.tdd",      "skip_if": None,           "gates": None,           "description": "TDD RED→GREEN per task"},
-        {"id": "05-verify",       "skill": None,                    "enabled_by": None,              "skip_if": None,           "gates": None,           "description": "Full test run + coverage"},
-        {"id": "06-document",     "skill": "java-uml-spec",         "enabled_by": None,              "skip_if": None,           "gates": None,           "description": "Spec updated"},
-        {"id": "07-deliver",      "skill": None,                    "enabled_by": None,              "skip_if": None,           "gates": ["commit","pr","report"], "description": "Stacked PR delivery"},
-    ]
+    # База фаз — модульная константа DEFAULT_PHASES (порядок/id пинятся test_phase_consistency
+    # против pipeline_phases.MAIN_PHASES). Копируем, чтобы phases_override не мутировал константу.
+    phases_definitions = [dict(p) for p in DEFAULT_PHASES]
 
     # Позволяем pipeline.json переопределить фазы через phases_override
     override = pipeline.get("phases_override")

@@ -163,6 +163,9 @@ def _direct_update(root: Path, feature: str, step_id: str, status: str, obj: dic
                 [sys.executable, str(UPDATE),
                  "--project", str(root), "--skill", SKILL, "--feature", feature,
                  "--step-id", str(step_id), "--status", status,
+                 # SubagentStop → запись пришла ОТ субагента: снимает блок «фаза должна идти
+                 # через agent()» в update._check_subagent_origin (бывший subagent-enforcer).
+                 "--closed-by", "subagent",
                  "--output-json", json.dumps(obj, ensure_ascii=False)],
                 capture_output=True, text=True, timeout=20,
             )
@@ -191,6 +194,7 @@ def _update_gate_phase(root: Path, feature: str, step_id: str, status: str) -> N
         PREFIX_PHASE = {
             "00-": "00-brd",
             "01-": "01-grounding",
+            "02-sdd": "02-sdd",
             "02-eval-plan": "02-eval-plan",
             "02-": "02-design",
             "03-": "03-jira",

@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import judges_registry
-from _util import repo_root
+from _util import repo_root, feature_docs_dir, safe_slug
 
 
 def load_json_arg(value: str):
@@ -62,6 +62,13 @@ def main():
     p.add_argument("--force", action="store_true", help="Archive existing manifest and create fresh")
     p.add_argument("--feature", default="pipeline", help="Namespace стейта на фичу (slug/Jira-key). По умолчанию 'pipeline'.")
     args = p.parse_args()
+
+    # slug идёт в пути (statements/<skill>/<feature>/, docs/.../<feature>/) — fail-closed на traversal
+    try:
+        safe_slug(args.feature)
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(2)
 
     project = Path(args.project or repo_root()).resolve()
     if not project.exists():
@@ -127,21 +134,19 @@ def main():
         "steps": steps,
     }
 
-    # Auto-resolve artifacts for existing files by convention paths
-    # Map: step-id prefix → list of (artifact_key, relative_path_template)
+    # Auto-resolve artifacts for existing files by convention.
+    # Файлы лежат в <feature_docs_dir>/<feature>/<name> — каталог резолвится по docs-конфигу
+    # (in-repo / separate-repo), а не хардкодом docs/feature-pipeline.
+    # Map: step-id prefix → list of (artifact_key, filename)
     ARTIFACT_CONVENTIONS = {
-        "00-brd":      [("brd", "docs/feature-pipeline/{feature}/brd.md")],
-        "02-design":   [
-            ("tech-design", "docs/feature-pipeline/{feature}/tech-design.md"),
-            ("task-plan",   "docs/feature-pipeline/{feature}/task-plan.json"),
-            ("sdd",         "docs/feature-pipeline/{feature}/sdd.md"),
-        ],
-        "02-eval-plan": [("eval-plan", "docs/feature-pipeline/{feature}/eval-plan.json")],
-        "03-jira":      [("jira-result", "docs/feature-pipeline/{feature}/jira-tasks-result.json")],
-        "07-deliver-":  [
-            ("pr-info", "docs/feature-pipeline/{feature}/pr-info.json"),
-        ],
+        "00-brd":       [("brd", "brd.md")],
+        "02-sdd":       [("sdd", "sdd.md")],
+        "02-design":    [("tech-design", "tech-design.md"), ("task-plan", "task-plan.json")],
+        "02-eval-plan": [("eval-plan", "eval-plan.json")],
+        "03-jira":      [("jira-result", "jira-tasks-result.json")],
+        "07-deliver-":  [("pr-info", "pr-info.json")],
     }
+    fdir = feature_docs_dir(project) / args.feature
     for step in steps:
         step_id = step["id"]
         # Find matching convention prefix
@@ -153,10 +158,14 @@ def main():
         if not matched:
             continue
         artifacts = {}
-        for key, template in matched:
-            candidate = project / template.format(feature=args.feature)
+        for key, name in matched:
+            candidate = fdir / name
             if candidate.exists():
-                artifacts[key] = str(candidate.relative_to(project))
+                # relative — если под проектом (in-repo); иначе absolute (separate-repo)
+                try:
+                    artifacts[key] = str(candidate.relative_to(project))
+                except ValueError:
+                    artifacts[key] = str(candidate)
         if artifacts:
             step["artifacts"] = artifacts
 

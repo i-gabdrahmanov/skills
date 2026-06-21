@@ -52,6 +52,7 @@ class TestOverrideJudge(unittest.TestCase):
     def _write_verdict(self, judge: str, passed: bool, issues: list | None = None):
         verdict = {
             "$schema": "feature-pipeline/judge-verdict@1",
+            "produced_by": "run_judge",
             "judge": judge,
             "feature_slug": self.feature,
             "passed": passed,

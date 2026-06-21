@@ -17,10 +17,11 @@ Usage:
      - Добавляет новые записи в конец таблицы с пометкой "[added: <feature>]".
      - Если раздел отсутствует — создаёт.
   3. Пересобирает grounding-excerpt.json из обновлённых MD + scan-файлов.
-  4. Прогоняет verify_coverage.py для проверки полноты (gate).
+  4. Если передан --scan — прогоняет verify_coverage.verify() как gate полноты
+     (excerpt vs scan). Без --scan верифицировать нечем → gate пропускается.
 
 Exit:
-    0 — PASS (grounding обогащён, coverage OK)
+    0 — PASS (grounding обогащён, coverage OK либо verify пропущен из-за отсутствия --scan)
     2 — FAIL (покрытие не сошлось — нужен полный рескан)
 """
 from __future__ import annotations
@@ -408,22 +409,67 @@ def enrich(analysis_dir: str | Path, scan_dir: str | Path | None,
 
     # 2. Пересобрать grounding-excerpt.json
     if not dry_run:
-        excerpt = _build_excerpt(analysis_path, scan_path, feature_slug)
         excerpt_path = analysis_path / "grounding-excerpt.json"
+        prev_excerpt = _read_json(excerpt_path)  # ДО пересборки — для детекта дрейфа
+        excerpt = _build_excerpt(analysis_path, scan_path, feature_slug)
         excerpt_path.write_text(json.dumps(excerpt, ensure_ascii=False, indent=2))
         changes["excerpt_updated"] = True
         changes["excerpt_path"] = str(excerpt_path)
+
+        # 3. Gate полноты против scan:
+        #   • rebuilt — ловит scan-внутренний недосчёт (gate_total > извлечённых items) → exit 2;
+        #   • pre_enrich — был ли СТАРЫЙ excerpt неполон (дрейф grounding до этой фичи) → warning,
+        #     т.к. пересборка из scan дрейф залечивает; большой дрейф = повод на полный рескан.
+        #   • scan отсутствует → не 'skipped' молча, а явный 'unverified' (excerpt собран слабой
+        #     MD-эвристикой, полнота НЕ гарантирована).
+        if scan_path and scan_path.exists():
+            cov = _run_coverage_gate(scan_path, excerpt)
+            if prev_excerpt:
+                pre = _run_coverage_gate(scan_path, prev_excerpt)
+                cov["pre_enrich_status"] = pre.get("status")
+                if pre.get("status") == "fail":
+                    cov.setdefault("warnings", []).append(
+                        "grounding-excerpt был неполон ДО фичи (дрейф) — залечен пересборкой; "
+                        "при большом дрейфе прогони полный system-analyst")
+            changes["coverage"] = cov
+        else:
+            changes["coverage"] = {"status": "unverified",
+                                   "reason": "нет scan — excerpt собран MD-эвристикой, полнота не проверена"}
 
     changes["delta"] = {k: (list(v) if isinstance(v, set) else v) for k, v in delta.items()}
     return changes
 
 
+def _run_coverage_gate(scan_dir: Path, excerpt: dict) -> dict:
+    """Прогнать verify_coverage.verify() как gate полноты. Возвращает вердикт ({} если недоступен)."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from verify_coverage import verify  # type: ignore
+        return verify(scan_dir, excerpt)
+    except Exception as exc:  # verify_coverage недоступен/сломан — не валим обогащение
+        return {"status": "skipped", "reason": f"verify_coverage недоступен: {exc}"}
+
+
+def _resolve_docs(project_root: Path):
+    """(system_analysis_dir, scan_dir) по конфигу docs; фоллбэк docs/system-analysis[/scan]."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "feature-pipeline" / "scripts"))
+        import skill_paths  # type: ignore
+        return skill_paths.system_analysis_dir(project_root), skill_paths.scan_dir(project_root)
+    except Exception:
+        sa = project_root / "docs" / "system-analysis"
+        return sa, sa / "scan"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Incremental grounding enrichment after feature delivery")
     ap.add_argument("--task-plan", required=True, help="Path to task-plan.json")
-    ap.add_argument("--system-analysis", default="docs/system-analysis",
-                    help="Path to system-analysis directory (default: docs/system-analysis)")
-    ap.add_argument("--scan", default=None, help="Path to scan/ directory (from scan_all.py)")
+    ap.add_argument("--project-root", default=".",
+                    help="Корень проекта для резолва docs (default: cwd)")
+    ap.add_argument("--system-analysis", default=None,
+                    help="Path to system-analysis directory (default: резолв по docs-конфигу)")
+    ap.add_argument("--scan", default=None,
+                    help="Path to scan/ directory (default: <system-analysis>/scan по docs-конфигу)")
     ap.add_argument("--feature", default=None, help="Feature slug (auto from task-plan if omitted)")
     ap.add_argument("--dry-run", action="store_true", help="Preview changes, don't write files")
     ap.add_argument("--json", action="store_true", help="Output result as JSON")
@@ -439,10 +485,14 @@ def main() -> int:
         print(f"ERROR: invalid or empty task-plan: {task_plan_path}", file=sys.stderr)
         return 1
 
-    analysis_path = Path(args.system_analysis)
-    scan_path = Path(args.scan) if args.scan else None
+    _sa_default, _scan_default = _resolve_docs(Path(args.project_root))
+    analysis_path = Path(args.system_analysis) if args.system_analysis else _sa_default
+    scan_path = Path(args.scan) if args.scan else (_scan_default if _scan_default.exists() else None)
 
     changes = enrich(analysis_path, scan_path, task_plan, args.feature, args.dry_run)
+
+    coverage = changes.get("coverage") or {}
+    cov_status = coverage.get("status")
 
     if args.json:
         print(json.dumps(changes, ensure_ascii=False, indent=2))
@@ -456,8 +506,24 @@ def main() -> int:
         for cat, items in delta.items():
             if items:
                 print(f"  🔄 {cat}: {len(items)} change(s)")
+        if cov_status == "fail":
+            failed = [r for r in coverage.get("hard", []) if not r.get("ok")]
+            print(f"  ❌ coverage gate FAIL: недосчёт в {[r['category'] for r in failed]}")
+            for r in failed:
+                print(f"      {r['category']}: reported {r['reported']} < scan {r['deterministic']}")
+        elif cov_status == "pass":
+            print("  ✅ coverage gate PASS")
+        elif cov_status == "unverified":
+            print(f"  ⚠️  coverage НЕ проверен: {coverage.get('reason', 'нет scan')}")
+        elif cov_status == "skipped":
+            print(f"  · coverage gate skipped: {coverage.get('reason', 'нет --scan')}")
+        for w in coverage.get("warnings", []):
+            print(f"  ⚠️  {w}")
 
-    return 0 if not args.dry_run else 0
+    # exit 2 только при реальном провале полноты (нужен полный рескан); dry-run всегда 0
+    if not args.dry_run and cov_status == "fail":
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

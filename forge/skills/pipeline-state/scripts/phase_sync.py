@@ -28,10 +28,11 @@ try:
     _build_gate = pp.build_gate
 except Exception:  # pragma: no cover — fallback при отдельном деплое
     pp = None
-    MAIN_PHASES = ["00-brd", "01-grounding", "02-design", "02-eval-plan",
+    MAIN_PHASES = ["00-brd", "01-grounding", "02-sdd", "02-design", "02-eval-plan",
                    "03-jira", "04-tdd", "05-verify", "06-document",
                    "07-deliver", "07-report"]
     PREFIX_PHASE = {
+        "02-sdd": "02-sdd",
         "02-eval-plan": "02-eval-plan",
         "00-": "00-brd", "01-": "01-grounding", "02-": "02-design",
         "03-": "03-jira", "04-": "04-tdd", "05-": "05-verify",
@@ -49,7 +50,10 @@ except Exception:  # pragma: no cover — fallback при отдельном д�
 
 def _is_container_step(step_id: str) -> bool:
     """Main-phase шаги (04-tdd, 05-verify, 06-doc, 07-deliver) — контейнеры,
-    их статус не отражает реальную завершённость динамических шагов фазы."""
+    их статус не отражает реальную завершённость динамических шагов фазы.
+    ЕДИНОЕ определение — pipeline_phases.is_container_step (fallback при отдельном деплое)."""
+    if pp is not None:
+        return pp.is_container_step(step_id)
     return step_id in MAIN_PHASES
 
 
@@ -69,9 +73,14 @@ def _gate_write_path(root: str, feature: str) -> str:
 
 
 def sync_gate_from_manifest(project_root: str, feature: str, skill: str = "feature-pipeline") -> dict | None:
-    """
-    Синхронизирует gate.json из manifest.json.
-    Возвращает обновлённый gate dict или None, если файлы не найдены.
+    """Синхронизирует gate.json из manifest.json — manifest источник истины, gate производный.
+
+    ЕДИНАЯ деривация: всегда перестраиваем gate из manifest через build_gate (одна реализация
+    «steps → статусы фаз»), сохраняя авторитетную мету (skip_allowed из gate, артефакты из
+    phase-defs). Раньше тут был отдельный инкрементальный проход со СВОЕЙ копией container-логики,
+    который мог разойтись с build_gate (P1-4). Теперь источник деривации один.
+
+    Возвращает обновлённый gate dict или None, если manifest/gate не найдены.
     """
     manifest_path = os.path.join(
         project_root, "ground", "statements", skill, feature, "manifest.json",
@@ -85,82 +94,8 @@ def sync_gate_from_manifest(project_root: str, feature: str, skill: str = "featu
 
     with open(manifest_path) as f:
         manifest = json.load(f)
-    with open(gate_path) as f:
-        gate = json.load(f)
 
-    steps = manifest.get("steps", [])
-    step_status = {s["id"]: s["status"] for s in steps}
-    existing_phase_ids = {p["id"] for p in gate.get("phases", [])}
-
-    # Проверка: все ли шаги manifest маппятся на существующие фазы gate.json?
-    # Если нет — значит manifest изменился (add_steps.py добавил шаги),
-    # нужно пересоздать gate.json через _regenerate_gate.
-    unmatched = [s["id"] for s in steps if _guess_phase(s["id"]) not in existing_phase_ids]
-    if unmatched:
-        print(
-            f"phase_sync: manifest has {len(steps)} steps but gate.json has {len(existing_phase_ids)} phases. "
-            f"Unmatched steps: {unmatched[:5]}... Regenerating gate.json.",
-            file=sys.stderr,
-        )
-        return _regenerate_gate(project_root, feature, skill, manifest)
-    phases = gate.get("phases", [])
-    changed = False
-
-    for phase in phases:
-        pid = phase["id"]
-        # Собираем все динамические шаги manifest, относящиеся к этой фазе
-        # (исключаем container-шаги типа 04-tdd, 05-verify — они не отражают
-        # реальную завершённость динамических шагов)
-        phase_step_ids = [
-            s["id"] for s in steps
-            if _guess_phase(s["id"]) == pid and not _is_container_step(s["id"])
-        ]
-        if not phase_step_ids:
-            # Нет динамических шагов — проверяем по container-шагу
-            container_id = pid
-            container_status = step_status.get(container_id)
-            if container_status in ("completed", "skipped") and phase.get("status") != "completed":
-                phase["status"] = "completed"
-                changed = True
-                print(f"phase_sync: phase '{pid}' → completed (container {container_status})",
-                      file=sys.stderr)
-            continue
-
-        # Фаза completed, если все её шаги completed или skipped
-        all_done = all(
-            step_status.get(sid) in ("completed", "skipped")
-            for sid in phase_step_ids
-        )
-        if all_done and phase.get("status") != "completed":
-            phase["status"] = "completed"
-            changed = True
-            print(f"phase_sync: phase '{pid}' → completed", file=sys.stderr)
-
-    # Пересчитываем current_phase
-    new_current = ""
-    for phase in phases:
-        if phase.get("status") != "completed":
-            new_current = phase["id"]
-            if phase.get("status") != "in_progress":
-                phase["status"] = "in_progress"
-                changed = True
-            break
-
-    if gate.get("current_phase") != new_current:
-        gate["current_phase"] = new_current
-        changed = True
-        if new_current:
-            print(f"phase_sync: current_phase → '{new_current}'", file=sys.stderr)
-        else:
-            print(f"phase_sync: all phases completed", file=sys.stderr)
-
-    if changed:
-        tmp = gate_path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(gate, f, indent=2, ensure_ascii=False)
-        os.replace(tmp, gate_path)
-
-    return gate
+    return _regenerate_gate(project_root, feature, skill, manifest)
 
 
 def _regenerate_gate(project_root: str, feature: str, skill: str,
@@ -241,7 +176,9 @@ def _regenerate_gate(project_root: str, feature: str, skill: str,
     with open(tmp, "w") as f:
         json.dump(gate, f, indent=2, ensure_ascii=False)
     os.replace(tmp, gate_path)
-    print(f"phase_sync: regenerated gate.json ({len(phases)} phases, current={current})",
+    # phases/current читаем из готового gate (в build_gate-ветке локальных переменных нет — был NameError)
+    print(f"phase_sync: regenerated gate.json "
+          f"({len(gate.get('phases', []))} phases, current={gate.get('current_phase', '')})",
           file=sys.stderr)
     return gate
 

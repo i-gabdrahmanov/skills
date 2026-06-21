@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""check_sdd.py — gate строгого SDD (PDLC v3.5, стр. 66). Дополняет check_taskplan.py.
+"""check_sdd.py — gate линковки task-plan ↔ sdd.md (PDLC v3.5). Дополняет check_taskplan.py.
 
-Проверяет:
-  1. Существует sdd.md (путь задаётся или выводится рядом с task-plan) с обязательными секциями.
+Запускается на фазе 02-design (tech-design). Сам документ sdd.md (обязательные секции,
+Given-When-Then) уже провалидирован на фазе 02-sdd гейтом `sdd/scripts/check_sdd_doc.py`,
+поэтому здесь проверяется только связь плана со спецификацией:
+  1. Существует sdd.md (путь задаётся или выводится рядом с task-plan) — факт наличия.
   2. У каждой задачи task-plan есть непустой `acceptance` (≥1, желательно Given-When-Then) и `sdd_ref`.
 
 Usage:
@@ -16,10 +18,6 @@ import json
 import re
 from pathlib import Path
 
-REQUIRED_SECTIONS = [
-    "бизнес-контекст", "функциональные требования", "нефункциональные",
-    "api", "модель данных", "критерии приёмки",
-]
 _GWT = re.compile(r"(?i)given.*when.*then")
 
 
@@ -42,14 +40,7 @@ def main() -> int:
 
     sdd_path = Path(args.sdd) if args.sdd else plan_path.parent / "sdd.md"
     if not sdd_path.exists():
-        errors.append(f"нет SDD-документа: {sdd_path}")
-    else:
-        text = sdd_path.read_text(encoding="utf-8", errors="replace").lower()
-        for sec in REQUIRED_SECTIONS:
-            if sec not in text:
-                errors.append(f"в sdd.md нет обязательной секции: «{sec}»")
-        if not _GWT.search(sdd_path.read_text(encoding="utf-8", errors="replace")):
-            warnings.append("в sdd.md не найден ни один сценарий Given-When-Then")
+        errors.append(f"нет SDD-документа: {sdd_path} (должен быть создан на фазе 02-sdd)")
 
     for t in plan.get("tasks", []):
         tid = t.get("id", "?")

@@ -1,0 +1,418 @@
+{
+  "$schema": "config-helper/params-registry@1",
+  "_comment": "Единственный источник правды по настраиваемым параметрам forge. config.py пишет только параметры, описанные здесь (fail-closed). file: pipeline=ground/pipeline.json, gates=ground/feature-gates.json, risk=.gigacode/hooks/risk-policy.json. path — dotted-путь внутри файла. aliases помогают модели смапить свободный запрос на id.",
+  "params": [
+    {
+      "id": "quality.coverage_threshold",
+      "file": "pipeline",
+      "path": "quality.coverage_threshold",
+      "type": "float", "min": 0, "max": 1, "default": 0.8,
+      "category": "quality", "sensitive": false,
+      "title": "Порог покрытия тестами",
+      "description": "Минимальное покрытие (0..1), ниже которого coverage-гейт фейлит",
+      "aliases": ["покрытие", "coverage", "процент покрытия", "тестовое покрытие"]
+    },
+    {
+      "id": "quality.eval_enabled",
+      "file": "pipeline",
+      "path": "quality.eval_enabled",
+      "type": "bool", "default": true,
+      "category": "quality", "sensitive": false,
+      "title": "Eval-Driven Development",
+      "description": "Включает eval-guard: блокирует запись в src/main, пока eval'ы задачи не пройдены",
+      "aliases": ["eval", "эвалы", "eval-driven", "edd", "проверки до кода"]
+    },
+    {
+      "id": "quality.eval_threshold",
+      "file": "pipeline",
+      "path": "quality.eval_threshold",
+      "type": "float", "min": 0, "max": 1, "default": 0.95,
+      "category": "quality", "sensitive": false,
+      "title": "Порог прохождения eval'ов",
+      "description": "Доля eval'ов (0..1), которая должна пройти по умолчанию",
+      "aliases": ["порог eval", "eval threshold"]
+    },
+    {
+      "id": "quality.build_command",
+      "file": "pipeline",
+      "path": "quality.build_command",
+      "type": "string", "default": "./gradlew clean build",
+      "category": "quality", "sensitive": false,
+      "title": "Команда сборки",
+      "description": "Shell-команда полной сборки проекта",
+      "aliases": ["build", "сборка", "команда сборки"]
+    },
+    {
+      "id": "quality.test_command",
+      "file": "pipeline",
+      "path": "quality.test_command",
+      "type": "string", "default": "./gradlew test jacocoTestReport",
+      "category": "quality", "sensitive": false,
+      "title": "Команда тестов",
+      "description": "Shell-команда прогона тестов и отчёта покрытия",
+      "aliases": ["test", "тесты", "команда тестов"]
+    },
+    {
+      "id": "quality.jacoco_configured",
+      "file": "pipeline",
+      "path": "quality.jacoco_configured",
+      "type": "bool", "default": false,
+      "category": "quality", "sensitive": false,
+      "title": "JaCoCo подключён",
+      "description": "Подключён ли JaCoCo (генерит XML-отчёт покрытия). Если coverage-гейт активен, а это false — coverage в --strict будет FAIL без отчёта (см. validate)",
+      "aliases": ["jacoco", "жакоко", "покрытие подключено", "jacoco_configured"]
+    },
+    {
+      "id": "quality.architecture_check",
+      "file": "pipeline",
+      "path": "quality.architecture_check",
+      "type": "bool", "default": false,
+      "category": "quality", "sensitive": false,
+      "title": "Гейт архитектуры (ArchUnit-lite)",
+      "description": "Включить детерминированный гейт слоёв check_architecture.py в фазе verify: package_root, размещение классов по слоям, запрет зависимостей (entity→service и т.п.). Без Java/ArchUnit",
+      "aliases": ["архитектура", "archunit", "слои", "layering", "architecture", "architecture_check"]
+    },
+    {
+      "id": "quality.tautology_check",
+      "file": "pipeline",
+      "path": "quality.tautology_check",
+      "type": "bool", "default": false,
+      "category": "quality", "sensitive": false,
+      "title": "Гейт тавтологичных тестов",
+      "description": "Включить статический детектор пустых/тавтологичных тестов check_tautological_tests.py (assertTrue(true), пустое тело, нет ассертов). Дополняет RED-гейт, работает без build",
+      "aliases": ["тавтология", "тавтологичные тесты", "tautology", "пустые тесты", "tautology_check"]
+    },
+    {
+      "id": "quality.traceability_check",
+      "file": "pipeline",
+      "path": "quality.traceability_check",
+      "type": "bool", "default": false,
+      "category": "quality", "sensitive": false,
+      "title": "Гейт трассируемости",
+      "description": "Включить сквозной judge трассируемости check_traceability.py: каждая задача имеет резолвимый sdd_ref, ≥1 eval и непустой acceptance (матрица требование→SDD→задача→eval). Ловит 'забыли верифицировать требование'",
+      "aliases": ["трассируемость", "traceability", "матрица трассировки", "sdd_ref", "traceability_check"]
+    },
+    {
+      "id": "quality.secret_scan",
+      "file": "pipeline",
+      "path": "quality.secret_scan",
+      "type": "bool", "default": true,
+      "category": "quality", "sensitive": false,
+      "title": "Secret-scan (вкл. по умолчанию)",
+      "description": "Детерминированный поиск хардкод-кредов check_secrets.py в фазе verify (по умолчанию ON). На доставке secret-scan форсится всегда (delivery-judge), независимо от флага",
+      "aliases": ["секреты", "secret scan", "поиск секретов", "secrets", "secret_scan"]
+    },
+    {
+      "id": "autonomy.mode",
+      "file": "pipeline",
+      "path": "autonomy.mode",
+      "type": "enum", "enum": ["gated", "auto"], "default": "gated",
+      "category": "autonomy", "sensitive": false,
+      "title": "Режим автономии",
+      "description": "gated — каждый гейт требует подтверждения; auto — пайплайн идёт сам до auto_max_risk",
+      "aliases": ["автономия", "режим", "gated", "auto"]
+    },
+    {
+      "id": "autonomy.auto_max_risk",
+      "file": "pipeline",
+      "path": "autonomy.auto_max_risk",
+      "type": "enum", "enum": ["R0", "R1", "R2", "R3", "R4", "R5"], "default": "R1",
+      "category": "autonomy", "sensitive": true,
+      "title": "Макс. риск авто-аппрува (проект)",
+      "description": "Действия с риском <= уровня проходят без подтверждения. Переопределяет risk-policy autonomy_auto_max для этого проекта",
+      "aliases": ["авто-аппрув", "auto approve", "макс риск", "auto_max_risk", "уровень риска"]
+    },
+    {
+      "id": "autonomy.criticality",
+      "file": "pipeline",
+      "path": "autonomy.criticality",
+      "type": "enum", "enum": ["low", "medium", "high"], "default": "medium",
+      "category": "autonomy", "sensitive": false,
+      "title": "Критичность проекта",
+      "description": "Класс критичности проекта, влияет на строгость гейтов",
+      "aliases": ["критичность", "criticality"]
+    },
+    {
+      "id": "docs.mode",
+      "file": "pipeline",
+      "path": "docs.mode",
+      "type": "enum", "enum": ["in-repo", "separate-repo"], "default": "in-repo",
+      "category": "docs", "sensitive": false,
+      "title": "Где живут доки",
+      "description": "in-repo — в репозитории кода; separate-repo — во внешнем репо спеки (repo_path)",
+      "aliases": ["доки", "документация", "куда класть доки", "docs mode"]
+    },
+    {
+      "id": "docs.docs_path",
+      "file": "pipeline",
+      "path": "docs.docs_path",
+      "type": "string", "default": "docs",
+      "category": "docs", "sensitive": false,
+      "title": "Папка доков (in-repo)",
+      "description": "Базовая папка документных артефактов под корнем проекта",
+      "aliases": ["docs path", "папка доков"]
+    },
+    {
+      "id": "docs.repo_path",
+      "file": "pipeline",
+      "path": "docs.repo_path",
+      "type": "string", "default": null,
+      "category": "docs", "sensitive": false,
+      "title": "Путь к внешнему репо спеки (separate-repo)",
+      "description": "Абсолютный путь к внешнему репозиторию спеки, если docs.mode = separate-repo",
+      "aliases": ["repo path", "внешний репо спеки"]
+    },
+    {
+      "id": "docs.feature_subdir",
+      "file": "pipeline",
+      "path": "docs.feature_subdir",
+      "type": "string", "default": "feature-pipeline",
+      "category": "docs", "sensitive": false,
+      "title": "Подпапка фич",
+      "description": "Имя подпапки под docs-базой для артефактов фич",
+      "aliases": ["feature subdir"]
+    },
+    {
+      "id": "docs.system_analysis_subdir",
+      "file": "pipeline",
+      "path": "docs.system_analysis_subdir",
+      "type": "string", "default": "system-analysis",
+      "category": "docs", "sensitive": false,
+      "title": "Подпапка системного обзора",
+      "description": "Имя подпапки под docs-базой для system-analysis",
+      "aliases": ["system analysis subdir"]
+    },
+    {
+      "id": "conventions.migration_tool",
+      "file": "pipeline",
+      "path": "conventions.migration_tool",
+      "type": "enum", "enum": ["liquibase", "flyway", "none"], "default": "none",
+      "category": "conventions", "sensitive": false,
+      "title": "Инструмент миграций",
+      "description": "Какой инструмент схемных миграций используется в проекте",
+      "aliases": ["миграции", "migration", "liquibase", "flyway"]
+    },
+    {
+      "id": "conventions.package_root",
+      "file": "pipeline",
+      "path": "conventions.package_root",
+      "type": "string", "default": null,
+      "category": "conventions", "sensitive": false,
+      "title": "Корневой пакет",
+      "description": "Корневой Java-пакет проекта (например ru.sbrf.pprb.npf)",
+      "aliases": ["package root", "корневой пакет", "пакет"]
+    },
+    {
+      "id": "conventions.changelog_path",
+      "file": "pipeline",
+      "path": "conventions.changelog_path",
+      "type": "string", "default": null,
+      "category": "conventions", "sensitive": false,
+      "title": "Путь к changelog миграций",
+      "description": "Путь к корневому changelog Liquibase/Flyway",
+      "aliases": ["changelog", "changelog path"]
+    },
+    {
+      "id": "jira.enabled",
+      "file": "pipeline",
+      "path": "jira.enabled",
+      "type": "bool", "default": null,
+      "category": "jira", "sensitive": false,
+      "title": "Jira включена",
+      "description": "Создавать ли задачи в Jira в фазе постановки",
+      "aliases": ["jira", "джира", "jira enabled"]
+    },
+    {
+      "id": "jira.project_key",
+      "file": "pipeline",
+      "path": "jira.project_key",
+      "type": "string", "default": null,
+      "category": "jira", "sensitive": false,
+      "title": "Ключ проекта Jira",
+      "description": "Ключ проекта в Jira (например NPF)",
+      "aliases": ["project key", "ключ jira", "ключ проекта"]
+    },
+    {
+      "id": "jira.issue_type_story",
+      "file": "pipeline",
+      "path": "jira.issue_type_story",
+      "type": "string", "default": "Story",
+      "category": "jira", "sensitive": false,
+      "title": "Тип задачи Story",
+      "description": "Название типа задачи для Story",
+      "aliases": ["story type"]
+    },
+    {
+      "id": "jira.issue_type_subtask",
+      "file": "pipeline",
+      "path": "jira.issue_type_subtask",
+      "type": "string", "default": "Sub-task",
+      "category": "jira", "sensitive": false,
+      "title": "Тип задачи Sub-task",
+      "description": "Название типа задачи для Sub-task",
+      "aliases": ["subtask type"]
+    },
+    {
+      "id": "bitbucket.enabled",
+      "file": "pipeline",
+      "path": "bitbucket.enabled",
+      "type": "bool", "default": null,
+      "category": "bitbucket", "sensitive": false,
+      "title": "Bitbucket включён",
+      "description": "Создавать ли PR в Bitbucket в фазе доставки",
+      "aliases": ["bitbucket", "битбакет", "pr"]
+    },
+    {
+      "id": "bitbucket.workspace",
+      "file": "pipeline",
+      "path": "bitbucket.workspace",
+      "type": "string", "default": null,
+      "category": "bitbucket", "sensitive": false,
+      "title": "Workspace Bitbucket",
+      "description": "Bitbucket workspace",
+      "aliases": ["workspace"]
+    },
+    {
+      "id": "bitbucket.repo_slug",
+      "file": "pipeline",
+      "path": "bitbucket.repo_slug",
+      "type": "string", "default": null,
+      "category": "bitbucket", "sensitive": false,
+      "title": "Repo slug Bitbucket",
+      "description": "Bitbucket repo slug",
+      "aliases": ["repo slug"]
+    },
+    {
+      "id": "delivery.pr_strategy",
+      "file": "pipeline",
+      "path": "delivery.pr_strategy",
+      "type": "enum", "enum": ["stacked", "single"], "default": "stacked",
+      "category": "delivery", "sensitive": false,
+      "title": "Стратегия PR",
+      "description": "stacked — стек PR по задачам; single — один PR на фичу",
+      "aliases": ["pr strategy", "стратегия pr"]
+    },
+    {
+      "id": "delivery.branch_prefix",
+      "file": "pipeline",
+      "path": "delivery.branch_prefix",
+      "type": "string", "default": "feature/",
+      "category": "delivery", "sensitive": false,
+      "title": "Префикс веток",
+      "description": "Префикс имён feature-веток",
+      "aliases": ["branch prefix", "префикс веток"]
+    },
+
+    {
+      "id": "eval_driven_dev",
+      "file": "gates",
+      "path": "gates.eval_driven_dev.enabled",
+      "type": "bool", "default": true,
+      "category": "gates", "sensitive": false,
+      "title": "Гейт: eval-driven dev",
+      "description": "Рантайм-флаг eval-guard (блок src/main до прохождения eval-plan)",
+      "aliases": ["eval gate", "edd gate"]
+    },
+    {
+      "id": "security_review",
+      "file": "gates",
+      "path": "gates.security_review.enabled",
+      "type": "bool", "default": false,
+      "category": "gates", "sensitive": false,
+      "title": "Гейт: security review",
+      "description": "Включает фазу security-review (SAST + CVE)",
+      "aliases": ["security", "секьюрити", "security review"]
+    },
+    {
+      "id": "tdd_enforced",
+      "file": "gates",
+      "path": "gates.tdd_enforced.enabled",
+      "type": "bool", "default": true,
+      "category": "gates", "sensitive": false,
+      "title": "Гейт: TDD",
+      "description": "Включает tdd-guard (RED-тест до кода)",
+      "aliases": ["tdd", "тдд", "red test", "тест до кода"]
+    },
+    {
+      "id": "parallel_build",
+      "file": "gates",
+      "path": "gates.parallel_build.enabled",
+      "type": "bool", "default": false,
+      "category": "gates", "sensitive": false,
+      "title": "Гейт: параллельная сборка",
+      "description": "Разрешает параллельную сборку задач",
+      "aliases": ["parallel build", "параллельная сборка"]
+    },
+    {
+      "id": "evidence_bundle",
+      "file": "gates",
+      "path": "gates.evidence_bundle.enabled",
+      "type": "bool", "default": true,
+      "category": "gates", "sensitive": false,
+      "title": "Гейт: evidence bundle",
+      "description": "Требует сбор evidence перед доставкой",
+      "aliases": ["evidence", "эвиденс"]
+    },
+    {
+      "id": "background_consolidation",
+      "file": "gates",
+      "path": "gates.background_consolidation.enabled",
+      "type": "bool", "default": false,
+      "category": "gates", "sensitive": false,
+      "title": "Гейт: фоновая консолидация",
+      "description": "Запускает консолидацию асинхронно",
+      "aliases": ["background consolidation"]
+    },
+    {
+      "id": "migration_impact_check",
+      "file": "gates",
+      "path": "gates.migration_impact_check.enabled",
+      "type": "bool", "default": true,
+      "category": "gates", "sensitive": false,
+      "title": "Гейт: проверка миграций",
+      "description": "Проверяет зависимости миграций",
+      "aliases": ["migration check", "проверка миграций"]
+    },
+    {
+      "id": "module_deps_validation",
+      "file": "gates",
+      "path": "gates.module_deps_validation.enabled",
+      "type": "bool", "default": true,
+      "category": "gates", "sensitive": false,
+      "title": "Гейт: валидация зависимостей модулей",
+      "description": "Проверяет DAG зависимостей модулей",
+      "aliases": ["module deps", "зависимости модулей"]
+    },
+    {
+      "id": "single_feature_branch",
+      "file": "gates",
+      "path": "gates.single_feature_branch.enabled",
+      "type": "bool", "default": false,
+      "category": "gates", "sensitive": false,
+      "title": "Гейт: одна feature-ветка",
+      "description": "Ограничивает работу одной feature-веткой",
+      "aliases": ["single branch", "одна ветка"]
+    },
+
+    {
+      "id": "risk.autonomy_auto_max",
+      "file": "risk",
+      "path": "autonomy_auto_max",
+      "type": "enum", "enum": ["R0", "R1", "R2", "R3", "R4", "R5"], "default": "R1",
+      "category": "risk", "sensitive": true,
+      "title": "Глобальный порог авто-аппрува (risk-policy)",
+      "description": "Действия с риском <= уровня проходят авто (с логом). Глобально для всех проектов; pipeline.autonomy.auto_max_risk переопределяет на проект",
+      "aliases": ["risk auto max", "глобальный авто-аппрув", "autonomy_auto_max"]
+    },
+    {
+      "id": "risk.default_level",
+      "file": "risk",
+      "path": "default_level",
+      "type": "enum", "enum": ["R0", "R1", "R2", "R3", "R4", "R5"], "default": "R1",
+      "category": "risk", "sensitive": true,
+      "title": "Дефолтный уровень риска",
+      "description": "Уровень риска по умолчанию, если действие не классифицировано path/command-правилами",
+      "aliases": ["default risk level", "дефолтный риск"]
+    }
+  ]
+}

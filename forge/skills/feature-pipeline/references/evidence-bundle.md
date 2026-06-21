@@ -17,6 +17,7 @@
   "tests": { "ran": 42, "passed": 42 },        // из шага 05-tests
   "coverage": 0.86,                              // доля, из JaCoCo
   "gates": { "build": "pass", "coverage": "pass", "delivery": "pass" },
+  "degraded_gates": [],                          // гейты, не подтвердившие результат (P0-3)
   "artifacts": ["module/src/main/java/.../Foo.java"],
   "rationale": "почему так реализовано (1–3 предложения)",
   "sdd_ref": "feature-folder/sdd.md#T1",        // ссылка на раздел SDD
@@ -31,6 +32,20 @@
 Обязательные (вес равный): `task, tests, coverage, gates, artifacts, rationale, sdd_ref`.
 `completeness = (заполненных обязательных) / (всего обязательных)`. Порог по умолчанию **0.95**
 (переопределяется `pipeline.json → evidence.threshold`).
+
+## degraded_gates — «гейт не подтвердил результат» ≠ «пройден» (P0-3)
+
+Исход гейта — три состояния, а не два: **pass**, **fail** и **degraded** (гейт отработал, но НЕ
+подтвердил результат: `skipped` / `missing_report` / `error` — например coverage в `--lenient` без
+JaCoCo, или eval без команды). Раньше degraded молча выглядел как pass в бандле. Теперь
+`build_evidence.py` классифицирует статус каждого гейта и складывает «не подтверждённые» в
+`degraded_gates`. Отсутствие гейта (`None`, например delivery до доставки) — это `absent`
+(незавершённость, её ловит completeness), а не долг.
+
+`check_evidence.py` по умолчанию **fail-closed**: непустой `degraded_gates` валит ворота доставки
+(тихий пропуск → видимый долг). Escape — `--degraded-policy warn` или
+`pipeline.json → evidence.degraded_policy: "warn"` (только осознанно). `evidence-enforcer.py`
+наследует поведение автоматически — он гоняет `check_evidence.py` с `--pipeline-config`.
 
 ## Как собирается и проверяется
 

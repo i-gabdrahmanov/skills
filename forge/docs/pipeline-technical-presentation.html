@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Feature Pipeline — техническая презентация (фазы / хуки)</title>
+<style>
+  :root{
+    --bg:#0b0f1a; --bg2:#111728; --card:#161d30; --line:#26304a;
+    --fg:#e6ebf5; --muted:#94a3b8; --accent:#6ea8fe; --accent2:#7ee0c1;
+    --warn:#ffcf6e; --bad:#ff7a8a; --good:#7ee0c1; --purp:#b794f6;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:radial-gradient(1200px 800px at 75% -10%,#1a2440 0,transparent 60%),
+               radial-gradient(900px 700px at 0% 110%,#15203a 0,transparent 55%),
+               var(--bg);
+    color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif;
+    overflow:hidden;
+  }
+  .deck{height:100vh;width:100vw;position:relative}
+  .slide{position:absolute;inset:0;display:none;flex-direction:column;
+    padding:6vh 7vw;animation:fade .45s ease;justify-content:center;}
+  .slide.active{display:flex}
+  @keyframes fade{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  h1{font-size:clamp(34px,5vw,62px);margin:0 0 8px;line-height:1.05;letter-spacing:-.02em}
+  h2{font-size:clamp(22px,3.2vw,38px);margin:0 0 20px;letter-spacing:-.01em}
+  h2 .num{color:var(--accent)}
+  p.lead{font-size:clamp(15px,1.6vw,21px);color:var(--muted);max-width:64ch;line-height:1.5}
+  .kicker{font-family:var(--mono);font-size:13px;letter-spacing:.25em;text-transform:uppercase;
+    color:var(--accent);margin-bottom:16px}
+  .grid{display:grid;gap:14px}
+  .cols-2{grid-template-columns:1fr 1fr}
+  .cols-3{grid-template-columns:repeat(3,1fr)}
+  .card{background:linear-gradient(180deg,var(--card),#131a2b);border:1px solid var(--line);
+    border-radius:14px;padding:16px 18px}
+  .card h3{margin:0 0 8px;font-size:17px}
+  .card h3 .mono{font-size:13px}
+  .card p{margin:0;color:var(--muted);font-size:14px;line-height:1.5}
+  .mono{font-family:var(--mono)}
+  code,.path{font-family:var(--mono);background:#0d1322;border:1px solid var(--line);
+    border-radius:6px;padding:1px 7px;font-size:.85em;color:var(--accent2)}
+  .pill{display:inline-block;font-family:var(--mono);font-size:12px;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line);background:#0d1322;color:var(--muted);margin:2px 4px 2px 0}
+  .flow{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-top:8px}
+  .step{font-family:var(--mono);font-size:12.5px;padding:7px 11px;border-radius:9px;
+    background:#0e1626;border:1px solid var(--line);white-space:nowrap}
+  .step b{color:var(--accent)}
+  .arrow{color:var(--muted);font-size:16px}
+  .gate{border-color:#3a2f12;background:#1b1606;color:var(--warn)}
+  .sub-a{border-color:#1d3a5c;background:#0a1626;color:var(--accent)}
+  .judge{border-color:#16402f;background:#0b1f17;color:var(--good)}
+  table{border-collapse:collapse;width:100%;font-size:13.5px}
+  th,td{text-align:left;padding:7px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+  td .mono{color:var(--accent2)}
+  td code{font-size:.82em}
+  ul.clean{margin:6px 0 0;padding:0;list-style:none}
+  ul.clean li{padding:6px 0 6px 24px;position:relative;color:var(--muted);font-size:15px;line-height:1.4}
+  ul.clean li::before{content:"";position:absolute;left:2px;top:13px;width:8px;height:8px;border-radius:2px;
+    background:var(--accent)}
+  ul.clean li b{color:var(--fg);font-weight:600}
+  .ok::before{background:var(--good)!important}
+  .bad::before{background:var(--bad)!important}
+  .tag-good{color:var(--good)} .tag-bad{color:var(--bad)} .tag-warn{color:var(--warn)}
+  .big{font-size:clamp(34px,6vw,76px);font-weight:800;letter-spacing:-.03em;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;
+    background-clip:text;color:transparent}
+  .center{align-items:center;text-align:center}
+  .footer{position:fixed;bottom:16px;left:0;right:0;display:flex;justify-content:space-between;
+    padding:0 26px;align-items:center;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .dots{display:flex;gap:7px}
+  .dot{width:8px;height:8px;border-radius:50%;background:#2a3551;cursor:pointer;transition:.2s}
+  .dot.active{background:var(--accent);transform:scale(1.35)}
+  .brand{display:flex;gap:9px;align-items:center}
+  .logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--accent2));
+    display:grid;place-items:center;color:#06121f;font-weight:800;font-size:15px}
+  .nav-hint{opacity:.7}
+  .progress{position:fixed;top:0;left:0;height:3px;background:linear-gradient(90deg,var(--accent),var(--accent2));
+    transition:width .35s ease;z-index:50}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;color:var(--muted);font-size:13px}
+  .legend span{display:inline-flex;gap:7px;align-items:center}
+  .sq{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .lane{display:grid;grid-template-columns:120px 1fr;gap:10px;align-items:start;margin-bottom:8px}
+  .lane .who{font-family:var(--mono);font-size:12px;color:var(--accent);padding-top:8px}
+  .lane .acts{display:flex;flex-wrap:wrap;gap:6px}
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="deck" id="deck">
+
+  <!-- 1 -->
+  <section class="slide active center">
+    <div class="kicker">GigaCode · Forge · for engineers</div>
+    <h1>Feature&nbsp;Pipeline</h1>
+    <p class="lead" style="margin:0 auto">Что именно вызывается на каждой фазе: субагенты, судьи,
+      execution-gates и хуки control-plane.</p>
+    <div style="margin-top:24px">
+      <span class="pill">pipeline &gt; model</span>
+      <span class="pill">hooks = enforcement</span>
+      <span class="pill">skills = guidance</span>
+      <span class="pill">PDLC v3.5</span>
+    </div>
+  </section>
+
+  <!-- 2 — principle -->
+  <section class="slide">
+    <div class="kicker">Принцип</div>
+    <h2>Правила форсит рантайм, а не «добрая воля» модели</h2>
+    <div class="grid cols-3">
+      <div class="card"><h3 class="tag-warn">SKILL.md — guidance</h3><p>Инструкция для модели.
+        Её можно проигнорировать → одной её недостаточно.</p></div>
+      <div class="card"><h3 class="tag-good">Хуки — enforcement</h3><p>Рантайм форсит risk ladder,
+        TDD, evidence, token budget, phase-gate. Блок = <code>exit 2</code> + причина в stderr.</p></div>
+      <div class="card"><h3 class="tag-good">Судьи + gates</h3><p>Детерминированные проверки
+        (<code>run_judge.py</code>, <code>check_*.py</code>): шаг закрывается только при PASS.</p></div>
+    </div>
+    <p class="lead" style="margin-top:18px"><b style="color:var(--bad)">⚠ Запуск обязателен с</b>
+      <code>--experimental-hooks</code> — иначе <code>[HOOK_REGISTRY] 0 hook entries</code>, control-plane молчит.
+      До прогона — <code>preflight.py</code> (exit 0 = активен).</p>
+  </section>
+
+  <!-- 3 — full flow -->
+  <section class="slide">
+    <div class="kicker">Поток вызовов</div>
+    <h2>Bootstrap → 8 фаз</h2>
+    <div class="flow">
+      <span class="step">preflight.py</span><span class="arrow">→</span>
+      <span class="step">resolve_phases.py</span><span class="arrow">→</span>
+      <span class="step">init_pipeline_config.py</span><span class="arrow">→</span>
+      <span class="step">jira_discover.py</span><span class="arrow">→</span>
+      <span class="step">pipeline-state init</span>
+    </div>
+    <div class="flow" style="margin-top:14px">
+      <span class="step gate">0 BRD ✓</span><span class="arrow">→</span>
+      <span class="step">1 Grounding</span><span class="arrow">→</span>
+      <span class="step gate">2 Design ✓</span><span class="arrow">→</span>
+      <span class="step gate">2.5 Jira ✓</span><span class="arrow">→</span>
+      <span class="step sub-a">3 Build TDD</span><span class="arrow">→</span>
+      <span class="step sub-a">4 Verify</span><span class="arrow">→</span>
+      <span class="step sub-a">5 Document</span><span class="arrow">→</span>
+      <span class="step gate">6 Deliver ✓</span>
+    </div>
+    <p class="lead" style="margin-top:18px"><b>Главное правило:</b> фазы Design/Build/Verify/Document —
+      ТОЛЬКО через явный <code>agent(subagent_type="general-purpose", ...)</code>. Inline-исполнение
+      субагентной фазы = баг (теряется изоляция и устойчивость к обрыву стрима).</p>
+    <div class="legend">
+      <span><i class="sq" style="background:var(--warn)"></i> гейт человека</span>
+      <span><i class="sq" style="background:var(--accent)"></i> субагентная фаза</span>
+    </div>
+  </section>
+
+  <!-- 4 — who executes -->
+  <section class="slide">
+    <div class="kicker">Исполнители</div>
+    <h2>Кто что делает</h2>
+    <table>
+      <tr><th>Фаза</th><th>Исполнитель</th><th>Механизм</th><th>Гейт</th></tr>
+      <tr><td>0 BRD</td><td>интервью inline + BRD-писатель</td><td>вложенный скилл + субагент</td><td class="tag-warn">Гейт 1</td></tr>
+      <tr><td>1 Grounding</td><td class="mono">system-analyst</td><td>оркестратор субагентов</td><td>grounding</td></tr>
+      <tr><td>2 Design</td><td class="mono">tech-design</td><td>субагент (читает SKILL сам)</td><td class="tag-warn">Гейт 2</td></tr>
+      <tr><td>2.5 Jira</td><td class="mono">jira-task-writer</td><td>субагент (контракт §4.5)</td><td class="tag-warn">Гейт 3</td></tr>
+      <tr><td>3 Build</td><td class="mono">java-spring-dev</td><td>субагент, TDD RED→GREEN</td><td>—</td></tr>
+      <tr><td>4 Verify</td><td>тестописатель + тестраннер</td><td>субагенты</td><td>—</td></tr>
+      <tr><td>5 Document</td><td class="mono">спецадаптер + java-uml-spec</td><td>субагент + скилл</td><td>—</td></tr>
+      <tr><td>6 Deliver</td><td>главный агент</td><td>Bitbucket / Jira MCP</td><td class="tag-warn">Гейты 4–6</td></tr>
+    </table>
+    <p class="lead" style="margin-top:14px;font-size:14px">Субагент возвращает JSON с полем
+      <code>step_id</code> → хук <code>state-recorder</code> закрывает шаг.</p>
+  </section>
+
+  <!-- 5 — manifest + judges -->
+  <section class="slide">
+    <div class="kicker">pipeline-state</div>
+    <h2>Манифест шагов и обязательные судьи</h2>
+    <table>
+      <tr><th>step-id</th><th>depends_on</th><th>required_judges</th></tr>
+      <tr><td><code>00-brd</code></td><td>—</td><td class="mono">brd-judge</td></tr>
+      <tr><td><code>02-design</code></td><td><code>00-brd, 01-grounding</code></td><td class="mono">design-judge</td></tr>
+      <tr><td><code>02-eval-plan</code></td><td><code>02-design</code></td><td class="mono">eval-judge</td></tr>
+      <tr><td><code>03-jira</code></td><td><code>02-design</code></td><td>—</td></tr>
+      <tr><td><code>04-test-&lt;id&gt;</code></td><td><code>02-design</code></td><td class="mono">red-judge</td></tr>
+      <tr><td><code>04-build-&lt;id&gt;</code></td><td><code>04-test-&lt;id&gt;, 02-eval-plan</code></td><td class="mono">build-judge, reuse-judge</td></tr>
+      <tr><td><code>05-tests</code></td><td>все <code>04-build-*</code></td><td class="mono">coverage-judge</td></tr>
+      <tr><td><code>06-spec</code></td><td><code>05-tests</code></td><td class="mono">spec-judge</td></tr>
+      <tr><td><code>07-deliver-&lt;id&gt;</code></td><td><code>05-tests, 06-spec</code></td><td class="mono">delivery-judge</td></tr>
+    </table>
+    <p class="lead" style="margin-top:12px;font-size:13.5px"><code>04-*</code>/<code>07-deliver-*</code>
+      добавляет <code>feature-pipeline/scripts/add_steps.py</code> (проставляет required_judges, пересобирает gate.json).
+      Регистр task-id сохраняется: <code>T1</code> → <code>04-test-T1</code>.</p>
+  </section>
+
+  <!-- 6 — Build phase zoom (TDD) -->
+  <section class="slide">
+    <div class="kicker">Фаза 3 — Build · per task</div>
+    <h2>TDD: <span class="num">RED → GREEN</span> через судей</h2>
+    <div class="lane"><div class="who">RED</div><div class="acts">
+      <span class="step sub-a">тестописатель §4.1</span>
+      <span class="step judge">check_tests_red.py</span>
+      <span class="step judge">red-judge §7.2</span>
+      <span class="step">run_judge red --recheck</span></div></div>
+    <div class="lane"><div class="who">стабы</div><div class="acts">
+      <span class="step sub-a">стабы сигнатур §4.2</span></div></div>
+    <div class="lane"><div class="who">GREEN</div><div class="acts">
+      <span class="step sub-a">java-spring-dev §4.3</span>
+      <span class="step judge">build-judge §7.3</span>
+      <span class="step judge">check_build.py --task</span>
+      <span class="step judge">reuse-judge §7.7</span></div></div>
+    <p class="lead" style="margin-top:14px">RED обязан падать на <b>runtime-assert</b> (не на компиляции).
+      <code>04-build-&lt;id&gt;</code> закрывается только когда <b>оба</b> судьи (build + reuse) — PASS.</p>
+    <p class="lead" style="font-size:14px">Хук <code>tdd-guard</code> блокирует запись в <code>src/main</code>,
+      пока <code>04-test-&lt;id&gt;</code> ещё pending. Хук <code>eval-guard</code> блокирует код, пока eval'ы задачи не прошли.</p>
+  </section>
+
+  <!-- 7 — judges map -->
+  <section class="slide">
+    <div class="kicker">Судьи</div>
+    <h2>9 ступеней проверки качества</h2>
+    <div class="grid cols-3">
+      <div class="card"><h3 class="mono">brd-judge</h3><p>БТ языком бизнеса, без кода. LLM + код-токены.</p></div>
+      <div class="card"><h3 class="mono">design-judge</h3><p>Тех-дизайн консистентен с BRD.</p></div>
+      <div class="card"><h3 class="mono">eval-judge</h3><p>Eval'ы покрывают AC, пороги адекватны.</p></div>
+      <div class="card"><h3 class="mono">red-judge</h3><p>Тесты реально падают (RED), не «зелёные стабы».</p></div>
+      <div class="card"><h3 class="mono">build-judge</h3><p>Код зеленит тесты (pass-through, verdict субагента).</p></div>
+      <div class="card"><h3 class="mono">reuse-judge</h3><p>Нет «велосипедов» поверх библиотек/util. LLM + regex по diff.</p></div>
+      <div class="card"><h3 class="mono">coverage-judge</h3><p>JaCoCo ≥ порога (<code>check_coverage.py</code>).</p></div>
+      <div class="card"><h3 class="mono">spec-judge</h3><p>Документация отражает изменения.</p></div>
+      <div class="card"><h3 class="mono">delivery-judge</h3><p>Нет stubs/секретов, Jira консистентна, git чист.</p></div>
+    </div>
+  </section>
+
+  <!-- 8 — hooks -->
+  <section class="slide">
+    <div class="kicker">Control-plane</div>
+    <h2>Хуки и порядок срабатывания</h2>
+    <div class="two" style="display:grid;grid-template-columns:1.3fr 1fr;gap:24px">
+      <table>
+        <tr><th>Хук</th><th>Назначение</th></tr>
+        <tr><td class="mono">gate-guard</td><td>risk ladder R0–R5, deny-first, критичность</td></tr>
+        <tr><td class="mono">tdd-guard</td><td>блок src/main пока RED pending</td></tr>
+        <tr><td class="mono">destructive-blocker</td><td>чёрный список (rm -rf /, force-push, DROP)</td></tr>
+        <tr><td class="mono">pii-boundary</td><td>блок записи PII вне секретов</td></tr>
+        <tr><td class="mono">evidence-enforcer</td><td>блок доставки без evidence bundle</td></tr>
+        <tr><td class="mono">cost-breaker</td><td>token budget warn 80% / stop 120%</td></tr>
+        <tr><td class="mono">state-recorder</td><td>запись шага по step_id (SubagentStop)</td></tr>
+        <tr><td class="mono">phase-gate</td><td>блок Stop с висящим in_progress</td></tr>
+      </table>
+      <div>
+        <div class="card"><h3>Порядок · Bash</h3><p class="mono" style="font-size:12.5px">destructive →
+          cost-breaker → evidence → gate-guard → log-agent</p></div>
+        <div class="card" style="margin-top:12px"><h3>Порядок · Write/Edit</h3><p class="mono" style="font-size:12.5px">pii-boundary →
+          tdd-guard → gate-guard → log-agent</p></div>
+        <div class="card" style="margin-top:12px"><h3 class="tag-warn">fail-OPEN</h3><p>Гейт-хук &gt;60с
+          убивается → действие проходит. Поэтому тяжёлые гейты гоняет оркестратор, хуки — лёгкая страховка.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9 — re-iteration -->
+  <section class="slide">
+    <div class="kicker">Отказоустойчивость</div>
+    <h2>FAIL → ре-итерация → (override)</h2>
+    <div class="flow" style="flex-direction:column;align-items:stretch;max-width:760px">
+      <span class="step judge">PASS → errors.json удаляется, шаг закрывается</span>
+      <span class="arrow center">↑</span>
+      <span class="step">judge verdict</span>
+      <span class="arrow center">↓ FAIL</span>
+      <span class="step bad" style="border-color:#5c1d2a;background:#260a0f;color:var(--bad)">run_judge сохраняет blocking_issues → errors.json (perpetual)</span>
+      <span class="arrow center">↓</span>
+      <span class="step">iterations &lt; 3 → перезапуск субагента той же фазы с accumulated_errors</span>
+      <span class="arrow center">↓ 3 неудачи</span>
+      <span class="step gate">стоп → спросить человека: сброс / отмена / override (§0.6.1)</span>
+    </div>
+    <p class="lead" style="margin-top:14px;font-size:14px"><b>Override</b> не подделывает вердикт —
+      FAIL остаётся, снимается лишь блок закрытия, с <code>--reason</code> в аудит. <b style="color:var(--bad)">Никогда</b>
+      <code>git push --force</code> / <code>reset --hard</code> / правка манифеста руками.</p>
+  </section>
+
+  <!-- 10 — diagnostics -->
+  <section class="slide">
+    <div class="kicker">Диагностика</div>
+    <h2>Перед прогоном и в процессе</h2>
+    <div class="grid cols-2">
+      <div class="card"><h3>Готовность</h3><p class="mono" style="font-size:12.5px">preflight.py --project .<br/>
+        → exit 0 активен · exit 1 ENFORCEMENT OFF</p></div>
+      <div class="card"><h3>Что в работе</h3><p class="mono" style="font-size:12.5px">pipeline-state/read.py
+        --skill feature-pipeline --list</p></div>
+      <div class="card"><h3>Живой лог</h3><p class="mono" style="font-size:12.5px">hooks/watch-agents.sh<br/>
+        ground/ai-logs/&lt;feature&gt;/iter-NN/</p></div>
+      <div class="card"><h3>Метрики</h3><p class="mono" style="font-size:12.5px">hooks/agentops.py
+        --archive &lt;home&gt;/ai-logs-archive</p></div>
+    </div>
+    <p class="lead" style="margin-top:16px"><b style="color:var(--bad)">Грабли:</b> <code>agent()</code> и
+      <code>ask_user_question</code> не активны одновременно (race → ответ теряется). Вопросы субагента — через
+      <code>pending_questions</code>, не из самого субагента.</p>
+  </section>
+
+  <!-- 11 — summary -->
+  <section class="slide center">
+    <div class="kicker">Резюме</div>
+    <h1 class="big">Изоляция · судьи · гейты</h1>
+    <p class="lead" style="margin:18px auto 0">Каждая тяжёлая фаза — изолированный субагент.
+      Каждый шаг — детерминированный судья. Каждое необратимое действие — гейт человека и risk-ladder хука.</p>
+    <div style="margin-top:24px">
+      <span class="pill">pipeline-technical.md — полный справочник</span>
+      <span class="pill">FORGE.md — источник правды</span>
+    </div>
+  </section>
+
+</div>
+
+<div class="footer">
+  <div class="brand"><div class="logo">F</div><span>Feature Pipeline · for engineers</span></div>
+  <div class="dots" id="dots"></div>
+  <div class="nav-hint">← → · пробел</div>
+</div>
+
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  const dotsWrap=document.getElementById('dots');
+  const progress=document.getElementById('progress');
+  let i=0;
+  slides.forEach((_,k)=>{const d=document.createElement('div');d.className='dot'+(k===0?' active':'');
+    d.onclick=()=>go(k);dotsWrap.appendChild(d);});
+  const dots=[...dotsWrap.children];
+  function go(n){i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach((s,k)=>s.classList.toggle('active',k===i));
+    dots.forEach((d,k)=>d.classList.toggle('active',k===i));
+    progress.style.width=((i+1)/slides.length*100)+'%';}
+  go(0);
+  document.addEventListener('keydown',e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){e.preventDefault();go(i+1);}
+    if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();go(i-1);}
+    if(e.key==='Home')go(0); if(e.key==='End')go(slides.length-1);
+  });
+</script>
+</body>
+</html>

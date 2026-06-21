@@ -105,9 +105,15 @@ def check_phase_gate(tool_name: str, tool_input: dict, agent_type: str | None,
         if not any(bp in file_path for bp in blocked_paths):
             return True
 
-        # Пропускаем тесты — они всегда разрешены
-        if "/test/" in file_path or "/Test" in file_path:
-            return True
+        # Пропускаем тесты — по сегментам пути, не по подстроке (иначе src/main/Testimonials
+        # ложно считался тестом → обход гейта)
+        try:
+            import _project
+            if _project.is_test_path(file_path):
+                return True
+        except Exception:
+            if "/test/" in file_path or "/Test" in file_path:
+                return True
 
         # Проверяем, прочитал ли агент grounding-index (через evidence-лог)
         ev_path = evidence_file(root, feat)
@@ -172,6 +178,12 @@ def main() -> int:
         tool_input = data.get("tool_input") or {}
         agent_type = data.get("agent_type")
         root = Path(R.project_root(data.get("cwd", "")))
+
+        # Без загруженной risk-policy ladder не может классифицировать → в пайплайне deny-first
+        # (иначе всё прошло бы как R1-auto). preflight ловит это ДО старта; здесь — backstop.
+        if not R.policy_loaded() and R.manifest_exists(root):
+            return _block("risk-policy.json не загружена/битая — risk ladder неактивен; "
+                          "почини .gigacode/hooks/risk-policy.json (см. preflight).")
 
         info = R.classify(tool_name, tool_input, str(root))
         level = info["level"]

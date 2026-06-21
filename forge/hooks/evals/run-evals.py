@@ -114,6 +114,17 @@ def main() -> int:
                         "tool_input": {"command": "git commit -m x"}})
         check("критичность не выбрана → R2 deny", c == 2 and "критичность" in out)
 
+        # H1: запись src/main при high-критичности во время билда (evidence ещё НЕ собран) → allow.
+        # Раньше R2 требовал evidence:true → дедлок (бандл появляется только после билда).
+        rhb = make_project(tmp / "highbuild")
+        cfgh = json.loads((rhb / "ground" / "pipeline.json").read_text())
+        cfgh["autonomy"] = {"criticality": "high", "auto_max_risk": "R0"}
+        (rhb / "ground" / "pipeline.json").write_text(json.dumps(cfgh))
+        (rhb / "ground" / "evidence" / "T1.json").unlink()  # evidence ещё нет на этапе билда
+        c, out = run_hook("gate-guard.py", {"cwd": str(rhb), "tool_name": "Write",
+                        "tool_input": {"file_path": str(rhb / "src/main/java/Foo.java"), "content": "x"}})
+        check("H1: R2 write@high-crit во время билда (нет evidence) → allow", c == 0)
+
         # ── tdd-guard: RED перед кодом ──
         def tdd_project(sub, test_status):
             rr = make_project(tmp / sub)
@@ -134,6 +145,26 @@ def main() -> int:
         c, _ = run_hook("tdd-guard.py", {"cwd": str(rtd2), "tool_name": "Write",
                         "tool_input": {"file_path": str(rtd2 / "src/main/java/Foo.java"), "content": "x"}})
         check("TDD: код после RED completed → allow", c == 0)
+
+        # M2 per-task: build T2 (in_progress) при completed тесте T2 → allow, даже если тест T1 pending.
+        rpt = make_project(tmp / "tdd_pertask")
+        pp2 = rpt / "ground" / "statements" / "feature-pipeline" / "pipeline" / "manifest.json"
+        pp2.write_text(json.dumps({"skill": "feature-pipeline", "steps": [
+            {"id": "02-design", "status": "completed"},
+            {"id": "04-test-T1", "status": "pending"},
+            {"id": "04-build-T1", "status": "pending"},
+            {"id": "04-test-T2", "status": "completed"},
+            {"id": "04-build-T2", "status": "in_progress"}]}), encoding="utf-8")
+        c, _ = run_hook("tdd-guard.py", {"cwd": str(rpt), "tool_name": "Write",
+                        "tool_input": {"file_path": str(rpt / "src/main/java/Foo2.java"), "content": "x"}})
+        check("TDD per-task: build T2 при completed тесте T2 (T1 pending) → allow", c == 0)
+        pp2.write_text(json.dumps({"skill": "feature-pipeline", "steps": [
+            {"id": "04-test-T1", "status": "pending"},
+            {"id": "04-build-T1", "status": "in_progress"}]}), encoding="utf-8")
+        c, out = run_hook("tdd-guard.py", {"cwd": str(rpt), "tool_name": "Write",
+                        "tool_input": {"file_path": str(rpt / "src/main/java/Foo.java"), "content": "x"}})
+        check("TDD per-task: build T1 при pending тесте T1 → deny", c == 2 and "T1" in out)
+
         # tdd выключен → код можно
         rtoff = tdd_project("tdd_off", "pending")
         cfg = json.loads((rtoff / "ground" / "pipeline.json").read_text())

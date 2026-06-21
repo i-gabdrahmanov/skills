@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -114,3 +115,114 @@ def script(project_root: Path, skill_name: str, script_name: str,
         default = f".gigacode/skills/{skill_name}/scripts/{script_name}.py"
     return resolve(project_root, "skills", skill_name, "scripts", script_name,
                    default=default, skill=skill)
+
+
+# ── Резолв базы ДОКУМЕНТНЫХ артефактов (docs) ─────────────────────────
+# Артефакты (brd/sdd/tech-design/task-plan, system-analysis/grounding) могут жить либо
+# в самом репо кода (in-repo), либо в отдельном репозитории спеки (separate-repo).
+# ЕДИНЫЙ источник правды — ground/pipeline.json, секция `docs`:
+#   {"mode":"in-repo|separate-repo", "docs_path":"docs", "repo_path":"/abs/spec-repo",
+#    "feature_subdir":"feature-pipeline", "system_analysis_subdir":"system-analysis"}
+# Контракт ОБЩИЙ со стороной хуков (hooks/_project.py: docs_base/feature_docs_dir/
+# system_analysis_dir) — синхронность пинится test_docs_resolver_consistency.py.
+
+def load_pipeline_config(project_root: Path) -> dict:
+    """ground/pipeline.json проекта (или {}). Никогда не бросает."""
+    p = Path(project_root) / "ground" / "pipeline.json"
+    try:
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        pass
+    return {}
+
+
+# ── Хелперы устойчивости (типы конфига + анти-traversal) ──────────────
+def _docs_cfg(cfg: Optional[dict], project_root: Path) -> dict:
+    cfg = cfg if cfg is not None else load_pipeline_config(project_root)
+    docs = cfg.get("docs") if isinstance(cfg, dict) else None
+    return docs if isinstance(docs, dict) else {}
+
+
+def _is_safe_segment(name) -> bool:
+    """Простое имя подпапки/слага: строка, без разделителей/traversal/абсолюта."""
+    return (isinstance(name, str) and name not in ("", ".", "..")
+            and "/" not in name and "\\" not in name and ".." not in name
+            and not name.startswith(("~", "/")))
+
+
+def _clean_subdir(val, default: str) -> str:
+    """Имя подпапки docs. Не-строка/traversal/абсолют → default (с предупреждением)."""
+    if _is_safe_segment(val):
+        return val
+    if val is not None and val != default:
+        print(f"[skill_paths] docs: небезопасное имя подпапки {val!r} → '{default}'", file=sys.stderr)
+    return default
+
+
+def _clean_rel(val, project_root: Path, default: str) -> Path:
+    """Относительный путь под project_root. Не-строка/абсолют/traversal → project_root/default."""
+    if isinstance(val, str) and val.strip():
+        s = val.strip()
+        if not s.startswith(("/", "~")) and ".." not in Path(s).parts:
+            return project_root / s
+        print(f"[skill_paths] docs: путь {val!r} выходит за проект → '{default}'", file=sys.stderr)
+    elif val is not None:
+        print(f"[skill_paths] docs: путь не строка ({val!r}) → '{default}'", file=sys.stderr)
+    return project_root / default
+
+
+def safe_slug(slug) -> str:
+    """Валидный слаг фичи (один компонент пути). ValueError на traversal/разделителях."""
+    if not _is_safe_segment(slug):
+        raise ValueError(f"небезопасный feature-slug: {slug!r} (запрещены '/', '..', '~', абсолютный, пустой)")
+    return slug
+
+
+def docs_base(project_root: Path, cfg: Optional[dict] = None) -> Path:
+    """База, под которой лежат `feature-pipeline/` и `system-analysis/`.
+
+    in-repo       → project_root / docs.docs_path (дефолт 'docs', только под проектом).
+    separate-repo → docs.repo_path (внешний репо спеки); относительный — от project_root.
+    """
+    project_root = Path(project_root)
+    docs = _docs_cfg(cfg, project_root)
+    if docs.get("mode") == "separate-repo":
+        rp = docs.get("repo_path")
+        if isinstance(rp, str) and rp.strip():
+            p = Path(rp.strip()).expanduser()
+            return p if p.is_absolute() else (project_root / p)
+        # mode=separate-repo, но repo_path нет/битый → безопасный откат в in-repo
+    return _clean_rel(docs.get("docs_path"), project_root, "docs")
+
+
+def feature_docs_dir(project_root: Path, cfg: Optional[dict] = None) -> Path:
+    """Каталог документов фич: <docs_base>/feature-pipeline (или legacy docs.feature_docs_path)."""
+    project_root = Path(project_root)
+    docs = _docs_cfg(cfg, project_root)
+    legacy = docs.get("feature_docs_path")
+    if (isinstance(legacy, str) and legacy and docs.get("mode") != "separate-repo"
+            and not legacy.startswith(("/", "~")) and ".." not in Path(legacy).parts):
+        return project_root / legacy
+    return docs_base(project_root, cfg) / _clean_subdir(docs.get("feature_subdir"), "feature-pipeline")
+
+
+def system_analysis_dir(project_root: Path, cfg: Optional[dict] = None) -> Path:
+    """Каталог системного обзора: <docs_base>/system-analysis (или legacy docs.system_analysis_path)."""
+    project_root = Path(project_root)
+    docs = _docs_cfg(cfg, project_root)
+    legacy = docs.get("system_analysis_path")
+    if (isinstance(legacy, str) and legacy and docs.get("mode") != "separate-repo"
+            and not legacy.startswith(("/", "~")) and ".." not in Path(legacy).parts):
+        return project_root / legacy
+    return docs_base(project_root, cfg) / _clean_subdir(docs.get("system_analysis_subdir"), "system-analysis")
+
+
+def scan_dir(project_root: Path, cfg: Optional[dict] = None) -> Path:
+    """Каталог детерминированного скана: <system_analysis>/scan."""
+    return system_analysis_dir(project_root, cfg) / "scan"
+
+
+def grounding_excerpt_path(project_root: Path, cfg: Optional[dict] = None) -> Path:
+    """Путь к компактной выжимке grounding: <system_analysis>/grounding-excerpt.json."""
+    return system_analysis_dir(project_root, cfg) / "grounding-excerpt.json"

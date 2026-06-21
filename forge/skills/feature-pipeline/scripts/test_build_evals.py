@@ -162,6 +162,69 @@ class TestBuildEvals(unittest.TestCase):
         for e in coverage_evals:
             self.assertIn("--threshold", e["command"])
 
+    # --- P0-2: честный бинарный test_pass + Maven-корректные команды ---
+
+    def test_test_pass_is_binary(self):
+        """test_pass: threshold=0 и binary=True (рантайм смотрит только exit-код)."""
+        result = build_evals(SAMPLE_TASK_PLAN, SAMPLE_PIPELINE_CONFIG, coverage_script=FAKE_COVERAGE_SCRIPT)
+        tp = [e for e in result["evals"] if e["type"] == "test_pass"]
+        self.assertTrue(tp)
+        for e in tp:
+            self.assertEqual(e["threshold"], 0)
+            self.assertIs(e["binary"], True)
+
+    def test_test_pass_description_honest(self):
+        """Описание test_pass честное: не «Тесты задачи N», а про регресс/всю сюиту."""
+        result = build_evals(SAMPLE_TASK_PLAN, SAMPLE_PIPELINE_CONFIG, coverage_script=FAKE_COVERAGE_SCRIPT)
+        for e in (e for e in result["evals"] if e["type"] == "test_pass"):
+            self.assertNotIn("Тесты задачи", e["description"])
+            self.assertIn("сюита", e["description"].lower())
+
+    def test_compile_is_binary(self):
+        """compile тоже бинарный: binary=True, threshold=0."""
+        result = build_evals(SAMPLE_TASK_PLAN, coverage_script=FAKE_COVERAGE_SCRIPT)
+        for e in (e for e in result["evals"] if e["type"] == "compile"):
+            self.assertIs(e["binary"], True)
+            self.assertEqual(e["threshold"], 0)
+
+    def test_gradle_default_commands(self):
+        """Без build_system → gradle: compile=./gradlew compileJava, test=./gradlew test."""
+        result = build_evals(SAMPLE_TASK_PLAN, coverage_script=FAKE_COVERAGE_SCRIPT)
+        compile_cmds = {e["command"] for e in result["evals"] if e["type"] == "compile"}
+        tp_cmds = {e["command"] for e in result["evals"] if e["type"] == "test_pass"}
+        self.assertEqual(compile_cmds, {"./gradlew compileJava"})
+        self.assertEqual(tp_cmds, {"./gradlew test"})
+
+    def test_maven_commands(self):
+        """build_system=maven → compile=mvn -q compile, test из quality.test_command."""
+        maven_cfg = {
+            "project": {"build_system": "maven"},
+            "quality": {"coverage_threshold": 0.8, "test_command": "mvn -q test jacoco:report"},
+        }
+        result = build_evals(SAMPLE_TASK_PLAN, maven_cfg, coverage_script=FAKE_COVERAGE_SCRIPT)
+        compile_cmds = {e["command"] for e in result["evals"] if e["type"] == "compile"}
+        tp_cmds = {e["command"] for e in result["evals"] if e["type"] == "test_pass"}
+        self.assertEqual(compile_cmds, {"mvn -q compile"})
+        self.assertEqual(tp_cmds, {"mvn -q test jacoco:report"})
+        # коды покрытия (check_coverage) build-system-агностичны — команда не gradle-специфична
+        for e in (e for e in result["evals"] if e["type"] == "coverage"):
+            self.assertNotIn("gradlew", e["command"])
+
+    def test_maven_test_fallback_without_test_command(self):
+        """maven без quality.test_command → дефолт mvn -q test."""
+        maven_cfg = {"project": {"build_system": "maven"}, "quality": {"coverage_threshold": 0.8}}
+        result = build_evals(SAMPLE_TASK_PLAN, maven_cfg, coverage_script=FAKE_COVERAGE_SCRIPT)
+        tp_cmds = {e["command"] for e in result["evals"] if e["type"] == "test_pass"}
+        self.assertEqual(tp_cmds, {"mvn -q test"})
+
+    def test_test_command_from_pipeline_used_for_gradle(self):
+        """quality.test_command подхватывается и для gradle-проекта."""
+        cfg = {"project": {"build_system": "gradle"},
+               "quality": {"test_command": "./gradlew test jacocoTestReport"}}
+        result = build_evals(SAMPLE_TASK_PLAN, cfg, coverage_script=FAKE_COVERAGE_SCRIPT)
+        tp_cmds = {e["command"] for e in result["evals"] if e["type"] == "test_pass"}
+        self.assertEqual(tp_cmds, {"./gradlew test jacocoTestReport"})
+
     def test_output_file_is_valid_json(self):
         """Проверка: при записи через main получается валидный JSON."""
         with tempfile.TemporaryDirectory() as tmp:

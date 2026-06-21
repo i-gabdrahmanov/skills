@@ -6,11 +6,12 @@ Evals пишутся ДО кода (фаза Design) и форсят Eval-Driven
 агент не может закрыть build-шаг задачи, пока все её eval'ы не пройдены.
 
 Для каждой задачи в task-plan генерируются типовые evals:
-  - compile:  полная компиляция проекта (./gradlew compileJava)
-  - coverage: проверка JaCoCo покрытия (check_coverage.py)
-  - test_pass: % зелёных тестов >= порога (gradle test)
+  - compile:  компиляция проекта (бинарный gate, exit-код)
+  - coverage: проверка JaCoCo покрытия (check_coverage.py --strict: нет отчёта = FAIL)
+  - test_pass: вся тест-сюита зелёная — регресс-чекпоинт (бинарный, exit-код, НЕ «% задачи»)
 
-Пороги берутся из pipeline.json quality.*, либо из параметров командной строки.
+Команды compile/test берутся из pipeline.json (project.build_system, quality.test_command) —
+поэтому одинаково работает на Gradle и Maven. Порог покрытия — из quality.coverage_threshold.
 
 Usage:
     build_evals_from_design.py <task-plan.json> \\
@@ -18,8 +19,8 @@ Usage:
         [--pipeline-config pipeline.json] \\
         [--out eval-plan.json] \\
         [--coverage-threshold 0.80] \\
-        [--test-pass-threshold 0.95] \\
-        [--build-cmd "./gradlew compileJava"] \\
+        [--build-cmd "<команда компиляции>"] \\
+        [--test-cmd "<команда тестов>"] \\
         [--json]
 
 Exit: 0 (всегда — генерация не блокируется; блокирует использование eval-guard).
@@ -34,14 +35,51 @@ from pathlib import Path
 SCHEMA_VERSION = "feature-pipeline/eval-plan@1"
 
 DEFAULT_COVERAGE_THRESHOLD = 0.80
-DEFAULT_TEST_PASS_THRESHOLD = 0.95
-DEFAULT_BUILD_CMD = "./gradlew compileJava"
-DEFAULT_TEST_CMD = "./gradlew test"
+
+# Команды компиляции/тестов резолвятся по build-системе из pipeline.json (Maven-корректно).
+# compile — намеренно лёгкая (только компиляция, не полный build), чтобы не дублировать test_pass.
+GRADLE_COMPILE = "./gradlew compileJava"
+GRADLE_TEST = "./gradlew test"
+MAVEN_COMPILE = "mvn -q compile"
+MAVEN_TEST = "mvn -q test"
+# Дефолты для обратной совместимости (используются как fallback, если pipeline.json не задан).
+DEFAULT_BUILD_CMD = GRADLE_COMPILE
+DEFAULT_TEST_CMD = GRADLE_TEST
 
 
 def _load_json(path: str | Path) -> dict:
     with open(path) as f:
         return json.load(f)
+
+
+def _build_system(pipeline_config: dict | None) -> str:
+    """gradle | maven из pipeline.json project.build_system (дефолт gradle)."""
+    if pipeline_config:
+        bs = pipeline_config.get("project", {}).get("build_system")
+        if bs in ("gradle", "maven"):
+            return bs
+    return "gradle"
+
+
+def _resolve_compile_cmd(pipeline_config: dict | None, override: str | None) -> str:
+    """Лёгкая команда компиляции по build-системе (НЕ полный build — чтобы compile-eval
+    был быстрым и не дублировал test_pass). quality.build_command тут не берём: там
+    `clean build`/`clean verify`, который гоняет и тесты."""
+    if override:
+        return override
+    return MAVEN_COMPILE if _build_system(pipeline_config) == "maven" else GRADLE_COMPILE
+
+
+def _resolve_test_cmd(pipeline_config: dict | None, override: str | None) -> str:
+    """Команда прогона тестов. Приоритет: override > quality.test_command (его init
+    пишет уже build-system-корректным, с генерацией JaCoCo) > дефолт по build-системе."""
+    if override:
+        return override
+    if pipeline_config:
+        tc = pipeline_config.get("quality", {}).get("test_command")
+        if isinstance(tc, str) and tc.strip():
+            return tc.strip()
+    return MAVEN_TEST if _build_system(pipeline_config) == "maven" else GRADLE_TEST
 
 
 def build_evals(
@@ -50,7 +88,6 @@ def build_evals(
     coverage_script: str = "check_coverage.py",
     coverage_helper: str | None = None,
     coverage_threshold: float | None = None,
-    test_pass_threshold: float | None = None,
     build_cmd: str | None = None,
     test_cmd: str | None = None,
 ) -> dict:
@@ -58,29 +95,25 @@ def build_evals(
 
     Args:
         task_plan: загруженный task-plan.json.
-        pipeline_config: загруженный pipeline.json (опц.).
+        pipeline_config: загруженный pipeline.json (опц.) — отсюда build-система и команды.
         coverage_script: путь к check_coverage.py.
         coverage_threshold: порог покрытия (переопределяет pipeline.json).
-        test_pass_threshold: порог прохождения тестов.
-        build_cmd: команда сборки (переопределяет pipeline.json).
+        build_cmd: команда компиляции (override; иначе по build-системе).
+        test_cmd: команда тестов (override; иначе quality.test_command / build-система).
 
     Returns:
         eval-plan dict.
     """
-    # Извлекаем пороги (приоритет: аргументы > pipeline.json > дефолты)
+    # Порог покрытия (приоритет: аргумент > pipeline.json > дефолт)
     cov_threshold = coverage_threshold
     if cov_threshold is None and pipeline_config:
         cov_threshold = pipeline_config.get("quality", {}).get("coverage_threshold")
     if cov_threshold is None:
         cov_threshold = DEFAULT_COVERAGE_THRESHOLD
 
-    test_threshold = test_pass_threshold
-    if test_threshold is None:
-        test_threshold = DEFAULT_TEST_PASS_THRESHOLD
-
-    build = build_cmd or DEFAULT_BUILD_CMD
-
-    test = test_cmd or DEFAULT_TEST_CMD
+    # Команды compile/test — Maven-корректно из pipeline.json (или override)
+    build = _resolve_compile_cmd(pipeline_config, build_cmd)
+    test = _resolve_test_cmd(pipeline_config, test_cmd)
 
     cov_script = coverage_script
 
@@ -93,14 +126,15 @@ def build_evals(
         tid = task["id"]
         task_cov = task.get("coverage_threshold") or threshold_from_task or cov_threshold
 
-        # 1. Compile eval — проверка, что проект компилируется
+        # 1. Compile eval — проект компилируется (бинарный gate по exit-коду)
         evals.append({
             "id": f"compile-{tid.lower()}",
             "type": "compile",
             "task_id": tid,
             "command": build,
             "threshold": 0,
-            "description": f"Полная компиляция проекта ({build})",
+            "binary": True,
+            "description": f"Проект компилируется ({build})",
         })
 
         # 2. Coverage eval — проверка JaCoCo покрытия
@@ -114,20 +148,24 @@ def build_evals(
             "command": (
                 f"{cov_prefix}python3 {cov_script} "
                 f"--base HEAD~1 "
-                f"--threshold {task_cov}"
+                f"--threshold {task_cov} "
+                f"--strict"
             ),
             "threshold": task_cov,
             "description": f"Покрытие кода задачи {tid} >= {task_cov:.0%}",
         })
 
-        # 3. Test pass eval — % зелёных тестов задачи
+        # 3. Test pass eval — вся тест-сюита зелёная (бинарный регресс-чекпоинт: задача
+        #    не должна ломать ранее написанные тесты). exit-код, не «% задачи» — рантайм
+        #    (eval-guard/run_pending_evals) и так смотрит только returncode.
         evals.append({
             "id": f"test_pass-{tid.lower()}",
             "type": "test_pass",
             "task_id": tid,
             "command": test,
-            "threshold": test_threshold,
-            "description": f"Тесты задачи {tid} проходят (>= {test_threshold:.0%})",
+            "threshold": 0,
+            "binary": True,
+            "description": f"Вся тест-сюита зелёная после задачи {tid} (регрессия, {test})",
         })
 
     result = {
@@ -162,9 +200,8 @@ def main():
     parser.add_argument("--pipeline-config", help="Путь к pipeline.json (опционально)")
     parser.add_argument("--out", default=None, help="Куда писать результат (по умолчанию рядом с task-plan)")
     parser.add_argument("--coverage-threshold", type=float, help="Порог покрытия (переопределяет pipeline.json)")
-    parser.add_argument("--test-pass-threshold", type=float, help="Порог зелёных тестов")
-    parser.add_argument("--build-cmd", help="Команда сборки")
-    parser.add_argument("--test-cmd", default=DEFAULT_TEST_CMD, help="Команда для тестов")
+    parser.add_argument("--build-cmd", help="Команда компиляции (override; иначе по build-системе)")
+    parser.add_argument("--test-cmd", default=None, help="Команда тестов (override; иначе из pipeline.json)")
     parser.add_argument("--coverage-script", required=True, help="Путь к check_coverage.py")
     parser.add_argument("--coverage-helper", help="Путь к coverage-helper.py (инкрементальный запуск JaCoCo)")
     parser.add_argument("--json", action="store_true", help="Вывести JSON в stdout")
@@ -194,7 +231,6 @@ def main():
         task_plan,
         pipeline_config=pipeline_config,
         coverage_threshold=args.coverage_threshold,
-        test_pass_threshold=args.test_pass_threshold,
         test_cmd=args.test_cmd,
         build_cmd=args.build_cmd,
         coverage_script=args.coverage_script,

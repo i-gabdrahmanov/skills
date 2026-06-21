@@ -39,6 +39,7 @@ AS_FP = _load("skills/feature-pipeline/scripts/add_steps.py", "fp_add_steps")
 PV = _load("skills/feature-pipeline/scripts/preflight-validate.py", "fp_preflight")
 RJ = _load("skills/feature-pipeline/scripts/run_judge.py", "fp_run_judge")
 JR = _load("skills/pipeline-state/scripts/judges_registry.py", "ps_judges_registry")
+RP = _load("skills/feature-pipeline/scripts/resolve_phases.py", "fp_resolve_phases")
 
 
 class CanonicalSource(unittest.TestCase):
@@ -119,6 +120,59 @@ class TestMainPhases(unittest.TestCase):
     def test_main_phases_identical(self):
         self.assertEqual(PS.MAIN_PHASES, AS_FP.MAIN_PHASES)
         self.assertEqual(PS.MAIN_PHASES, PV.MAIN_PHASES)
+
+
+class TestStepIdConventions(unittest.TestCase):
+    """P1-6: соглашения об id шагов — единый источник pipeline_phases; копии в хуках/скриптах
+    не должны разойтись (раньше '04-build-'/subagent-set были разрозненными магическими строками)."""
+
+    def test_build_task_id_helper(self):
+        self.assertEqual(PP.build_task_id("04-build-T1"), "T1")
+        self.assertEqual(PP.build_task_id("04-build-KIDPPRB-8639"), "KIDPPRB-8639")
+        self.assertIsNone(PP.build_task_id("04-test-T1"))
+        self.assertIsNone(PP.build_task_id("04-build-"))   # пустой суффикс → None
+        self.assertIsNone(PP.build_task_id(None))
+
+    def test_requires_subagent(self):
+        for sid in ("02-sdd", "02-design-x", "04-test-T1", "04-build-T1", "05-tests", "06-spec"):
+            self.assertTrue(PP.requires_subagent(sid), sid)
+        for sid in ("00-brd", "01-grounding", "03-jira", "07-deliver-T1", "07-report", None):
+            self.assertFalse(PP.requires_subagent(sid), sid)
+
+    def test_preflight_uses_pp_requires_subagent(self):
+        """preflight больше не держит свой hardcoded-set, а зовёт pp.requires_subagent (P1-6)."""
+        src = _src("skills/feature-pipeline/scripts/preflight-validate.py")
+        self.assertIn("pp.requires_subagent", src)
+        self.assertNotIn('"02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec"', src)
+
+    def test_eval_guard_build_prefix_matches_pp(self):
+        """eval-guard: fallback-префикс build-шага совпадает с pp.BUILD_STEP_PREFIX, и нет
+        старого .replace('04-build-', '') (P1-6)."""
+        src = _src("hooks/eval-guard.py")
+        self.assertIn(f'_BUILD_STEP_PREFIX = "{PP.BUILD_STEP_PREFIX}"', src)
+        self.assertIn("_build_task_id", src)
+        self.assertNotIn('.replace("04-build-", "")', src)
+
+    def test_subagent_origin_set_matches_pp(self):
+        """update._check_subagent_origin (бывший subagent-enforcer, перенесён с PreToolUse на
+        закрытие шага): inline-fallback набора фаз совпадает с pp.SUBAGENT_PHASE_PREFIXES."""
+        src = _src("skills/pipeline-state/scripts/update.py")
+        self.assertEqual(PP.SUBAGENT_PHASE_PREFIXES,
+                         ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec"))
+        for ph in PP.SUBAGENT_PHASE_PREFIXES:
+            self.assertIn(f'"{ph}"', src, f"{ph} пропал из fallback update._check_subagent_origin")
+
+
+class ResolvePhasesSource(unittest.TestCase):
+    """M4: resolve_phases.DEFAULT_PHASES — не второй нескоординированный источник списка фаз.
+    Его id обязаны быть подмножеством pipeline_phases.MAIN_PHASES и идти в каноническом порядке."""
+    def test_default_phases_subset_of_main_in_order(self):
+        ids = [p["id"] for p in RP.DEFAULT_PHASES]
+        for pid in ids:
+            self.assertIn(pid, PP.MAIN_PHASES, f"{pid} нет в pipeline_phases.MAIN_PHASES")
+        canonical = [m for m in PP.MAIN_PHASES if m in ids]
+        self.assertEqual(ids, canonical,
+                         "порядок DEFAULT_PHASES (resolve_phases) разошёлся с MAIN_PHASES")
 
 
 if __name__ == "__main__":

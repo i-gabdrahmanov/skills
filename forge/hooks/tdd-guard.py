@@ -24,6 +24,22 @@ from pathlib import Path
 
 import risk_ladder as R
 
+# Соглашения об id шагов — ЕДИНЫЙ источник pipeline_phases (co-located). best-effort импорт +
+# inline-fallback (пинится test_phase_consistency), чтобы per-task TDD не отвалился молча.
+_BUILD_STEP_PREFIX = "04-build-"
+_TEST_STEP_PREFIX = "04-test-"
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "feature-pipeline" / "scripts"))
+    import pipeline_phases as _pp
+    _build_task_id = _pp.build_task_id
+    _BUILD_STEP_PREFIX = _pp.BUILD_STEP_PREFIX
+    _TEST_STEP_PREFIX = _pp.TEST_STEP_PREFIX
+except Exception:
+    def _build_task_id(step_id):
+        if isinstance(step_id, str) and step_id.startswith(_BUILD_STEP_PREFIX):
+            return step_id[len(_BUILD_STEP_PREFIX):] or None
+        return None
+
 
 # Аннотации, которые делают тест "интеграционным" (непригодным для TDD RED)
 INTEGRATION_ANNOTATIONS = [
@@ -79,7 +95,10 @@ def _scan_test_directory(test_dir: Path) -> dict:
 
 def main() -> int:
     raw = sys.stdin.read()
-    data = json.loads(raw) if raw.strip() else {}
+    try:
+        data = json.loads(raw) if raw.strip() else {}
+    except (json.JSONDecodeError, ValueError):
+        return 0  # не-JSON stdin — fail-open, не роняем инструмент
     if not isinstance(data, dict):
         return 0
 
@@ -161,8 +180,29 @@ def main() -> int:
                       f"({scan['integration_count']} шт.) — TDD пропущен.", file=sys.stderr)
                 return 0
 
-    # ── Проверка RED-теста в manifest ──
+    # ── Проверка RED-теста в manifest (per-task) ──
     steps = R.manifest_status(root)
+
+    # Какую задачу строим? Активный (in_progress) build-шаг 04-build-<id> → задача.
+    active_task = None
+    for sid, st in steps.items():
+        tid = _build_task_id(sid)
+        if tid and st == "in_progress":
+            active_task = tid
+            break
+
+    if active_task:
+        # Привязка к КОНКРЕТНОЙ задаче: блок только если её собственный RED-тест не закрыт.
+        # Раньше блокировал ЛЮБОЙ pending test-шаг → код задачи T2 ложно блокировался pending-тестом T1.
+        test_step = f"{_TEST_STEP_PREFIX}{active_task}"
+        if steps.get(test_step) != "completed":
+            return _block(
+                f"RED-тест задачи {active_task} ({test_step}) не завершён "
+                f"(status={steps.get(test_step)}). Сначала тест (src/test/), потом код (src/main/)."
+            )
+        return 0
+
+    # Нет активного build-шага — консервативный fallback: любой pending test-шаг блокирует код.
     has_red = any(
         s == "pending" and ("test" in step_id.lower() or "tdd" in step_id.lower())
         for step_id, s in steps.items()

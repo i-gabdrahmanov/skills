@@ -12,6 +12,7 @@ Usage:
 
 Phases:
     brd        — проверка БТ на язык бизнеса (нет код-токенов); поддерживает --brd <path>
+    sdd        — проверка sdd.md (секции + Given-When-Then); закрывает шаг 02-sdd
     eval       — проверка eval-plan.json
     red        — проверка RED-тестов (только если есть файл вердикта от субагента)
     build      — проверка build-артефактов
@@ -59,8 +60,9 @@ def _set_paths(project_root: Path, skill: str = "feature-pipeline") -> None:
     global PROJECT_ROOT, GROUND_DIR, FEATURE_DOCS_DIR, SYSTEM_ANALYSIS_DIR, SKILL_NAME
     PROJECT_ROOT = project_root
     GROUND_DIR = project_root / "ground"
-    FEATURE_DOCS_DIR = project_root / "docs" / "feature-pipeline"
-    SYSTEM_ANALYSIS_DIR = project_root / "docs" / "system-analysis"
+    # docs-расположение резолвится по ground/pipeline.json (in-repo / separate-repo)
+    FEATURE_DOCS_DIR = skill_paths.feature_docs_dir(project_root)
+    SYSTEM_ANALYSIS_DIR = skill_paths.system_analysis_dir(project_root)
     SKILL_NAME = skill
 
 
@@ -160,6 +162,9 @@ def _make_verdict(
 ) -> dict:
     return {
         "$schema": SCHEMA_VERSION,
+        # Провенанс: update._check_judges требует это поле — отсекает рукописные/поддельные
+        # вердикты (правило «перезапусти судью, не правь файл руками»).
+        "produced_by": "run_judge",
         "judge": judge_name,
         "feature_slug": slug,
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
@@ -348,24 +353,24 @@ def check_eval(slug: str, feature_dir: Path | None) -> dict:
             "severity": "warning",
         })
 
-    tp_thresholds = [
-        e.get("threshold", 0) for e in evals
-        if e["type"] == "test_pass" and e.get("threshold") is not None
-    ]
-    low_tp = [t for t in tp_thresholds if t < 0.8]
-    if low_tp:
-        blocking_issues.append(f"Низкие пороги test_pass: {low_tp} (должны быть >= 0.8)")
+    # test_pass — бинарный gate (exit-код, «вся сюита зелёная»), а не ratio-порог.
+    # Рантайм (eval-guard/run_pending_evals) смотрит только returncode, поэтому валидируем
+    # не порог, а наличие непустой команды у каждого test_pass eval.
+    tp_evals = [e for e in evals if e["type"] == "test_pass"]
+    tp_no_cmd = [e.get("id", "?") for e in tp_evals if not str(e.get("command", "")).strip()]
+    if tp_no_cmd:
+        blocking_issues.append(f"test_pass eval'ы без команды: {tp_no_cmd}")
         checks.append({
-            "name": "Test_pass thresholds reasonable",
+            "name": "Test_pass evals have command",
             "status": "FAIL",
-            "detail": f"Есть пороги ниже 0.8: {low_tp}",
+            "detail": f"Без команды: {tp_no_cmd}",
             "severity": "error",
         })
     else:
         checks.append({
-            "name": "Test_pass thresholds reasonable",
+            "name": "Test_pass evals have command",
             "status": "PASS",
-            "detail": f"Все пороги >= 0.8",
+            "detail": f"У всех {len(tp_evals)} test_pass есть команда (бинарный gate)",
             "severity": "warning",
         })
 
@@ -505,7 +510,8 @@ def _feature_test_classes(feature_dir: Path | None, slug: str) -> dict:
 
 
 def check_red(slug: str, feature_dir: Path | None) -> dict:
-    """Проверка RED-тестов: запускает gradle test с фильтром и проверяет exit code."""
+    """Проверка RED-тестов: запускает тесты фичи (Gradle --tests / Maven -Dtest по build-системе
+    из pipeline.json) с фильтром по тест-классам фичи и проверяет exit code."""
     import subprocess
 
     project_root = PROJECT_ROOT
@@ -517,13 +523,17 @@ def check_red(slug: str, feature_dir: Path | None) -> dict:
     # модуль ('service-taskservice') или None (корень одномодульного проекта).
     feat_classes = _feature_test_classes(feature_dir, slug)
 
-    # Читаем test_layer из pipeline.json (default=service-unit для multimodule)
+    # Читаем test_layer + build-систему из pipeline.json (default=service-unit / gradle)
     test_layer = "service-unit"
+    build_system = "gradle"
     if pipeline_json_path.exists():
         try:
             with open(pipeline_json_path) as f:
                 _pcfg = json.load(f)
             test_layer = _pcfg.get("quality", {}).get("test_layer", test_layer)
+            _bs = _pcfg.get("project", {}).get("build_system")
+            if _bs in ("gradle", "maven"):
+                build_system = _bs
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -557,35 +567,46 @@ def check_red(slug: str, feature_dir: Path | None) -> dict:
             "severity": "warning",
         })
 
-    for module in feat_classes:
-        # --tests только по тест-классам фичи в этом модуле
-        test_flags = []
-        for glob in feat_classes[module]:
-            test_flags += ["--tests", glob]
-
-        if module is None:
-            # Одномодульный проект — тесты в корне (без :module: префикса).
-            label = "root"
-            gradle_cmd = ["./gradlew", "test", *test_flags, "--no-daemon"]
-        else:
-            # Нормализация имени модуля: 'service-taskservice' → ':service:taskservice'.
-            gradle_path = module
-            if gradle_path.startswith(":"):
-                pass  # уже нормализован
-            elif ":" in gradle_path:
-                gradle_path = f":{gradle_path}"
+    # Собираем «работы» по build-системе: Gradle — по модулю (--tests glob), Maven — один
+    # прогон surefire по всем тест-классам фичи (-Dtest=...). Раньше тут был жёсткий ./gradlew,
+    # из-за чего на Maven RED-judge падал «gradlew not found» (P1-16).
+    jobs: list[tuple[str, list]] = []
+    if build_system == "maven":
+        all_globs = sorted({g for globs in feat_classes.values() for g in globs})
+        if all_globs:
+            jobs.append(("maven", [
+                "mvn", "-q", "test",
+                f"-Dtest={','.join(all_globs)}",
+                "-Dsurefire.failIfNoSpecifiedTests=false",
+            ]))
+    else:
+        for module in feat_classes:
+            test_flags = []
+            for glob in feat_classes[module]:
+                test_flags += ["--tests", glob]
+            if module is None:
+                # Одномодульный проект — тесты в корне (без :module: префикса).
+                jobs.append(("root", ["./gradlew", "test", *test_flags, "--no-daemon"]))
             else:
-                parts = gradle_path.rsplit("-", 1)
-                if len(parts) == 2:
-                    gradle_path = f":{parts[0]}:{parts[1]}"
-                else:
+                # Нормализация имени модуля: 'service-taskservice' → ':service:taskservice'.
+                gradle_path = module
+                if gradle_path.startswith(":"):
+                    pass  # уже нормализован
+                elif ":" in gradle_path:
                     gradle_path = f":{gradle_path}"
-            label = module
-            gradle_cmd = ["./gradlew", f"{gradle_path}:test", *test_flags, "--no-daemon"]
+                else:
+                    parts = gradle_path.rsplit("-", 1)
+                    if len(parts) == 2:
+                        gradle_path = f":{parts[0]}:{parts[1]}"
+                    else:
+                        gradle_path = f":{gradle_path}"
+                jobs.append((module, ["./gradlew", f"{gradle_path}:test", *test_flags, "--no-daemon"]))
 
+    runner_name = "mvn" if build_system == "maven" else "gradlew"
+    for label, cmd in jobs:
         try:
             r = subprocess.run(
-                gradle_cmd, cwd=str(project_root),
+                cmd, cwd=str(project_root),
                 capture_output=True, text=True, timeout=300,
             )
             passed = r.returncode == 0
@@ -618,10 +639,10 @@ def check_red(slug: str, feature_dir: Path | None) -> dict:
             checks.append({
                 "name": f"test:{label}",
                 "status": "FAIL",
-                "detail": "gradlew not found",
+                "detail": f"{runner_name} not found",
                 "severity": "error",
             })
-            blocking_issues.append(f"RED-judge {label}: gradlew not found")
+            blocking_issues.append(f"RED-judge {label}: {runner_name} not found")
             all_passed = False
 
     passed_count = sum(1 for c in checks if c["status"] == "PASS")
@@ -968,27 +989,34 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
     return _make_verdict("spec-judge", slug, passed, checks, blocking_issues, warnings, summary)
 
 
-_SECRET_RE = re.compile(
-    r"(?:password|passwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|token)\s*[=:]\s*"
-    r"['\"][^'\"\n]{6,}['\"]"
-    r"|AKIA[0-9A-Z]{16}"
-    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----",
-    re.IGNORECASE)
-
-
 def _delivery_floor() -> tuple:
-    """Детерминированный пол delivery-judge: ловит секреты в изменённых файлах."""
+    """Детерминированный пол delivery-judge: ловит секреты в изменённых файлах.
+
+    Правила поиска — ЕДИНЫЙ источник `check_secrets.scan_text` (тот же сканер, что standalone-гейт
+    P2-12), чтобы regex не двоился. best-effort импорт (co-located), inline-fallback на простой паттерн.
+    """
     checks, blocking, warnings = [], [], []
     files = _changed_src_files(main_only=False)
+    try:
+        import check_secrets as _cs
+        scan = _cs.scan_text
+    except Exception:
+        _fallback = re.compile(
+            r"(?:password|passwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|token)\s*[=:]\s*"
+            r"['\"][^'\"\n]{6,}['\"]|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----", re.I)
+
+        def scan(path, text):
+            return [{"file": path, "line": i, "kind": "secret", "detail": ln.strip()[:80]}
+                    for i, ln in enumerate(text.splitlines(), 1) if _fallback.search(ln)]
+
     secrets = []
     for p in files:
         try:
             txt = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        for ln in txt.splitlines():
-            if _SECRET_RE.search(ln):
-                secrets.append(f"{p.name}: {ln.strip()[:60]}")
+        for hit in scan(p.name, txt):
+            secrets.append(f"{hit['file']}: {hit['detail']}")
     if secrets:
         checks.append({"name": "Нет секретов (детерминированно)", "status": "FAIL",
                        "detail": "; ".join(secrets[:5]), "severity": "error"})
@@ -1033,6 +1061,54 @@ def check_delivery(slug: str, feature_dir: Path | None) -> dict:
     summary = (verdict.get("summary", "DELIVERY-judge: см. вердикт субагента")
                + f" | пол: {'OK' if not floor_block else str(len(floor_block)) + ' blocking'}")
     return _make_verdict("delivery-judge", slug, passed, checks, blocking, warnings, summary)
+
+
+def check_sdd_doc(slug: str, feature_dir: Path | None) -> dict:
+    """Запускает sdd/scripts/check_sdd_doc.py (gate документа SDD) и собирает вердикт sdd-judge.
+
+    Проверяет сам sdd.md (обязательные секции + Given-When-Then), без task-plan —
+    он ещё не создан на фазе 02-sdd.
+    """
+    project_root = PROJECT_ROOT
+    check_sdd_doc_script = skill_paths.script(project_root, "sdd", "check_sdd_doc")
+
+    import subprocess
+
+    sdd_path = feature_dir / "sdd.md" if feature_dir else None
+
+    checks = []
+    blocking_issues = []
+    warnings = []
+
+    if sdd_path and sdd_path.exists():
+        try:
+            r = subprocess.run(
+                [sys.executable, str(check_sdd_doc_script), str(sdd_path), "--json"],
+                capture_output=True, text=True, timeout=60,
+            )
+            if r.returncode == 0:
+                checks.append({"name": "check_sdd_doc", "status": "PASS",
+                               "detail": sdd_path.name, "severity": "error"})
+            else:
+                detail = r.stderr.strip() or r.stdout.strip() or "exit code {}".format(r.returncode)
+                checks.append({"name": "check_sdd_doc", "status": "FAIL",
+                               "detail": detail[:200], "severity": "error"})
+                blocking_issues.append(f"check_sdd_doc FAIL: {detail[:200]}")
+        except subprocess.TimeoutExpired:
+            checks.append({"name": "check_sdd_doc", "status": "FAIL",
+                           "detail": "timeout (60s)", "severity": "error"})
+            blocking_issues.append("check_sdd_doc: timeout")
+    else:
+        checks.append({"name": "check_sdd_doc", "status": "FAIL",
+                       "detail": f"sdd.md not found at {sdd_path}", "severity": "error"})
+        blocking_issues.append(f"SDD (sdd.md) не найден: {sdd_path}")
+
+    passed = len(blocking_issues) == 0
+    summary = f"{sum(1 for c in checks if c['status'] == 'PASS')}/{len(checks)} checks passed"
+    if blocking_issues:
+        summary += f", {len(blocking_issues)} blocking"
+
+    return _make_verdict("sdd-judge", slug, passed, checks, blocking_issues, warnings, summary)
 
 
 def check_design(slug: str, feature_dir: Path | None) -> dict:
@@ -1140,7 +1216,7 @@ def check_coverage(slug: str, feature_dir: Path | None) -> dict:
 
     import subprocess
     cmd = [sys.executable, str(check_cov_script), "--root", str(project_root),
-           "--threshold", str(threshold), "--json"]
+           "--threshold", str(threshold), "--strict", "--json"]
     try:
         r = subprocess.run(cmd, cwd=str(project_root),
                            capture_output=True, text=True, timeout=120)
@@ -1152,7 +1228,7 @@ def check_coverage(slug: str, feature_dir: Path | None) -> dict:
             ["check_coverage: timeout"], [], "COVERAGE-judge: timeout"
         )
 
-    # check_coverage.py: exit 0 = pass/skip, 2 = LOW/MISSING
+    # check_coverage.py (--strict): exit 0 = pass, 2 = LOW/MISSING/JaCoCo-отчёт не найден
     passed = r.returncode == 0
     detail = (r.stdout.strip() or r.stderr.strip() or f"exit {r.returncode}")[:300]
     checks = [{
@@ -1325,7 +1401,7 @@ def _git_diff_added(base: str) -> list:
 def _load_reuse_deps() -> set:
     """Множество имён зависимостей (artifact и group) из scan/reuse.json."""
     p = REUSE_SCAN_OVERRIDE if REUSE_SCAN_OVERRIDE else (
-        PROJECT_ROOT / "docs" / "system-analysis" / "scan" / "reuse.json")
+        SYSTEM_ANALYSIS_DIR / "scan" / "reuse.json")
     data = _load_json(Path(p))
     deps: set = set()
     if data:
@@ -1394,6 +1470,7 @@ def check_reuse(slug: str, feature_dir: Path | None) -> dict:
 
 PHASE_MAP = {
     "brd": check_brd,
+    "sdd": check_sdd_doc,
     "reuse": check_reuse,
     "eval": check_eval,
     "red": check_red,
@@ -1443,18 +1520,14 @@ def main():
     project_root = Path(args.project_root).resolve()
     _set_paths(project_root, skill=args.skill)
 
-    # Переопределяем docs-пути, если явно переданы
+    # docs-пути уже резолвлены в _set_paths по docs-конфигу; CLI-флаги переопределяют точечно
     if args.feature_docs:
         global FEATURE_DOCS_DIR
         FEATURE_DOCS_DIR = Path(args.feature_docs).resolve()
-    else:
-        FEATURE_DOCS_DIR = project_root / "docs" / "feature-pipeline"
 
     if args.system_analysis_dir:
         global SYSTEM_ANALYSIS_DIR
         SYSTEM_ANALYSIS_DIR = Path(args.system_analysis_dir).resolve()
-    else:
-        SYSTEM_ANALYSIS_DIR = project_root / "docs" / "system-analysis"
 
     if args.brd:
         global BRD_OVERRIDE

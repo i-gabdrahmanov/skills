@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Feature Pipeline — каждый шаг для бизнеса</title>
+<style>
+  :root{
+    --bg:#0b0f1a; --bg2:#111728; --card:#161d30; --line:#26304a;
+    --fg:#e6ebf5; --muted:#94a3b8; --accent:#6ea8fe; --accent2:#7ee0c1;
+    --warn:#ffcf6e; --bad:#ff7a8a; --good:#7ee0c1;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:radial-gradient(1200px 800px at 75% -10%,#1a2440 0,transparent 60%),
+               radial-gradient(900px 700px at 0% 110%,#15203a 0,transparent 55%),
+               var(--bg);
+    color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif;
+    overflow:hidden;
+  }
+  .deck{height:100vh;width:100vw;position:relative}
+  .slide{
+    position:absolute;inset:0;display:none;flex-direction:column;
+    padding:6vh 8vw;animation:fade .45s ease;justify-content:center;
+  }
+  .slide.active{display:flex}
+  @keyframes fade{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  h1{font-size:clamp(34px,5vw,62px);margin:0 0 8px;line-height:1.05;letter-spacing:-.02em}
+  h2{font-size:clamp(24px,3.4vw,40px);margin:0 0 22px;letter-spacing:-.01em}
+  h2 .num{color:var(--accent);font-variant-numeric:tabular-nums}
+  p.lead{font-size:clamp(16px,1.7vw,22px);color:var(--muted);max-width:62ch;line-height:1.5}
+  .kicker{font-family:var(--mono);font-size:13px;letter-spacing:.25em;text-transform:uppercase;
+    color:var(--accent);margin-bottom:18px}
+  .grid{display:grid;gap:16px}
+  .cols-2{grid-template-columns:1fr 1fr}
+  .cols-3{grid-template-columns:repeat(3,1fr)}
+  .card{background:linear-gradient(180deg,var(--card),#131a2b);border:1px solid var(--line);
+    border-radius:16px;padding:18px 20px}
+  .card h3{margin:0 0 8px;font-size:18px}
+  .card p{margin:0;color:var(--muted);font-size:15.5px;line-height:1.55}
+  .card p b{color:var(--fg)}
+  .mono{font-family:var(--mono)}
+  .pill{display:inline-block;font-family:var(--mono);font-size:12px;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line);background:#0d1322;color:var(--muted);margin:2px 4px 2px 0}
+  .flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+  .step{font-family:var(--mono);font-size:13px;padding:8px 12px;border-radius:10px;
+    background:#0e1626;border:1px solid var(--line);white-space:nowrap}
+  .step b{color:var(--accent)}
+  .step.now{border-color:var(--accent);background:#16233f;color:var(--fg);box-shadow:0 0 0 1px var(--accent) inset}
+  .arrow{color:var(--muted);font-size:18px}
+  .gate{border-color:#3a2f12;background:#1b1606;color:var(--warn)}
+  table{border-collapse:collapse;width:100%;font-size:15px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.06em}
+  ul.clean{margin:6px 0 0;padding:0;list-style:none}
+  ul.clean li{padding:7px 0 7px 26px;position:relative;color:var(--muted);font-size:16px;line-height:1.5}
+  ul.clean li::before{content:"";position:absolute;left:2px;top:14px;width:8px;height:8px;border-radius:2px;
+    background:var(--accent)}
+  ul.clean li b{color:var(--fg);font-weight:600}
+  .big{font-size:clamp(40px,7vw,90px);font-weight:800;letter-spacing:-.03em;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;
+    background-clip:text;color:transparent}
+  .sub{color:var(--muted);font-size:18px;margin-top:4px}
+  .center{align-items:center;text-align:center}
+  .footer{position:fixed;bottom:18px;left:0;right:0;display:flex;justify-content:space-between;
+    padding:0 26px;align-items:center;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .dots{display:flex;gap:7px;flex-wrap:wrap;max-width:60vw;justify-content:center}
+  .dot{width:8px;height:8px;border-radius:50%;background:#2a3551;cursor:pointer;transition:.2s}
+  .dot.active{background:var(--accent);transform:scale(1.35)}
+  .brand{display:flex;gap:9px;align-items:center}
+  .logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--accent2));
+    display:grid;place-items:center;color:#06121f;font-weight:800;font-size:15px}
+  .nav-hint{opacity:.7}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;color:var(--muted);font-size:14px}
+  .legend span{display:inline-flex;gap:7px;align-items:center}
+  .sq{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .badge{font-family:var(--mono);font-size:12px;border:1px solid var(--line);border-radius:8px;
+    padding:6px 10px;background:#0d1322}
+  .progress{position:fixed;top:0;left:0;height:3px;background:linear-gradient(90deg,var(--accent),var(--accent2));
+    transition:width .35s ease;z-index:50}
+
+  /* step slide */
+  .stephead{display:flex;align-items:center;gap:18px;margin-bottom:18px}
+  .stepnum{font-size:clamp(40px,6vw,76px);font-weight:800;line-height:.9;letter-spacing:-.03em;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;
+    background-clip:text;color:transparent;min-width:1.4em}
+  .stephead h2{margin:0}
+  .tag{font-family:var(--mono);font-size:12px;padding:5px 11px;border-radius:999px;border:1px solid var(--line)}
+  .tag.human{color:var(--warn);border-color:#3a2f12;background:#1b1606}
+  .tag.auto{color:var(--accent2);border-color:#16352c;background:#0a1a16}
+  .qa h3{font-size:15px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:600;margin:0 0 8px}
+  .qa .card p{font-size:16.5px}
+  .analogy{margin-top:16px;color:var(--muted);font-size:15.5px;font-style:italic;
+    border-left:3px solid var(--accent);padding-left:14px;max-width:78ch}
+  .analogy b{color:var(--fg);font-style:normal}
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="deck" id="deck">
+
+  <!-- 1 · Титул -->
+  <section class="slide active center">
+    <div class="kicker">GigaCode · Forge · для бизнеса</div>
+    <h1>Feature&nbsp;Pipeline:<br>каждый шаг простыми словами</h1>
+    <p class="lead" style="margin:14px auto 0">Как фича проходит путь от идеи до готового кода — шаг за шагом.
+      Для каждого шага: <b style="color:var(--fg)">что он делает</b> и <b style="color:var(--fg)">зачем это бизнесу</b>.
+      Без технического жаргона.</p>
+    <div style="margin-top:26px">
+      <span class="pill">12 понятных шагов</span>
+      <span class="pill">6 точек решения человека</span>
+      <span class="pill">качество встроено</span>
+    </div>
+  </section>
+
+  <!-- 2 · Карта -->
+  <section class="slide">
+    <div class="kicker">Карта пути</div>
+    <h2>Фича проходит 12 шагов — от идеи до отчёта</h2>
+    <div class="flow">
+      <div class="step gate"><b>1</b> Требования</div><span class="arrow">→</span>
+      <div class="step"><b>2</b> Изучение системы</div><span class="arrow">→</span>
+      <div class="step gate"><b>3</b> Спецификация</div><span class="arrow">→</span>
+      <div class="step gate"><b>4</b> Тех-дизайн</div><span class="arrow">→</span>
+      <div class="step"><b>5</b> План проверок</div><span class="arrow">→</span>
+      <div class="step gate"><b>6</b> Задачи в Jira</div><span class="arrow">→</span>
+      <div class="step"><b>7</b> Тесты вперёд</div><span class="arrow">→</span>
+      <div class="step"><b>8</b> Код</div><span class="arrow">→</span>
+      <div class="step"><b>9</b> Покрытие</div><span class="arrow">→</span>
+      <div class="step"><b>10</b> Документация</div><span class="arrow">→</span>
+      <div class="step gate"><b>11</b> Pull Request</div><span class="arrow">→</span>
+      <div class="step gate"><b>12</b> Отчёт</div>
+    </div>
+    <div class="legend">
+      <span><span class="sq" style="background:var(--accent)"></span> конвейер делает сам</span>
+      <span><span class="sq" style="background:var(--warn)"></span> здесь решение принимает человек</span>
+    </div>
+    <p class="lead" style="margin-top:20px">Между точками решения конвейер работает сам, но ничего необратимого
+      (задачи, публикация, отчёт) не делает без явного «да». Дальше — по одному слайду на каждый шаг.</p>
+  </section>
+
+  <!-- 3 · Как читать -->
+  <section class="slide">
+    <div class="kicker">Как читать эти слайды</div>
+    <h2>На каждом слайде шага — три простых блока</h2>
+    <div class="grid cols-3">
+      <div class="card"><h3>🛠️ Что делает</h3><p>Действие шага человеческими словами — что именно происходит,
+        без скриптов и терминов.</p></div>
+      <div class="card"><h3>🎯 Зачем бизнесу</h3><p>Какую пользу шаг приносит: меньше рисков, меньше переделок,
+        прозрачность, экономия времени.</p></div>
+      <div class="card"><h3>🚦 Кто решает</h3><p><span class="tag auto">сам</span> — конвейер делает автоматически.
+        <span class="tag human">человек</span> — нужна команда «да».</p></div>
+    </div>
+    <p class="lead" style="margin-top:20px">Плюс короткая <b style="color:var(--fg)">аналогия из жизни</b> —
+      чтобы шаг был понятен даже без знакомства с разработкой.</p>
+  </section>
+
+  <!-- ШАГ 1 -->
+  <section class="slide">
+    <div class="stephead">
+      <div class="stepnum">1</div>
+      <div>
+        <div class="kicker" style="margin-bottom:6px">Шаг 1 из 12 · <span class="tag human">человек решает</span></div>
+        <h2>Требования: договариваемся, что именно делаем</h2>
+      </div>
+    </div>
+    <div class="grid cols-2 qa">
+      <div class="card"><h3>🛠️ Что делает</h3><p>Задаёт <b>3–7 вопросов</b> о задаче и оформляет ответы в короткий
+        документ требований на языке бизнеса. Если задача пришла из Jira — берёт описание оттуда.</p></div>
+      <div class="card"><h3>🎯 Зачем бизнесу</h3><p>Заказчик, аналитик и разработчик понимают задачу <b>одинаково</b>.
+        Недопонимание ловится в начале — а не после релиза, когда переделка стоит дорого.</p></div>
+    </div>
+    <p class="analogy"><b>Как в жизни:</b> прежде чем заказывать ремонт, договариваемся, что именно хотим получить —
+      а не покупаем материалы наугад.</p>
+  </section>
+
+  <!-- ШАГ 2 -->
+  <section class="slide">
+    <div class="stephead">
+      <div class="stepnum">2</div>
+      <div>
+        <div class="kicker" style="margin-bottom:6px">Шаг 2 из 12 · <span class="tag auto">конвейер сам</span></div>
+        <h2>Изучение системы: понять, во что встраиваемся</h2>
+      </div>
+    </div>
+    <div class="grid cols-2 qa">
+      <div class="card"><h3>🛠️ Что делает</h3><p>Разбирается, как устроен сервис — из чего состоит, какие данные,
+        с чем связан. Собирается <b>один раз</b> и переиспользуется в следующих фичах.</p></div>
+      <div class="card"><h3>🎯 Зачем бизнесу</h3><p>Не ломаем то, что уже работает, и <b>не пишем заново</b> то,
+        что уже есть. Новому человеку не нужны дни, чтобы «въехать» в проект.</p></div>
+    </div>
+    <p class="analogy"><b>Как в жизни:</b> перед перепланировкой смотрят на план дома — где несущие стены и где трубы,
+      чтобы случайно не снести нужное.</p>
+  </section>
+
+  <!-- ШАГ 3 -->
+  <section class="slide">
+    <div class="stephead">
+      <div class="stepnum">3</div>
+      <div>
+        <div class="kicker" style="margin-bottom:6px">Шаг 3 из 12 · <span class="tag human">человек решает</span></div>
+        <h2>Спецификация: расписываем сценарии до мелочей</h2>
+      </div>
+    </div>
+    <div class="grid cols-2 qa">
+      <div class="card"><h3>🛠️ Что делает</h3><p>Превращает требования в точные сценарии: что происходит при успехе
+        и <b>что — при ошибке</b>, шаг за шагом по схеме «дано — когда — тогда».</p></div>
+      <div class="card"><h3>🎯 Зачем бизнесу</h3><p>Чёткая граница, что именно делаем, ещё до проектирования.
+        Ошибочные ситуации продуманы заранее — а не «всплывают» у клиента.</p></div>
+    </div>
+    <p class="analogy"><b>Как в жизни:</b> сценарий спектакля — расписано, кто что делает в каждой сцене,
+      включая «что если актёр забыл текст».</p>
+  </section>
+
+  <!-- ШАГ 4 -->
+  <section class="slide">
+    <div class="stephead">
+      <div class="stepnum">4</div>
+      <div>
+        <div class="kicker" style="margin-bottom:6px">Шаг 4 из 12 · <span class="tag human">человек решает</span></div>
+        <h2>Тех-дизайн: план реализации и разбивка на задачи</h2>
+      </div>
+    </div>
+    <div class="grid cols-2 qa">
+      <div class="card"><h3>🛠️ Что делает</h3><p>Составляет план, как фичу собрать по слоям, и <b>разбивает работу
+        на конкретные задачи</b> с понятными границами.</p></div>
+      <div class="card"><h3>🎯 Зачем бизнесу</h3><p>Прозрачная оценка объёма <b>до старта кода</b>. Видно, из чего
+        складывается срок, и можно решить, что делать сейчас, а что — потом.</p></div>
+    </div>
+    <p class="analogy"><b>Как в жизни:</b> смета и план работ от прораба — сколько этапов, что за чем,
+      и сколько примерно займёт.</p>
+  </section>
+
+  <!-- ШАГ 5 -->
+  <section class="slide">
+    <div class="stephead">
+      <div class="stepnum">5</div>
+      <div>
+        <div class="kicker" style="margin-bottom:6px">Шаг 5 из 12 · <span class="tag auto">конвейер сам</span></div>
+        <h2>План проверок: как поймём, что готово</h2>
+      </div>
+    </div>
+    <div class="grid cols-2 qa">
+      <div class="card"><h3>🛠️ Что делает</h3><p>Для каждой задачи заранее описывает <b>автоматические проверки</b>:
+        собирается ли код, проходят ли тесты, достигнут ли порог качества.</p></div>
+      <div class="card"><h3>🎯 Зачем бизнесу</h3><p>Критерий приёмки превращается в <b>проверку, а не в обещание</b>.
+        Нельзя просто «сказать, что готово» — система проверит объективно.</p></div>
+    </div>
+    <p class="analogy"><b>Как в жизни:</b> чек-лист приёмки квартиры — заранее ясно, что будем проверять,
+      прежде чем подписать акт.</p>
+  </section>
+
+  <!-- ШАГ 6 -->
+  <section class="slide">
+    <div class="stephead">
+      <div class="stepnum">6</div>
+      <div>
+        <div class="kicker" style="margin-bottom:6px">Шаг 6 из 12 · <span class="tag human">человек решает</span></div>
+        <h2>Задачи в Jira: ставим работу в трекер</h2>
+      </div>
+    </div>
+    <div class="grid cols-2 qa">
+      <div class="card"><h3>🛠️ Что делает</h3><p>Заводит Story и подзадачи по плану. Сначала <b>показывает черновик</b>,
+        создаёт задачи только после подтверждения.</p></div>
+      <div class="card"><h3>🎯 Зачем бизнесу</h3><p>Вся команда видит работу в привычном трекере. Ничего не появляется
+        <b>в обход согласования</b> — состав задач утверждает человек.</p></div>
+    </div>
+    <p class="analogy"><b>Как в жизни:</b> прежде чем раздать поручения, показываем список дел и спрашиваем:
+      «заводим именно так?»</p>
+  </section>
+
+  <!-- ШАГ 7 -->
+  <section class="slide">
+    <div class="stephead">
+      <div class="stepnum">7</div>
+      <div>
+        <div class="kicker" style="margin-bottom:6px">Шаг 7 из 12 · <span class="tag auto">конвейер сам</span></div>
+        <h2>Тесты вперёд: сначала проверка, потом код</h2>
+      </div>
+    </div>
+    <div class="grid cols-2 qa">
+      <div class="card"><h3>🛠️ Что делает</h3><p>Сначала пишет тесты — и они <b>намеренно не проходят</b>, потому что
+        нужного кода ещё нет. Это фиксирует, что считать «правильно».</p></div>
+      <div class="card"><h3>🎯 Зачем бизнесу</h3><p>Сначала договорились, как проверять результат, и только потом его делаем.
+        Это <b>страховка от «вроде работает»</b> и от тестов, написанных «для галочки».</p></div>
+    </div>
+    <p class="analogy"><b>Как в жизни:</b> сначала вешаем линейку на стену, а потом строим — чтобы измерять
+      по честной мерке, а не подгонять её под результат.</p>
+  </section>
+
+  <!-- ШАГ 8 -->
+  <section class="slide">
+    <div class="stephead">
+      <div class="stepnum">8</div>
+      <div>
+        <div class="kicker" style="margin-bottom:6px">Шаг 8 из 12 · <span class="tag auto">конвейер сам</span></div>
+        <h2>Код: пишем реализацию под готовые тесты</h2>
+      </div>
+    </div>
+    <div class="grid cols-2 qa">
+      <div class="card"><h3>🛠️ Что делает</h3><p>Пишет код, который <b>проходит заранее написанные тесты</b>.
+        Опирается на уже существующие части системы, а не изобретает заново.</p></div>
+      <div class="card"><h3>🎯 Зачем бизнесу</h3><p>Код подтверждён тестами с первой минуты — <b>меньше багов и переделок</b>.
+        Повторное использование снижает объём и стоимость поддержки.</p></div>
+    </div>
+    <p class="analogy"><b>Как в жизни:</b> собираем мебель так, чтобы дверца сразу закрывалась по уровню,
+      а не «потом подпилим».</p>
+  </section>
+
+  <!-- ШАГ 9 -->
+  <section class="slide">
+    <div class="stephead">
+      <div class="stepnum">9</div>
+      <div>
+        <div class="kicker" style="margin-bottom:6px">Шаг 9 из 12 · <span class="tag auto">конвейер сам</span></div>
+        <h2>Покрытие: убеждаемся, что проверено достаточно</h2>
+      </div>
+    </div>
+    <div class="grid cols-2 qa">
+      <div class="card"><h3>🛠️ Что делает</h3><p>Прогоняет все тесты и <b>дописывает недостающие</b>, пока проверено
+        не будет достаточно по заранее заданному порогу качества.</p></div>
+      <div class="card"><h3>🎯 Зачем бизнесу</h3><p>Объективная планка «насколько код проверен», а не ощущение
+        разработчика. <b>Меньше скрытых дыр</b>, которые выстреливают в проде.</p></div>
+    </div>
+    <p class="analogy"><b>Как в жизни:</b> перед сдачей объекта проверяют не одну розетку, а все —
+      чтобы не оказалось, что половина не работает.</p>
+  </section>
+
+  <!-- ШАГ 10 -->
+  <section class="slide">
+    <div class="stephead">
+      <div class="stepnum">10</div>
+      <div>
+        <div class="kicker" style="margin-bottom:6px">Шаг 10 из 12 · <span class="tag auto">конвейер сам</span></div>
+        <h2>Документация: обновляем описание системы</h2>
+      </div>
+    </div>
+    <div class="grid cols-2 qa">
+      <div class="card"><h3>🛠️ Что делает</h3><p>Обновляет спецификацию сервиса с учётом новой фичи — <b>сразу</b>,
+        как часть процесса, а не отдельной задачей «когда-нибудь».</p></div>
+      <div class="card"><h3>🎯 Зачем бизнесу</h3><p>Документация <b>не отстаёт от кода</b>. Обычно её делают «потом»
+        (то есть никогда) — здесь она всегда актуальна и ускоряет следующие фичи.</p></div>
+    </div>
+    <p class="analogy"><b>Как в жизни:</b> после перепланировки сразу вносят изменения в план дома —
+      чтобы следующий мастер работал по правде, а не по устаревшей схеме.</p>
+  </section>
+
+  <!-- ШАГ 11 -->
+  <section class="slide">
+    <div class="stephead">
+      <div class="stepnum">11</div>
+      <div>
+        <div class="kicker" style="margin-bottom:6px">Шаг 11 из 12 · <span class="tag human">человек решает</span></div>
+        <h2>Pull Request: готовим изменения к ревью</h2>
+      </div>
+    </div>
+    <div class="grid cols-2 qa">
+      <div class="card"><h3>🛠️ Что делает</h3><p>Создаёт ветки и запросы на слияние по задачам. <b>Сохранение и публикация —
+        каждое после отдельного «да»</b>. По одному запросу на задачу.</p></div>
+      <div class="card"><h3>🎯 Зачем бизнесу</h3><p>Готовый, аккуратный пакет изменений к ревью человеком.
+        <b>Ничего не уходит в общий код без подтверждения</b> — контроль на стороне команды.</p></div>
+    </div>
+    <p class="analogy"><b>Как в жизни:</b> прежде чем отправить документ на подпись, его складывают по папкам
+      и спрашивают: «отправляем?»</p>
+  </section>
+
+  <!-- ШАГ 12 -->
+  <section class="slide">
+    <div class="stephead">
+      <div class="stepnum">12</div>
+      <div>
+        <div class="kicker" style="margin-bottom:6px">Шаг 12 из 12 · <span class="tag human">человек решает</span></div>
+        <h2>Отчёт: фиксируем результат в задаче</h2>
+      </div>
+    </div>
+    <div class="grid cols-2 qa">
+      <div class="card"><h3>🛠️ Что делает</h3><p>Пишет в задачу отчёт: что сделано, какие файлы затронуты, тесты,
+        покрытие и <b>ссылки на запросы на слияние</b>.</p></div>
+      <div class="card"><h3>🎯 Зачем бизнесу</h3><p>Полный <b>аудит-след</b>: решения и результат сохранены в трекере,
+        а не в головах. Легко понять историю фичи спустя месяцы.</p></div>
+    </div>
+    <p class="analogy"><b>Как в жизни:</b> акт выполненных работ — что сделали, чем подтверждаем, кто принял.</p>
+  </section>
+
+  <!-- Сводка точек решения -->
+  <section class="slide">
+    <div class="kicker">Где главный — человек</div>
+    <h2>6 точек, где конвейер ждёт вашего «да»</h2>
+    <table>
+      <tr><th>Точка</th><th>На каком шаге</th><th>Что подтверждаем</th></tr>
+      <tr><td class="mono" style="color:var(--warn)">1</td><td>Требования</td><td>Задачу поняли верно</td></tr>
+      <tr><td class="mono" style="color:var(--warn)">2</td><td>Спецификация / Тех-дизайн</td><td>Делаем именно так</td></tr>
+      <tr><td class="mono" style="color:var(--warn)">3</td><td>Задачи в Jira</td><td>Заводим эти задачи</td></tr>
+      <tr><td class="mono" style="color:var(--warn)">4</td><td>Pull Request — коммит</td><td>Сохраняем изменения</td></tr>
+      <tr><td class="mono" style="color:var(--warn)">5</td><td>Pull Request — публикация</td><td>Отправляем на ревью</td></tr>
+      <tr><td class="mono" style="color:var(--warn)">6</td><td>Отчёт</td><td>Фиксируем результат в Jira</td></tr>
+    </table>
+    <p class="lead" style="margin-top:18px">Плюс в самом начале — <b style="color:var(--fg)">выбор критичности</b> фичи
+      (низкая / средняя / высокая). Чем выше риск (платежи, персональные данные, инфраструктура) —
+      тем больше подтверждений требует конвейер.</p>
+  </section>
+
+  <!-- Экономия времени -->
+  <section class="slide">
+    <div class="kicker">Что это даёт</div>
+    <h2>Где команда экономит время</h2>
+    <div class="grid cols-3">
+      <div class="card"><h3>⏱️ Меньше рутины</h3><p>Требования, дизайн, каркас тестов и черновики задач готовятся
+        автоматически. Инженер занят сутью, а не оформлением.</p></div>
+      <div class="card"><h3>🧭 Быстрый онбординг</h3><p>Карта системы собирается один раз и переиспользуется —
+        не нужно дни разбираться «что тут происходит».</p></div>
+      <div class="card"><h3>🔁 Меньше переделок</h3><p>Тесты вперёд и автопроверки ловят проблемы до ревью и релиза,
+        а не после.</p></div>
+      <div class="card"><h3>📚 Живая документация</h3><p>Спецификация обновляется на каждой фиче, а не «потом» —
+        то есть всегда актуальна.</p></div>
+      <div class="card"><h3>🛡️ Качество как условие</h3><p>Тесты, покрытие и доказательства — обязательны для доставки,
+        а не «по доброй воле».</p></div>
+      <div class="card"><h3>💾 Устойчивость к сбоям</h3><p>Прогресс сохраняется по шагам: после обрыва продолжаем
+        с того же места, а не с нуля.</p></div>
+    </div>
+  </section>
+
+  <!-- Финал -->
+  <section class="slide center">
+    <h1 class="big">Рутину — конвейеру,<br>решения — людям</h1>
+    <p class="sub">12 понятных шагов · 6 точек подтверждения · качество встроено в процесс</p>
+    <p class="lead" style="margin:24px auto 0">Команда тратит время на то, что важно — а не на оформление,
+      погружение и догон документации. Спасибо за внимание.</p>
+    <div style="margin-top:24px">
+      <span class="badge">предсказуемо</span>
+      <span class="badge">прозрачно</span>
+      <span class="badge">качество-гейт</span>
+      <span class="badge">с понятными точками «да»</span>
+    </div>
+  </section>
+
+</div>
+
+<div class="footer">
+  <div class="brand"><div class="logo">F</div><span>Feature Pipeline · каждый шаг для бизнеса</span></div>
+  <div class="dots" id="dots"></div>
+  <div class="nav-hint">← → · Space · клик</div>
+</div>
+
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  const dotsBox=document.getElementById('dots');
+  const progress=document.getElementById('progress');
+  let i=0;
+  slides.forEach((_,idx)=>{const d=document.createElement('div');d.className='dot'+(idx===0?' active':'');
+    d.onclick=()=>go(idx);dotsBox.appendChild(d);});
+  const dots=[...dotsBox.children];
+  function go(n){
+    i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach((s,idx)=>s.classList.toggle('active',idx===i));
+    dots.forEach((d,idx)=>d.classList.toggle('active',idx===i));
+    progress.style.width=((i)/(slides.length-1)*100)+'%';
+  }
+  function next(){go(i+1)} function prev(){go(i-1)}
+  document.addEventListener('keydown',e=>{
+    if(['ArrowRight','PageDown',' '].includes(e.key)){e.preventDefault();next();}
+    else if(['ArrowLeft','PageUp'].includes(e.key)){e.preventDefault();prev();}
+    else if(e.key==='Home')go(0); else if(e.key==='End')go(slides.length-1);
+  });
+  document.getElementById('deck').addEventListener('click',e=>{
+    if(e.target.closest('.dot'))return;
+    const x=e.clientX/window.innerWidth; x>0.35?next():prev();
+  });
+  go(0);
+</script>
+</body>
+</html>

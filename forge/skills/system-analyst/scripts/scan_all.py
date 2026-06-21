@@ -38,6 +38,16 @@ from common import attribute_module, repo_root  # noqa: E402
 HARD = {"domain", "api", "async_consumers"}
 
 
+def _default_scan_dir(root: Path) -> Path:
+    """Каталог scan по конфигу docs (in-repo/separate-repo); фоллбэк <root>/docs/system-analysis/scan."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "feature-pipeline" / "scripts"))
+        import skill_paths  # type: ignore
+        return skill_paths.scan_dir(root)
+    except Exception:
+        return root / "docs/system-analysis/scan"  # fallback (резолвер недоступен)
+
+
 def _attribute(items: list[dict], index, prefix: str = "") -> dict:
     counts: dict[str, int] = {}
     for it in items:
@@ -146,7 +156,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Deterministic system scan (ground truth for self-check).")
     ap.add_argument("roots", nargs="*", help="project root(s) (default: git toplevel или cwd)")
     ap.add_argument("-o", "--out", default=None,
-                    help="output dir (default: <root>/ground/statements/system-analysis/scan)")
+                    help="output dir (default: <root>/docs/system-analysis/scan — канонический путь, "
+                         "откуда читают check_grounding/verify_coverage/enrich_grounding; "
+                         "для отдельного спека-репо передавай <docs_path>/system-analysis/scan)")
     ap.add_argument("--quiet", action="store_true", help="do not print the summary table")
     args = ap.parse_args()
 
@@ -159,7 +171,7 @@ def main() -> int:
             return 1
         _merge(cats, scan_root(r, prefix=r.name if multi else ""))
 
-    out = Path(args.out) if args.out else roots[0] / "ground/statements/system-analysis/scan"
+    out = Path(args.out) if args.out else _default_scan_dir(roots[0])
     out.mkdir(parents=True, exist_ok=True)
     for name, cat in cats.items():
         (out / f"{name}.json").write_text(json.dumps(cat, ensure_ascii=False, indent=2), encoding="utf-8")

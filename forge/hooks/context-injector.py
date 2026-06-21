@@ -24,11 +24,22 @@ from pathlib import Path
 
 PER_FILE_LIMIT = 6000  # символов на файл
 
-# Файлы для инъекции (project-relative), в порядке важности. Берём те, что реально есть.
-INJECT_FILES = [
-    "docs/system-analysis/grounding-excerpt.json",  # компактный срез системы (главное для дизайна/кода)
-    "ground/conventions.md",                         # раскладка слоёв проекта (приоритет над generic)
-]
+
+def _inject_targets(root: Path) -> list[tuple[str, Path]]:
+    """(label, абсолютный путь) файлов для инъекции, в порядке важности.
+
+    grounding-excerpt резолвится по docs-конфигу (in-repo/separate-repo); conventions.md
+    project-relative (рабочее состояние всегда в репо кода)."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import _project  # type: ignore
+        excerpt = _project.grounding_excerpt_path(root)
+    except Exception:
+        excerpt = root / "docs/system-analysis/grounding-excerpt.json"  # fallback (резолвер недоступен)
+    return [
+        ("system-analysis/grounding-excerpt.json", excerpt),  # компактный срез системы
+        ("ground/conventions.md", root / "ground/conventions.md"),  # раскладка слоёв проекта
+    ]
 
 
 def _project_root(cwd: str) -> Path:
@@ -54,8 +65,7 @@ def main() -> int:
         root = _project_root(data.get("cwd", ""))
 
         chunks: list[str] = []
-        for rel in INJECT_FILES:
-            p = root / rel
+        for label, p in _inject_targets(root):
             if not p.exists():
                 continue
             try:
@@ -64,7 +74,7 @@ def main() -> int:
                 continue
             if len(txt) > PER_FILE_LIMIT:
                 txt = txt[:PER_FILE_LIMIT] + f"\n…(усечено, всего {len(txt)} символов)"
-            chunks.append(f"### Контекст пайплайна: `{rel}`\n```\n{txt}\n```")
+            chunks.append(f"### Контекст пайплайна: `{label}`\n```\n{txt}\n```")
 
         if not chunks:
             return 0

@@ -61,7 +61,10 @@ class MultiFeatureGate(unittest.TestCase):
         jdir = self.proj / "ground/statements/feature-pipeline" / feat / "judges"
         jdir.mkdir(parents=True, exist_ok=True)
         for n in JUDGES:
-            (jdir / f"{n}.json").write_text(json.dumps({"judge": n, "passed": True}))
+            # реалистичный вердикт run_judge (verdict/passed/checks/summary) — schema-sanity update.py
+            (jdir / f"{n}.json").write_text(json.dumps(
+                {"produced_by": "run_judge", "judge": n, "verdict": "PASS", "passed": True,
+                 "checks": [], "summary": "ok"}))
 
     def _gate(self, feat):
         return json.loads((self.proj / "ground/phases" / feat / "gate.json").read_text())
@@ -70,6 +73,7 @@ class MultiFeatureGate(unittest.TestCase):
         for sid in ALL_STEPS:
             r = _run([UPDATE, "--project", self.proj, "--skill", "feature-pipeline",
                       "--feature", feat, "--step-id", sid, "--status", "completed",
+                      "--closed-by", "subagent",  # как state-recorder на SubagentStop (C3)
                       "--output-json", json.dumps({"step_id": sid})], self.proj)
             self.assertEqual(r.returncode, 0, f"{feat}/{sid}: {r.stderr or r.stdout}")
 

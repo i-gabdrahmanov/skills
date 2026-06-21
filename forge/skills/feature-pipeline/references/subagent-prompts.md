@@ -78,6 +78,50 @@ prompt:
 
 ---
 
+## 4.0a SDD-писатель (фаза 02-sdd — BRD → sdd.md)
+
+Зови **после утверждения BRD (Гейт 1) и сбора grounding**, ДО tech-design. Этот субагент
+пишет строгую спецификацию (`sdd.md`, PDLC v3.5) из BRD: что система должна делать в
+проверяемой форме (Given-When-Then, API-контракты, модель данных, критерии приёмки). Он
+НЕ раскладывает по слоям и НЕ дробит на задачи — это работа tech-design (фаза 02-design).
+
+```
+description: "Write SDD spec for <slug>"
+subagent_type: general-purpose
+
+prompt:
+Ты — системный аналитик/спецификатор в пайплайне feature-pipeline.
+
+Шаг 0: Прочитай `<project>/.gigacode/skills/sdd/SKILL.md` целиком.
+
+Вход:
+- BRD: <путь к brd.md>
+- Grounding (выжимка о системе): <путь к grounding-excerpt.json>
+- Jira-ключ (если есть): <KEY-123 или «нет»>
+
+Шаг 1: Прочитай BRD и grounding. Специфицируй ПО grounding, не по коду.
+Шаг 2: Создай ОДИН файл в <папка фичи>/:
+  sdd.md — по шаблону `<project>/.gigacode/skills/sdd/references/sdd-template.md`
+  (обязательные секции: бизнес-контекст, функциональные требования Given-When-Then, NFR,
+   API-контракты, модель данных, критерии приёмки, риски). Если Jira-ключ есть — первой
+   строкой шапки `**Jira:** <KEY-123>`.
+
+Gate (обязательно, перед завершением):
+  python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py sdd <slug> --project-root <project>
+  Должен быть PASS. Сохраняет вердикт в judges/sdd-judge.json.
+
+Выходной JSON (ТОЛЬКО его, без текста sdd.md в теле):
+  {"step_id": "02-sdd", "status": "completed",
+   "path": "docs/feature-pipeline/<slug>/sdd.md",
+   "summary": "3-5 строк: суть фичи, ключевые сценарии (вкл. ошибочные), новые API/данные, риск",
+   "gates": {"sdd-judge": "PASS"}}
+```
+
+После возврата — детерминированный `run_judge.py sdd <slug>` (фаза 02-sdd). PASS → Гейт SDD.
+См. SKILL.md §5a.
+
+---
+
 ## 4.1 Тестописатель (TDD — RED: тесты ДО кода)
 
 Зови **до** написания production-кода задачи. Тесты пишутся первыми из `acceptance` и контракта
@@ -323,16 +367,22 @@ Diff фичи (production, без тестов):
 Суть фичи (2-3 предложения): <...>
 tech-design: <путь к tech-design.md>
 
+🚨 РАЗРЕШЁННЫЙ scope правки — ТОЛЬКО `system-analysis/*.md` (api.md, domain.md, db.md,
+structure.md). **НЕ редактируй `*/sdd.md`, `*/brd.md`, `*/tech-design.md`** — это замороженные
+артефакты ранних фаз (02-sdd / 00-brd / 02-design); их трогать нельзя. И не вставляй сырой код
+из diff в документы — спека описывает поведение словами, а не листингами.
+
 Алгоритм:
 1. Перейди в <docs_path>. Ветка `feature/<slug>` (создай от default, если нет).
-2. Обнови разделы, описывающие изменённое поведение. Новые эндпойнты → добавь в
-   system-analysis/api.md; новые сущности → domain.md. Стиль документа сохраняй.
+2. Обнови ТОЛЬКО разделы system-analysis, описывающие изменённое поведение. Новые эндпойнты →
+   добавь в system-analysis/api.md; новые сущности → domain.md. Стиль документа сохраняй,
+   код из diff не копируй — формулируй поведение.
 3. Не выдумывай разделы — если части нет, зафиксируй в отчёте.
 4. Один коммит в стиле спец-репо. НЕ пушь (push/PR решает главный агент на Гейте 5).
 
-Верни JSON:
+Верни JSON (`files_changed` НЕ должен содержать `sdd.md`/`brd.md`/`tech-design.md`):
 {"no_changes":false,"branch":"feature/<slug>","commit_sha":"...","default_branch":"main",
- "files_changed":["api/...","domain/..."],"summary":"...","uncovered_in_spec":[]}
+ "files_changed":["system-analysis/api.md","system-analysis/domain.md"],"summary":"...","uncovered_in_spec":[]}
 ```
 
 ---

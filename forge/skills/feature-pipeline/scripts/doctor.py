@@ -14,12 +14,18 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
 REPO = SCRIPTS.parents[2]  # …/skills/feature-pipeline/scripts → repo root
 sys.path.insert(0, str(SCRIPTS))
+
+# Минимальная версия Python — ЕДИНЫЙ источник (скрипты/хуки используют PEP604 `X | None`
+# и match; на 3.9 phase_sync падал → ложное «несоответствие стадий»). preflight.py пинит копию.
+MIN_PYTHON = (3, 10)
 
 
 def _load(path: Path, name: str):
@@ -31,13 +37,18 @@ def _load(path: Path, name: str):
 
 
 def run_checks(project_root: Path | None = None) -> dict:
-    problems: list[str] = []
+    problems: list[str] = []      # жёсткие нарушения целостности кода → passed=False
+    warnings: list[str] = []      # средовые/конфиг-советы (Python/git/config) → не валят passed
     checks: list[dict] = []
 
     def ok(name): checks.append({"name": name, "status": "PASS"})
     def fail(name, detail):
         checks.append({"name": name, "status": "FAIL", "detail": detail})
         problems.append(f"{name}: {detail}")
+    def warn(name, detail):
+        # Средовой/конфиг-совет: виден и уходит в preflight как warning, но не делает doctor «красным»
+        checks.append({"name": name, "status": "WARN", "detail": detail})
+        warnings.append(f"{name}: {detail}")
 
     pp = _load(SCRIPTS / "pipeline_phases.py", "pp_doctor")
     rj = _load(SCRIPTS / "run_judge.py", "rj_doctor")
@@ -143,7 +154,56 @@ def run_checks(project_root: Path | None = None) -> dict:
     else:
         ok("no-hardcoded-home-paths")
 
-    return {"passed": not problems, "checks": checks, "problems": problems}
+    # 8. Версия Python зафиксирована (скрипты требуют >= MIN_PYTHON; на 3.9 phase_sync падал).
+    #    Средовой совет (warn), а не integrity-fail: doctor может гоняться и на старом интерпретаторе.
+    if sys.version_info[:2] < MIN_PYTHON:
+        have = f"{sys.version_info.major}.{sys.version_info.minor}"
+        warn("python-version",
+             f"Python {have} < {MIN_PYTHON[0]}.{MIN_PYTHON[1]} — скрипты используют синтаксис "
+             f"{MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ (PEP604/match). Обнови интерпретатор.")
+    else:
+        ok("python-version")
+
+    # 9. git доступен (repo_root, ветки/доставка, ключ pipeline-state — всё на git)
+    if shutil.which("git"):
+        ok("git-available")
+    else:
+        warn("git-available", "git не найден в PATH — фазы доставки/состояния работать не будут")
+
+    # 10. Конфиг валиден по типам + coverage-гейт обеспечен JaCoCo. Переиспускаем ЕДИНУЮ
+    #     реализацию — config-helper validate --strict (там же кросс-проверка JaCoCo из P0-1/P3-15),
+    #     чтобы не плодить вторую копию логики.
+    cfg_validate = REPO / "skills" / "config-helper" / "scripts" / "config.py"
+    pipeline_json = (project_root / "ground" / "pipeline.json") if project_root else None
+    if not project_root:
+        checks.append({"name": "config-valid", "status": "SKIP", "detail": "нет project root"})
+    elif not cfg_validate.exists() or not (pipeline_json and pipeline_json.exists()):
+        checks.append({"name": "config-valid", "status": "SKIP",
+                       "detail": "нет config-helper или ground/pipeline.json"})
+    else:
+        try:
+            r = subprocess.run(
+                [sys.executable, str(cfg_validate), "--project", str(project_root),
+                 "validate", "--strict", "--json"],
+                capture_output=True, text=True, timeout=20,
+            )
+            if r.returncode == 0:
+                ok("config-valid")
+            else:
+                detail = ""
+                try:
+                    v = json.loads(r.stdout)
+                    detail = "; ".join(i.get("error", "")[:90] for i in v.get("issues", [])[:3])
+                except Exception:
+                    detail = (r.stdout or r.stderr).strip()[:180]
+                warn("config-valid", detail or "config validate FAIL")
+        except Exception as e:
+            checks.append({"name": "config-valid", "status": "SKIP", "detail": f"не выполнен: {e}"})
+
+    result = {"passed": not problems, "checks": checks, "problems": problems}
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 def main() -> int:
@@ -162,9 +222,11 @@ def main() -> int:
         print(json.dumps(res, ensure_ascii=False, indent=2))
     else:
         for c in res["checks"]:
-            mark = {"PASS": "✅", "FAIL": "❌", "SKIP": "·"}.get(c["status"], "?")
+            mark = {"PASS": "✅", "FAIL": "❌", "WARN": "⚠️", "SKIP": "·"}.get(c["status"], "?")
             print(f"  {mark} {c['name']}" + (f" — {c['detail']}" if c.get("detail") else ""))
-        print("doctor: OK" if res["passed"] else f"doctor: {len(res['problems'])} проблем(ы)")
+        nwarn = len(res.get("warnings", []))
+        tail = f" (+{nwarn} предупрежд.)" if nwarn else ""
+        print(("doctor: OK" if res["passed"] else f"doctor: {len(res['problems'])} проблем(ы)") + tail)
     return 0 if res["passed"] else 1
 
 

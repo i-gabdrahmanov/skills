@@ -12,8 +12,8 @@
       {"matcher": "(Write|Edit|WriteFile|NotebookEdit)", "sequential": true, "hooks": [
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/pii-boundary.py", "name": "pii-boundary"},
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/tdd-guard.py", "name": "tdd-guard"},
+        {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/eval-guard.py", "name": "eval-guard"},
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/sod-enforcer.py", "name": "sod-enforcer"},
-        {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/subagent-enforcer.py", "name": "subagent-enforcer"},
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/gate-guard.py", "name": "gate-guard"},
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/log-agent.py", "name": "agent-logger"}
       ]},

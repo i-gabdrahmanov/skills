@@ -39,22 +39,34 @@ def level_order(level: str) -> int:
         return 1  # неизвестное → как R1 (не падаем)
 
 
+# Статус последней загрузки политики: "loaded" | "missing" | "corrupt" | "unknown".
+# Нужен, чтобы отличать «файла нет/битый» (enforcement OFF → deny-first) от штатной загрузки.
+_POLICY_STATUS = "unknown"
+
+
 def load_policy() -> dict:
-    """Загружает risk-policy.json: сначала из ~/.gigacode/hooks/, затем из проекта через cwd."""
-    try:
-        return json.loads(_POLICY_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    # Fallback: ищем в проекте (hooks в .gigacode проекта)
-    try:
-        import traceback
-        # Пробуем найти в родительском каталоге хуков проекта
-        proj_policy = Path(__file__).resolve().parent / "risk-policy.json"
-        if proj_policy.exists():
-            return json.loads(proj_policy.read_text(encoding="utf-8"))
-    except Exception:
-        pass
+    """Загружает co-located risk-policy.json. Различает отсутствие и порчу файла.
+
+    Раньше любая ошибка глоталась в {} → classify() ставил всему R1 → при default auto_max=R1
+    ВСЁ проходило авто (тихий fail-OPEN самого рискового случая). Теперь статус фиксируется в
+    _POLICY_STATUS; gate-guard на основании policy_loaded() держит deny-first в пайплайне."""
+    global _POLICY_STATUS
+    if _POLICY_PATH.exists():
+        try:
+            data = json.loads(_POLICY_PATH.read_text(encoding="utf-8"))
+            _POLICY_STATUS = "loaded"
+            return data
+        except Exception:
+            _POLICY_STATUS = "corrupt"
+            return {}
+    _POLICY_STATUS = "missing"
     return {}
+
+
+def policy_loaded() -> bool:
+    """True только если risk-policy.json реально прочитан и распарсен."""
+    load_policy()
+    return _POLICY_STATUS == "loaded"
 
 
 def pipeline_cfg(root: Path) -> dict:

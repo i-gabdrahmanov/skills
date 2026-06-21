@@ -30,6 +30,19 @@ from pathlib import Path
 from _util import repo_root
 from phase_sync import sync_gate_from_manifest
 
+# Соглашение «какие фазы обязаны идти через субагента» — ЕДИНЫЙ источник pipeline_phases
+# (co-located feature-pipeline). best-effort импорт + inline-fallback, чтобы переименование
+# префикса в одном месте не отключало enforcement молча.
+_SUBAGENT_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec")
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1].parent / "feature-pipeline" / "scripts"))
+    import pipeline_phases as _pp
+    _requires_subagent = _pp.requires_subagent
+    _SUBAGENT_PREFIXES = _pp.SUBAGENT_PHASE_PREFIXES
+except Exception:
+    def _requires_subagent(step_id) -> bool:
+        return isinstance(step_id, str) and step_id.startswith(tuple(_SUBAGENT_PREFIXES))
+
 
 VALID_STATUSES = {"pending", "in_progress", "completed", "failed", "skipped"}
 
@@ -111,6 +124,24 @@ def _check_judges(step: dict, project: Path, skill: str, feature: str):
             blocking.append(f"❌ Вердикт '{judge_name}.json' повреждён: {e}")
             continue
 
+        # 2b. Схема-санити + ПРОВЕНАНС: настоящий вердикт run_judge несёт produced_by:"run_judge",
+        # passed:bool И один из verdict/checks/summary/step_id. Рукописный/поддельный (в т.ч. голый
+        # {"passed":true} или дописанный руками) → блок: «перезапусти судью, не правь файл руками».
+        if (not isinstance(verdict, dict) or verdict.get("produced_by") != "run_judge"
+                or not isinstance(verdict.get("passed"), bool)
+                or not any(k in verdict for k in ("verdict", "checks", "summary", "step_id"))):
+            ov = _load_override(project, skill, feature, judge_name)
+            if ov:
+                overridden.append(f"⚠️  '{judge_name}' схема/провенанс невалидны — пропущен вручную. "
+                                  f"Причина: {ov.get('reason', '?')}")
+                continue
+            blocking.append(
+                f"❌ Вердикт '{judge_name}.json' не похож на вывод run_judge "
+                f"(нужно produced_by:'run_judge' + passed:bool + verdict/checks/summary). "
+                f"Перезапусти судью (run_judge.py), не правь файл руками."
+            )
+            continue
+
         # 3. Вердикт есть, но FAIL
         if not verdict.get("passed", False):
             ov = _load_override(project, skill, feature, judge_name)
@@ -148,6 +179,38 @@ def _check_judges(step: dict, project: Path, skill: str, feature: str):
         )
 
 
+def _check_subagent_origin(step: dict, closed_by: str, project: Path, skill: str, feature: str):
+    """Гарантия «фаза выполнена ЧЕРЕЗ субагента, а не inline».
+
+    Раньше это пытался форсить subagent-enforcer (PreToolUse), но PreToolUse срабатывает и
+    ВНУТРИ субагента → он заблокировал бы сам субагент. Поэтому проверка перенесена на закрытие
+    шага: фазы из SUBAGENT_PHASE_PREFIXES можно закрыть completed только если запись пришла от
+    SubagentStop (state-recorder передаёт closed_by=subagent). Inline-закрытие блокируется.
+
+    Escape-hatch: overrides/subagent-origin.json (как у судей) — снимает блок с предупреждением.
+    """
+    if not _requires_subagent(step.get("id", "")):
+        return
+    if closed_by == "subagent":
+        return
+    ov = _load_override(project, skill, feature, "subagent-origin")
+    if ov:
+        step.setdefault("override_warnings", [])
+        msg = (f"⚠️  шаг '{step['id']}' закрыт inline (не субагентом) — пропущено вручную. "
+               f"Причина: {ov.get('reason', '?')}")
+        if msg not in step["override_warnings"]:
+            step["override_warnings"].append(msg)
+        print(f"  {msg}", file=sys.stderr)
+        return
+    raise RuntimeError(
+        f"Шаг {step['id']} нельзя закрыть inline: фаза обязана выполняться ЧЕРЕЗ "
+        f"agent(subagent_type=...). Прогони её субагентом (state-recorder закроет шаг на "
+        f"SubagentStop), либо поставь override:\n"
+        f"   python3 {_OVERRIDE_SCRIPT} --judge subagent-origin --feature {feature} "
+        f"--step-id {step['id']} --reason \"<почему inline допустимо>\""
+    )
+
+
 def iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -174,6 +237,9 @@ def main():
     g.add_argument("--output-stdin", action="store_true", help="Read JSON output from stdin")
     p.add_argument("--error", help="Error message (use with status=failed)")
     p.add_argument("--skip-judges", action="store_true", help="Skip judge check (use when restoring state after init --force)")
+    p.add_argument("--closed-by", default="inline", choices=["inline", "subagent"],
+                   help="Кто закрывает шаг: subagent (от SubagentStop/state-recorder) или inline (оркестратор). "
+                        "Фазы из SUBAGENT_PHASE_PREFIXES требуют subagent.")
     args = p.parse_args()
 
     project = Path(args.project or repo_root()).resolve()
@@ -195,11 +261,14 @@ def main():
     now = iso_now()
     prev_status = step.get("status")
 
-    # Детерминированная блокировка: не даём закрыть шаг без судей
+    # Детерминированная блокировка: не даём закрыть шаг без судей и без субагентного происхождения
     if not args.skip_judges and args.status == "completed" and prev_status != "completed":
+        _check_subagent_origin(step, args.closed_by, project, args.skill, args.feature)
         _check_judges(step, project, args.skill, args.feature)
 
     step["status"] = args.status
+    if args.status == "completed":
+        step["closed_by"] = args.closed_by
 
     # Track timestamps
     if args.status == "in_progress" and prev_status != "in_progress":

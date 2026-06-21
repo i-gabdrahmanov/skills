@@ -13,6 +13,7 @@ Usage:
     python3 resolve_hook_paths.py --dry-run                 # только вывод, без записи
     python3 resolve_hook_paths.py --check                   # exit 0 если всё ок, 1 если проблемы
 """
+from __future__ import annotations  # PEP604 (X | None) под Python 3.9
 
 import json
 import os

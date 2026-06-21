@@ -70,21 +70,31 @@ description: >
   },
   "steps": [
     {
+      "id": "02-sdd",
+      "title": "SDD specification",
+      "status": "completed",
+      "output_file": "02-sdd.json",
+      "artifacts": {
+        "sdd": "docs/feature-pipeline/kidpprb-8639/sdd.md"
+      },
+      "required_judges": ["sdd-judge"],
+      "depends_on": ["00-brd", "01-grounding"]
+    },
+    {
       "id": "02-design",
       "title": "Tech design + task plan",
       "status": "completed",
       "output_file": "02-design.json",
       "artifacts": {
         "tech-design": "docs/feature-pipeline/kidpprb-8639/tech-design.md",
-        "task-plan": "docs/feature-pipeline/kidpprb-8639/task-plan.json",
-        "sdd": "docs/feature-pipeline/kidpprb-8639/sdd.md"
+        "task-plan": "docs/feature-pipeline/kidpprb-8639/task-plan.json"
       },
       "started_at": "2026-05-29T11:00:05Z",
       "completed_at": "2026-05-29T11:00:45Z",
       "duration_ms": 40000,
       "attempts": 1,
-      "required_judges": ["taskplan-check", "sdd-check"],
-      "depends_on": ["00-brd", "01-grounding"]
+      "required_judges": ["design-judge"],
+      "depends_on": ["02-sdd"]
     },
     {
       "id": "06-integration",
@@ -195,10 +205,12 @@ python <project>/.gigacode/skills/pipeline-state/scripts/update.py \
     --status completed \
     --artifacts '{
         "tech-design": "docs/feature-pipeline/<slug>/tech-design.md",
-        "task-plan": "docs/feature-pipeline/<slug>/task-plan.json",
-        "sdd": "docs/feature-pipeline/<slug>/sdd.md"
+        "task-plan": "docs/feature-pipeline/<slug>/task-plan.json"
     }'
 ```
+
+(Артефакт `sdd.md` закрывается отдельно на шаге `02-sdd`:
+`--step-id 02-sdd --artifacts '{"sdd": "docs/feature-pipeline/<slug>/sdd.md"}'`.)
 
 `--artifacts` принимает JSON-объект string→string. Пути нормализуются
 относительно корня проекта. Сохранённые artifacts видны в `read.py`.

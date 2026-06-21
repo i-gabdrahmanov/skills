@@ -2,26 +2,42 @@
 """eval-guard.py — PreToolUse хук: блокирует запись кода (src/main), пока eval'ы задачи не пройдены.
 
 PDLC v3.5 — Eval-Driven Development: eval'ы пишутся ДО кода (фаза Design).
-Этот хук форсирует: файлы в src/main/ не создаются/изменяются, пока eval-plan.json
-существует и для соответствующей задачи есть непройденные eval'ы.
+Этот хук форсирует: файлы в src/main/ не создаются/изменяются, пока для соответствующей
+задачи есть непройденные eval'ы.
+
+**Read-only (важно):** хук НЕ запускает eval-команды сам. Тяжёлый прогон (compile/coverage/
+test_pass, до 300с) — это execution-gate `run_pending_evals.py`, который запускает ОРКЕСТРАТОР
+и который пишет результаты в `ground/statements/feature-pipeline/<slug>/evals.json`. Хук лишь
+ЧИТАЕТ этот кэш. Так мы не кладём тяжёлый subprocess в hook hot-path (рантайм убивает хук >60с
+и трактует как fail-open — то есть запись бы прошла молча; см. FORGE.md «известные ограничения»).
 
 Матчится на Write/Edit/WriteFile в src/main/. Блок: exit 2 + stderr.
-fail-open: если eval-plan.json нет, eval_enabled=false, или фичи нет — пропускает.
-
-Читает eval-plan.json из папки активной фичи:
-  docs/feature-pipeline/<slug>/eval-plan.json
-
-Результаты eval'ов кеширует в ground/statements/feature-pipeline/<slug>/eval-results.json.
-Если eval уже однажды прошёл — повторно не гоняет (идемпотентность).
+fail-open: если eval-plan.json нет, eval_enabled=false, фичи/задачи нет — пропускает.
+Если кэша `evals.json` нет или задача в нём не пройдена — блок с инструкцией прогнать
+`run_pending_evals.py`.
 """
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import risk_ladder as R
+
+# Соглашения об id шагов — ЕДИНЫЙ источник pipeline_phases (co-located с хуками в .gigacode).
+# best-effort импорт + inline-fallback (пинится test_phase_consistency), чтобы переименование
+# префикса '04-build-' в одном месте не отключало enforcement молча.
+_BUILD_STEP_PREFIX = "04-build-"
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "feature-pipeline" / "scripts"))
+    import pipeline_phases as _pp
+    _build_task_id = _pp.build_task_id
+    _BUILD_STEP_PREFIX = _pp.BUILD_STEP_PREFIX
+except Exception:
+    def _build_task_id(step_id):
+        if isinstance(step_id, str) and step_id.startswith(_BUILD_STEP_PREFIX):
+            return step_id[len(_BUILD_STEP_PREFIX):] or None
+        return None
 
 
 def _block(reason: str) -> int:
@@ -30,7 +46,8 @@ def _block(reason: str) -> int:
 
 
 def _load_eval_results(manifest_dir: Path) -> dict:
-    path = manifest_dir / "eval-results.json"
+    """Кэш результатов eval'ов, который пишет run_pending_evals.py (имя файла — evals.json)."""
+    path = manifest_dir / "evals.json"
     if path.exists():
         try:
             return json.loads(path.read_text(encoding="utf-8"))
@@ -39,36 +56,9 @@ def _load_eval_results(manifest_dir: Path) -> dict:
     return {}
 
 
-def _save_eval_results(manifest_dir: Path, results: dict) -> None:
-    manifest_dir.mkdir(parents=True, exist_ok=True)
-    path = manifest_dir / "eval-results.json"
-    path.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
-
-
 def _has_passed(results: dict, eval_id: str) -> bool:
     entry = results.get(eval_id)
-    return entry is not None and entry.get("status") == "passed"
-
-
-def _run_eval_command(command: str, cwd: Path) -> tuple[bool, str]:
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        passed = result.returncode == 0
-        output = result.stdout.strip()
-        if result.stderr:
-            output += "\nSTDERR:\n" + result.stderr.strip()
-        return passed, output[:2000]
-    except subprocess.TimeoutExpired:
-        return False, "Eval command timed out after 300s"
-    except Exception as e:
-        return False, f"Eval command error: {e}"
+    return isinstance(entry, dict) and entry.get("status") == "passed"
 
 
 def _is_src_main(target_path: str | None) -> bool:
@@ -78,16 +68,17 @@ def _is_src_main(target_path: str | None) -> bool:
 
 
 def _target_path(tool_name: str, tool_input: dict) -> str | None:
-    if tool_name in ("Write", "WriteFile"):
-        return (tool_input.get("file_path") or "").strip()
-    if tool_name in ("Edit",):
+    if tool_name in ("Write", "WriteFile", "Edit"):
         return (tool_input.get("file_path") or "").strip()
     return None
 
 
 def main() -> int:
     raw = sys.stdin.read()
-    data = json.loads(raw) if raw.strip() else {}
+    try:
+        data = json.loads(raw) if raw.strip() else {}
+    except (json.JSONDecodeError, ValueError):
+        return 0  # не-JSON stdin — fail-open, не роняем инструмент
     if not isinstance(data, dict):
         return 0
 
@@ -100,8 +91,7 @@ def main() -> int:
     # 1. Проверяем, включён ли eval (fail-open)
     cfg = R.pipeline_cfg(root)
     quality_cfg = cfg.get("quality", {})
-    eval_enabled = quality_cfg.get("eval_enabled", True)
-    if not eval_enabled:
+    if not quality_cfg.get("eval_enabled", True):
         return 0
 
     # 2. Фильтр: только запись в src/main (не src/test)
@@ -116,26 +106,24 @@ def main() -> int:
     manifest = json.loads(mp.read_text(encoding="utf-8"))
     feature_slug = manifest.get("context", {}).get("feature", "")
 
-    # 4. Ищем eval-plan.json
-    feature_docs_path = root / cfg.get("docs", {}).get("feature_docs_path", "docs/feature-pipeline")
-    eval_plan_path = feature_docs_path / feature_slug / "eval-plan.json"
+    # 4. Ищем eval-plan.json (каталог фич резолвится по docs-конфигу: in-repo/separate-repo)
+    import _project
+    eval_plan_path = _project.feature_docs_dir(root, cfg) / feature_slug / "eval-plan.json"
     if not eval_plan_path.exists():
         return 0
 
     eval_plan = json.loads(eval_plan_path.read_text(encoding="utf-8"))
     evals = eval_plan.get("evals", [])
-
     if not evals:
         return 0
 
-    # 5. Определяем текущую задачу по шагам манифеста
+    # 5. Определяем текущую задачу по шагам манифеста (по соглашению build-шага)
     current_task_id = None
     for step in manifest.get("steps", []):
-        sid = step.get("id", "")
-        if sid.startswith("04-build-") and step.get("status") == "in_progress":
-            current_task_id = sid.replace("04-build-", "")
+        tid = _build_task_id(step.get("id", ""))
+        if tid and step.get("status") == "in_progress":
+            current_task_id = tid
             break
-
     if not current_task_id:
         return 0
 
@@ -144,43 +132,19 @@ def main() -> int:
     if not task_evals:
         return 0
 
-    # 7. Загружаем кеш результатов
+    # 7. Читаем кэш результатов (его пишет execution-gate run_pending_evals.py)
     manifest_dir = mp.parent
     eval_results = _load_eval_results(manifest_dir)
 
-    # 8. Прогоняем непройденные eval'ы
-    failed_evals = []
-    for eval_entry in task_evals:
-        eval_id = eval_entry["id"]
-
-        if _has_passed(eval_results, eval_id):
-            continue
-
-        command = eval_entry.get("command", "")
-        if not command:
-            eval_results[eval_id] = {"status": "error", "error": "No command specified"}
-            failed_evals.append(eval_id)
-            continue
-
-        passed, output = _run_eval_command(command, root)
-        if passed:
-            eval_results[eval_id] = {"status": "passed", "output": output[:500]}
-        else:
-            eval_results[eval_id] = {"status": "failed", "output": output[:500], "error": f"Eval {eval_id} failed"}
-            failed_evals.append(eval_id)
-
-    _save_eval_results(manifest_dir, eval_results)
-
-    # 9. Блокируем, если есть непройденные eval'ы
+    # 8. Блокируем, если для задачи есть eval'ы без статуса passed в кэше
+    failed_evals = [e["id"] for e in task_evals if not _has_passed(eval_results, e["id"])]
     if failed_evals:
-        details = "; ".join(
-            f"{eid}: {eval_results.get(eid, {}).get('output', '')[:120]}"
-            for eid in failed_evals
-        )
         return _block(
-            f"Eval-Driven Development: для задачи {current_task_id} не пройдены eval'ы: "
-            f"{failed_evals}. Детали: {details}. "
-            f"Сначала добейся прохождения eval'ов, или отключи eval_enabled в pipeline.json."
+            f"Eval-Driven Development: для задачи {current_task_id} не пройдены (или не прогонялись) "
+            f"eval'ы: {failed_evals}. Прогони execution-gate: "
+            f"python3 .gigacode/skills/feature-pipeline/scripts/run_pending_evals.py "
+            f"--project . --feature {feature_slug} --task {current_task_id}  "
+            f"(или отключи quality.eval_enabled в pipeline.json)."
         )
 
     return 0

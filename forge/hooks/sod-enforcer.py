@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """sod-enforcer.py — Separation of Duties: PreToolUse хук.
 
-Блокирует действия, не соответствующие роли субагента, на основе
-risk-policy.json agent_caps. Если роль = test, а цель — src/main/ — BLOCK.
-Если роль = design, а команда — git push — BLOCK.
+Блокирует действия, не соответствующие роли текущей фазы пайплайна, на основе ROLE_POLICY.
+Если активна фаза тестов (04-test), а цель — src/main/ — BLOCK. Если активна фаза дизайна, а
+команда — git push/commit/build — BLOCK.
 
-В отличие от subagent-enforcer (который проверяет, что фаза выполняется
-через субагента), sod-enforcer проверяет, что субагент НЕ выходит за
-границы своей роли.
+**Роль определяется по АКТИВНОМУ шагу манифеста** (in_progress), а не по tool_input: на Write/Edit
+в tool_input нет ни role, ни prompt субагента (все субагенты — general-purpose), поэтому прежняя
+эвристика по tool_input всегда давала None и хук молчал. Теперь роль детерминированно выводится из
+id активного шага, который ведёт state-recorder/update.
 
-Эвристика роли извлекается из поля role в tool_input, а если его нет —
-из prompt субагента (контекст SubagentStart).
+В отличие от update._check_subagent_origin (который проверяет, что фаза ЗАКРЫТА субагентом),
+sod-enforcer проверяет, что действие внутри фазы НЕ выходит за границы её роли.
 
-Маппинг: (Write|Edit|Bash) на пути src/main/ + src/test/ + git.
-Блок: exit 2 + stderr. fail-open: если риск-политика не загружена — пропускает.
-
-PDLC v3.5, risk-policy.json §agent_caps.
+Маппинг: (Write|Edit|Bash) на пути src/main/ + src/test/ + git/build.
+Блок: exit 2 + stderr. fail-open: если активной фичи/шага нет — пропускает.
 """
 from __future__ import annotations
 
@@ -23,6 +22,17 @@ import json
 import re
 import sys
 from pathlib import Path
+
+# risk_ladder (co-located) даёт project_root + active_manifest — те же резолверы, что у gate-guard.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import risk_ladder as _R
+except Exception:  # pragma: no cover
+    _R = None
+
+# Команда сборки/тестов — Gradle ИЛИ Maven. Роль build/test закрыта для spec/design/jira-фаз;
+# раньше распознавался только `./gradlew`, и на Maven-проекте SoD-кап для `mvn` не срабатывал (P1-16).
+BUILD_CMD_RE = r"(?:\./gradlew\s+|\bmvn\b)"
 
 # Роли и их разрешённые действия
 # role → { allowed_path_prefixes, blocked_commands, blocked_path_patterns }
@@ -41,7 +51,7 @@ ROLE_POLICY = {
         "blocked_commands": [
             r"\bgit\s+push\b",
             r"\bgit\s+commit\b",
-            r"\./gradlew\s+",
+            BUILD_CMD_RE,
         ],
         "blocked_content_patterns": [],
     },
@@ -51,7 +61,7 @@ ROLE_POLICY = {
         "blocked_commands": [
             r"\bgit\s+push\b",
             r"\bgit\s+commit\b",
-            r"\./gradlew\s+",
+            BUILD_CMD_RE,
             r"\bjira\b.*\bcreate\b",
             r"\bacli\b.*\bcreate\b",
         ],
@@ -70,7 +80,7 @@ ROLE_POLICY = {
         "allowed_paths": [],
         "blocked_paths": ["src/"],
         "blocked_commands": [
-            r"\./gradlew\s+",
+            BUILD_CMD_RE,
             r"\bgit\s+push\b",
             r"\bgit\s+commit\b",
         ],
@@ -78,42 +88,55 @@ ROLE_POLICY = {
     },
 }
 
+# Префикс id шага → роль фазы. Длинный префикс выигрывает. Фазы без ограничений SoD
+# (00-brd / 01-grounding / 07-deliver) сюда не входят → роль None → fail-open.
+STEP_ROLE = {
+    "02-sdd": "spec",
+    "02-eval-plan": "design",
+    "02-design": "design",
+    "02-": "design",
+    "03-jira": "jira",
+    "03-": "jira",
+    "04-test": "test",
+    "04-build": "dev",
+    "05-tests": "test",
+    "05-": "test",
+    "06-spec": "spec",
+    "06-": "spec",
+}
 
-def _detect_role(tool_input: dict, cwd: str | None = None) -> str | None:
-    """Определяет роль субагента.
 
-    Порядок:
-    1. Явное поле role в tool_input (если передано оркестратором)
-    2. Эвристика по prompt (описание/description)
-    3. По tool_name (Bash с jira → role=jira)
-    """
-    # 1. Явная роль
-    role = tool_input.get("role")
-    if role and role in ROLE_POLICY:
-        return role
+def _active_step_id(root: Path) -> str | None:
+    """id активного (in_progress) шага самого свежего манифеста активной фичи."""
+    if _R is None:
+        return None
+    try:
+        mp = _R.active_manifest(root)
+        if not mp or not mp.exists():
+            return None
+        manifest = json.loads(mp.read_text(encoding="utf-8"))
+        for step in manifest.get("steps", []):
+            if step.get("status") == "in_progress":
+                return step.get("id") or None
+    except Exception:
+        return None
+    return None
 
-    # 2. Эвристика по description
-    desc = (tool_input.get("description") or tool_input.get("prompt") or "").lower()
 
-    if any(kw in desc for kw in ["red", "test writer", "напиши тесты", "write failing tests"]):
-        return "test"
-    if any(kw in desc for kw in ["spec", "update spec", "documentation", "обнови спецификац"]):
-        return "spec"
-    if any(kw in desc for kw in ["tech design", "design", "проектирован", "архитектур"]):
-        return "design"
-    if any(kw in desc for kw in ["green", "implement", "реализуй", "java-spring-dev", "code for"]):
-        return "dev"
-    if any(kw in desc for kw in ["jira", "task writer", "заведи задач"]):
-        return "jira"
-
+def _detect_role(root: Path) -> str | None:
+    """Роль текущей фазы по id активного шага манифеста (детерминированно)."""
+    step_id = _active_step_id(root)
+    if not isinstance(step_id, str) or not step_id:
+        return None
+    for prefix, role in sorted(STEP_ROLE.items(), key=lambda kv: -len(kv[0])):
+        if step_id.startswith(prefix):
+            return role
     return None
 
 
 def _target_path(tool_name: str, tool_input: dict) -> str:
     """Извлекает целевой путь из tool_input."""
-    if tool_name in ("Write", "WriteFile"):
-        return tool_input.get("file_path", "")
-    if tool_name == "Edit":
+    if tool_name in ("Write", "WriteFile", "Edit"):
         return tool_input.get("file_path", "")
     if tool_name == "Bash":
         return tool_input.get("command", "")
@@ -126,8 +149,8 @@ def _detect_command_from_bash(command: str) -> str | None:
         return "git push"
     if re.search(r"\bgit\s+commit\b", command):
         return "git commit"
-    if re.search(r"\./gradlew\s+", command):
-        return "gradle"
+    if re.search(BUILD_CMD_RE, command):
+        return "build"
     if re.search(r"\bjira\b", command):
         return "jira"
     return None
@@ -140,7 +163,10 @@ def _block(reason: str) -> int:
 
 def main() -> int:
     raw = sys.stdin.read()
-    data = json.loads(raw) if raw.strip() else {}
+    try:
+        data = json.loads(raw) if raw.strip() else {}
+    except (json.JSONDecodeError, ValueError):
+        return 0  # не-JSON stdin — fail-open, не роняем инструмент
     if not isinstance(data, dict):
         return 0
 
@@ -148,24 +174,25 @@ def main() -> int:
     tool_input = data.get("tool_input") or {}
     target = _target_path(tool_name, tool_input)
 
-    # 1. Определяем роль
-    role = _detect_role(tool_input)
+    # 1. Определяем роль по активному шагу манифеста
+    root = Path(_R.project_root(data.get("cwd", ""))) if _R else Path(data.get("cwd") or ".")
+    role = _detect_role(root)
     if not role:
-        return 0  # fail-open: если роль не определена, не блокируем
+        return 0  # fail-open: вне фазы с SoD — не блокируем
 
     policy = ROLE_POLICY.get(role)
     if not policy:
         return 0
 
     # 2. Проверка по blocked_commands (только для Bash)
-    if tool_name == "Bash":
+    if tool_name in ("Bash", "run_shell_command"):
         cmd = tool_input.get("command", "")
         detected_cmd = _detect_command_from_bash(cmd)
         if detected_cmd:
             for pattern in policy.get("blocked_commands", []):
                 if re.search(pattern, cmd):
                     return _block(
-                        f"роль '{role}' не может выполнять '{detected_cmd}' "
+                        f"роль '{role}' (фаза активного шага) не может выполнять '{detected_cmd}' "
                         f"(blocked_commands: {pattern})"
                     )
         return 0  # для Bash больше проверок нет
@@ -174,10 +201,11 @@ def main() -> int:
     if not target:
         return 0
 
+    norm = target.replace("\\", "/")
     for blocked_pattern in policy.get("blocked_paths", []):
-        if blocked_pattern in target.replace("\\", "/"):
+        if blocked_pattern in norm:
             return _block(
-                f"роль '{role}' не может писать в '{target}' "
+                f"роль '{role}' (фаза активного шага) не может писать в '{target}' "
                 f"(blocked_paths: {blocked_pattern})"
             )
 

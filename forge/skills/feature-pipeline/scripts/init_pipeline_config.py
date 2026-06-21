@@ -153,7 +153,6 @@ def build_config(root):
             "spring_boot_version": spring_v,
             "is_git": is_git,
             "data_dir": "ground",             # директория для state, манифестов, логов (prj-relative)
-            "feature_docs_path": "docs/feature-pipeline",  # docs директория фич
         },
         "conventions": {
             "package_root": group,            # эвристика по group; уточни при необходимости
@@ -194,8 +193,13 @@ def build_config(root):
             ],
         },
         "docs": {
+            # Где живут документные артефакты (brd/sdd/tech-design/task-plan, system-analysis/grounding).
+            # ЕДИНЫЙ источник правды о расположении — резолвится skill_paths.docs_base / _project.docs_base.
             "mode": "in-repo",                # in-repo | separate-repo
-            "docs_path": "docs",
+            "docs_path": "docs",              # in-repo: база под project_root
+            "repo_path": None,                # separate-repo: АБСОЛЮТНЫЙ путь к внешнему репо спеки
+            "feature_subdir": "feature-pipeline",      # подпапка фич под docs-базой
+            "system_analysis_subdir": "system-analysis",  # подпапка системного обзора под docs-базой
         },
         "jira": {
             "enabled": None,                  # TODO: true/false

@@ -19,8 +19,8 @@ description: >
 > к ground-файлам — в `ground.*`, к docs — в `docs.*`.  
 > Не используй `~/.gigacode/...` — читай из конфига.
 
-Скилл ведёт фичу по циклу: **идея/Jira → BRD → контекст системы → тех-дизайн → задачи
-в Jira → код → тесты → спека → stacked-PR → отчёт**.
+Скилл ведёт фичу по циклу: **идея/Jira → BRD → контекст системы → SDD (спецификация) →
+тех-дизайн → задачи в Jira → код → тесты → спека → stacked-PR → отчёт**.
 
 ## ⚠️ ЖЕЛЕЗОБЕТОННОЕ ПРАВИЛО: СУБАГЕНТЫ ОБЯЗАТЕЛЬНЫ
 
@@ -35,14 +35,14 @@ description: >
 **Самопроверка до начала каждой фазы:**
 
 Перед вызовом agent() для фазы остановись и ответь:
-1. Текущий шаг манифеста — `02-design`, `04-build-*`, `04-test-*`, `05-tests`, `06-spec`?
+1. Текущий шаг манифеста — `02-sdd`, `02-design`, `04-build-*`, `04-test-*`, `05-tests`, `06-spec`?
 2. Если ДА — **ты ОБЯЗАН вызвать `agent()`, а не делать inline.**
 3. Если вместо этого ты начал читать MD-шаблоны или писать код — **СТОП**. Это баг.
    Закрой чтение. Вызови agent().
 
 **Симптомы inline-ошибки (не допускать):**
 - `read_file(".../SKILL.md")` для фазы 2, 3, 4, 5 → а потом пишешь файлы сам
-- создание `tech-design.md`, `task-plan.json`, `sdd.md` через `write_file()` → должен субагент
+- создание `sdd.md`, `tech-design.md`, `task-plan.json` через `write_file()` → должен субагент
 - компиляция/запуск тестов через `run_shell_command` → должен субагент
 - редактирование `*.java` файлов → должен субагент (`java-spring-dev`)
 
@@ -123,13 +123,25 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/resolve_phases.py \
    незаполняемое в `_incomplete`.
 3. **Пройди по `_incomplete`** — спроси у пользователя ровно эти поля (Jira-ключ, Bitbucket
    workspace/repo, инструмент миграций, нужен ли `git init`) и впиши в файл.
-4. Дальше бери из конфига: `docs.docs_path` (вместо старого
-   `config.json` в скилле minor-defect-fix — он остаётся фоллбэком),
+4. Дальше бери из конфига: `docs.*` (расположение артефактов, см. ниже),
    `quality.coverage_threshold`, `conventions.migration_tool`, `delivery.pr_strategy`,
    `project.default_branch`, `autonomy.*`. Не хардкодь эти значения в шагах — читай из конфига.
 
 Если `project.is_git=false`, а пользователь хочет дойти до PR — предложи `git init` до фазы 6
 (иначе ветки/stacked-PR и ключ `pipeline-state` не работают).
+
+**Расположение документных артефактов `<docs_path>` (in-repo / separate-repo).**
+Везде ниже `<docs_path>` = база документов, резолвится из `docs.*`:
+- **in-repo** (дефолт): `<docs_path>` = `<project>/<docs.docs_path>` (обычно `<project>/docs`).
+- **separate-repo**: `<docs_path>` = `docs.repo_path` (внешний репо спеки); subagent'ы и скрипты
+  работают там через `git -C <docs_path>`.
+
+Артефакты лежат под `<docs_path>/feature-pipeline/<slug>/` (brd/sdd/tech-design/task-plan)
+и `<docs_path>/system-analysis/` (обзор + grounding). **Скрипты и хуки резолвят это
+автоматически** (`skill_paths.docs_base` / `_project.docs_base`) — им docs-пути не передавай.
+**Субагентам** же подставляй конкретный `<docs_path>` из конфига. Если пользователь говорит
+«артефакты в другом репо» — пропиши `docs.mode=separate-repo` + `docs.repo_path` в конфиг
+(детали — [`references/config.md`](references/config.md)). См. также [`skill-paths.json`](references/skill-paths.json).
 
 ### 0.2 Автоопределение Jira-конфига
 
@@ -202,7 +214,8 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
 |---|---|---|
 | `00-brd` | Discovery / BRD | — |
 | `01-grounding` | System overview ensured | — |
-| `02-design` | Tech design + task plan | `00-brd`, `01-grounding` |
+| `02-sdd` | SDD specification (sdd.md) | `00-brd`, `01-grounding` |
+| `02-design` | Tech design + task plan | `02-sdd` |
 | `02-eval-plan` | Eval-plan generated (eval-plan.json) | `02-design` |
 | `03-jira` | Jira issues created | `02-design` |
 | `04-test-<taskId>` | TDD RED: тесты компилируются и падают | `02-design` |
@@ -220,7 +233,7 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
 > группирует живые логи в `ground/ai-logs/<feature>/iter-NN/`.
 После каждого завершённого субагента/шага — `update.py --skill feature-pipeline --feature <slug>
 --step-id <id> --status completed` с его JSON. Для шагов, создающих файловые артефакты
-(02-design, 02-eval-plan, 03-jira), обязательно передавай `--artifacts '{"key":"path"}'`.
+(02-sdd, 02-design, 02-eval-plan, 03-jira), обязательно передавай `--artifacts '{"key":"path"}'`.
 Перед синтезаторами/дизайнером — выжимки через
 `--excerpt-of` (тоже с `--feature`). Не храни в state секреты и сами MD-файлы.
 Хуки (`gate-guard`/`phase-gate`) сами находят АКТИВНУЮ фичу как самый свежий манифест — отдельно
@@ -305,7 +318,8 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/override_judge.py --ju
 | Скоуп-чек | главный агент | — | — |
 | 0 Discovery (BRD) | интервью inline + BRD-писатель | вложенный скилл (интервью) + субагент (черновение) | **Гейт 1** |
 | 1 Grounding | `system-analyst` (если нет обзора) | оркестратор-субагентов | — |
-| 2 Design | `tech-design` | вложенный скилл | **Гейт 2** |
+| 2 SDD (спецификация) | `sdd` | субагент general-purpose (контракт §4.0a) | **Гейт SDD** |
+| 2 Design (вход — `sdd.md`) | `tech-design` | вложенный скилл/субагент | **Гейт 2** |
 | 2.5 Jira | `jira-task-writer` | субагент general-purpose (контракт §4.5) | **Гейт 3** |
 | 3 Build (per task) | `java-spring-dev` + changeset | вложенный скилл | — |
 | 4 Verify | тестописатель + тестраннер | субагенты general-purpose | — |
@@ -334,7 +348,7 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/override_judge.py --ju
 **Два типа гейтов.** «Гейт 1-6» — точки подтверждения пользователем (необратимое не
 делается без «да»). Отдельно у каждой фазы есть **детерминированный execution-gate**
 (Python), который проверяет, что фаза реально отработала, ДО закрытия её шага в
-pipeline-state: design→`check_taskplan.py`, eval-plan→`build_evals_from_design.py`
+pipeline-state: sdd→`check_sdd_doc.py`, design→`check_taskplan.py`+`check_sdd.py`, eval-plan→`build_evals_from_design.py`
 (сама генерация, без gate — ошибка только если скрипт упал),
 jira→`check_jira.py`, build→`check_build.py` (с дополнительным
 **хуком `eval-guard`**, который проверяет прохождение eval'ов в рантайме),
@@ -390,7 +404,7 @@ agent(subagent_type="general-purpose", description="draft BRD for <slug>",
 
 **Ключ Jira (почти всегда есть).** Если фича пришла из Jira — передай issue-ключ (`[A-Z]+-\d+`)
 BRD-писателю (§4.0), чтобы он встал ПЕРВОЙ строкой шапки `brd.md` (`**Jira:**`). Этот ключ протягивается
-дальше: `tech-design` копирует его в шапку `tech-design.md` и `sdd.md`. Если задача не из Jira —
+дальше: `sdd` ставит его в шапку `sdd.md`, `tech-design` — в `tech-design.md`. Если задача не из Jira —
 строку опускаем во всех документах.
 
 ### Judge-gate: brd-judge (обязательно, ДО Гейта 1)
@@ -414,7 +428,7 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py brd <sl
 Оба должны быть PASS (exit 0). Вердикт — в `judges/brd-judge.json`.
 
 **FAIL → ре-итерация** (раздел 0.6): ошибки в `errors.json`, верни BRD-скилл на доработку
-(перепиши требования языком бизнеса, удали код-детали — они идут в `tech-design`, не в BRD).
+(перепиши требования языком бизнеса, удали код-детали — они идут в SDD/`tech-design`, не в BRD).
 Не закрывай `00-brd`, пока brd-judge не PASS.
 
 **Важно:** brd-judge — это gate, а не опция. Если `brd.md` создан, но brd-judge не запущен —
@@ -462,10 +476,10 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/check_grounding.py --r
 Свежесть между фичами поддерживается инкрементально в фазе Document (`enrich_grounding.py`), поэтому
 полный рескан на каждом прогоне не нужен.
 
-**Гейт Grounding (ОБЯЗАТЕЛЬНО, перед переходом к тех-дизайну).**
-Спроси у пользователя: «Обзор системы (grounding) собран и актуален. Переходим к техническому
-проектированию?». Только после «да». Если grounding не собран — НЕ переходи к §5, выполни
-полный обзор через `system-analyst` (см. exit 1 выше).
+**Гейт Grounding (ОБЯЗАТЕЛЬНО, перед переходом к спецификации).**
+Спроси у пользователя: «Обзор системы (grounding) собран и актуален. Переходим к
+спецификации (SDD)?». Только после «да». Если grounding не собран — НЕ переходи к §5a,
+выполни полный обзор через `system-analyst` (см. exit 1 выше).
 
 Обнови `01-grounding` (completed, в output — `path`/`excerpt_path` из вердикта).
 
@@ -473,23 +487,71 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/check_grounding.py --r
 
 ---
 
-## 5. Фаза 2 — Design → Гейт 2
+## 5. Фаза 2 — Спецификация (SDD) и Дизайн
 
-**🚨 ОБЯЗАТЕЛЬНО через agent(). Не делай inline.**
+**🚨 ОБЕ подфазы — ОБЯЗАТЕЛЬНО через agent(). Не делай inline.**
+
+Цепочка: **BRD → SDD (§5a) → Tech Design (§5b)**. Сначала субагент `sdd` пишет
+строгую спецификацию `sdd.md` из BRD; после её утверждения субагент `tech-design`
+проектирует **по `sdd.md`** (не по BRD напрямую) и выдаёт `tech-design.md` + `task-plan.json`.
 
 ### 5.0 Preflight-validate перед запуском (обязательно)
 
-Перед вызовом agent() для фазы 2, 3, 4, 5 — выполни проверку, что предыдущий шаг был сделан субагентом:
+Перед вызовом agent() для каждой подфазы — проверь, что предыдущий шаг был сделан субагентом:
 ```bash
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/preflight-validate.py \
-    --project /Users/21879313/work/pprb-kid \
+    --project <project> \
     --feature <slug> \
     --step-id <id>
 ```
 - **exit 0** — можно вызывать agent()
 - **exit 1** — СТОП. Предыдущий шаг был сделан inline. Не продолжай, пока не исправлено.
 
-### 5.0 Pre-design: подготовка компактного data-context
+---
+
+### 5a. Фаза 02-sdd — SDD спецификация → Гейт SDD
+
+**🚨 ОБЯЗАТЕЛЬНО через agent(). Не пиши `sdd.md` сам.**
+
+Запусти субагента SDD-писателя по контракту
+[`references/subagent-prompts.md §4.0a`](references/subagent-prompts.md). НЕ читай
+`sdd/SKILL.md` в свой контекст — субагент прочитает его сам.
+```
+agent(
+  subagent_type="general-purpose",
+  description="Write SDD spec for <slug>",
+  prompt="<контракт §4.0a subagent-prompts.md; подставь: slug, пути к brd.md и grounding-excerpt.json, Jira-ключ>"
+)
+```
+
+После возврата субагента прогони детерминированный execution-gate:
+```bash
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py sdd <slug> --project-root <project>
+```
+- gate fail → верни субагента на доработку (допиши недостающие секции/сценарии Given-When-Then).
+- gate pass → **Гейт SDD** (см. ниже).
+
+**Гейт SDD — утверждение спецификации.** Покажи резюме SDD: суть фичи, ключевые сценарии
+(включая ошибочные ветки), затрагиваются ли новые API/данные, главный риск. Спроси:
+«утверждаем спецификацию / правки?».
+- Правки SDD → верни `sdd` на доработку (BRD не трогаем).
+- Если всплыло **новое бизнес-требование** → откат к фазе 0 (BRD).
+
+После «да» обнови `02-sdd` (только при `pass` execution-gate), передав артефакт:
+```bash
+python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py \
+    --skill feature-pipeline --feature <slug> \
+    --step-id 02-sdd --status completed \
+    --artifacts '{"sdd": "docs/feature-pipeline/<slug>/sdd.md"}'
+```
+
+---
+
+### 5b. Фаза 02-design — Tech Design → Гейт 2
+
+**🚨 ОБЯЗАТЕЛЬНО через agent(). Не делай inline.** Вход — утверждённый `sdd.md` (§5a).
+
+#### 5b.0 Pre-design: подготовка компактного data-context
 
 До вызова субагента tech-design сгенерируй **design-context.json** — отфильтрованную
 выжимку из grounding-excerpt.json, содержащую только релевантные entities, API-endpoints,
@@ -510,7 +572,7 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/prepare_design_conte
 
 Полученный `design-context.json` передаётся в контракт субагента ниже.
 
-### 5.1 Запуск субагента tech-design
+#### 5b.1 Запуск субагента tech-design
 
 Вызови agent() со следующим контрактом. НЕ читай SKILL.md тех-дизайнера сам — субагент прочитает.
 
@@ -523,20 +585,21 @@ agent(
 Шаг 0: Прочитай `<project>/.gigacode/skills/tech-design/SKILL.md` целиком.
 
 Вход:
-- BRD: <путь к brd.md>
+- SDD (спецификация — ОСНОВНОЙ вход): <путь к sdd.md>
 - Design context (компактная выжимка grounding под фичу): <путь к design-context.json>
 - Grounding (полный — для редких справок): <путь к grounding-excerpt.json>
+- BRD (первоисточник, только как справка): <путь к brd.md>
 
-Шаг 1: Прочитай design-context и BRD. К grounding-excerpt.json обращайся
-        только если design-context не содержит нужной информации.
-Шаг 2: Создай три файла в <папка фичи>/:
+Шаг 1: Проектируй ПО sdd.md и design-context. К grounding-excerpt.json обращайся
+        только если design-context не содержит нужной информации. BRD — лишь справка.
+Шаг 2: Создай ДВА файла в <папка фичи>/ (sdd.md уже написан на фазе 02-sdd — НЕ трогай его):
   1. tech-design.md — по шаблону `<project>/.gigacode/skills/tech-design/references/design-template.md`
   2. task-plan.json — по шаблону `<project>/.gigacode/skills/tech-design/references/task-plan-schema.md`
-  3. sdd.md — по шаблону `<project>/.gigacode/skills/tech-design/references/sdd-template.md`
+     Каждая задача: непустой acceptance (Given-When-Then) + sdd_ref на раздел sdd.md.
 
 Gate (обязательно, перед завершением):
   python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py design <slug> --project-root <project>
-  Должен быть PASS. Сохраняет вердикт в judges/design-judge.json.
+  Должен быть PASS (check_taskplan + check_sdd-линковка). Сохраняет вердикт в judges/design-judge.json.
 
 Выходной JSON:
   {"step_id": "02-design", "status": "completed", "path": "...", "gates": {"design-judge": "PASS"}}
@@ -544,7 +607,7 @@ Gate (обязательно, перед завершением):
 )
 ```
 
-### 5.2 Получение результата
+#### 5b.2 Получение результата
 
 После возврата субагента:
 1. Прочитай результат (JSON с полем `step_id`, `path`, `gates`)
@@ -555,12 +618,13 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py design 
 3. Если gates fail — скажи пользователю, верни субагента на доработку.
 4. Если gates pass — покажи **Гейт 2** (см. ниже).
 
-### 5.3 Гейт 2 — утверждение дизайна
+#### 5b.3 Гейт 2 — утверждение дизайна
 
 Покажи резюме: затронутые модули, новые/изменяемые сущности, нужны ли
 миграции, число задач, главный риск. Спроси: «делаем так / правки?».
-- Правки дизайна → верни `tech-design` на доработку (BRD не трогаем).
-- Если на гейте всплыло **новое бизнес-требование** → откат к фазе 0.
+- Правки дизайна → верни `tech-design` на доработку (SDD и BRD не трогаем).
+- Если правка по сути меняет **спецификацию** (новый сценарий/контракт) → откат к §5a (SDD).
+- Если на гейте всплыло **новое бизнес-требование** → откат к фазе 0 (BRD).
 
 После «да»: добавь в манифест шаги `02-eval-plan` (Eval-Driven),
 `04-test-<taskId>` (RED, при `quality.tdd:true`),
@@ -587,12 +651,11 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py \
     --step-id 02-design --status completed \
     --artifacts '{
         "tech-design": "docs/feature-pipeline/<slug>/tech-design.md",
-        "task-plan": "docs/feature-pipeline/<slug>/task-plan.json",
-        "sdd": "docs/feature-pipeline/<slug>/sdd.md"
+        "task-plan": "docs/feature-pipeline/<slug>/task-plan.json"
     }'
 ```
 
-### 5.1 — Eval-Driven Development: генерация eval-plan (PDLC v3.5)
+### 5c. Eval-Driven Development: генерация eval-plan (PDLC v3.5)
 
 **Сразу после утверждения Гейта 2 и до манифеста:** сгенерируй `eval-plan.json`
 из `task-plan.json`. Eval'ы — детерминированные автоматические проверки, которые
@@ -629,6 +692,19 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/build_evals_from_des
 ```
 По умолчанию `eval_enabled: true`. Отключить можно установкой `eval_enabled: false`
 (например, для экспериментов или прототипов).
+
+### Опциональный гейт: трассируемость (`quality.traceability_check`)
+
+Если `quality.traceability_check: true` в `pipeline.json` (по умолчанию `false`) — сразу после
+генерации eval-plan и ДО закрытия `02-eval-plan` прогони детерминированную проверку матрицы
+«требование → SDD → задача → eval → тест»:
+```bash
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_traceability.py \
+    "<папка фичи>/task-plan.json"
+```
+- **exit 0** — цепочка замкнута, продолжай.
+- **exit 2** — есть задача без eval / битый `sdd_ref` / пустой acceptance → почини task-plan/eval-plan
+  и перезапусти. (`--strict` валит и на warnings.)
 
 ### Judge-gate: eval-judge (обязательно, перед закрытием `02-eval-plan`)
 
@@ -900,6 +976,25 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py coverag
 
 После возврата — закрой `05-tests` при pass. При fail — верни тестописателя на доработку (лимит 3).
 
+### 8.4 Опциональные детерминированные гейты verify (по флагам `pipeline.json`)
+
+Гоняй ПОСЛЕ тестов, до закрытия `05-tests`. Оба по умолчанию `false`; включаются в `pipeline.json`.
+
+- **Архитектура** (`quality.architecture_check: true`) — ArchUnit-lite гейт слоёв (package_root,
+  чистота домена, запрет entity→service / controller→repository) статически по изменённым `.java`:
+  ```bash
+  python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.py \
+      --root "<project>" --pipeline-config "<project>/ground/pipeline.json"
+  ```
+- **Тавтологичные тесты** (`quality.tautology_check: true`) — статический детектор пустых/
+  тавтологичных тестов (`assertTrue(true)`, пустое тело, нет ассертов/verify):
+  ```bash
+  python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_tautological_tests.py \
+      --root "<project>"
+  ```
+`exit 2` любого — blocking: почини нарушения и перезапусти (`--strict` ужесточает warnings).
+`exit 0` — продолжай к закрытию `05-tests`.
+
 ---
 
 ## 9. Фаза 5 — Document
@@ -924,11 +1019,16 @@ agent(
 ```bash
 python3 .gigacode/skills/system-analyst/scripts/enrich_grounding.py \
     --task-plan "<папка фичи>/task-plan.json" \
-    --system-analysis "docs/system-analysis" \
+    --project-root "<project>" \
     --feature "<slug>"
 ```
 
-Если `enrich_grounding.py` вернул non-zero — нужен полный рескан через `system-analyst` (см. фазу 1).
+`--system-analysis` и `--scan` НЕ передаём — скрипт сам резолвит их по `docs.*` из
+`ground/pipeline.json` (in-repo или separate-repo). Резолвленный `scan/` обязателен для
+пересборки полной выжимки и для встроенного coverage-gate; если его нет — сначала грундинг.
+
+Если `enrich_grounding.py` вернул non-zero (coverage не сошёлся) — нужен полный рескан через
+`system-analyst` (см. фазу 1).
 
 ### 9.3 Judge-gate spec
 
@@ -976,6 +1076,19 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py deliver
 
 **Гейт 4 — коммиты.** Покажи план коммитов (какая задача → какие файлы → сообщение) по
 всем задачам сразу. Спроси «коммитим?». Только после «да».
+
+**Перед Гейтом 5 — детерминированный план доставки (идемпотентность, защита от дублей PR).**
+Доставка необратима, а Bitbucket-PR не дедуплицируется: ре-ран после падения вслепую создаст дубль
+ветки/PR. ДО push/PR посчитай из git-веток + manifest, что уже сделано:
+```bash
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/delivery_plan.py \
+    "<папка фичи>/task-plan.json" \
+    --manifest "<project>/ground/statements/feature-pipeline/<slug>/manifest.json" \
+    --pipeline-config "<project>/ground/pipeline.json"
+```
+План даёт `create / resume / skip` на задачу: `skip` — `07-deliver-<id>` уже completed; `resume` —
+ветка есть, шаг не закрыт (не пересоздавай ветку — доведи push/PR, проверив существующий PR);
+`create` — с нуля. Действуй строго по плану.
 
 **Гейт 5 — push + stacked PR.** Покажи план веток и PR (для каждого: source→target,
 заголовок, тело со ссылкой на Jira). Спроси «пушим и создаём PR?». После «да» — push в

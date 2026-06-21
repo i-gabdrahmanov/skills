@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Feature Pipeline — экономия времени команды</title>
+<style>
+  :root{
+    --bg:#0b0f1a; --bg2:#111728; --card:#161d30; --line:#26304a;
+    --fg:#e6ebf5; --muted:#94a3b8; --accent:#6ea8fe; --accent2:#7ee0c1;
+    --warn:#ffcf6e; --bad:#ff7a8a; --good:#7ee0c1; --purp:#b794f6;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:radial-gradient(1200px 800px at 75% -10%,#1a2440 0,transparent 60%),
+               radial-gradient(900px 700px at 0% 110%,#15203a 0,transparent 55%),
+               var(--bg);
+    color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif;
+    overflow:hidden;
+  }
+  .deck{height:100vh;width:100vw;position:relative}
+  .slide{
+    position:absolute;inset:0;display:none;flex-direction:column;
+    padding:6vh 8vw;animation:fade .45s ease;justify-content:center;
+  }
+  .slide.active{display:flex}
+  @keyframes fade{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  h1{font-size:clamp(34px,5vw,62px);margin:0 0 8px;line-height:1.05;letter-spacing:-.02em}
+  h2{font-size:clamp(24px,3.4vw,40px);margin:0 0 22px;letter-spacing:-.01em}
+  h2 .num{color:var(--accent);font-variant-numeric:tabular-nums}
+  p.lead{font-size:clamp(16px,1.7vw,22px);color:var(--muted);max-width:62ch;line-height:1.5}
+  .kicker{font-family:var(--mono);font-size:13px;letter-spacing:.25em;text-transform:uppercase;
+    color:var(--accent);margin-bottom:18px}
+  .grid{display:grid;gap:16px}
+  .cols-2{grid-template-columns:1fr 1fr}
+  .cols-3{grid-template-columns:repeat(3,1fr)}
+  .cols-4{grid-template-columns:repeat(4,1fr)}
+  .card{background:linear-gradient(180deg,var(--card),#131a2b);border:1px solid var(--line);
+    border-radius:16px;padding:18px 20px}
+  .card h3{margin:0 0 8px;font-size:18px}
+  .card p{margin:0;color:var(--muted);font-size:14.5px;line-height:1.5}
+  .mono{font-family:var(--mono)}
+  code,.path{font-family:var(--mono);background:#0d1322;border:1px solid var(--line);
+    border-radius:6px;padding:1px 7px;font-size:.86em;color:var(--accent2)}
+  .pill{display:inline-block;font-family:var(--mono);font-size:12px;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line);background:#0d1322;color:var(--muted);margin:2px 4px 2px 0}
+  .flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+  .step{font-family:var(--mono);font-size:13px;padding:8px 12px;border-radius:10px;
+    background:#0e1626;border:1px solid var(--line);white-space:nowrap}
+  .step b{color:var(--accent)}
+  .arrow{color:var(--muted);font-size:18px}
+  .gate{border-color:#3a2f12;background:#1b1606;color:var(--warn)}
+  table{border-collapse:collapse;width:100%;font-size:14.5px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.06em}
+  td .mono{color:var(--accent2)}
+  ul.clean{margin:6px 0 0;padding:0;list-style:none}
+  ul.clean li{padding:7px 0 7px 26px;position:relative;color:var(--muted);font-size:15.5px;line-height:1.45}
+  ul.clean li::before{content:"";position:absolute;left:2px;top:14px;width:8px;height:8px;border-radius:2px;
+    background:var(--accent)}
+  ul.clean li b{color:var(--fg);font-weight:600}
+  .ok::before{background:var(--good)!important}
+  .tag-good{color:var(--good)} .tag-bad{color:var(--bad)} .tag-warn{color:var(--warn)}
+  .big{font-size:clamp(40px,7vw,90px);font-weight:800;letter-spacing:-.03em;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;
+    background-clip:text;color:transparent}
+  .sub{color:var(--muted);font-size:18px;margin-top:4px}
+  .center{align-items:center;text-align:center}
+  .footer{position:fixed;bottom:18px;left:0;right:0;display:flex;justify-content:space-between;
+    padding:0 26px;align-items:center;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .dots{display:flex;gap:7px}
+  .dot{width:8px;height:8px;border-radius:50%;background:#2a3551;cursor:pointer;transition:.2s}
+  .dot.active{background:var(--accent);transform:scale(1.35)}
+  .brand{display:flex;gap:9px;align-items:center}
+  .logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--accent2));
+    display:grid;place-items:center;color:#06121f;font-weight:800;font-size:15px}
+  .nav-hint{opacity:.7}
+  .metric{font-size:clamp(30px,4vw,52px);font-weight:800;color:var(--accent2);line-height:1}
+  .metric+span{color:var(--muted);font-size:14px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:center}
+  .badge{font-family:var(--mono);font-size:12px;border:1px solid var(--line);border-radius:8px;
+    padding:6px 10px;background:#0d1322}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;color:var(--muted);font-size:13px}
+  .legend span{display:inline-flex;gap:7px;align-items:center}
+  .sq{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .progress{position:fixed;top:0;left:0;height:3px;background:linear-gradient(90deg,var(--accent),var(--accent2));
+    transition:width .35s ease;z-index:50}
+  /* charts */
+  .bars{display:flex;flex-direction:column;gap:14px;margin-top:10px}
+  .bar-row{display:grid;grid-template-columns:170px 1fr;align-items:center;gap:14px}
+  .bar-label{font-size:14px;color:var(--muted)}
+  .bar-track{position:relative;height:34px}
+  .bar{position:absolute;top:0;height:14px;border-radius:7px;display:flex;align-items:center;
+    padding-left:8px;font-size:11.5px;font-family:var(--mono);color:#06121f;font-weight:700;
+    white-space:nowrap}
+  .bar.manual{top:0;background:linear-gradient(90deg,#ff7a8a,#ffb3bd)}
+  .bar.pipe{top:18px;background:linear-gradient(90deg,var(--accent2),#bff3e2)}
+  .donut{width:230px;height:230px;border-radius:50%;
+    background:conic-gradient(
+      var(--accent) 0 35%,
+      var(--warn) 35% 60%,
+      var(--purp) 60% 80%,
+      var(--bad) 80% 100%);
+    display:grid;place-items:center;position:relative;
+    box-shadow:0 0 0 1px var(--line) inset;}
+  .donut::after{content:"";width:130px;height:130px;border-radius:50%;
+    background:var(--bg2);box-shadow:0 0 0 1px var(--line) inset;}
+  .donut .hole{position:absolute;text-align:center}
+  .donut .hole b{font-size:30px;color:var(--fg);display:block;line-height:1}
+  .donut .hole span{font-size:11px;color:var(--muted)}
+  .lg{display:flex;flex-direction:column;gap:12px}
+  .lg .row{display:flex;align-items:center;gap:10px;font-size:15px}
+  .lg .row i{width:13px;height:13px;border-radius:4px;flex:0 0 auto}
+  .lg .row b{color:var(--fg)} .lg .row span{color:var(--muted);font-size:13.5px}
+  .funnel{display:flex;flex-direction:column;gap:8px;align-items:center;margin-top:6px}
+  .fstage{height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;
+    font-size:14px;color:#06121f;font-weight:700;font-family:var(--mono)}
+  svg text{font-family:var(--mono)}
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="deck" id="deck">
+
+  <!-- 1 -->
+  <section class="slide active center">
+    <div class="kicker">GigaCode · Forge</div>
+    <h1>Feature&nbsp;Pipeline</h1>
+    <p class="lead" style="margin:0 auto">Сколько времени команды экономит конвейер, который ведёт фичу
+      от идеи до pull request — и почему результату можно доверять.</p>
+    <div style="margin-top:26px">
+      <span class="pill">меньше рутины</span>
+      <span class="pill">меньше переделок</span>
+      <span class="pill">документация не отстаёт</span>
+      <span class="pill">качество встроено</span>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section class="slide">
+    <div class="kicker">Проблема</div>
+    <h2>Куда уходит время на каждой фиче</h2>
+    <div class="grid cols-3">
+      <div class="card"><h3 class="tag-bad">Рутина</h3><p>Оформление требований, заведение задач,
+        ветки/PR, отчёты — часы на каждую фичу, и так каждый раз.</p></div>
+      <div class="card"><h3 class="tag-bad">Погружение</h3><p>Разобраться в незнакомом сервисе —
+        дни. Новый человек тратит их снова и снова.</p></div>
+      <div class="card"><h3 class="tag-bad">Переделки</h3><p>Баги и пробелы всплывают на ревью
+        или после релиза — самое дорогое время.</p></div>
+    </div>
+    <p class="lead" style="margin-top:22px">Само написание кода — лишь часть. Большая доля времени —
+      вокруг него.</p>
+  </section>
+
+  <!-- 3 — DONUT -->
+  <section class="slide">
+    <div class="kicker">Структура усилий</div>
+    <h2>На написание кода уходит лишь ~⅓ времени</h2>
+    <div class="two">
+      <div class="center"><div class="donut"><div class="hole"><b>~65%</b><span>не кодинг</span></div></div></div>
+      <div class="lg">
+        <div class="row"><i style="background:var(--accent)"></i><b>35%</b>&nbsp;<span>— написание кода</span></div>
+        <div class="row"><i style="background:var(--warn)"></i><b>25%</b>&nbsp;<span>— рутина: требования, задачи, PR, отчёты</span></div>
+        <div class="row"><i style="background:var(--purp)"></i><b>20%</b>&nbsp;<span>— погружение в систему</span></div>
+        <div class="row"><i style="background:var(--bad)"></i><b>20%</b>&nbsp;<span>— переделки после ревью/релиза</span></div>
+        <p class="lead" style="margin-top:10px;font-size:14px">Конвейер бьёт именно по этим 65% —
+          рутина, погружение и переделки.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 — ROUTE -->
+  <section class="slide">
+    <div class="kicker">Маршрут</div>
+    <h2>Один управляемый проход</h2>
+    <div class="flow">
+      <span class="step">Идея / Jira</span><span class="arrow">→</span>
+      <span class="step gate">BRD ✓</span><span class="arrow">→</span>
+      <span class="step">Изучение системы</span><span class="arrow">→</span>
+      <span class="step gate">Дизайн ✓</span><span class="arrow">→</span>
+      <span class="step gate">Jira ✓</span><span class="arrow">→</span>
+      <span class="step">Код (тесты вперёд)</span><span class="arrow">→</span>
+      <span class="step">Покрытие</span><span class="arrow">→</span>
+      <span class="step">Документация</span><span class="arrow">→</span>
+      <span class="step gate">PR + отчёт ✓</span>
+    </div>
+    <div class="legend">
+      <span><i class="sq" style="background:var(--accent)"></i> конвейер делает сам</span>
+      <span><i class="sq" style="background:var(--warn)"></i> ✓ — точка, где человек говорит «да»</span>
+    </div>
+    <p class="lead" style="margin-top:18px">Автономно между гейтами. Необратимое (Jira, коммит, PR,
+      отчёт) — только с подтверждением человека.</p>
+  </section>
+
+  <!-- 5 — BARS -->
+  <section class="slide">
+    <div class="kicker">Эффект по этапам</div>
+    <h2><span class="num" style="color:var(--bad)">вручную</span> vs <span class="num" style="color:var(--accent2)">конвейер</span></h2>
+    <div class="bars">
+      <div class="bar-row"><div class="bar-label">Требования</div><div class="bar-track">
+        <div class="bar manual" style="width:80%">1–2 дня</div><div class="bar pipe" style="width:12%">1–2 ч</div></div></div>
+      <div class="bar-row"><div class="bar-label">Погружение</div><div class="bar-track">
+        <div class="bar manual" style="width:55%">0.5–1 день</div><div class="bar pipe" style="width:5%">мин</div></div></div>
+      <div class="bar-row"><div class="bar-label">Дизайн + задачи</div><div class="bar-track">
+        <div class="bar manual" style="width:55%">~1 день</div><div class="bar pipe" style="width:9%">~1 ч</div></div></div>
+      <div class="bar-row"><div class="bar-label">Тесты / покрытие</div><div class="bar-track">
+        <div class="bar manual" style="width:55%">0.5–1 день</div><div class="bar pipe" style="width:30%">ассист.</div></div></div>
+      <div class="bar-row"><div class="bar-label">Документация</div><div class="bar-track">
+        <div class="bar manual" style="width:28%">0.5 дня*</div><div class="bar pipe" style="width:5%">мин</div></div></div>
+      <div class="bar-row"><div class="bar-label">PR + отчёт</div><div class="bar-track">
+        <div class="bar manual" style="width:14%">1–2 ч</div><div class="bar pipe" style="width:5%">мин</div></div></div>
+    </div>
+    <div class="legend">
+      <span><i class="sq" style="background:#ff7a8a"></i> вручную</span>
+      <span><i class="sq" style="background:var(--accent2)"></i> с конвейером</span>
+      <span>* документацию вручную часто пропускают вовсе</span>
+    </div>
+  </section>
+
+  <!-- 6 — AREA: cumulative savings -->
+  <section class="slide">
+    <div class="kicker">Накопленный эффект</div>
+    <h2>Экономия растёт с каждой фичей</h2>
+    <svg viewBox="0 0 780 300" width="100%" style="max-height:52vh">
+      <defs>
+        <linearGradient id="area" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#7ee0c1" stop-opacity="0.55"/>
+          <stop offset="100%" stop-color="#7ee0c1" stop-opacity="0.03"/>
+        </linearGradient>
+      </defs>
+      <!-- grid -->
+      <g stroke="#26304a" stroke-width="1">
+        <line x1="60" y1="30" x2="60" y2="250"/>
+        <line x1="60" y1="250" x2="730" y2="250"/>
+        <line x1="60" y1="140" x2="730" y2="140" stroke-dasharray="4 6"/>
+      </g>
+      <g fill="#94a3b8" font-size="11">
+        <text x="20" y="254">0</text>
+        <text x="14" y="144">~12 дн</text>
+        <text x="14" y="34">~25 дн</text>
+        <text x="300" y="285">количество фич →</text>
+      </g>
+      <!-- area + line -->
+      <polygon fill="url(#area)" points="60,228 133,206 207,184 280,162 353,140 427,118 500,96 573,74 647,52 720,30 720,250 60,250"/>
+      <polyline fill="none" stroke="#7ee0c1" stroke-width="3"
+        points="60,228 133,206 207,184 280,162 353,140 427,118 500,96 573,74 647,52 720,30"/>
+      <g fill="#7ee0c1">
+        <circle cx="60" cy="228" r="4"/><circle cx="207" cy="184" r="4"/>
+        <circle cx="353" cy="140" r="4"/><circle cx="500" cy="96" r="4"/>
+        <circle cx="720" cy="30" r="4"/>
+      </g>
+      <g fill="#94a3b8" font-size="11" text-anchor="middle">
+        <text x="60" y="268">1</text><text x="207" y="268">3</text>
+        <text x="353" y="268">5</text><text x="500" y="268">7</text><text x="720" y="268">10</text>
+      </g>
+    </svg>
+    <p class="lead" style="margin-top:6px;font-size:14px">При ~2.5 сэкономленных дня на фичу — около
+      <b style="color:var(--accent2)">25 человеко-дней на каждые 10 фич</b>. Оценка иллюстративная.</p>
+  </section>
+
+  <!-- 7 — METRICS -->
+  <section class="slide center">
+    <div class="kicker">Главный сдвиг</div>
+    <h2>С дней — на часы по рутинным этапам</h2>
+    <div class="grid cols-4" style="margin-top:10px;width:100%">
+      <div class="card center"><div class="metric">~1 раз</div><span>карта системы собирается, дальше переиспользуется</span></div>
+      <div class="card center"><div class="metric">100%</div><span>фич с обновлённой документацией</span></div>
+      <div class="card center"><div class="metric">≤ ревью</div><span>проблемы ловятся до ревью, а не после релиза</span></div>
+      <div class="card center"><div class="metric">~2.5 дн</div><span>экономия на типовую фичу</span></div>
+    </div>
+    <p class="lead" style="margin:24px auto 0">Команда тратит время на решения и ревью, а не на
+      оформление, погружение и догон документации.</p>
+  </section>
+
+  <!-- 8 — WINS -->
+  <section class="slide">
+    <div class="kicker">Три крупнейших выигрыша</div>
+    <h2>Откуда берётся экономия</h2>
+    <div class="grid cols-3">
+      <div class="card"><h3 class="tag-good">Онбординг</h3><p>Карта сервиса (модули, данные,
+        интеграции) собирается один раз и переиспользуется. Новый разработчик не тратит дни «что тут вообще происходит».</p></div>
+      <div class="card"><h3 class="tag-good">Документация</h3><p>Спецификация обновляется автоматически
+        на каждой фиче — а не «когда-нибудь потом» (то есть никогда).</p></div>
+      <div class="card"><h3 class="tag-good">Меньше переделок</h3><p>Тесты вперёд + автоматические
+        проверки качества ловят проблемы до ревью. Самое дорогое время — переделки после релиза — сокращается.</p></div>
+    </div>
+  </section>
+
+  <!-- 9 — FUNNEL: quality gates -->
+  <section class="slide">
+    <div class="kicker">Доверие</div>
+    <h2>Качество проходит через ступени проверок</h2>
+    <div class="two">
+      <div class="funnel">
+        <div class="fstage" style="width:100%;background:#6ea8fe">Требования на языке бизнеса</div>
+        <div class="fstage" style="width:88%;background:#7bb0f3">Дизайн утверждён</div>
+        <div class="fstage" style="width:76%;background:#88c4e8">Тесты падают до кода (TDD)</div>
+        <div class="fstage" style="width:64%;background:#8ad7d2">Код зеленит тесты</div>
+        <div class="fstage" style="width:52%;background:#7ee0c1">Покрытие достигнуто</div>
+        <div class="fstage" style="width:40%;background:#9bead2">Готово к доставке</div>
+      </div>
+      <div>
+        <ul class="clean">
+          <li class="ok"><b>Судья на каждой ступени.</b> Шаг не закрывается, пока проверка не PASS.</li>
+          <li class="ok"><b>Не прошёл — до 3 попыток доработки</b>, потом стоп и вопрос человеку, а не «проталкивание».</li>
+          <li class="ok"><b>Устойчивость к сбоям.</b> Прогресс сохраняется по шагам — после обрыва
+            продолжаем с места, а не с нуля.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 — GATES -->
+  <section class="slide">
+    <div class="kicker">Контроль</div>
+    <h2>6 точек, где решает человек</h2>
+    <div class="grid cols-3">
+      <div class="card"><h3>Гейт 1</h3><p>Утвердить требования + выбрать критичность фичи.</p></div>
+      <div class="card"><h3>Гейт 2</h3><p>Утвердить тех-дизайн и объём.</p></div>
+      <div class="card"><h3>Гейт 3</h3><p>Создать задачи в Jira.</p></div>
+      <div class="card"><h3>Гейт 4</h3><p>Коммит кода.</p></div>
+      <div class="card"><h3>Гейт 5</h3><p>Публикация PR.</p></div>
+      <div class="card"><h3>Гейт 6</h3><p>Отчёт в Jira.</p></div>
+    </div>
+    <p class="lead" style="margin-top:18px">Чем выше критичность (платежи, перс. данные, инфраструктура)
+      — тем строже конвейер требует подтверждений и доказательств.</p>
+  </section>
+
+  <!-- 11 — SUMMARY -->
+  <section class="slide center">
+    <div class="kicker">Резюме</div>
+    <h1 class="big">Рутину — конвейеру.<br/>Решения — людям.</h1>
+    <p class="lead" style="margin:18px auto 0">Один проход — одна фича. От идеи до проверенного PR,
+      с понятными точками подтверждения и встроенным качеством.</p>
+    <div style="margin-top:24px">
+      <span class="pill">pipeline-business.md — обзор</span>
+      <span class="pill">pipeline-technical.md — детали</span>
+      <span class="pill">pipeline-technical-presentation.html — deck для инженеров</span>
+    </div>
+  </section>
+
+</div>
+
+<div class="footer">
+  <div class="brand"><div class="logo">F</div><span>Feature Pipeline · экономия времени</span></div>
+  <div class="dots" id="dots"></div>
+  <div class="nav-hint">← → · пробел</div>
+</div>
+
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  const dotsWrap=document.getElementById('dots');
+  const progress=document.getElementById('progress');
+  let i=0;
+  slides.forEach((_,k)=>{const d=document.createElement('div');d.className='dot'+(k===0?' active':'');
+    d.onclick=()=>go(k);dotsWrap.appendChild(d);});
+  const dots=[...dotsWrap.children];
+  function go(n){i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach((s,k)=>s.classList.toggle('active',k===i));
+    dots.forEach((d,k)=>d.classList.toggle('active',k===i));
+    progress.style.width=((i+1)/slides.length*100)+'%';}
+  go(0);
+  document.addEventListener('keydown',e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){e.preventDefault();go(i+1);}
+    if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();go(i-1);}
+    if(e.key==='Home')go(0); if(e.key==='End')go(slides.length-1);
+  });
+</script>
+</body>
+</html>

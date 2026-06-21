@@ -16,13 +16,24 @@ import sys
 from pathlib import Path
 
 
+def _system_analysis_dir(root: Path) -> Path:
+    """Каталог system-analysis по конфигу docs (in-repo/separate-repo); фоллбэк docs/system-analysis."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "feature-pipeline" / "scripts"))
+        import skill_paths  # type: ignore
+        return skill_paths.system_analysis_dir(root)
+    except Exception:
+        return Path(root) / "docs" / "system-analysis"
+
+
 def check_grounding(project_root: str) -> dict:
     root = Path(project_root)
+    sa = _system_analysis_dir(root)
 
     # 1. Проверка grounding-excerpt.json (полный обзор с выжимкой)
     excerpt_paths = [
-        root / "docs" / "system-analysis" / "grounding-excerpt.json",
-        root / "docs" / "system-analysis" / "grounding" / "grounding-excerpt.json",
+        sa / "grounding-excerpt.json",
+        sa / "grounding" / "grounding-excerpt.json",
     ]
     for p in excerpt_paths:
         if p.exists():
@@ -40,7 +51,7 @@ def check_grounding(project_root: str) -> dict:
                 continue
 
     # 2. Проверка README.md (краткий обзор)
-    readme_path = root / "docs" / "system-analysis" / "README.md"
+    readme_path = sa / "README.md"
     if readme_path.exists():
         return {
             "status": "found",
@@ -52,7 +63,7 @@ def check_grounding(project_root: str) -> dict:
         }
 
     # 3. Проверка scan-директории
-    scan_dir = root / "docs" / "system-analysis" / "scan"
+    scan_dir = sa / "scan"
     if scan_dir.is_dir() and any(scan_dir.iterdir()):
         return {
             "status": "found",

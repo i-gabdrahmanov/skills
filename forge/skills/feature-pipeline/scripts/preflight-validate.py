@@ -172,11 +172,8 @@ def _check_prev_step_judges(manifest: dict, project_root: str, feature: str,
 
 def check_phase_subagent(manifest: dict, step_id: str) -> bool:
     """Проверяет, что фазы Design/Build/Verify/Document делались через субагента."""
-    phases_require_subagent = {"02-design", "04-test", "04-build", "05-tests", "06-spec"}
-
-    # Определяем, относится ли шаг к фазе, требующей субагента
-    matches = any(step_id.startswith(prefix) for prefix in phases_require_subagent)
-    if not matches:
+    # Соглашение «какие фазы требуют субагента» — единое, из pipeline_phases.
+    if not pp.requires_subagent(step_id):
         # Шаг не требует субагента (00-brd, 01-grounding, 03-jira, 07-deliver) — пропускаем
         return True
 
@@ -244,24 +241,32 @@ def _safe_read_json(path: str) -> dict | None:
     return None
 
 
-def _check_gate_phase(project_root: str, step_id: str, feature: str = "pipeline") -> bool:
-    """Жёсткая блокировка: step-id должен соответствовать current_phase в gate.json.
+def _check_gate_phase(project_root: str, step_id: str, feature: str = "pipeline",
+                      manifest: dict | None = None) -> bool:
+    """Жёсткая блокировка: step-id должен соответствовать current_phase.
+
+    Решение считаем из ЖИВОГО manifest (источник истины), а не из персистентного gate.json:
+    тот — лишь кэш и мог устареть, если sync был пропущен/упал (P1-4). Если manifest не передан
+    (нет данных) — мягкий fallback на gate.json с диска.
 
     Правила:
     - Точное совпадение step_id или его фазы с current_phase — разрешено.
     - Префиксное совпадение (например, "04-test-T1" в фазе "04-tdd") — разрешено.
-    - Если current_phase пустая (все фазы завершены) — БЛОКИРУЕМ всё.
+    - Если current_phase пустая (все фазы завершены) — БЛОКИРУЕМ всё (кроме 07-report).
     - Повторный проход той же фазы (она уже completed) — разрешаем, но
       ТОЛЬКО если шаг относится к этой же фазе (не байпас через неё).
     - Во всех остальных случаях — БЛОКИРУЕМ (фаза пропущена).
     """
-    gate_path = str(pp.gate_path(Path(project_root), feature))
-    if not os.path.exists(gate_path):
-        return True
-
-    gate = _safe_read_json(gate_path)
-    if gate is None:
-        return True
+    if manifest is not None:
+        decision = pp.live_phase_decision(manifest)
+        gate = {"current_phase": decision["current_phase"], "phases": decision["phases"]}
+    else:
+        gate_path = str(pp.gate_path(Path(project_root), feature))
+        if not os.path.exists(gate_path):
+            return True
+        gate = _safe_read_json(gate_path)
+        if gate is None:
+            return True
 
     current_phase = gate.get("current_phase", "")
     expected_phase = _guess_phase(step_id)
@@ -348,8 +353,8 @@ def main():
             )
             sys.exit(1)
 
-    # Жёсткая блокировка: проверка current_phase
-    if not _check_gate_phase(args.project, args.step_id, args.feature):
+    # Жёсткая блокировка: проверка current_phase (решение из живого manifest, не с диска)
+    if not _check_gate_phase(args.project, args.step_id, args.feature, manifest=manifest):
         sys.exit(1)
 
     # Проверка судей предыдущего шага

@@ -250,7 +250,7 @@ prompt:
 
 ```bash
 python3 <project>/.gigacode/skills/system-analyst/scripts/scan_all.py \
-    -o "<project>/ground/statements/system-analysis/scan"
+    -o "<docs_path>/system-analysis/scan"
 # несколько микросервис-репо: перечисли корни через пробел
 ```
 
@@ -423,7 +423,7 @@ actuator-конфиг, env-переменные (из `${...}` плейсхол�
 
 ```bash
 python3 <project>/.gigacode/skills/system-analyst/scripts/verify_coverage.py \
-    --scan "<project>/ground/statements/system-analysis/scan" \
+    --scan "<docs_path>/system-analysis/scan" \
     --reported-counts '{"entities":<N в domain.md>,"endpoints":<N в api.md>,"async":<N consumer в async.md>}'
 ```
 

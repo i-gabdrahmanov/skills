@@ -72,6 +72,7 @@ class GoldenStateCycle(unittest.TestCase):
         jdir.mkdir(parents=True, exist_ok=True)
         for name in JUDGE_VERDICTS:
             (jdir / f"{name}.json").write_text(json.dumps({
+                "produced_by": "run_judge",
                 "judge": name, "passed": True, "verdict": "PASS",
                 "blocking_issues": [],
             }))
@@ -94,6 +95,8 @@ class GoldenStateCycle(unittest.TestCase):
         for step_id in UPDATE_ORDER:
             r = _run([UPDATE, "--project", self.proj, "--skill", "feature-pipeline",
                       "--feature", SLUG, "--step-id", step_id, "--status", "completed",
+                      # как state-recorder на SubagentStop — иначе subagent-фазы блокируются (C3)
+                      "--closed-by", "subagent",
                       "--output-json", json.dumps({"step_id": step_id})], self.proj)
             self.assertEqual(r.returncode, 0,
                              f"шаг {step_id} не закрылся: {r.stderr or r.stdout}")

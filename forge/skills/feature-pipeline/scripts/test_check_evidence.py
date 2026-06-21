@@ -158,11 +158,47 @@ class TestMain(unittest.TestCase):
         self.assertEqual(rc, 2)
 
     def test_completeness_not_numeric(self):
-        """completeness не число → fail (float() бросит исключение, _load вернёт как есть, а float(bundle.get(...)) упадёт)."""
+        """completeness не число → fail (check_evidence ловит исключение и валит ворота, не падает)."""
         evidence_dir = self.root / "ground" / "evidence"
         _write_json(evidence_dir / "T1.json", {"completeness": "high", "task": "T1"})
-        with self.assertRaises(ValueError):
-            self._run_main()
+        rc = self._run_main()
+        self.assertEqual(rc, 2)
+
+    # --- P0-3: degraded-гейты — «не подтверждён» ≠ «пройден» ---
+
+    def test_degraded_gate_blocks_by_default(self):
+        """Бандл с degraded_gates → fail по умолчанию (fail-closed), даже если completeness ок."""
+        evidence_dir = self.root / "ground" / "evidence"
+        _write_json(evidence_dir / "T1.json",
+                    {"completeness": 1.0, "task": "T1", "degraded_gates": ["coverage"]})
+        rc = self._run_main()
+        self.assertEqual(rc, 2)
+
+    def test_degraded_gate_warn_policy_passes(self):
+        """--degraded-policy warn → degraded не валит ворота (только предупреждение)."""
+        evidence_dir = self.root / "ground" / "evidence"
+        _write_json(evidence_dir / "T1.json",
+                    {"completeness": 1.0, "task": "T1", "degraded_gates": ["coverage"]})
+        rc = self._run_main(["--degraded-policy", "warn"])
+        self.assertEqual(rc, 0)
+
+    def test_degraded_policy_from_pipeline_config(self):
+        """evidence.degraded_policy=warn из pipeline.json подхватывается."""
+        _write_json(self.pipeline_cfg_path,
+                    {"evidence": {"threshold": 0.95, "degraded_policy": "warn"}})
+        evidence_dir = self.root / "ground" / "evidence"
+        _write_json(evidence_dir / "T1.json",
+                    {"completeness": 1.0, "task": "T1", "degraded_gates": ["eval"]})
+        rc = self._run_main()
+        self.assertEqual(rc, 0)
+
+    def test_no_degraded_gates_passes(self):
+        """Пустой/отсутствующий degraded_gates → ворота не трогаются."""
+        evidence_dir = self.root / "ground" / "evidence"
+        _write_json(evidence_dir / "T1.json",
+                    {"completeness": 1.0, "task": "T1", "degraded_gates": []})
+        rc = self._run_main()
+        self.assertEqual(rc, 0)
 
 
 class TestMainNoPipelineConfig(unittest.TestCase):

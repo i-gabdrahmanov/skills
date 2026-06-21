@@ -22,7 +22,12 @@
     "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}",
     "\\b(?:\\d[ -]?){13,16}\\b",
     "\\b\\+?\\d{1,3}[ -]?\\(?\\d{2,4}\\)?[ -]?\\d{3}[ -]?\\d{2}[ -]?\\d{2}\\b",
-    "(?i)(api[_-]?key|secret|password|token|bearer)\\s*[=:]\\s*\\S{8,}"
+    "(?i)(api[_-]?key|secret|password|passwd|pwd|token|bearer|access[_-]?key|client[_-]?secret|private[_-]?key)\\s*[=:]\\s*\\S{6,}",
+    "\\bAKIA[0-9A-Z]{16}\\b",
+    "(?i)aws_secret_access_key\\s*[=:]\\s*\\S{8,}",
+    "-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----",
+    "\\bgh[pousr]_[A-Za-z0-9]{20,}\\b",
+    "\\bxox[baprs]-[A-Za-z0-9-]{10,}\\b"
   ],
 
   "injection_markers": [
@@ -59,17 +64,17 @@
   },
 
   "level_requirements": {
-    "_comment": "Что должно быть выполнено, чтобы действие уровня прошло. step = completed-шаг manifest; approval = файл ground/approvals/<key>.json; evidence = ground/evidence/* >= порога.",
+    "_comment": "Что должно быть выполнено, чтобы действие уровня прошло. step = completed-шаг manifest; approval = файл ground/approvals/<key>.json; evidence = ground/evidence/* >= порога. ВАЖНО: evidence требуется ТОЛЬКО на доставке (R4/R5) — на R2/R3 (запись кода/чувствительных путей) его нет, т.к. бандл собирается ПОСЛЕ билда (иначе дедлок medium/high критичности). Доставочный evidence дополнительно форсит evidence-enforcer на push/PR/report. SoD форсит sod-enforcer (не ключи политики); audit — лог-агент.",
     "R0": {"mode": "auto"},
     "R1": {"mode": "auto_log"},
-    "R2": {"mode": "require", "steps": ["02-design"], "commit_needs": ["05-tests"], "push_needs": ["05-tests", "06-spec"], "evidence": true},
-    "R3": {"mode": "require", "steps": ["02-design"], "approval": "security-review", "evidence": true},
-    "R4": {"mode": "require", "approval": "human-approval", "separation_of_duties": true, "evidence": true},
-    "R5": {"mode": "require", "approval": "change-advisory", "evidence": true, "audit": true}
+    "R2": {"mode": "require", "steps": ["02-design"], "commit_needs": ["05-tests"], "push_needs": ["05-tests", "06-spec"]},
+    "R3": {"mode": "require", "steps": ["02-design"], "approval": "security-review"},
+    "R4": {"mode": "require", "approval": "human-approval", "evidence": true},
+    "R5": {"mode": "require", "approval": "change-advisory", "evidence": true}
   },
 
   "agent_caps": {
-    "_comment": "Separation of duties по agent_type (regex)→max-risk. Активно через sod-enforcer.py (PreToolUse хук), который определяет роль эвристически по prompt/tool_input. Если роль определена — применяется max-risk; если нет — проходим без ограничений. agent_caps НЕ используется напрямую risk_ladder'ом (все субагенты — general-purpose), sod-enforcer читает ROLE_POLICY из своего кода.",
+    "_comment": "Separation of duties по agent_type (regex)→max-risk — BEST-EFFORT: применяется в gate-guard ТОЛЬКО когда рантайм передаёт agent_type (для general-purpose субагентов он пуст → слой неактивен). ОСНОВНОЙ SoD форсит sod-enforcer.py (PreToolUse), определяя роль по id АКТИВНОГО шага манифеста (STEP_ROLE→ROLE_POLICY), а не по agent_type/prompt. Гарантию «фаза закрыта субагентом» держит update._check_subagent_origin.",
     "(?i)test|coverage|verify": "R1",
     "(?i)spec|uml|document": "R1",
     "(?i)explore|grounder|analyst": "R1",

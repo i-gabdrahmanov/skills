@@ -3,6 +3,7 @@
   "_comment": "ЕДИНЫЙ источник истины для required_judges и метаданных судей. Читается init.py и patch_manifest_judges.py (через judges_registry.py), чтобы маска не дублировалась. Имена судей ДОЛЖНЫ совпадать с вердиктами run_judge.py (<phase>-judge.json) и фазами PHASE_MAP.",
   "step_masks": {
     "00-brd": ["brd-judge"],
+    "02-sdd": ["sdd-judge"],
     "02-design": ["design-judge"],
     "02-eval-plan": ["eval-judge"],
     "04-test-*": ["red-judge"],
@@ -13,7 +14,8 @@
   },
   "judges": {
     "brd-judge":      {"phase": "brd",      "kind": "hybrid",        "contract": "subagent-prompts.md §7.6"},
-    "design-judge":   {"phase": "design",   "kind": "deterministic", "contract": "check_taskplan.py + check_sdd.py"},
+    "sdd-judge":      {"phase": "sdd",      "kind": "deterministic", "contract": "sdd/scripts/check_sdd_doc.py"},
+    "design-judge":   {"phase": "design",   "kind": "deterministic", "contract": "check_taskplan.py + check_sdd.py (link)"},
     "eval-judge":     {"phase": "eval",     "kind": "hybrid",        "contract": "subagent-prompts.md §7.1"},
     "red-judge":      {"phase": "red",      "kind": "pass-through",  "contract": "subagent-prompts.md §7.2"},
     "build-judge":    {"phase": "build",    "kind": "hybrid",        "contract": "subagent-prompts.md §7.3"},

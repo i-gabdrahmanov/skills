@@ -40,12 +40,23 @@ def _run_cmd(cmd: str, cwd: str) -> tuple[int, str]:
         return 1, str(e)
 
 
-def _resolve_eval_plan_path(project_root: str, feature: str, eval_plan_arg: str | None, feature_docs_dir: str = "docs/feature-pipeline") -> Path:
+def _feature_docs_dir(project_root: str, override: str | None) -> Path:
+    """Каталог документов фич: override → как есть; иначе резолв по docs-конфигу."""
+    if override:
+        return Path(project_root) / override
+    try:
+        import skill_paths  # type: ignore
+        return skill_paths.feature_docs_dir(Path(project_root))
+    except Exception:
+        return Path(project_root) / "docs" / "feature-pipeline"
+
+
+def _resolve_eval_plan_path(project_root: str, feature: str, eval_plan_arg: str | None, feature_docs_dir: str | None = None) -> Path:
     """Определяет путь к eval-plan.json."""
     if eval_plan_arg:
         return Path(eval_plan_arg)
-    # Стандартный путь
-    p = Path(project_root) / feature_docs_dir / feature / "eval-plan.json"
+    # Стандартный путь (каталог фич резолвится по docs-конфигу)
+    p = _feature_docs_dir(project_root, feature_docs_dir) / feature / "eval-plan.json"
     if p.exists():
         return p
     # Fallback: рядом с task-plan
@@ -65,7 +76,7 @@ def main() -> int:
     ap.add_argument("--feature", default="pipeline", help="feature slug")
     ap.add_argument("--task", required=True, help="task id (e.g. T1)")
     ap.add_argument("--skill", default="feature-pipeline", help="Имя скилла для резолвинга ground/statements/<skill>/")
-    ap.add_argument("--feature-docs-dir", default="docs/feature-pipeline", help="Путь к doc-папке фичи (от корня проекта)")
+    ap.add_argument("--feature-docs-dir", default=None, help="Путь к doc-папке фичи (от корня проекта; по умолчанию резолв по docs-конфигу)")
     ap.add_argument("--eval-plan", help="path to eval-plan.json (auto-detected if omitted)")
     ap.add_argument("--build-cmd", help="override compile command")
     ap.add_argument("--test-cmd", help="override test command")

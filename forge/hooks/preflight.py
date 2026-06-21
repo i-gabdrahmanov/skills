@@ -39,9 +39,45 @@ def _find_foreign_hook_paths(settings: dict, project_root: str) -> list[str]:
     return found
 
 
+def _referenced_hook_basenames(hooks_block: dict) -> set:
+    """Собирает basenames .py-хуков, реально перечисленных в command-полях блока hooks.
+
+    Это и есть «wiring»: рантайм исполняет только то, что здесь. Наличие файла на диске
+    НЕ означает, что хук подключён (кейс eval-guard: файл был, в settings — нет)."""
+    names: set = set()
+
+    def _walk(node):
+        if isinstance(node, str):
+            m = re.search(r"([\w.-]+\.py)\b", node)
+            if m:
+                names.add(m.group(1))
+        elif isinstance(node, dict):
+            for v in node.values():
+                _walk(v)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    _walk(hooks_block)
+    return names
+
+
+# Минимальная версия Python (копия doctor.MIN_PYTHON; пинится test_doctor). Скрипты/хуки
+# используют синтаксис 3.10+ (PEP604 `X | None`, match); на 3.9 phase_sync падал.
+MIN_PYTHON = (3, 10)
+
+
 def preflight(project_root: str) -> dict:
     errors = []
     warnings = []
+
+    # 0. Версия Python (раньше всего — иначе doctor/скрипты упадут с невнятным импорт-эррором)
+    if sys.version_info[:2] < MIN_PYTHON:
+        have = f"{sys.version_info.major}.{sys.version_info.minor}"
+        warnings.append(
+            f"Python {have}: пайплайн требует {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ "
+            f"(PEP604/match). Часть скриптов/хуков может падать. Обнови интерпретатор."
+        )
 
     # 1. pipeline.json
     pipeline_json = Path(project_root) / "ground" / "pipeline.json"
@@ -70,7 +106,9 @@ def preflight(project_root: str) -> dict:
         except json.JSONDecodeError as e:
             errors.append(f"settings.hooks.json parse error: {e}")
 
-    # 3. Проверка наличия ключевых хуков
+    # 3. Проверка ключевых хуков: ФАЙЛ на диске + РЕАЛЬНОЕ подключение (wiring).
+    #    Раньше проверялось только наличие файла → eval-guard лежал на диске, но не был
+    #    в settings.json, и preflight давал зелёный свет при выключенном enforcement.
     essential_hooks = [
         "gate-guard.py",
         "phase-gate.py",
@@ -82,6 +120,39 @@ def preflight(project_root: str) -> dict:
     for hook in essential_hooks:
         if not (hooks_dir / hook).exists():
             errors.append(f"hook not found: .gigacode/hooks/{hook}")
+
+    # Источник истины wiring — задеплоенный settings.json (его читает рантайм); если его ещё
+    # нет — эталон settings.hooks.json (он будет развёрнут).
+    settings_json_p = Path(project_root) / ".gigacode" / "settings.json"
+    hooks_template_p = Path(project_root) / ".gigacode" / "hooks" / "settings.hooks.json"
+    wiring_src, wiring_block = None, None
+    for cand in (settings_json_p, hooks_template_p):
+        if cand.exists():
+            try:
+                wiring_block = json.loads(cand.read_text()).get("hooks", {})
+                wiring_src = cand.name
+                break
+            except (json.JSONDecodeError, OSError):
+                continue
+    if wiring_block is not None:
+        referenced = _referenced_hook_basenames(wiring_block)
+        for hook in essential_hooks:
+            if hook not in referenced:
+                errors.append(
+                    f"essential hook НЕ подключён в {wiring_src}: {hook} "
+                    f"(файл есть, но рантайм его не вызывает → enforcement off для этого хука)"
+                )
+
+    # 3b. risk-policy.json должен существовать и парситься — иначе risk_ladder тихо
+    #     деградирует до R1-auto («allow all»). Fail-closed на уровне готовности.
+    risk_policy_p = Path(project_root) / ".gigacode" / "hooks" / "risk-policy.json"
+    if not risk_policy_p.exists():
+        errors.append(".gigacode/hooks/risk-policy.json not found — risk ladder выключится (fail-open)")
+    else:
+        try:
+            json.loads(risk_policy_p.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            errors.append(f"risk-policy.json parse error: {e} — risk ladder деградирует до allow-all")
 
     # 4. Проверка settings.json (потребляется рантаймом)
     settings_json = Path(project_root) / ".gigacode" / "settings.json"
@@ -157,15 +228,21 @@ def preflight(project_root: str) -> dict:
                 [sys.executable, str(doctor_script), "--project", project_root, "--json"],
                 capture_output=True, text=True, timeout=20,
             )
+            try:
+                detail = json.loads(res.stdout) if res.stdout.strip() else {}
+            except json.JSONDecodeError:
+                detail = {}
             if res.returncode == 1:
-                try:
-                    detail = json.loads(res.stdout)
-                    for prob in detail.get("problems", []):
+                if detail.get("problems"):
+                    for prob in detail["problems"]:
                         warnings.append(f"doctor: {prob}")
-                except json.JSONDecodeError:
+                else:
                     warnings.append("doctor: обнаружены проблемы целостности (см. doctor.py)")
             elif res.returncode == 2:
                 warnings.append(f"doctor: не выполнен ({res.stderr.strip()[:200]})")
+            # средовые/конфиг-советы doctor (Python/git/config) — даже при exit 0
+            for w in detail.get("warnings", []):
+                warnings.append(f"doctor: {w}")
         except Exception as e:
             warnings.append(f"doctor.py не выполнен: {e}")
 

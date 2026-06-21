@@ -8,18 +8,20 @@
 
 ## Что это
 
-`~/.gigacode/` — source-of-truth e2e-обвязки для реализации фич в Java/Spring через feature pipeline.
-Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; skills = guidance**. Деплой —
-`~/.gigacode/deploy.sh` в конфиг-дом рантайма.
+Репозиторий Forge — source-of-truth e2e-обвязки для реализации фич в Java/Spring через feature
+pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; skills = guidance**.
+Модель **проектная**: разворачивается в `<project>/.gigacode/` (см. [docs/deployment.md](docs/deployment.md)).
 
 - `hooks/` — control-plane (см. `hooks/DEPLOY.md` — полный ростер, порядок, диагностика).
 - `skills/` — пайплайн-скиллы (оркестратор `feature-pipeline` + фазовые).
-- `deploy.sh` — развёртывание одной командой (co-location hooks+skills, мерж hooks-блока).
+- `deploy.sh` — установщик: разворачивает Forge в указанный проект одной командой
+  (co-location hooks+skills + доки, мерж hooks-блока с бэкапом).
+- `deploy-local.sh` — in-project фиксер путей в `settings.json` (живёт в `<project>/.gigacode/`).
 - `hooks/preflight.py` — диагностика готовности ДО прогона.
 
 ## Архитектура (фазы feature-pipeline)
 
-`идея/Jira → BRD → grounding → tech-design → Jira → build → verify → document → deliver`.
+`идея/Jira → BRD → grounding → SDD → tech-design → Jira → build → verify → document → deliver`.
 Гейты: точки подтверждения пользователем + детерминированные execution-gate'ы (Python) на каждую фазу.
 Состояние — `pipeline-state` (manifest), резюмируемо. Подробности — `skills/feature-pipeline/SKILL.md`.
 
@@ -31,11 +33,13 @@
 | Скрипт | Событие | Назначение | Блок |
 |---|---|---|---|
 | `gate-guard.py` (+`risk_ladder.py`,`risk-policy.json`) | PreToolUse Bash/Write/Edit | permission gateway, risk ladder R0–R5, **deny-first**; форсит выбор критичности | exit 2 |
-| `tdd-guard.py` | PreToolUse Write/Edit | форсит TDD (блок `src/main` пока RED pending) + тест-стратегию (блок `@DataJpaTest`/`@SpringBootTest` при `test_layer=service-unit`) | exit 2 |
+| `tdd-guard.py` | PreToolUse Write/Edit | форсит TDD per-task (блок `src/main` пока RED-тест задачи `04-test-<id>` не completed) + тест-стратегию (блок `@DataJpaTest`/`@SpringBootTest` при `test_layer=service-unit`) | exit 2 |
+| `eval-guard.py` | PreToolUse Write/Edit | форсит EDD: блок `src/main` пока eval'ы задачи не passed в кэше `evals.json` (read-only; прогон — `run_pending_evals.py`) | exit 2 |
+| `sod-enforcer.py` | PreToolUse Write/Edit/Bash | separation of duties: роль из активного шага манифеста (test не пишет src/main; design/spec не коммитят/пушат/билдят) | exit 2 |
 | `destructive-blocker.py` | PreToolUse `^Bash$` | чёрный список (`rm -rf /`, force-push, DROP…) | exit 2 |
 | `pii-boundary.py` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
 | `evidence-enforcer.py` | PreToolUse `^Bash$` | блок доставки без полного evidence bundle | exit 2 |
-| `cost-breaker.py` | Pre/Post/Stop/SubagentStop/UserPromptSubmit | token budget warn 80% / stop 120% | exit 2 / block |
+| `cost-breaker.py` | Pre/Post/Stop/SubagentStop/UserPromptSubmit | token budget: warn ≥80% (**стоп 120% временно отключён — токены безлимитны**); учёт по фазам + финализация на Stop | нет (warn-only) |
 | `prompt-guard.py` | UserPromptSubmit + PostToolUse(read/fetch) | детект prompt-injection → additionalContext | нет |
 | `state-recorder.py` | SubagentStop | авто-запись шага в pipeline-state по `step_id` | нет |
 | `context-injector.py` | SubagentStart | инъекция grounding-excerpt/conventions | нет |
@@ -52,7 +56,8 @@
 | `feature-pipeline` | Оркестратор: ведёт фичу по фазам от BRD до PR | gate-скрипты + evals |
 | `pipeline-state` | Состояние многошаговых пайплайнов с субагентами | косвенно через evals |
 | `system-analyst` | Скан Java/Spring сервиса (модули, API, Kafka, БД) | `verify_coverage.py` |
-| `tech-design` | BRD → план + `task-plan.json` + структура слоёв | `check_taskplan.py` |
+| `sdd` | BRD → спецификация `sdd.md` (GWT, API, данные, приёмка) | `check_sdd_doc.py` |
+| `tech-design` | SDD → план + `task-plan.json` + структура слоёв | `check_taskplan.py` |
 | `java-spring-dev` | Генерация Java-кода (слои, аннотации, TDD) | `check_build.py` |
 | `jira-task-writer` | Создание задач Jira (Story + Sub-task) | `check_jira.py` |
 | `brd-interview` | Интервью по требованиям (диалог) | — |
@@ -66,6 +71,7 @@
 | `project-assembler` | Сборка проекта из склейки | — |
 | `gigacode-migrator` | Миграция скиллов между CLI-системами | dry-run |
 | `skill-creator` | Создание/правка скиллов | — |
+| `config-helper` | Настройка параметров forge (pipeline/gates/risk) скриптом | `test_config.py` |
 | `plantuml-to-png` | PlantUML → PNG | — |
 | `pdf` / `pptx` | Работа с PDF/PPTX | — |
 
@@ -113,34 +119,44 @@
 
 **PreToolUse `(Write|Edit)` — sequential:**
 1. `pii-boundary` — PII scope
-2. `tdd-guard` — форсинг TDD
-3. `gate-guard` — risk ladder
-4. `log-agent` — аудит
+2. `tdd-guard` — форсинг TDD per-task (RED-тест задачи)
+3. `eval-guard` — форсинг EDD (eval'ы задачи passed)
+4. `sod-enforcer` — separation of duties (роль из активного шага)
+5. `gate-guard` — risk ladder
+6. `log-agent` — аудит
 
 Любой блокирующий может остановить (exit 2) до действия. Логгер — всегда последний и неблокирующий.
-Точный блок — в `settings.hooks.json`.
+Точный блок — в `settings.hooks.json`. Эта секция пинится `hooks/test_docs_hooks_consistency.py`
+(дрейф «доки ↔ деплой» → fail). Гарантию «фаза закрыта субагентом» держит не PreToolUse-хук, а
+`update._check_subagent_origin` на закрытии шага (PreToolUse срабатывает и внутри субагента).
 
-## Три расположения харнеса
+## Расположение харнеса
 
-| Каталог | Зачем | Конфиг-дом |
-|---|---|---|
-| `~/.gigacode/` (source) | **source-of-truth** (этот каталог) | — |
-| `~/.qwen/` | локальный тест (бинарь на dev) | `~/.qwen/` |
-| `~/.gigacode/` | **прод-цель** (задеплоено) | `~/.gigacode/` |
+| Каталог | Зачем |
+|---|---|
+| репо Forge (этот каталог) | **source-of-truth**: `hooks/` + `skills/` + `deploy.sh` |
+| `<project>/.gigacode/` | **цель деплоя**: задеплоенная копия hooks+skills, закоммичена в репо проекта |
 
-> **Гейты вызываются по `../skills/`** — в целевом доме рядом с `hooks/` должны лежать `skills/`.
-> `deploy.sh` копирует И хуки И скиллы в один дом (co-location).
+> **Гейты вызываются по `../skills/`** — в `<project>/.gigacode/` рядом с `hooks/` должны лежать
+> `skills/`. `deploy.sh` копирует И хуки И скиллы в один каталог (co-location). Привязки к
+> домашнему `~/.gigacode` нет: резолверы выводят базу из фактического расположения файла.
 
 ## Деплой — ОДНОЙ КОМАНДОЙ (канонический путь)
 
+Модель **проектная**: разворачиваем в `<project>/.gigacode/`. Полное руководство —
+[docs/deployment.md](docs/deployment.md).
+
 ```bash
-bash ~/.gigacode/deploy.sh            # прод
-bash ~/.gigacode/deploy.sh ~/.qwen    # тест-дом
+# из склонированного репо Forge; целевая папка проекта обязательна
+cd <forge>
+bash deploy.sh /path/to/target-project
 ```
 
-`deploy.sh` сам: (1) копирует `hooks/` И `skills/` в ОДИН дом (co-location — иначе гейты не найдут
-`../skills`), (2) мержит блок `hooks` в `settings.json` с ретаргетом путей на этот дом и снимает
-`disableAllHooks`, (3) прогоняет `doctor.py`.
+`deploy.sh` сам: (1) копирует `hooks/` И `skills/` в `<project>/.gigacode/` (co-location — иначе
+гейты не найдут `../skills`) + доки, (2) кладёт `deploy-local.sh` и доводит `settings.json`
+(merge блока `hooks` + бэкап старого, `permissions`/`mcpServers` сохраняются), (3) прогоняет
+`preflight.py`. Повторный деплой идемпотентен; settings уходит в вечный `.bak` + таймстемпы.
+Починить пути после переезда проекта — `bash <project>/.gigacode/deploy-local.sh`.
 
 > ⚠️ **Не копируй скиллы и хуки вручную по отдельности.** Если скиллы на проектном уровне,
 > а блок `hooks` в `settings.json` не влит → `[HOOK_REGISTRY] 0 hook entries`, весь control-plane
@@ -162,7 +178,7 @@ gigacode --experimental-hooks
 
 **Перед каждым серьёзным прогоном — быстрый self-check, что контроль реально включён:**
 ```bash
-python3 ~/.gigacode/hooks/preflight.py --project .
+python3 <project>/.gigacode/hooks/preflight.py --project <project>
 ```
 - ✅ `exit 0` — можно работать
 - ❌ `exit 1` — ENFORCEMENT OFF, подними флаг/деплой
@@ -198,15 +214,31 @@ python3 ~/.gigacode/hooks/preflight.py --project .
       тяжёлого, excerpts).
 - [x] Аудит исходников: фикс `additionalContext`→`hookSpecificOutput`, context-injector без `agent_type`,
       SoD помечен неактивным, fail-open задокументирован, флаг `--experimental-hooks` (форк) — везде в командах.
-- [ ] (опц.) Устойчивость к обрывам стрима глубже: точечный per-file TDD-маппинг, авто-resume.
+- [x] **Hardening-проход по аудиту обвязки (2026-06-21).** Закрыты дыры «задокументировано ≠
+      исполняется»: `eval-guard` подключён в `settings.hooks.json` и сделан read-only (тяжёлый прогон —
+      execution-gate `run_pending_evals.py`); `preflight` проверяет РЕАЛЬНОЕ подключение essential-хуков в
+      `settings.json` (не наличие файла) + парсинг `risk-policy.json`; `subagent-enforcer` (мёртвый
+      PreToolUse-блок) удалён, гарантия «фаза закрыта субагентом» перенесена на закрытие шага
+      (`update._check_subagent_origin` + `state-recorder --closed-by subagent`); `sod-enforcer` переписан
+      на роль из активного шага манифеста; снят дедлок evidence-before-build (evidence ушёл из R2/R3 в
+      risk-policy, остаётся на доставке R4/R5 + `evidence-enforcer`); `risk_ladder` fail-CLOSED при
+      битой/отсутствующей policy (`policy_loaded()`); мёртвые ключи политики и хук `gate-resolver`
+      удалены; TDD-гейт стал per-task; провенанс вердиктов судей (`produced_by:run_judge`); единый
+      источник списка фаз (`resolve_phases.DEFAULT_PHASES` ⊆ `MAIN_PHASES`, пинится тестом). Тесты:
+      все 18 `hooks/test_*.py` сделаны запускаемыми (были битые стабы `import x-y`), +`test_preflight`,
+      `test_sod-enforcer`, `test_subagent_origin`, `test_docs_hooks_consistency` (доки↔settings).
+- [ ] (опц.) Устойчивость к обрывам стрима глубже: авто-resume.
 
 ## Известные ограничения (из аудита)
 
 - **`additionalContext` только в `hookSpecificOutput`** — рантайм читает контекст-инъекцию ТОЛЬКО из
   `hookSpecificOutput.additionalContext` (core/hooks/types). Все наши хуки исправлены под это.
 - **Subagent `agent_type` = `general-purpose`** для всех наших субагентов (мы так дёргаем `agent`).
-  Поэтому `context-injector` НЕ зависит от типа (инъектит по наличию файлов), а **separation-of-duties
-  через `agent_caps` сейчас НЕАКТИВНО** (заработает только с кастомными `subagent_type`). Не считать его рабочим.
+  Поэтому `context-injector` НЕ зависит от типа (инъектит по наличию файлов). SoD через `agent_caps`
+  (по `agent_type`) — лишь **best-effort** (работает, только если рантайм передал `agent_type`).
+  **Основной SoD форсит `sod-enforcer`**, определяя роль по id АКТИВНОГО шага манифеста (детерминированно,
+  не зависит от `agent_type`). Гарантию «фаза закрыта субагентом» держит `update._check_subagent_origin`
+  на закрытии шага (PreToolUse-блок не годится — срабатывает и внутри субагента).
 - **Гейт-хуки fail-OPEN при таймауте/краше** (`hookEventHandler`: блок при сбое только для Todo-событий;
   команд-хук >60с убивается → действие проходит). Поэтому тяжёлые гейты (`check_taskplan`/`check_delivery`/
   coverage) запускает ОРКЕСТРАТОР как execution-gate (так и есть в SKILL), а хуки лёгкие (file-reads) —
@@ -218,57 +250,62 @@ python3 ~/.gigacode/hooks/preflight.py --project .
 ## Диагностика (перед прогоном)
 
 ```bash
-python3 ~/.gigacode/hooks/preflight.py --project <repo>     # харнес активен?
-# или коротко:
-bash smoke-cli.sh ~/.gigacode --live                        # runtime-контракт
+python3 <project>/.gigacode/hooks/preflight.py --project <project>   # харнес активен?
 
 # какие фичи в работе:
-python3 ~/.gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
+python3 <project>/.gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
 ```
 
 ## Состояние пайплайна (state)
 
-- `preflight` — проверка settings (линтер на живом `settings.json`)
-- `doctor` — статика (хуки + скиллы + evals)
-- `smoke-cli` — runtime-контракт через CLI
+- `preflight.py` — проверка settings (линтер на живом `settings.json`)
+- `feature-pipeline/scripts/doctor.py` — статика (хуки + скиллы + evals)
 
 ## Наблюдаемость
 
 ```bash
 # живой лог прогона (отдельный терминал):
-bash ~/.gigacode/hooks/watch-agents.sh
+bash <project>/.gigacode/hooks/watch-agents.sh
 
 # сводка по метрикам:
-python3 ~/.gigacode/hooks/agentops.py --archive ~/.gigacode/ai-logs-archive
+python3 <project>/.gigacode/hooks/agentops.py --root <project>
 ```
 
 ## Поддерживаемая структура
 
+Репо Forge (source-of-truth):
 ```bash
-~/.gigacode/
+forge/
 ├── FORGE.md                  # этот файл
-├── deploy.sh                 # развёртывание
-├── smoke-cli.sh              # runtime-контракт
-├── GUIDE.md                  # руководство для пользователя
-├── AGENT-RUNBOOK.md          # runbook для агента-владельца
-├── hooks/                    # control-plane (18 скриптов)
-│   ├── settings.hooks.json   # эталон
-│   ├── risk-policy.json       # политика рисков
-│   ├── preflight.py          # self-check
-│   ├── evals/run-evals.py   # eval-набор
-│   └── test_*.py            # тесты каждого хука
-└── skills/                   # пайплайн-скиллы (22 шт)
-    ├── SKILLS-REGISTRY.md    # реестр с owner/validity/evals
+├── SKILLS-REGISTRY.md        # реестр скиллов с owner/validity/evals
+├── deploy.sh                 # установщик (разворачивает в проект)
+├── deploy-local.sh           # in-project фиксер путей (копируется в .gigacode/)
+├── docs/                     # документация (deployment.md, user-guide.md, troubleshooting.md, …)
+├── hooks/                    # control-plane (~35 скриптов)
+│   ├── settings.hooks.json   # эталон блока hooks (${PROJECT_ROOT})
+│   ├── resolve_hook_paths.py # подстановка путей + merge в settings.json
+│   ├── risk-policy.json      # политика рисков
+│   ├── preflight.py          # self-check готовности
+│   ├── evals/                # eval-набор
+│   └── test_*.py             # тесты хуков
+└── skills/                   # пайплайн-скиллы (14 шт)
     ├── feature-pipeline/     # оркестратор
     ├── pipeline-state/       # состояние
-    ├── system-analyst/      # grounding
-    ├── tech-design/         # проектирование
-    ├── java-spring-dev/     # генерация кода
-    ├── jira-task-writer/    # задачи Jira
-    ├── brd-interview/       # интервью
-    ├── business-requirements/ # BRD
+    ├── system-analyst/       # grounding
+    ├── tech-design/          # проектирование
+    ├── java-spring-dev/      # генерация кода
     └── ...
+```
 
+После `deploy.sh <project>` в целевом проекте:
+```bash
+<project>/.gigacode/
+├── hooks/                    # копия control-plane
+├── skills/                   # копия скиллов (co-located)
+├── deploy-local.sh           # фиксер путей на месте
+├── settings.json             # конфиг рантайма с блоком hooks (+ .bak при обновлении)
+├── FORGE.md, SKILLS-REGISTRY.md   # доки для справки
+└── ...
 ```
 
 ## Решения на основе Claude Code (2026-06-13)
@@ -282,14 +319,15 @@ python3 ~/.gigacode/hooks/agentops.py --archive ~/.gigacode/ai-logs-archive
   `phases_override` в pipeline.json позволяет добавить новую фазу (например security-review)
   без изменения кода скилла.
 
-### Runtime feature gates с дисковым кэшем
-- **Мотивация:** В Claude Code используется GrowthBook с трёхуровневой стратегией (env → disk cache → default).
-- **Решение:** `ground/feature-gates.json` — аналог GrowthBook disk cache. Хук `gate-resolver.py`
-  читает его на SubagentStart и внедряет gates как `additionalContext`. Стратегия загрузки:
-  1. Environment overrides (`GATE_OVERRIDE_<NAME>`)
-  2. Disk cache (`feature-gates.json`)
-  3. Defaults (вшитые в `gate-resolver.py`)
-- **Преимущество:** Feature gates доступны и хукам, и модели. Не требуют внешнего сервиса.
+### Runtime feature gates (`feature-gates.json`)
+- **Что это:** `ground/feature-gates.json` — bool-фиче-флаги рантайма (tdd_enforced, eval_driven_dev,
+  security_review, …), управляются скиллом `config-helper` (модель не правит файл руками).
+- **Кто читает:** `resolve_phases.py` (execution-time, запускает оркестратор) — флаги участвуют в
+  `enabled_by`/`skip_if` фаз. Файла нет → дефолты. Хуки при необходимости читают флаги сами из
+  `pipeline.json`/`feature-gates.json`.
+- **Чего НЕ делаем (урок):** не инжектим gates через хук между процессами. Бывший `gate-resolver.py`
+  (SubagentStart → additionalContext) удалён как мёртвая абстракция: каждый хук — отдельный процесс,
+  его stdout другим хукам не виден (та же ошибка, что у удалённого FlushGate).
 
 ### state-recorder — прямая запись (FlushGate удалён)
 - **Было:** `flush_gate.py` (порт `bridge/flushGate.ts`) буферизовал микро-обновления в
@@ -300,33 +338,33 @@ python3 ~/.gigacode/hooks/agentops.py --archive ~/.gigacode/ai-logs-archive
 - **Сейчас:** `state-recorder.py` пишет каждый шаг напрямую через `update.py` в namespace
   активной фичи (`--feature`), ошибки `update.py` логируются в stderr.
 
-### Permission-хуки с уровнями риска (gate-resolver)
-- **Мотивация:** В Claude Code PreToolUse хуки могут вернуть `permissionDecision: allow|deny|ask`,
-  что меняет поведение permission-системы.
-- **Решение:** `gate-resolver.py` возвращает gates как `additionalContext` + `hookSpecificOutput`.
-  Это позволяет другим хукам (tdd-guard, evidence-enforcer) принимать решения на основе gates.
-- **Преимущество:** Унифицированный механизм включения/выключения enforcement-хуков.
 
 ## Установка/дистрибуция
 
-- `install.sh` — пользовательская установка «всё сразу», канал-агностично (берёт исходник из
-  своей папки → работает из git clone / архива / общего каталога).
-- `install.sh` проверяет пред-условия (python3, CLI),
-  зовёт `deploy.sh`, печатает next-steps (запуск с `--experimental-hooks`, `preflight`, запуск фичи).
+- `deploy.sh <project>` — установщик из склонированного репо: копирует hooks+skills(+доки) в
+  `<project>/.gigacode/`, кладёт `deploy-local.sh`, доводит `settings.json` (merge + бэкап),
+  прогоняет `preflight.py`. Канал-агностично (работает из git clone / архива). Целевая папка
+  обязательна — без аргумента ничего не копируется.
+- `deploy-local.sh` — повторная доводка путей в `settings.json` на месте (после переезда проекта),
+  без копирования. Полное руководство — [docs/deployment.md](docs/deployment.md).
 
 ## Обслуживание
 
-- **`doctor.py`** — не существует как отдельный файл (если есть — в `hooks/`). Диагностика:
-  - `preflight.py` → `deploy.sh` → `doctor` (через `risk-policy.json` / `settings.hooks.json`)
-- **`validate_skills.py`** — валидатор frontmatter всех скиллов (name/description);
-  ловит «мёртвые» скиллы (без шапки → рантайм молча скипает).
+- **`hooks/preflight.py`** — основная проверка готовности (settings + pipeline.json + пути хуков).
+  Сам зовёт `resolve_hook_paths.py --check` и `feature-pipeline/scripts/doctor.py` (advisory).
+- **`hooks/resolve_hook_paths.py`** — merge блока hooks в `settings.json` с подстановкой путей;
+  `--check` валидирует, `--dry-run` показывает результат без записи.
+- При проблемах: `bash <project>/.gigacode/deploy-local.sh` (починка путей) или повторный
+  `deploy.sh` (полное обновление из исходника).
 
 ## Связанное
 
-- `AGENT-RUNBOOK.md` — инструкция владельцу (как деплоить, какими командами)
+- `docs/deployment.md` — полное руководство по деплою (установщик, бэкапы, переезд проекта)
+- `docs/user-guide.md` — руководство пользователя (установка, запуск, фазы)
+- `docs/troubleshooting.md` — разбор типовых проблем
 - `hooks/DEPLOY.md` — полный ростер хуков (какие события, порядок, диагностика)
-- `skills/SKILLS-REGISTRY.md` — реестр скиллов с owner/validity/evals
-- `risk-policy.json` — policy-as-code (R0–R5)
+- `SKILLS-REGISTRY.md` — реестр скиллов с owner/validity/evals
+- `hooks/risk-policy.json` — policy-as-code (R0–R5)
 
 > История — это git-история этого репозитория. Хочешь полноценный аудит изменений —
 > `git init` здесь и коммить по фичам; тогда «журнал решений» дополняется коммит-сообщениями.

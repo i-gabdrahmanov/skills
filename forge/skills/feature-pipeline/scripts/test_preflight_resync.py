@@ -59,7 +59,7 @@ class TestPreflightResync(unittest.TestCase):
         jd = self.sd / "judges"
         jd.mkdir(parents=True, exist_ok=True)
         (jd / f"{name}.json").write_text(json.dumps({
-            "$schema": "feature-pipeline/judge-verdict@1", "judge": name,
+            "$schema": "feature-pipeline/judge-verdict@1", "produced_by": "run_judge", "judge": name,
             "feature_slug": self.feature, "passed": True, "verdict": "PASS",
             "checks": [], "blocking_issues": [], "warnings": [], "summary": "ok",
             "evaluated_at": "2026-06-16T00:00:00Z",

@@ -24,6 +24,7 @@ from typing import Optional
 PREFIX_PHASE = {
     "00-": "00-brd",
     "01-": "01-grounding",
+    "02-sdd": "02-sdd",                   # спецификация (BRD → sdd.md), до tech-design
     "02-eval-plan": "02-eval-plan",       # отдельная фаза между design и jira
     "02-": "02-design",
     "03-": "03-jira",
@@ -36,7 +37,7 @@ PREFIX_PHASE = {
 }
 
 # Главные фазы в КАНОНИЧЕСКОМ порядке (по нему сортируется gate, а не по появлению шагов).
-MAIN_PHASES = ["00-brd", "01-grounding", "02-design", "02-eval-plan",
+MAIN_PHASES = ["00-brd", "01-grounding", "02-sdd", "02-design", "02-eval-plan",
                "03-jira", "04-tdd", "05-verify", "06-document",
                "07-deliver", "07-report"]
 
@@ -56,10 +57,63 @@ except Exception:  # реестр недоступен (pipeline-state не ра
 
 def guess_phase(step_id: str) -> str:
     """id шага ('04-test-foo') → id фазы ('04-tdd'). Длинный префикс побеждает."""
+    if not isinstance(step_id, str):
+        return ""  # малформед-манифест (None/число вместо id) — не роняем фазовую машину
     for prefix, phase in sorted(PREFIX_PHASE.items(), key=lambda x: -len(x[0])):
         if step_id.startswith(prefix):
             return phase
     return step_id
+
+
+def is_container_step(step_id: str) -> bool:
+    """Container-шаг — main-phase placeholder, чей id ТОЧНО совпадает с фазой ('04-tdd').
+    Его собственный статус не отражает завершённость динамических шагов фазы
+    (04-test-T1/04-build-T1), поэтому при наличии динамических шагов он исключается из
+    расчёта завершённости фазы. ЕДИНОЕ определение — им же пользуется phase_sync."""
+    return step_id in MAIN_PHASES
+
+
+# ── Соглашения об id динамических шагов (ЕДИНЫЙ источник; копии в хуках пинит ───────────
+#    test_phase_consistency). Раньше эти префиксы были «магическими строками» в eval-guard,
+#    tdd-guard, update._check_subagent_origin, preflight — переименуй в одном месте,
+#    enforcement тихо отвалится.
+BUILD_STEP_PREFIX = "04-build-"      # 04-build-<taskId> — GREEN-фаза задачи (пишет src/main)
+TEST_STEP_PREFIX = "04-test-"        # 04-test-<taskId>  — RED-фаза задачи (пишет src/test)
+DELIVER_STEP_PREFIX = "07-deliver-"  # 07-deliver-<taskId> — доставка задачи (PR/commit)
+
+# Фазы, ОБЯЗАННЫЕ исполняться субагентом (не inline). Совпадает с префиксами шагов.
+SUBAGENT_PHASE_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec")
+
+
+def _task_id_after(step_id, prefix: str):
+    """task-id из id шага по префиксу ('04-build-T1' → 'T1'); иначе None."""
+    if isinstance(step_id, str) and step_id.startswith(prefix):
+        return step_id[len(prefix):] or None
+    return None
+
+
+def build_task_id(step_id):
+    """task-id из build-шага ('04-build-T1' → 'T1'), иначе None."""
+    return _task_id_after(step_id, BUILD_STEP_PREFIX)
+
+
+def test_task_id(step_id):
+    """task-id из RED-test-шага ('04-test-T1' → 'T1'), иначе None."""
+    return _task_id_after(step_id, TEST_STEP_PREFIX)
+
+
+def deliver_task_id(step_id):
+    """task-id из delivery-шага ('07-deliver-T1' → 'T1'), иначе None."""
+    return _task_id_after(step_id, DELIVER_STEP_PREFIX)
+
+
+def is_build_step(step_id) -> bool:
+    return build_task_id(step_id) is not None
+
+
+def requires_subagent(step_id) -> bool:
+    """Должен ли шаг исполняться субагентом (а не inline-оркестратором)."""
+    return isinstance(step_id, str) and step_id.startswith(SUBAGENT_PHASE_PREFIXES)
 
 
 def match_required_judges(step_id: str) -> list:
@@ -85,6 +139,7 @@ def allowed_skills(phase_id: str) -> list:
     return {
         "00-brd":       ["brd-grounder", "brd-interview", "business-requirements"],
         "01-grounding": ["system-analyst", "Explore"],
+        "02-sdd":       ["sdd"],
         "02-design":    ["tech-design", "java-uml-spec"],
         "02-eval-plan": ["general-purpose"],
         "03-jira":      ["jira-task-writer"],
@@ -100,6 +155,7 @@ def required_artifacts(phase_id: str) -> list:
     return {
         "00-brd":       ["docs/brd.md"],
         "01-grounding": ["ground/grounding-index.json"],
+        "02-sdd":       ["docs/sdd.md"],
         "02-design":    ["docs/task-plan.json", "docs/tech-design.md"],
         "02-eval-plan": ["docs/eval-plan.json",
                          "ground/statements/feature-pipeline/**/judges/eval-judge.json"],
@@ -156,13 +212,18 @@ def build_gate(steps: list, manifest: Optional[dict] = None,
                 p["depends_on"].append(main_order[i - 1])
                 break
 
-    # Статусы из манифеста: фаза completed/skipped, если ВСЕ её шаги такие.
+    # Статусы из манифеста (ЕДИНАЯ семантика, ею же пользуется phase_sync): фаза completed,
+    # если все её ДИНАМИЧЕСКИЕ шаги completed/skipped. Container-шаг (04-tdd и т.п.) не
+    # учитывается, пока есть динамические; если динамических нет — смотрим по самому container.
     if step_status:
         for phase in phases:
-            phase_steps = [s["id"] for s in steps if guess_phase(s.get("id", "")) == phase["id"]]
-            if not phase_steps:
-                continue
-            if all(step_status.get(sid) in ("completed", "skipped") for sid in phase_steps):
+            dynamic = [s["id"] for s in steps
+                       if guess_phase(s.get("id", "")) == phase["id"]
+                       and not is_container_step(s["id"])]
+            if dynamic:
+                if all(step_status.get(sid) in ("completed", "skipped") for sid in dynamic):
+                    phase["status"] = "completed"
+            elif step_status.get(phase["id"]) in ("completed", "skipped"):
                 phase["status"] = "completed"
 
     # current_phase — первая не-completed (по каноническому порядку)
@@ -181,6 +242,18 @@ def build_gate(steps: list, manifest: Optional[dict] = None,
         "current_phase": current_phase,
         "phases": phases,
     }
+
+
+def live_phase_decision(manifest: Optional[dict]) -> dict:
+    """Живой фазовый снимок из manifest (источник истины), без чтения gate.json с диска.
+
+    gate.json — лишь кэш этого расчёта; его персистентный статус может устареть, если sync
+    был пропущен/упал. Поэтому решения фазовой машины (current_phase + статусы фаз) считаем
+    ОТСЮДА. Возвращает {"current_phase": str, "phases": [...]} — та же деривация, что build_gate.
+    """
+    steps = (manifest or {}).get("steps", [])
+    gate = build_gate(steps, manifest)
+    return {"current_phase": gate.get("current_phase", ""), "phases": gate.get("phases", [])}
 
 
 def build_defs(steps: list) -> dict:

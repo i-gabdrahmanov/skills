@@ -8,9 +8,15 @@
 Общий скрипт для minor-defect-fix (фаза тестов) и feature-pipeline (Фаза 4 / step 05-tests).
 
 Usage:
-    check_coverage.py [--root .] [--base HEAD] [--threshold 0.80] [--report XML]... [--changed "a.java b.java"] [--json]
+    check_coverage.py [--root .] [--base HEAD] [--threshold 0.80] [--report XML]... [--changed "a.java b.java"] [--strict|--lenient] [--json]
 
-Exit: 0 = pass/skip, 2 = LOW/MISSING (покрытие не дотянуто).
+fail-closed по умолчанию (--strict): если JaCoCo-отчёт не найден — покрытие НЕЛЬЗЯ проверить,
+поэтому гейт FAIL, а не «тихо пропустить». Раньше отсутствие отчёта давало exit 0 (pass),
+из-за чего на проекте без JaCoCo coverage-гейт молча отключался. --lenient восстанавливает
+старое поведение (skip=pass) — только для осознанных исключений.
+
+Exit: 0 = pass (или skip в --lenient), 2 = FAIL (LOW/MISSING покрытие, либо в --strict —
+      JaCoCo-отчёт не найден).
 """
 from __future__ import annotations
 
@@ -94,6 +100,11 @@ def main() -> int:
     ap.add_argument("--threshold", type=float, default=0.80)
     ap.add_argument("--report", action="append", help="JaCoCo XML path/glob (repeatable)")
     ap.add_argument("--changed", help="explicit changed files (comma/space separated) — skips git")
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--strict", dest="strict", action="store_true", default=True,
+                   help="JaCoCo-отчёт не найден → FAIL (по умолчанию, fail-closed)")
+    g.add_argument("--lenient", dest="strict", action="store_false",
+                   help="JaCoCo-отчёт не найден → SKIP=pass (старое fail-open поведение)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
@@ -107,10 +118,19 @@ def main() -> int:
         changed = _changed_java(root, args.base)
 
     if not reports:
-        verdict = {"status": "skipped", "reason": "JaCoCo report not found — coverage can't be checked",
+        if args.strict:
+            verdict = {"status": "missing_report",
+                       "reason": "JaCoCo XML не найден — покрытие невозможно проверить (strict)",
+                       "threshold": args.threshold, "changed": len(changed), "files": []}
+            print(json.dumps(verdict, ensure_ascii=False, indent=2) if args.json
+                  else (f"Coverage gate: ✗ FAIL (JaCoCo XML не найден, strict). "
+                        f"Подключи JaCoCo или прогоняй с --lenient. Изменённых .java: {len(changed)}"))
+            return 2
+        verdict = {"status": "skipped",
+                   "reason": "JaCoCo report not found — coverage can't be checked (lenient)",
                    "threshold": args.threshold, "changed": len(changed), "files": []}
         print(json.dumps(verdict, ensure_ascii=False, indent=2) if args.json
-              else f"Coverage gate: SKIPPED (JaCoCo XML не найден). Изменённых .java: {len(changed)}")
+              else f"Coverage gate: SKIPPED (JaCoCo XML не найден, lenient). Изменённых .java: {len(changed)}")
         return 0
 
     cov = _load_sourcefiles(reports)

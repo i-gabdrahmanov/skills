@@ -23,7 +23,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from build_evidence import _completeness, _step_dir, main
+from build_evidence import _completeness, _step_dir, main, _gate_outcome, _degraded_gates
 
 
 def _write_json(path: Path, data: dict):
@@ -100,6 +100,33 @@ class TestCompleteness(unittest.TestCase):
         }
         # Присутствуют: task, gates, rationale = 3/7 = ~0.429
         self.assertAlmostEqual(_completeness(bundle), 3/7, places=2)
+
+
+class TestGateOutcome(unittest.TestCase):
+    """P0-3: классификация исхода гейта — pass / fail / degraded / absent."""
+
+    def test_pass_values(self):
+        for v in ("pass", "passed", "ok", "OK", "completed", "✓", True):
+            self.assertEqual(_gate_outcome(v), "pass", v)
+
+    def test_fail_values(self):
+        for v in ("fail", "failed", "blocked", "✗", False):
+            self.assertEqual(_gate_outcome(v), "fail", v)
+
+    def test_degraded_values(self):
+        for v in ("skipped", "missing_report", "error", "n/a", "unknown", "DEGRADED"):
+            self.assertEqual(_gate_outcome(v), "degraded", v)
+
+    def test_absent_values(self):
+        for v in (None, "", "   "):
+            self.assertEqual(_gate_outcome(v), "absent", repr(v))
+
+    def test_degraded_gates_extraction(self):
+        gates = {"build": "pass", "coverage": "skipped", "delivery": None, "eval": "error"}
+        self.assertEqual(_degraded_gates(gates), ["coverage", "eval"])
+
+    def test_no_degraded(self):
+        self.assertEqual(_degraded_gates({"build": "pass", "delivery": None}), [])
 
 
 class TestMain(unittest.TestCase):
@@ -222,6 +249,28 @@ class TestMain(unittest.TestCase):
         evidence_path = self.root / "ground" / "evidence" / "T1.json"
         bundle = json.loads(evidence_path.read_text(encoding="utf-8"))
         self.assertEqual(bundle["task"], "T1")
+
+    def test_no_degraded_gates_when_all_pass(self):
+        """Все гейты pass (delivery=pass) → degraded_gates пуст."""
+        self._run_main()
+        bundle = json.loads((self.root / "ground" / "evidence" / "T1.json").read_text(encoding="utf-8"))
+        self.assertEqual(bundle["degraded_gates"], [])
+
+    def test_skipped_coverage_surfaces_as_degraded(self):
+        """coverage-гейт = skipped (напр. --lenient без JaCoCo) → degraded_gates содержит 'coverage'."""
+        step_dir = self.root / "ground" / "statements" / "feature-pipeline" / "pipeline"
+        _write_json(step_dir / "05-tests.json",
+                    {"tests": 5, "coverage": 0.85, "gate": "skipped"})
+        self._run_main()
+        bundle = json.loads((self.root / "ground" / "evidence" / "T1.json").read_text(encoding="utf-8"))
+        self.assertIn("coverage", bundle["degraded_gates"])
+
+    def test_absent_delivery_not_degraded(self):
+        """delivery-гейт отсутствует (доставки ещё не было) → это не degraded."""
+        (self.root / "ground" / "statements" / "feature-pipeline" / "pipeline" / "07-deliver-T1.json").unlink()
+        self._run_main()
+        bundle = json.loads((self.root / "ground" / "evidence" / "T1.json").read_text(encoding="utf-8"))
+        self.assertNotIn("delivery", bundle["degraded_gates"])
 
 
 if __name__ == "__main__":
