@@ -1,3 +1,17 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Runtime-артефакты пайплайна (живут в проекте-цели, не в репо)
+ground/
+**/settings.json.bak
+**/settings.json.*.bak
+
 # IDE
 .idea/
 .gigaide/

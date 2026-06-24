@@ -92,7 +92,12 @@ class GoldenStateCycle(unittest.TestCase):
         self._write_verdicts()
 
         # 4. закрываем все шаги БЕЗ --skip-judges
+        odir = self._state_dir() / "_origins"
+        odir.mkdir(parents=True, exist_ok=True)
         for step_id in UPDATE_ORDER:
+            # evidence-маркер от SubagentStop (его пишет state-recorder) — update требует его
+            # для subagent-фаз, флаг --closed-by больше не доказательство
+            (odir / f"{step_id}.json").write_text(json.dumps({"step_id": step_id}))
             r = _run([UPDATE, "--project", self.proj, "--skill", "feature-pipeline",
                       "--feature", SLUG, "--step-id", step_id, "--status", "completed",
                       # как state-recorder на SubagentStop — иначе subagent-фазы блокируются (C3)

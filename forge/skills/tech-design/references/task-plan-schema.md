@@ -33,6 +33,7 @@
         "repository/ExportJobRepository.java"
       ],
       "acceptance": ["Сущность маппится на таблицу", "CRUD через репозиторий"],
+      "sdd_ref": "sdd.md#хранение-export-job",
       "depends_on": []
     },
     {
@@ -46,6 +47,7 @@
         "service/ExportService.java", "service/ExportServiceImpl.java"
       ],
       "acceptance": ["Запуск экспорта создаёт job", "Ошибка при пустом наборе"],
+      "sdd_ref": "sdd.md#запуск-экспорта",
       "depends_on": ["T1"]
     },
     {
@@ -55,6 +57,7 @@
       "layers": ["controller"],
       "artifacts": ["controller/ExportController.java"],
       "acceptance": ["POST /api/v1/exports → 202", "401 без авторизации"],
+      "sdd_ref": "sdd.md#rest-эндпойнт-экспорта",
       "depends_on": ["T2"]
     }
   ]
@@ -74,9 +77,10 @@
 | `migrations[].task_id` | задача, в рамках которой пишется changeset |
 | `tasks[].id` | короткий стабильный ID (`T1`, `T2`…); используется в `pipeline-state` как `04-build-<id>` и в `07-deliver-<id>` |
 | `tasks[].modules` | модули, затрагиваемые задачей (**массив** — задача бывает кросс-модульной: напр. сущность в `service-X` + DTO в `utils-web`). Допустима строка `tasks[].module` как одно-модульное сокращение |
-| `tasks[].layers` | из словаря: `migration`, `entity`, `repository`, `dto`, `mapper`, `service`, `controller`. Только реально затрагиваемые |
+| `tasks[].layers` | из словаря: `migration`, `entity`, `repository`, `dto`, `mapper`, `service`, `controller`, `scheduler`. Только реально затрагиваемые |
 | `tasks[].artifacts` | для multi-module — пути **от корня репо** (напр. `service/dbservice/src/main/java/...`, `utils/web/src/main/java/...`); для одного модуля допустимо относительно его `src/main/java` (или `src/main/resources` для миграций) |
 | `tasks[].acceptance` | проверяемые утверждения из критериев приёмки BRD; основа тестов |
+| `tasks[].sdd_ref` | **обязателен** (гейт `check_sdd.py` валит пустой): якорь на раздел/сценарий `sdd.md` (напр. `sdd.md#запуск-экспорта`) — трассировка задача → спецификация |
 | `tasks[].depends_on` | ID задач, от которых зависит компиляция; задаёт порядок build, Sub-task и stacked-PR |
 
 ## Частые ошибки

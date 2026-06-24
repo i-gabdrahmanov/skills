@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Forge Feature Pipeline Presentation</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-dim: #94a3b8;
+            --accent: #38bdf8;
+            --accent-dim: #0ea5e9;
+            --gate-color: #f59e0b;
+            --auto-color: #3b82f6;
+            --border: #334155;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+            scroll-behavior: smooth;
+        }
+
+        header {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            background: linear-gradient(to bottom, #1e293b, #0f172a);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 80px 20px;
+        }
+
+        h1 { font-size: 4rem; margin-bottom: 1rem; color: var(--accent); }
+        h2 { font-size: 2.5rem; margin-bottom: 2rem; border-left: 5px solid var(--accent); padding-left: 20px; }
+        h3 { font-size: 1.5rem; margin-top: 2rem; color: var(--accent); }
+
+        .card {
+            background: var(--card-bg);
+            padding: 40px;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            margin-bottom: 40px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .badge-gate { background: var(--gate-color); color: #000; }
+        .badge-auto { background: var(--auto-color); color: #fff; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        th { color: var(--accent); }
+
+        .roadmap {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin: 40px 0;
+        }
+        .roadmap-item {
+            padding: 20px;
+            background: #2d3a4f;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        .step-num {
+            font-size: 2rem;
+            font-weight: bold;
+            color: var(--accent);
+            opacity: 0.5;
+        }
+
+        .roi-highlight {
+            color: #4ade80;
+            font-weight: bold;
+        }
+
+        footer {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-dim);
+            border-top: 1px solid var(--border);
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1 style="font-size: 4rem;">Forge Feature Pipeline</h1>
+    <p style="font-size: 1.5rem; color: var(--text-dim);">От идеи до продакшена: конвейер для создания качественных фич</p>
+    <p style="margin-top: 2rem; color: var(--accent);">Рутину конвейеру — решения людям</p>
+</header>
+
+<div class="container">
+    <section>
+        <h2 style="color: var(--accent);">Суть подхода</h2>
+        <div class="card">
+            <p>Feature Pipeline — это управляемый процесс, который проводит <strong style="color: var(--accent);">новую фичу</strong> через все необходимые этапы разработки: от сбора требований до публикации Pull Request.</p>
+            <p><strong style="color: var(--accent);">Главная идея:</strong> Мы выносим рутинную работу (анализ системы, написание спецификаций, генерация задач, тесты, документацию) в автоматизированный конвейер с четкими контрольными точками.</p>
+            <p>Качество встроено в процесс, а не держится на «доброй воле». На каждом шаге работает автоматическая проверка-судья — пропустить тесты, выкатить без покрытия или сделать рискованное «молча» нельзя.</p>
+        </div>
+    </section>
+
+    <section>
+        <h2 style="color: var(--accent);">Маршрут фичи</h2>
+        <div class="roadmap">
+            <div class="roadmap-item">
+                <span class="step-num">01</span>
+                <div>
+                    <span class="badge badge-gate">Gate 1</span>
+                    <strong style="color: var(--accent);">Требования (BRD)</strong> — интервью, сбор бизнес-задач, оформление документации.
+                </div>
+            </div>
+            <div class="roadmap-item">
+                <span class="step-num">02</span>
+                <div>
+                    <strong style="color: var(--accent);">Изучение системы</strong> — автоматический сбор "Ground Truth" (модули, API, базы).
+                </div>
+            </div>
+            <div class="roadmap-item">
+                <span class="step-num">03</span>
+                <div>
+                    <span class="badge badge-gate">Gate 2</span>
+                    <strong style="color: var(--accent);">Спецификация & Дизайн</strong> — детерминированное описание поведения и план реализации.
+                </div>
+            </div>
+            <div class="roadmap-item">
+                <span class="step-num">04</span>
+                <div>
+                    <span class="badge badge-gate">Gate 3</span>
+                    <strong style="color: var(--accent);">Задачи в Jira</strong> — автоматическая декомпозиция плана на Story и подзадачи.
+                </div>
+            </div>
+            <div class="roadmap-item">
+                <span class="step-num">05</span>
+                <div>
+                    <span class="badge badge-auto">Auto</span>
+                    <strong style="color: var(--accent);">Код и Тесты</strong> — разработка по принципу TDD (тесты пишутся первыми).
+                </div>
+            </div>
+            <div class="roadmap-item">
+                <span class="step-num">06</span>
+                <div>
+                    <span class="badge badge-auto">Auto</span>
+                    <strong style="color: var(--accent);">Покрытие & Документация</strong> — автоматический догон тестов до нужного порога качества.
+                </div>
+            </div>
+            <div class="roadmap-item">
+                <span class="step-num">07</span>
+                <div>
+                    <span class="badge badge-gate">Gate 4</span>
+                    <strong style="color: var(--accent);">Доставка (PR & Отчёт)</strong> — создание веток, коммит, публикация и отчёт в Jira.
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2 style="color: var(--accent);">Что происходит на каждом шаге</h2>
+        <div class="card">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Этап</th>
+                        <th style="color: var(--accent);">Что делает конвейер</th>
+                        <th style="color: var(--accent);">Ценность для бизнеса</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td style="color: var(--accent);">Требования (BRD)</td>
+                        <td style="color: var(--accent);">Интервью, сбор данных, создание BRD в языке бизнеса</td>
+                        <td style="color: var(--accent);">Единое понимание задачи, исключение "не так поняли"</td>
+                    </tr>
+                    <tr>
+                        <td style="color: var(--accent);">Изучение системы</td>
+                        <td style="color: var(--accent);">Авто-сбор карты модулей, API, данных (Ground Truth)</td>
+                        <td style="color: var(--accent);">Не ломаем существующее, не изобретаем лишнего</td>
+                    </tr>
+                    <tr>
+                        <td style="color: var(--accent);">Спецификация</td>
+                        <td style="color: var(--accent);">Описание сценариев, ошибок, поведения до начала кода</td>
+                        <td style="color: var(--accent);">Договорились, ЧТО делаем, прежде чем решать КАК</td>
+                    </tr>
+                    <tr>
+                        <td style="color: var(--accent);">Тех-дизайн</td>
+                        <td style="color: var(--accent);">План реализации по спецификации + разбивка на задачи по слоям</td>
+                        <td style="color: var(--accent);">Прозрачная оценка объема до старта кода</td>
+                    </tr>
+                    <tr>
+                        <td style="color: var(--accent);">Задачи в Jira</td>
+                        <td style="color: var(--accent);">Авто-создание Story и подзадач по плану</td>
+                        <td style="color: var(--accent);">Трекинг и видимость для всей команды</td>
+                    </tr>
+                    <tr>
+                        <td style="color: var(--accent);">Код (TDD)</td>
+                        <td style="color: var(--accent);">Генерация тестов (RED) → минимизация кода (GREEN)</td>
+                        <td style="color: var(--accent);">Меньше багов, меньше переделок на этапе ревью</td>
+                    </tr>
+                    <tr>
+                        <td style="color: var(--accent);">Покрытие</td>
+                        <td style="color: var(--accent);">Авто-догон тестов до нужного порога качества</td>
+                        <td style="color: var(--accent);">Объективная планка качества, а не субъективное "вроде работает"</td>
+                    </tr>
+                    <tr>
+                        <td style="color: var(--accent);">Документация</td>
+                        <td style="color: var(--accent);">Авто-обновление спецификации сервиса после фичи</td>
+                        <td style="color: var(--accent);">Документация всегда актуальна (не "когда-нибудь потом")</td>
+                    </tr>
+                    <tr>
+                        <td style="color: var(--accent);">Доставка</td>
+                        <td style="color: var(--accent);">Создание веток, коммит, публикация и отчёт в Jira</td>
+                        <td style="color: var(--accent);">Готово к ревью; история принятых решений в Jira</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section>
+        <h2 style="color: var(--accent);">Контроль и Безопасность (Control Plane)</h2>
+        <div class="grid">
+            <div class="card">
+                <h3 style="color: var(--accent);">Risk Ladder</h3>
+                <p>Каждое действие оценивается по шкале риска (R0–R5). Высокорисковые операции (auth, платежи, PII) требуют обязательного подтверждения или дополнительных доказательств (evidence).</p>
+            </div>
+            <div class="card">
+                <h3 style="color: var(--accent);">Cost Breaker</h3>
+                <p>Мониторинг затрат токенов в реальном времени. Предупреждение при достижении 80% бюджета и автоматическая остановка при превышении лимитов.</p>
+            </div>
+            <div class="card">
+                <h3 style="color: var(--accent);">Evidence Bundle</h3>
+                <p>Перед доставкой фичи конвейер собирает "пакет доказательств": отчеты о результатах тестов, ссылки на задачи и изменения в спеке.</p>
+            </div>
+            <div class="card">
+                <h3 style="color: var(--accent);">TDD Enforcement</h3>
+                <p>Хуки блокируют возможность записи в `src/main`, пока тесты задачи не пройдут проверку (RED-стадия), предотвращая написание кода без тестов.</p>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2 style="color: var(--accent);">Экономика: Время команды</h2>
+        <div class="card">
+            <p>Типовая фича среднего размера в Java/Spring-сервисе:</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Этап</th>
+                        <th style="color: var(--text-dim);">Вручную</th>
+                        <th style="color: var(--accent);">С конвейером</th>
+                        <th style="color: var(--accent);">Экономия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td style="color: var(--accent);">Сбор и оформление требований</td>
+                        <td style="color: var(--text-dim);">1–2 дня</td>
+                        <td style="color: var(--accent);">1–2 часа</td>
+                        <td style="color: #4ade80; font-weight: bold;">~90%</td>
+                    </tr>
+                    <tr>
+                        <td style="color: var(--accent);">Погружение в систему</td>
+                        <td style="color: var(--text-dim);">0.5–1 день</td>
+                        <td style="color: var(--accent);">минуты</td>
+                        <td style="color: #4ade80; font-weight: bold;">~90%</td>
+                    </tr>
+                    <tr>
+                        <td style="color: var(--accent);">Дизайн и задачи</td>
+                        <td style="color: var(--text-dim);">~1 день</td>
+                        <td style="color: var(--accent);">~1 час</td>
+                        <td style="color: #4ade80; font-weight: bold;">~80%</td>
+                    </tr>
+                    <tr>
+                        <td style="color: var(--accent);">Тесты и покрытие</td>
+                        <td style="color: var(--text-dim);">0.5–1 день</td>
+                        <td style="color: var(--accent);">ассистировано</td>
+                        <td style="color: #4ade80; font-weight: bold;">~50%</td>
+                    </tr>
+                    <tr>
+                        <td style="color: var(--accent);">Документация</td>
+                        <td style="color: var(--text-dim);">0.5 дня</td>
+                        <td style="color: var(--accent);">минуты</td>
+                        <td style="color: #4ade80; font-weight: bold;">~90%</td>
+                    </tr>
+                    <tr>
+                        <td style="color: var(--accent);">PR и отчеты</td>
+                        <td style="color: var(--text-dim);">1–2 часа</td>
+                        <td style="color: var(--accent);">минуты</td>
+                        <td style="color: #4ade80; font-weight: bold;">~80%</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section>
+        <h2 style="color: var(--accent);">Итог</h2>
+        <div class="card" style="border-left: 10px solid var(--accent);">
+            <p style="font-size: 1.5rem; font-weight: bold;">Рутину конвейеру — решения людям.</p>
+            <p>Forge освобождает команду от рутинного «сопровождения» фичи, позволяя сфокусироваться на архитектуре и логике бизнеса. Качество обеспечивается автоматическими «судьями», а не личной ответственностью разработчика за каждый забытый тест или неактуальную документацию.</p>
+        </div>
+    </section>
+
+    <footer style="margin-top: 100px;">
+        <p>© 2026 Forge Project — Конвейер разработки нового поколения</p>
+    </footer>
+
+</div>
+</body>
+</html>

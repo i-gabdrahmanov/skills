@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """
-test_no_hardcoded_paths_left.py — Сканирует все SKILL.md скиллов пайплайна
-на оставшиеся хардкодные пути вида ~/.gigacode/...
+test_no_hardcoded_paths_left.py — Сканирует SKILL.md скиллов пайплайна И
+операционные reference-файлы (subagent-prompts.md), которые попадают субагенту
+дословно, на оставшиеся хардкодные пути вида ~/.gigacode/...
 Если находит — падает со списком.
+
+Канон — ПРОЕКТНАЯ модель: пути вида `<project>/.gigacode/...`, а не домашний
+`~/.gigacode/...` (см. _project.py / DEPLOY.md). subagent-prompts.md и
+project-grounder/SKILL.md раньше не сканировались — дрейф там накапливался незаметно.
 
 Exit codes:
   0 — чистый код (нет хардкода)
@@ -14,21 +19,30 @@ import sys
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
+# База — каталог skills/ (parents[2] от scripts/). Работает И в source-репо (skills/…),
+# И в развёрнутом проекте (<project>/.gigacode/skills/…), т.к. пути относительны skills/.
+# Раньше база считалась как parents[4] + ".gigacode/skills/…" — в source-репо такого пути
+# нет, все файлы «пропускались», и тест давал ложную зелень. Теперь резолв корректен в обеих
+# раскладках, а отсутствие файла из списка — ошибка (а не молчаливый skip).
+SKILLS_DIR = Path(__file__).resolve().parents[2]
 
-# Скиллы пайплайна, которые надо проверить
+# Скиллы пайплайна, которые надо проверить (пути относительно skills/)
 SKILL_PATHS = [
-    ".gigacode/skills/feature-pipeline/SKILL.md",
-    ".gigacode/skills/system-analyst/SKILL.md",
-    ".gigacode/skills/tech-design/SKILL.md",
-    ".gigacode/skills/pipeline-state/SKILL.md",
-    ".gigacode/skills/minor-defect-fix/SKILL.md",
-    ".gigacode/skills/jira-task-writer/SKILL.md",
-    ".gigacode/skills/java-spring-dev/SKILL.md",
-    ".gigacode/skills/brd-interview/SKILL.md",
-    ".gigacode/skills/business-requirements/SKILL.md",
-    ".gigacode/skills/defect-analyzer/SKILL.md",
-    ".gigacode/skills/bugfix-developer/SKILL.md",
+    "feature-pipeline/SKILL.md",
+    "system-analyst/SKILL.md",
+    "tech-design/SKILL.md",
+    "pipeline-state/SKILL.md",
+    "minor-defect-fix/SKILL.md",
+    "jira-task-writer/SKILL.md",
+    "java-spring-dev/SKILL.md",
+    "brd-interview/SKILL.md",
+    "business-requirements/SKILL.md",
+    "defect-analyzer/SKILL.md",
+    "bugfix-developer/SKILL.md",
+    "project-grounder/SKILL.md",
+    "brd-grounder/SKILL.md",
+    # Операционные reference-файлы: уходят субагенту дословно (get_prompt.py не подставляет пути).
+    "feature-pipeline/references/subagent-prompts.md",
 ]
 
 
@@ -45,9 +59,11 @@ def main():
     total_errors = []
 
     for rel_path in SKILL_PATHS:
-        full_path = PROJECT_ROOT / rel_path
+        full_path = SKILLS_DIR / rel_path
         if not full_path.exists():
-            print(f"⚠️  Файл не найден (пропускаю): {rel_path}")
+            # Не молчаливый skip: отсутствующий файл из списка — это ошибка покрытия.
+            print(f"❌ {rel_path}: файл не найден по базе {SKILLS_DIR}")
+            total_errors.append((rel_path, 0))
             continue
 
         lines = full_path.read_text("utf-8").splitlines()

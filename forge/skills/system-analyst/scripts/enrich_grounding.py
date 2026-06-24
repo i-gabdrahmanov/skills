@@ -212,53 +212,45 @@ def _build_excerpt(analysis_dir: Path, scan_dir: Path | None, feature_slug: str)
             result.append(item)
         return result
 
-    def _merge_lists(existing: list, new_items: list, id_keys: tuple[str, ...]) -> list:
-        """Смержить списки по id_keys: новые записи добавляются, существующие обновляют _sources.
-
-        Дедуплицирует как внутри existing, так и внутри new_items.
-        """
-        existing = list(existing)
-        existing_ids = set()
+    def _sources_index(existing: list, id_keys: tuple[str, ...]) -> dict:
+        """id-кортеж -> сохранённый _sources прежней записи (для переноса при пересборке)."""
+        idx: dict = {}
         for item in existing:
             if isinstance(item, dict):
                 eid = tuple(str(item.get(k, "")) for k in id_keys)
-                existing_ids.add(eid)
+                idx[eid] = item.get("_sources", [])
+        return idx
 
-        # Дедуплицируем new_items
-        seen_new = set()
-        deduped_new = []
-        for new_item in new_items:
-            if not isinstance(new_item, dict):
+    def _replace_from_scan(existing: list, scan_items: list, id_keys: tuple[str, ...]) -> list:
+        """Scan — источник истины: результат = ровно записи из scan.
+
+        Записи, которых в свежем scan нет (артефакт удалён фичей), ВЫПАДАЮТ — иначе
+        grounding накапливал бы призраков и SDD ссылался бы на удалённые эндпойнты.
+        _sources переносим из прежней записи (или ставим текущую фичу для новых),
+        чтобы не терять историю появления артефакта.
+        """
+        prev_sources = _sources_index(existing, id_keys)
+        out: list = []
+        seen = set()
+        for it in scan_items:
+            if not isinstance(it, dict):
                 continue
-            nid = tuple(str(new_item.get(k, "")) for k in id_keys)
-            if nid in seen_new:
+            nid = tuple(str(it.get(k, "")) for k in id_keys)
+            if nid in seen:
                 continue
-            seen_new.add(nid)
-            deduped_new.append(new_item)
+            seen.add(nid)
+            entry = dict(it)
+            src = list(prev_sources.get(nid, []))
+            if feature_slug not in src:
+                src.append(feature_slug)
+            entry["_sources"] = src
+            out.append(entry)
+        return out
 
-        for new_item in deduped_new:
-            nid = tuple(str(new_item.get(k, "")) for k in id_keys)
-            if nid in existing_ids:
-                # Обновляем _sources существующей записи
-                for existing_item in existing:
-                    if isinstance(existing_item, dict):
-                        eid = tuple(str(existing_item.get(k, "")) for k in id_keys)
-                        if eid == nid:
-                            src = existing_item.setdefault("_sources", [])
-                            if feature_slug not in src:
-                                src.append(feature_slug)
-                            break
-            else:
-                # Новая запись
-                entry = dict(new_item)
-                entry["_sources"] = [feature_slug]
-                existing.append(entry)
-                existing_ids.add(nid)
-
-        return existing
-
-    # 1. Scan-файлы — мержим
+    # 1. Scan-файлы — источник истины (включая удаления)
     if scan_dir and scan_dir.exists():
+        # excerpt-key -> (id_keys, накопленные распарсенные записи). async собирается из двух
+        # scan-категорий (consumers+producers) → одна authoritative-замена по ключу async.
         scan_mappings = [
             ("domain", "entities", ("name",)),
             ("api", "api_endpoints", ("method", "path")),
@@ -267,53 +259,54 @@ def _build_excerpt(analysis_dir: Path, scan_dir: Path | None, feature_slug: str)
             ("integration", "external_clients", ("name",)),
             ("db", "tables", ("name",)),
         ]
+        accumulated: dict[str, list] = {}
+        id_keys_by_key: dict[str, tuple[str, ...]] = {}
+        scanned_keys: set[str] = set()
         for cat, key, id_keys in scan_mappings:
             scan_file = scan_dir / f"{cat}.json"
-            if scan_file.exists():
-                data = _read_json(scan_file)
-                items = data.get("items", [])
-                if not items:
-                    continue
+            if not scan_file.exists():
+                continue
+            scanned_keys.add(key)
+            id_keys_by_key[key] = id_keys
+            items = _read_json(scan_file).get("items", [])
+            if key == "entities":
+                parsed = [{"name": i.get("name", "?"),
+                           "kind": i.get("kind", "entity"),
+                           "module": i.get("module", "?")} for i in items]
+            elif key == "api_endpoints":
+                parsed = [{"method": i.get("http_method", "?"),
+                           "path": i.get("path", "?"),
+                           "handler": i.get("handler", "?"),
+                           "module": i.get("module", "?")} for i in items]
+            elif key == "async":
+                parsed = [{"topic": i.get("topic", "?"),
+                           "direction": i.get("direction", "consumer"),
+                           "message_type": i.get("type", "?"),
+                           "module": i.get("module", "?")} for i in items]
+            elif key == "external_clients":
+                parsed = [{"name": i.get("name", "?"),
+                           "protocol": i.get("protocol", "?"),
+                           "module": i.get("module", "?")} for i in items]
+            elif key == "tables":
+                parsed = [{"name": i.get("name", "?"),
+                           "source": i.get("source", "?"),
+                           "module": i.get("module", "?")} for i in items]
+            else:
+                parsed = []
+            accumulated.setdefault(key, []).extend(parsed)
 
-                if key == "entities":
-                    parsed = [{"name": i.get("name", "?"),
-                               "kind": i.get("kind", "entity"),
-                               "module": i.get("module", "?")} for i in items]
-                elif key == "api_endpoints":
-                    parsed = [{"method": i.get("http_method", "?"),
-                               "path": i.get("path", "?"),
-                               "handler": i.get("handler", "?"),
-                               "module": i.get("module", "?")} for i in items]
-                elif key == "async":
-                    parsed = [{"topic": i.get("topic", "?"),
-                               "direction": i.get("direction", "consumer"),
-                               "message_type": i.get("type", "?"),
-                               "module": i.get("module", "?")} for i in items]
-                elif key == "external_clients":
-                    parsed = [{"name": i.get("name", "?"),
-                               "protocol": i.get("protocol", "?"),
-                               "module": i.get("module", "?")} for i in items]
-                elif key == "tables":
-                    parsed = [{"name": i.get("name", "?"),
-                               "source": i.get("source", "?"),
-                               "module": i.get("module", "?")} for i in items]
-                else:
-                    parsed = []
+        # Authoritative-замена: scan присутствовал → ключ берётся целиком из scan (удаления выпадают).
+        for key in scanned_keys:
+            excerpt[key] = _replace_from_scan(excerpt.get(key, []), accumulated.get(key, []),
+                                              id_keys_by_key[key])
 
-                excerpt[key] = _merge_lists(excerpt.get(key, []), parsed, id_keys)
-
-        # Модули — мержим без дубликатов
+        # Модули — тоже authoritative (удалённый модуль выпадает)
         struct_file = scan_dir / "structure.json"
         if struct_file.exists():
             struct_data = _read_json(struct_file)
             scan_modules = [{"name": m.get("name", "?"),
                              "path": m.get("path", "?")} for m in struct_data.get("modules", [])]
-            existing_names = {m.get("name") for m in excerpt.get("modules", []) if isinstance(m, dict)}
-            for sm in scan_modules:
-                if sm.get("name") not in existing_names:
-                    sm["_sources"] = [feature_slug]
-                    excerpt.setdefault("modules", []).append(sm)
-                    existing_names.add(sm.get("name"))
+            excerpt["modules"] = _replace_from_scan(excerpt.get("modules", []), scan_modules, ("name",))
 
         # gate_total — пересчитываем с нуля (HARD)
         gate_total = 0
@@ -366,10 +359,32 @@ def _build_excerpt(analysis_dir: Path, scan_dir: Path | None, feature_slug: str)
     return excerpt
 
 
+def _rescan_code(code_root: Path, scan_path: Path) -> dict:
+    """Освежить scan/*.json по реальному коду перед пересборкой excerpt.
+
+    Без этого enrich читает СТАРЫЙ scan и excerpt отражает код до фичи — мнимая
+    «свежесть». Никогда не валит обогащение: если scan_all недоступен/упал — возвращаем
+    ошибку, дальше работаем по тому scan, что есть.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import scan_all  # type: ignore
+        summary = scan_all.write_scan([Path(code_root).resolve()], scan_path)
+        return {"status": "ok", "counts": summary.get("counts", {})}
+    except Exception as exc:
+        return {"status": "skipped", "reason": f"rescan не выполнен: {exc}"}
+
+
 def enrich(analysis_dir: str | Path, scan_dir: str | Path | None,
            task_plan: dict, feature_slug: str | None = None,
-           dry_run: bool = False) -> dict:
-    """Выполнить обогащение grounding-а."""
+           dry_run: bool = False, code_root: str | Path | None = None,
+           rescan: bool = True) -> dict:
+    """Выполнить обогащение grounding-а.
+
+    code_root — корень репозитория КОДА (может отличаться от analysis_dir для
+    отдельного спека-репо). При rescan=True enrich сам прогоняет scan_all по code_root
+    в scan_dir, чтобы excerpt строился по актуальному коду, а не по устаревшему scan.
+    """
     analysis_path = Path(analysis_dir) if isinstance(analysis_dir, str) else analysis_dir
     scan_path = Path(scan_dir) if isinstance(scan_dir, str) else (scan_dir if scan_dir else None)
 
@@ -379,6 +394,10 @@ def enrich(analysis_dir: str | Path, scan_dir: str | Path | None,
     delta = _extract_delta(task_plan)
 
     changes = {"md_files_updated": [], "excerpt_updated": False}
+
+    # 0. Освежить scan по реальному коду (иначе excerpt отражает код ДО фичи).
+    if rescan and not dry_run and scan_path is not None and code_root is not None:
+        changes["rescan"] = _rescan_code(Path(code_root), scan_path)
 
     # 1. Обновить MD-файлы по каждой затронутой категории
     for category, cfg in CATEGORIES.items():
@@ -472,6 +491,8 @@ def main() -> int:
                     help="Path to scan/ directory (default: <system-analysis>/scan по docs-конфигу)")
     ap.add_argument("--feature", default=None, help="Feature slug (auto from task-plan if omitted)")
     ap.add_argument("--dry-run", action="store_true", help="Preview changes, don't write files")
+    ap.add_argument("--no-rescan", action="store_true",
+                    help="не пересканировать код перед пересборкой (по умолчанию scan освежается)")
     ap.add_argument("--json", action="store_true", help="Output result as JSON")
     args = ap.parse_args()
 
@@ -487,9 +508,17 @@ def main() -> int:
 
     _sa_default, _scan_default = _resolve_docs(Path(args.project_root))
     analysis_path = Path(args.system_analysis) if args.system_analysis else _sa_default
-    scan_path = Path(args.scan) if args.scan else (_scan_default if _scan_default.exists() else None)
+    # При rescan берём канонический путь scan даже если его ещё нет — рескан его создаст.
+    rescan = not args.no_rescan
+    if args.scan:
+        scan_path = Path(args.scan)
+    elif rescan or _scan_default.exists():
+        scan_path = _scan_default
+    else:
+        scan_path = None
 
-    changes = enrich(analysis_path, scan_path, task_plan, args.feature, args.dry_run)
+    changes = enrich(analysis_path, scan_path, task_plan, args.feature, args.dry_run,
+                     code_root=args.project_root, rescan=rescan)
 
     coverage = changes.get("coverage") or {}
     cov_status = coverage.get("status")
@@ -498,6 +527,12 @@ def main() -> int:
         print(json.dumps(changes, ensure_ascii=False, indent=2))
     else:
         print(f"✅ Grounding enrichment {'(dry-run)' if args.dry_run else ''}")
+        rescan_info = changes.get("rescan")
+        if rescan_info:
+            if rescan_info.get("status") == "ok":
+                print("  🔁 scan освежён по коду")
+            else:
+                print(f"  ⚠️  rescan пропущен: {rescan_info.get('reason', '?')}")
         for md in changes["md_files_updated"]:
             print(f"  📝 Updated: {md}")
         if changes.get("excerpt_updated"):

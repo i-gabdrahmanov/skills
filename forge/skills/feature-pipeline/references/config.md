@@ -8,8 +8,7 @@
 
 | Слой | Путь | Роль |
 |---|---|---|
-| Глобальные дефолты (опц.) | `~/.gigacode/pipeline.defaults.json` | общие конвенции на все проекты |
-| **Параметры проекта** | `<project>/ground/pipeline.json` | **источник правды**, переопределяет дефолты |
+| **Параметры проекта** | `<project>/ground/pipeline.json` | **источник правды** для всех скиллов |
 | Рантайм-оверрайд | аргумент в диалоге | разовое переопределение на прогон |
 
 Идентичность проекта = текущая директория (или `git rev-parse --show-toplevel`). Реестра
@@ -90,7 +89,7 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/resolve_phases.py \
 ## Инициализация
 
 ```bash
-python ~/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.py   # создать (не перезапишет); корень — git toplevel/cwd сам
+python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.py   # создать (не перезапишет); корень — git toplevel/cwd сам
     # --print   показать детект без записи
     # --update  обновить только авто-детект-поля, сохранив заполненное вручную
     # --force   перезаписать целиком
@@ -275,9 +274,9 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_tautological_t
 ## Переносимость скиллов (не параметр, а упаковка)
 
 `feature-pipeline` ссылается на `../minor-defect-fix/references/*` (общие jira/bitbucket/
-coverage воркфлоу). Поэтому при экспорте конвейера в другой проект `minor-defect-fix`
-копируется рядом. `pipeline-state` вызывается по user-level пути
-`~/.gigacode/skills/pipeline-state/scripts/` — он глобальный, копировать в проект не нужно.
+coverage воркфлоу). `deploy.sh` раскладывает ВСЕ скиллы co-located в `<project>/.gigacode/skills/`,
+поэтому `minor-defect-fix` и `pipeline-state` лежат рядом и вызываются по проектному пути
+`<project>/.gigacode/skills/<skill>/scripts/` — отдельная глобальная установка не нужна.
 
 ---
 

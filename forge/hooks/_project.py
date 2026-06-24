@@ -44,16 +44,17 @@ def hooks_dir() -> Path:
 
 
 def resolve_skill_path(skill_name: str, *subpaths: str) -> Path:
-    """Резолвит путь к скиллу: ~/.gigacode/skills/<skill>/<subpaths>
+    """Резолвит путь к скиллу: <база>/skills/<skill>/<subpaths> (ПРОЕКТНАЯ модель,
+    база выводится из расположения хука — не ~/.gigacode).
 
     Пример: resolve_skill_path("pipeline-state", "scripts", "update.py")
-    → ~/.gigacode/skills/pipeline-state/scripts/update.py
+    → <project>/.gigacode/skills/pipeline-state/scripts/update.py
     """
     return skills_dir().joinpath(skill_name, *subpaths)
 
 
 def resolve_hook_path(hook_name: str) -> Path:
-    """Резолвит путь к хуку: ~/.gigacode/hooks/<hook>.py"""
+    """Резолвит путь к хуку: <база>/hooks/<hook>.py (проектная база, не ~/.gigacode)."""
     return hooks_dir() / f"{hook_name}.py"
 
 

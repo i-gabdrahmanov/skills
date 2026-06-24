@@ -99,8 +99,12 @@ def load_manifest(project_root: str, feature: str, skill: str = "feature-pipelin
     if not os.path.exists(manifest_path):
         print(f"preflight-validate: manifest not found at {manifest_path}", file=sys.stderr)
         return None
-    with open(manifest_path, "r") as f:
-        return json.load(f)
+    try:
+        with open(manifest_path, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"preflight-validate: manifest нечитаем/повреждён ({manifest_path}): {e}", file=sys.stderr)
+        return None
 
 
 def _check_prev_step_judges(manifest: dict, project_root: str, feature: str,

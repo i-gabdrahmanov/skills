@@ -20,8 +20,9 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_paths.py --pro
 python3 <project>/.gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
 ```
 
-> Глубже: тесты хуков — `bash <project>/.gigacode/hooks/run-hook-tests.sh`; тесты скиллов —
-> `python3 <project>/.gigacode/skills/run_all_tests.py`; метрики из аудита — `hooks/agentops.py`.
+> Глубже: eval-набор хуков — `bash <project>/.gigacode/hooks/run-hook-tests.sh`; тесты скиллов
+> И юнит-тесты хуков (единый прогон) — `python3 <project>/.gigacode/skills/run_all_tests.py`
+> (только хуки — `--skill hooks`); метрики из аудита — `hooks/agentops.py`.
 
 ---
 

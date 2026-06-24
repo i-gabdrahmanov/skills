@@ -2,11 +2,12 @@
 """check_jira.py — паритет созданных Jira-задач против task-plan (gate фазы Jira).
 
 Сверяет: создано issues == 1 Story + N tasks, и у каждой задачи есть Jira key. Источник —
-`jira-result.json`, который пишет jira-task-writer после создания (`{story, tasks:{T1:KEY}}`).
+`jira-tasks-result.json`, который пишет jira-task-writer после создания. Принимает обе формы:
+`{story:{key}, subtasks:[{task_id,key}]}` (контракт SKILL.md) и legacy `{story:KEY, tasks:{T1:KEY}}`.
 Не дёргает Jira API — проверяет метаданные пайплайна.
 
 Usage:
-    check_jira.py <task-plan.json> --result <jira-result.json> [--pipeline-config pipeline.json] [--json]
+    check_jira.py <task-plan.json> --result <jira-tasks-result.json> [--pipeline-config pipeline.json] [--json]
 Exit: 0 = pass/skip, 2 = недобор.
 """
 from __future__ import annotations
@@ -20,7 +21,7 @@ from pathlib import Path
 def main() -> int:
     ap = argparse.ArgumentParser(description="Jira creation parity gate.")
     ap.add_argument("plan")
-    ap.add_argument("--result", help="jira-result.json: {story:KEY, tasks:{T1:KEY,...}}")
+    ap.add_argument("--result", help="jira-tasks-result.json: {story:{key}, subtasks:[{task_id,key}]} (или legacy {story:KEY, tasks:{T1:KEY}})")
     ap.add_argument("--pipeline-config", help="pipeline.json (для jira.enabled)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()

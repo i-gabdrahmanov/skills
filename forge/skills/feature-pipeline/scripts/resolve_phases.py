@@ -79,11 +79,22 @@ def _evaluate_skip_if(skip_expr, pipeline, gates, feature_ctx):
     return result if not negate else not result
 
 
+# Дефолты для enabled_by-полей, ОТСУТСТВУЮЩИХ в pipeline.json. Должны совпадать с
+# дефолтами читателей того же поля: config.py (eval_enabled→True) и eval-guard/tdd-guard.
+# Иначе на конфиге без ключа фаза молча выпадала (02-eval-plan скипался при default=False,
+# хотя доки/судьи считают EDD включённым по умолчанию).
+ENABLED_BY_DEFAULTS = {
+    "quality.eval_enabled": True,
+    "quality.tdd": True,
+}
+
+
 def _evaluate_enabled_by(expr, pipeline, gates):
     """Проверить условие enabled_by (аналог compile-time feature() из Bun).
-    
+
     Если enabled_by нет или None — фаза включена по умолчанию.
     Если это строка — проверяем как путь в pipeline.json или gates.
+    Отсутствующий ключ берёт дефолт из ENABLED_BY_DEFAULTS (по умолчанию False).
     """
     if expr is None:
         return True
@@ -92,7 +103,7 @@ def _evaluate_enabled_by(expr, pipeline, gates):
         gates_data = gates or {}
         gate = gates_data.get("gates", {}).get(gate_name, {})
         return gate.get("enabled", False) if isinstance(gate, dict) else False
-    return bool(_resolve_jpath(pipeline, expr, False))
+    return bool(_resolve_jpath(pipeline, expr, ENABLED_BY_DEFAULTS.get(expr, False)))
 
 
 # База фаз пайплайна (id/порядок — стабильны; phases_override в pipeline.json может дополнить).
@@ -108,7 +119,7 @@ DEFAULT_PHASES = [
     {"id": "03-jira",         "skill": "jira-task-writer",      "enabled_by": "jira.enabled",     "skip_if": None,           "gates": ["jira"],       "description": "Jira issues created"},
     {"id": "04-tdd",          "skill": "java-spring-dev",       "enabled_by": "quality.tdd",      "skip_if": None,           "gates": None,           "description": "TDD RED→GREEN per task"},
     {"id": "05-verify",       "skill": None,                    "enabled_by": None,              "skip_if": None,           "gates": None,           "description": "Full test run + coverage"},
-    {"id": "06-document",     "skill": "java-uml-spec",         "enabled_by": None,              "skip_if": None,           "gates": None,           "description": "Spec updated"},
+    {"id": "06-document",     "skill": None,                    "enabled_by": None,              "skip_if": None,           "gates": None,           "description": "Spec updated"},
     {"id": "07-deliver",      "skill": None,                    "enabled_by": None,              "skip_if": None,           "gates": ["commit","pr","report"], "description": "Stacked PR delivery"},
 ]
 

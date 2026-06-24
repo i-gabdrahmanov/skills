@@ -13,7 +13,7 @@ description: >
 
 # Minor Defect Fix
 
-> **Все пути — в `references/skill-paths.json` (секция `skills.minor-defect-fix`).**
+> **Все пути — в `feature-pipeline/references/skill-paths.json` (секция `skills.minor-defect-fix`).**
 > Пути к другим скиллам — в `skills.<skill-name>`, к хукам — в `hooks.*`.
 > Не используй `~/.gigacode/...` — читай из конфига.
 

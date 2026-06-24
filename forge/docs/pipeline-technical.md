@@ -58,15 +58,22 @@ flowchart TD
 | Конфиг, чтение Jira-входа, скоуп-чек | главный агент | — | — |
 | 0 Discovery (BRD) | интервью inline + BRD-писатель | вложенный скилл + субагент | **Гейт 1** |
 | 1 Grounding | `system-analyst` | оркестратор субагентов | Гейт grounding |
-| 2 Design | `tech-design` | субагент (читает SKILL сам) | **Гейт 2** |
+| 2 SDD | `sdd` | субагент (контракт §4.0a) | **Гейт SDD** |
+| 2 Design (вход — `sdd.md`) | `tech-design` | субагент (читает SKILL сам) | **Гейт 2** |
 | 2.5 Jira | `jira-task-writer` | субагент (контракт §4.5) | **Гейт 3** |
 | 3 Build (per task) | `java-spring-dev` | субагент, TDD RED→GREEN | — |
 | 4 Verify | тестописатель + тестраннер | субагенты | — |
-| 5 Document | спецадаптер + `java-uml-spec` | субагент + скилл | — |
+| 5 Document | спецадаптер | субагент general-purpose | — |
 | 6 Deliver (per task, stacked) | главный агент | Bitbucket/Jira MCP | **Гейты 4–6** |
 
 > **Вложенный скилл vs субагент:** скилл грузится в контекст оркестратора (может задать вопрос);
 > субагент изолирован и возвращает JSON с полем `step_id` (его подхватывает хук `state-recorder`).
+
+> **Таксономия гейтов (во избежание путаницы):** нумерованные **Гейт 1–6** НЕ совпадают с номерами
+> фаз `P0–P6`. Именованные гейты (**критичности**, **Grounding**, **SDD**) идут без номера. Все
+> **Гейты 4–6 — внутри одной фазы Deliver** (commit / push+PR / отчёт): это три под-гейта доставки,
+> а не дубли по фазам Build/Verify/Document (у тех гейтов человека нет). Полный список —
+> Гейт 1 → критичности → Grounding → SDD → Гейт 2 → Гейт 3 → Гейт 4 → Гейт 5 → Гейт 6.
 
 ---
 
@@ -74,11 +81,18 @@ flowchart TD
 
 State намеспейсится по фиче: `<project>/ground/statements/feature-pipeline/<feature>/`.
 
+> **`ground/` — рантайм-каталог данных в ЦЕЛЕВОМ проекте, не в source-репо Forge.** Его создаёт
+> `init.py` (`mkdir(parents=True)`), а `init_pipeline_config.py` кладёт туда `pipeline.json`.
+> Отсутствие `ground/` в репозитории Forge — норма, а не дефект: там лежат только `hooks/`+`skills/`,
+> а `ground/` появляется в проекте при первом прогоне. Все пути `ground/...` ниже подразумевают
+> `<project>/ground/...`.
+
 | step-id | title | depends_on | required_judges |
 |---|---|---|---|
 | `00-brd` | Discovery / BRD | — | `brd-judge` |
 | `01-grounding` | System overview ensured | — | — |
-| `02-design` | Tech design + task plan | `00-brd`, `01-grounding` | `design-judge` |
+| `02-sdd` | SDD specification (sdd.md) | `00-brd`, `01-grounding` | `sdd-judge` |
+| `02-design` | Tech design + task plan | `02-sdd` | `design-judge` |
 | `02-eval-plan` | Eval-plan сгенерирован | `02-design` | `eval-judge` |
 | `03-jira` | Jira issues created | `02-design` | — |
 | `04-test-<taskId>` | TDD RED: тесты падают | `02-design` | `red-judge` |
@@ -112,10 +126,15 @@ sequenceDiagram
     A-->>J: verdict
     O->>J: run_judge brd --from-output / --recheck
     O->>U: Гейт 1 + выбор критичности
-    Note over O: Фаза 2 — Design
+    Note over O: Фаза 2 — SDD
     O->>G: preflight-validate.py
+    O->>A: sdd writer (§4.0a)
+    A-->>O: sdd.md + summary
+    O->>J: run_judge sdd
+    O->>U: Гейт SDD
+    Note over O: Фаза 2 — Design (вход sdd.md)
     O->>A: tech-design (читает SKILL сам)
-    A-->>O: tech-design.md + task-plan.json + sdd.md
+    A-->>O: tech-design.md + task-plan.json
     O->>J: run_judge design
     O->>U: Гейт 2
     Note over O: Фаза 3 — Build (per task)
@@ -155,10 +174,18 @@ sequenceDiagram
 - Свежесть между фичами — инкрементально в фазе 5 (`enrich_grounding.py`), полный рескан не нужен.
 - **Гейт grounding** перед переходом к дизайну.
 
-### Фаза 2 — Design
+### Фаза 2 — SDD (`02-sdd`)
+- `preflight-validate.py` (exit 1 = предыдущий шаг сделан inline → СТОП).
+- Субагент `sdd` (контракт §4.0a `subagent-prompts.md`) → строгая спецификация `sdd.md`
+  (вход: `brd.md` + `grounding-excerpt.json`). НЕ читать `sdd/SKILL.md` в контекст оркестратора.
+- **Judge:** `run_judge.py sdd <slug>` (`sdd-judge`).
+- **Гейт SDD** — утверждение спецификации (правки → возврат `sdd`; новое бизнес-требование → откат к BRD).
+
+### Фаза 2 — Design (вход — утверждённый `sdd.md`)
 - `preflight-validate.py` (exit 1 = предыдущий шаг сделан inline → СТОП).
 - `prepare_design_context.py` → `design-context.json` (выжимка grounding под фичу, ~50–200 строк).
-- Субагент `tech-design` → `tech-design.md`, `task-plan.json`, `sdd.md`.
+- Субагент `tech-design` проектирует ПО `sdd.md` → `tech-design.md`, `task-plan.json`
+  (`sdd.md` уже создан на `02-sdd` — НЕ трогает).
 - **Judge:** `run_judge.py design <slug>` (`design-judge`).
 - **Гейт 2**, затем `add_steps.py` добавляет `02-eval-plan`, `04-test/build-<taskId>`, `07-deliver-<taskId>`.
 
@@ -207,6 +234,7 @@ sequenceDiagram
 | `tdd-guard` | PreToolUse Write/Edit | блок `src/main` пока RED-тест задачи (`04-test-<id>`) не completed; блок `@DataJpaTest`/`@SpringBootTest` при `test_layer=service-unit` | exit 2 |
 | `eval-guard` | PreToolUse Write/Edit | блок `src/main` пока eval'ы задачи не passed в кэше `evals.json` (read-only; прогон — `run_pending_evals.py`) | exit 2 |
 | `sod-enforcer` | PreToolUse Write/Edit/Bash | separation of duties: роль из активного шага манифеста (test не пишет src/main, design не коммитит/пушит/билдит) | exit 2 |
+| `inline-phase-guard` | PreToolUse Write/Edit/Bash | actor-guard: ГЛАВНЫЙ агент (пустой `agent_type`) не производит артефакты/код subagent-фазы inline; снимается override `subagent-origin` | exit 2 |
 | `destructive-blocker` | PreToolUse Bash | чёрный список (`rm -rf /`, force-push, DROP) | exit 2 |
 | `pii-boundary` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
 | `evidence-enforcer` | PreToolUse Bash | блок доставки без полного evidence bundle | exit 2 |
@@ -218,8 +246,8 @@ sequenceDiagram
 | `log-agent` | все | append-only JSONL аудит | — |
 
 **Порядок (sequential) PreToolUse Bash:** destructive-blocker → cost-breaker → evidence-enforcer →
-gate-guard → log-agent. **Write/Edit:** pii-boundary → tdd-guard → eval-guard → sod-enforcer →
-gate-guard → log-agent. Логгер всегда последний и неблокирующий.
+inline-phase-guard → gate-guard → log-agent. **Write/Edit:** pii-boundary → tdd-guard → eval-guard →
+sod-enforcer → inline-phase-guard → gate-guard → log-agent. Логгер всегда последний и неблокирующий.
 
 > Гарантию «фаза выполнена ЧЕРЕЗ субагента» держит не PreToolUse-хук (он срабатывает и внутри
 > субагента → заблокировал бы его), а `update._check_subagent_origin` на закрытии шага: фазы из
@@ -244,7 +272,7 @@ flowchart TD
     ASK -->|override §0.6.1| OV[override_judge.py --reason ...<br/>FAIL остаётся, блок снимается]
 ```
 
-- **Error store:** `ground/statements/feature-pipeline/<slug>/judges/errors.json` — perpetual,
+- **Error store:** `<project>/ground/statements/feature-pipeline/<slug>/judges/errors.json` — perpetual,
   накапливает ошибки между попытками. Лимит — 3 итерации.
 - **Override (§0.6.1)** — последнее средство, только при внешней причине FAIL (нет тестовой БД, внешний
   сервис недоступен) и только с явного согласия. Override НЕ подделывает вердикт — фиксирует, кто и почему снял блок.
@@ -268,7 +296,7 @@ bash <project>/.gigacode/hooks/watch-agents.sh
 python3 <project>/.gigacode/hooks/agentops.py --archive <home>/ai-logs-archive
 ```
 
-Логи субагентов — `ground/ai-logs/<feature>/iter-NN/` + единый архив `ai-logs-archive/agents-YYYYMM.jsonl`.
+Логи субагентов — `<project>/ground/ai-logs/<feature>/iter-NN/` + единый архив `ai-logs-archive/agents-YYYYMM.jsonl`.
 
 ---
 

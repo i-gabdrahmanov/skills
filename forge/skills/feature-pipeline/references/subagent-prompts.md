@@ -92,33 +92,48 @@ subagent_type: general-purpose
 prompt:
 Ты — системный аналитик/спецификатор в пайплайне feature-pipeline.
 
-Шаг 0: Прочитай `<project>/.gigacode/skills/sdd/SKILL.md` целиком.
+Шаг 0: Прочитай `<project>/.gigacode/skills/sdd/SKILL.md` целиком — особенно раздел
+«Сбор неясностей — мини-интервью» и «Выход в пайплайне (JSON)». НЕ зови ask_user_question
+сам — неясности возвращай в `pending_questions`, их задаёт оркестратор.
 
 Вход:
 - BRD: <путь к brd.md>
 - Grounding (выжимка о системе): <путь к grounding-excerpt.json>
 - Jira-ключ (если есть): <KEY-123 или «нет»>
+- answers (если перезапуск): <ответы на прошлые pending_questions или «нет»>
 
 Шаг 1: Прочитай BRD и grounding. Специфицируй ПО grounding, не по коду.
-Шаг 2: Создай ОДИН файл в <папка фичи>/:
+Шаг 2: **Собери все существенные неясности** (всё, что иначе угадывал бы: развилки
+  поведения, лимиты/дефолты/ошибки, переиспользовать или заводить новое, открытые вопросы
+  BRD). Учти уже пришедшие `answers` и не переспрашивай закрытое.
+  - Если неясности остались — НЕ пиши sdd.md, НЕ гоняй gate, верни их в `pending_questions`
+    и заверши проход (status "needs_input"). Косметику не выноси — она идёт в §7 «Риски».
+  - Если неясностей нет — переходи к Шагу 3.
+Шаг 3: Создай ОДИН файл в <папка фичи>/:
   sdd.md — по шаблону `<project>/.gigacode/skills/sdd/references/sdd-template.md`
   (обязательные секции: бизнес-контекст, функциональные требования Given-When-Then, NFR,
    API-контракты, модель данных, критерии приёмки, риски). Если Jira-ключ есть — первой
    строкой шапки `**Jira:** <KEY-123>`.
 
-Gate (обязательно, перед завершением):
+Gate (только когда написал sdd.md, перед завершением):
   python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py sdd <slug> --project-root <project>
   Должен быть PASS. Сохраняет вердикт в judges/sdd-judge.json.
 
 Выходной JSON (ТОЛЬКО его, без текста sdd.md в теле):
-  {"step_id": "02-sdd", "status": "completed",
-   "path": "docs/feature-pipeline/<slug>/sdd.md",
-   "summary": "3-5 строк: суть фичи, ключевые сценарии (вкл. ошибочные), новые API/данные, риск",
-   "gates": {"sdd-judge": "PASS"}}
+  - Есть неясности — **БЕЗ поля `step_id`** (иначе хук закроет шаг раньше времени; шаг
+    закрывается только финальным `completed`-ответом):
+    {"status": "needs_input",
+     "pending_questions": [{"id": "<краткий-id>", "question": "<вопрос>"}]}
+  - Готово (неясностей нет / все закрыты answers) — с `step_id`:
+    {"step_id": "02-sdd", "status": "completed",
+     "path": "docs/feature-pipeline/<slug>/sdd.md",
+     "summary": "3-5 строк: суть фичи, ключевые сценарии (вкл. ошибочные), новые API/данные, риск",
+     "gates": {"sdd-judge": "PASS"}}
 ```
 
-После возврата — детерминированный `run_judge.py sdd <slug>` (фаза 02-sdd). PASS → Гейт SDD.
-См. SKILL.md §5a.
+После возврата оркестратор обрабатывает `pending_questions` через `ask_user_question` и
+перезапускает субагента с `answers`, пока их не останется; затем — детерминированный
+`run_judge.py sdd <slug>` (фаза 02-sdd). PASS → Гейт SDD. См. SKILL.md §5a.
 
 ---
 
@@ -223,14 +238,14 @@ description: "Stubs for task <id>"
 subagent_type: general-purpose
 
 prompt:
-Ты — java-spring-dev разработчик. Прочитай ~/.gigacode/skills/java-spring-dev/SKILL.md.
+Ты — java-spring-dev разработчик. Прочитай <project>/.gigacode/skills/java-spring-dev/SKILL.md.
 
 Создай ТОЛЬКО сигнатуры классов/методов из tech-design.md §3 с телом-заглушкой.
 Цель: тесты (из 04-test-<taskId>) компилируются и падают.
 Не добавляй лишних слоёв.
 
 Gate: ./gradlew compileTestJava (должен пройти, тесты должны падать).
-python3 ~/.gigacode/skills/feature-pipeline/scripts/check_tests_red.py --root . --task <taskId>
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_tests_red.py --root . --task <taskId>
 
 Выходной JSON:
   {"step_id": "stubs-<taskId>", "status": "completed", "compiles": true, "tests_fail": true}
@@ -247,17 +262,17 @@ description: "GREEN: implement code for task <id>"
 subagent_type: general-purpose
 
 prompt:
-Ты — java-spring-dev разработчик. Прочитай ~/.gigacode/skills/java-spring-dev/SKILL.md.
+Ты — java-spring-dev разработчик. Прочитай <project>/.gigacode/skills/java-spring-dev/SKILL.md.
 
 Реализуй тела методов для задачи <taskId> из task-plan.json.
 Минимально, пока тесты не позеленеют. Не добавляй слои «на всякий случай».
 
 Если eval-guard блокирует запись — выполни:
-python3 ~/.gigacode/skills/feature-pipeline/scripts/run_pending_evals.py --project . --feature <slug> --task <taskId>
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_pending_evals.py --project . --feature <slug> --task <taskId>
 
 Gate перед завершением:
 1. ./gradlew test (задачи <taskId>)
-2. python3 ~/.gigacode/skills/feature-pipeline/scripts/check_build.py "<папка>/task-plan.json" --task <taskId>
+2. python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_build.py "<папка>/task-plan.json" --task <taskId>
 
 Выходной JSON:
   {"step_id": "04-build-<taskId>", "status": "completed", "tests_green": true}
@@ -285,7 +300,7 @@ prompt:
 check_coverage отчёт: <путь или содержимое>
 
 Gate:
-python3 ~/.gigacode/tools/check_coverage.py --base dev --threshold 0.80
+python3 <project>/.gigacode/skills/minor-defect-fix/scripts/check_coverage.py --base dev --threshold 0.80
 
 Выходной JSON:
   {"step_id": "cover-gaps", "files_added": [...], "coverage_ok": true}

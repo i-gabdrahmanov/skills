@@ -35,7 +35,11 @@ REGISTRY = Path(__file__).resolve().parent.parent / "references" / "params-regis
 # ── Реестр ────────────────────────────────────────────────────────────────────
 
 def load_registry() -> list:
-    data = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"ERROR: реестр параметров нечитаем/повреждён ({REGISTRY}): {e}", file=sys.stderr)
+        raise SystemExit(4)
     return data.get("params", [])
 
 

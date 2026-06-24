@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Runtime-артефакты пайплайна (живут в проекте-цели, не в репо Forge)
+ground/
+**/settings.json.bak
+**/settings.json.*.bak
+
+# Runtime audit-логи агентов (пишет log-agent.py; не исходник харнеса)
+ai-logs-archive/

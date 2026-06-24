@@ -201,8 +201,12 @@ def update_pipeline_json(pipeline_path, jira_config):
         print(json.dumps({"error": f"pipeline.json не найден: {pipeline_path}"}))
         sys.exit(1)
 
-    with open(pipeline_path, encoding="utf-8") as f:
-        pipeline = json.load(f)
+    try:
+        with open(pipeline_path, encoding="utf-8") as f:
+            pipeline = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(json.dumps({"error": f"pipeline.json повреждён ({pipeline_path}): {e}"}))
+        sys.exit(1)
 
     pipeline["jira"] = jira_config
 

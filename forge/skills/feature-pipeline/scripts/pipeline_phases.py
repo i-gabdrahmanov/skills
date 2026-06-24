@@ -51,8 +51,12 @@ if str(_PSTATE_SCRIPTS) not in sys.path:
 try:
     import judges_registry as _judges_registry
     REQUIRED_JUDGES_MASK = _judges_registry.step_masks()
-except Exception:  # реестр недоступен (pipeline-state не развёрнут рядом) — деградируем мягко
+except Exception as _e:  # реестр недоступен (pipeline-state не развёрнут рядом) — деградируем мягко
     REQUIRED_JUDGES_MASK = {}
+    # Это мягкий fail-open enforcement: без маски шаги закрываются без судейских гейтов.
+    # Раньше падение глоталось молча — теперь оно видно (срабатывает лишь при кривом деплое).
+    print(f"[pipeline_phases] WARNING: judges-registry недоступен ({_e}) — "
+          f"REQUIRED_JUDGES_MASK пуст, судейские гейты не форсятся.", file=sys.stderr)
 
 
 def guess_phase(step_id: str) -> str:
@@ -140,12 +144,12 @@ def allowed_skills(phase_id: str) -> list:
         "00-brd":       ["brd-grounder", "brd-interview", "business-requirements"],
         "01-grounding": ["system-analyst", "Explore"],
         "02-sdd":       ["sdd"],
-        "02-design":    ["tech-design", "java-uml-spec"],
+        "02-design":    ["tech-design"],
         "02-eval-plan": ["general-purpose"],
         "03-jira":      ["jira-task-writer"],
         "04-tdd":       ["java-spring-dev", "bugfix-developer", "minor-defect-fix", "Explore"],
         "05-verify":    ["Explore"],
-        "06-document":  ["java-uml-spec", "Explore"],
+        "06-document":  ["general-purpose", "Explore"],
         "07-deliver":   ["Explore"],
         "07-report":    ["Explore"],
     }.get(phase_id, [])
