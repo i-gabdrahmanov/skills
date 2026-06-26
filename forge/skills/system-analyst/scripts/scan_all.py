@@ -9,7 +9,8 @@ Usage:
     scan_all.py <root> [<root2> ...] [-o <out-dir>] [--quiet]
 
 HARD-категории (точный счёт, gate падает при reported < deterministic):
-    domain (entities), api (endpoints), async_consumers (@KafkaListener).
+    domain (entities), api (endpoints — пути резолвятся из String-констант),
+    async_consumers (@KafkaListener, @StreamListener, функциональные стрим-биндинги).
 ADVISORY-категории (нечёткая семантика «что считать единицей» — gate только предупреждает):
     async_producers, integration, config, cross_cutting, db (tables).
 """
@@ -152,26 +153,18 @@ def _merge(into: dict, src: dict) -> None:
                     into[name].setdefault(sub, []).extend(cat[sub])
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="Deterministic system scan (ground truth for self-check).")
-    ap.add_argument("roots", nargs="*", help="project root(s) (default: git toplevel или cwd)")
-    ap.add_argument("-o", "--out", default=None,
-                    help="output dir (default: <root>/docs/system-analysis/scan — канонический путь, "
-                         "откуда читают check_grounding/verify_coverage/enrich_grounding; "
-                         "для отдельного спека-репо передавай <docs_path>/system-analysis/scan)")
-    ap.add_argument("--quiet", action="store_true", help="do not print the summary table")
-    args = ap.parse_args()
+def write_scan(roots: list[Path], out: Path) -> dict:
+    """Прогнать сканеры по корням и записать per-category JSON + summary.json в ``out``.
 
-    roots = [Path(r).resolve() for r in (args.roots or [repo_root()])]
+    Возвращает summary-словарь. Переиспользуется из main() и из enrich_grounding
+    (чтобы инкрементальное обогащение освежало scan по реальному коду, а не читало
+    устаревшие JSON).
+    """
     multi = len(roots) > 1
     cats: dict = {}
     for r in roots:
-        if not r.exists():
-            print(f"ERROR: root not found: {r}", file=sys.stderr)
-            return 1
         _merge(cats, scan_root(r, prefix=r.name if multi else ""))
 
-    out = Path(args.out) if args.out else _default_scan_dir(roots[0])
     out.mkdir(parents=True, exist_ok=True)
     for name, cat in cats.items():
         (out / f"{name}.json").write_text(json.dumps(cat, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -198,6 +191,27 @@ def main() -> int:
         "out_dir": str(out),
     }
     (out / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    return summary
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Deterministic system scan (ground truth for self-check).")
+    ap.add_argument("roots", nargs="*", help="project root(s) (default: git toplevel или cwd)")
+    ap.add_argument("-o", "--out", default=None,
+                    help="output dir (default: <root>/docs/system-analysis/scan — канонический путь, "
+                         "откуда читают check_grounding/verify_coverage/enrich_grounding; "
+                         "для отдельного спека-репо передавай <docs_path>/system-analysis/scan)")
+    ap.add_argument("--quiet", action="store_true", help="do not print the summary table")
+    args = ap.parse_args()
+
+    roots = [Path(r).resolve() for r in (args.roots or [repo_root()])]
+    for r in roots:
+        if not r.exists():
+            print(f"ERROR: root not found: {r}", file=sys.stderr)
+            return 1
+
+    out = Path(args.out) if args.out else _default_scan_dir(roots[0])
+    counts = write_scan(roots, out)["counts"]
 
     if not args.quiet:
         print(f"Deterministic scan → {out}")

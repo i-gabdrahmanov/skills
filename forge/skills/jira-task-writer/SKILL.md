@@ -13,7 +13,7 @@ description: >
 
 # Jira Task Writer
 
-> **Все пути — в `references/skill-paths.json` (секция `skills.jira-task-writer`).**
+> **Все пути — в `feature-pipeline/references/skill-paths.json` (секция `skills.jira-task-writer`).**
 > Не используй `~/.gigacode/...` — читай из конфига.
 
 Скилл превращает **план работ** в **задачи Jira**: одну Story на фичу и по одной

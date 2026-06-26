@@ -32,7 +32,7 @@ description: >
 |---|---|---|
 | `pipeline` | `ground/pipeline.json` | quality, autonomy, docs, conventions, jira, bitbucket, delivery, phases_override |
 | `gates` | `ground/feature-gates.json` | bool-фиче-флаги рантайма (tdd_enforced, eval_driven_dev, security_review, …) |
-| `risk` 🔒 | `.gigacode/hooks/risk-policy.json` | autonomy_auto_max, default_level, destructive_blacklist, agent_caps (advanced, чувствительно) |
+| `risk` 🔒 | `.gigacode/hooks/risk-policy.json` (в source-layout forge — фолбэк `hooks/risk-policy.json`) | autonomy_auto_max, default_level, destructive_blacklist, agent_caps (advanced, чувствительно) |
 
 Реестр допустимых параметров — `references/params-registry.json`. Скрипт пишет **только**
 то, что описано в реестре (fail-closed).

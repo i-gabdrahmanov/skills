@@ -18,12 +18,51 @@ SKIP_DIRS = {"build", "out", "target", ".gradle", ".idea", "node_modules", ".git
 DATA_DIR = "ground"
 BUILD_FILES = ("build.gradle", "build.gradle.kts", "pom.xml")
 
-_COMMENT_BLOCK_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
-_COMMENT_LINE_RE = re.compile(r"//[^\n]*")
-
-
 def strip_comments(src: str) -> str:
-    return _COMMENT_LINE_RE.sub("", _COMMENT_BLOCK_RE.sub("", src))
+    """Удалить //- и /* */-комментарии, НЕ трогая содержимое строк/символьных литералов.
+
+    Наивная замена регэкспом съедала `//` внутри строк (URL `http://...`, regex-паттерны),
+    из-за чего терялись target клиентов и пути. Этот вариант идёт по символам, пропуская
+    строковые (`"..."`, текстовые блоки `\"\"\"`) и символьные (`'.'`) литералы целиком.
+    """
+    out: list[str] = []
+    i, n = 0, len(src)
+    while i < n:
+        ch = src[i]
+        # Текстовый блок Java 15+ \"\"\"...\"\"\"
+        if src.startswith('"""', i):
+            j = src.find('"""', i + 3)
+            j = j + 3 if j != -1 else n
+            out.append(src[i:j])
+            i = j
+            continue
+        if ch == '"' or ch == "'":
+            quote = ch
+            j = i + 1
+            while j < n:
+                if src[j] == "\\":
+                    j += 2
+                    continue
+                if src[j] == quote or src[j] == "\n":
+                    j += 1 if src[j] == quote else 0
+                    break
+                j += 1
+            out.append(src[i:j])
+            i = j
+            continue
+        if ch == "/" and i + 1 < n and src[i + 1] == "/":
+            j = i + 2
+            while j < n and src[j] != "\n":
+                j += 1
+            i = j
+            continue
+        if ch == "/" and i + 1 < n and src[i + 1] == "*":
+            j = src.find("*/", i + 2)
+            i = j + 2 if j != -1 else n
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def read_text(path: Path) -> str:
@@ -51,6 +90,24 @@ def is_skipped_dir(part: str) -> bool:
     return part.startswith(".") or part in SKIP_DIRS or part == DATA_DIR
 
 
+def _is_test_source(rel_dir_parts: tuple[str, ...]) -> bool:
+    """True, если путь ведёт в тестовый source set.
+
+    Тестовые сорсы — это сегмент сразу после ``src``, имя которого содержит ``test``:
+    ``src/test`` (Maven/Gradle), ``src/testFixtures``, ``src/integrationTest``,
+    ``src/intTest`` и т.п. Проверяем именно соседство с ``src``, чтобы не зацепить
+    легитимный пакет ``...src/main/java/com/x/test/...`` в продакшен-коде.
+
+    Зачем: иначе @Entity-фикстуры, тестовые @RestController и @KafkaListener из
+    интеграционных тестов попадают в grounding как реальная поверхность системы и
+    раздувают HARD-категории (gate против недобора их не ловит).
+    """
+    for i, part in enumerate(rel_dir_parts[:-1]):
+        if part == "src" and "test" in rel_dir_parts[i + 1].lower():
+            return True
+    return False
+
+
 def in_skipped_dir(root: Path, path: Path) -> bool:
     """True, если файл лежит внутри пропускаемого каталога.
 
@@ -61,7 +118,9 @@ def in_skipped_dir(root: Path, path: Path) -> bool:
         rel_dir_parts = path.resolve().relative_to(root).parts[:-1]
     except ValueError:
         rel_dir_parts = path.parts[:-1]
-    return any(is_skipped_dir(part) for part in rel_dir_parts)
+    if any(is_skipped_dir(part) for part in rel_dir_parts):
+        return True
+    return _is_test_source(rel_dir_parts)
 
 
 def iter_files(root: Path, suffixes: tuple[str, ...]) -> Iterable[Path]:

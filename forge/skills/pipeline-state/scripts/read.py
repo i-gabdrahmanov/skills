@@ -15,7 +15,7 @@ import json
 import sys
 from pathlib import Path
 
-from _util import repo_root
+from _util import repo_root, safe_load_json
 
 
 # База данных скиллов внутри проекта (НЕ dot-папка — иначе рантайм режет доступ).
@@ -152,8 +152,7 @@ def main():
         print(json.dumps({"status": "no_state", "feature": args.feature, "expected_at": str(manifest_path)}, ensure_ascii=False))
         sys.exit(0)
 
-    with open(manifest_path) as f:
-        manifest = json.load(f)
+    manifest = safe_load_json(manifest_path, what="manifest")
 
     if args.full:
         print(json.dumps(manifest, ensure_ascii=False, indent=2))

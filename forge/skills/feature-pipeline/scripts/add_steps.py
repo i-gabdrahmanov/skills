@@ -152,7 +152,10 @@ def add_steps(skill: str, feature: str, steps: list) -> dict:
     if not manifest_path.exists():
         return {"status": "error", "error": f"Manifest not found: {manifest_path}"}
 
-    manifest = json.loads(manifest_path.read_text())
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        return {"status": "error", "error": f"Manifest повреждён ({manifest_path}): {e}"}
     existing_ids = {s["id"] for s in manifest.get("steps", [])}
 
     added = 0

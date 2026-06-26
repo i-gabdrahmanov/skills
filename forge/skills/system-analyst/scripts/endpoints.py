@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
-from common import in_skipped_dir
+from common import in_skipped_dir, strip_comments as _common_strip_comments
 
 # Аннотации маппингов: ключ — имя аннотации, значение — HTTP-метод (или None для @RequestMapping).
 MAPPING_ANNOTATIONS: dict[str, str | None] = {
@@ -69,15 +69,12 @@ class Controller:
     dependencies: dict[str, str] = field(default_factory=dict)  # field_name -> type
 
 
-_COMMENT_BLOCK_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
-_COMMENT_LINE_RE = re.compile(r"//[^\n]*")
 _STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"')
 
 
 def _strip_comments(src: str) -> str:
-    src = _COMMENT_BLOCK_RE.sub("", src)
-    src = _COMMENT_LINE_RE.sub("", src)
-    return src
+    # Единый string-aware стриппер (не съедает `//` внутри строковых литералов).
+    return _common_strip_comments(src)
 
 
 def _balanced(text: str, start: int, open_ch: str, close_ch: str) -> int:
@@ -103,26 +100,139 @@ def _balanced(text: str, start: int, open_ch: str, close_ch: str) -> int:
     return -1
 
 
-def _annotation_value(args: str) -> str:
+# Объявление строковой константы-пути: `static final String NAME = <expr>;` (и interface-стиль).
+_STRING_CONST_DECL_RE = re.compile(r"\bString\s+([A-Za-z_]\w*)\s*=\s*([^;]+);")
+
+
+def _split_plus(s: str) -> list[str]:
+    """Разрезать выражение по `+` верхнего уровня (вне строк/скобок) — для конкатенации путей."""
+    parts: list[str] = []
+    buf: list[str] = []
+    i, n = 0, len(s)
+    dp = dbr = 0
+    while i < n:
+        ch = s[i]
+        if ch == '"':
+            m = _STRING_RE.match(s, i)
+            if m:
+                buf.append(s[i:m.end()])
+                i = m.end()
+                continue
+        if ch == "(":
+            dp += 1
+        elif ch == ")":
+            dp -= 1
+        elif ch == "{":
+            dbr += 1
+        elif ch == "}":
+            dbr -= 1
+        if ch == "+" and dp == 0 and dbr == 0:
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    parts.append("".join(buf))
+    return parts
+
+
+def _resolve_expr(expr: str, constants: dict[str, str]) -> str:
+    """Разрешить выражение значения аннотации в строку пути.
+
+    Понимает: строковый литерал, ссылку на константу (CONST или Class.CONST, по простому
+    имени), и конкатенацию `+` этих частей. Если хоть одна часть неразрешима — "".
+    """
+    parts = _split_plus(expr.strip())
+    out: list[str] = []
+    resolved_any = False
+    for raw in parts:
+        p = raw.strip()
+        if not p:
+            continue
+        lm = re.fullmatch(r'"((?:\\.|[^"\\])*)"', p)
+        if lm:
+            out.append(lm.group(1))
+            resolved_any = True
+            continue
+        idm = re.fullmatch(r"(?:\w+\.)?([A-Za-z_]\w*)", p)
+        if idm and idm.group(1) in constants:
+            out.append(constants[idm.group(1)])
+            resolved_any = True
+            continue
+        return ""  # неразрешимая часть — путь восстановить нельзя
+    return "".join(out) if resolved_any else ""
+
+
+def _annotation_value(args: str, constants: dict[str, str] | None = None) -> str:
     """Извлечь строковое значение из аргументов аннотации.
-    Поддерживает: "x", value = "x", path = "x", "{a,b}" — берём первое.
+    Поддерживает: "x", value = "x", path = "x", "{a,b}", а также пути из String-констант
+    (CONST / Class.CONST / конкатенация) — если передан словарь constants.
     """
     if not args:
         return ""
-    s = args.strip().lstrip("(").rstrip(")")
-    # Если в скобках присутствуют именованные параметры
-    for key in ("value", "path"):
-        m = re.search(rf'{key}\s*=\s*"([^"]*)"', s)
-        if m:
-            return m.group(1)
-        m = re.search(rf'{key}\s*=\s*\{{\s*"([^"]*)"', s)
-        if m:
-            return m.group(1)
-    # Просто строковый литерал первым позиционным аргументом
-    m = re.search(r'"([^"]*)"', s)
-    if m:
-        return m.group(1)
-    return ""
+    constants = constants or {}
+    s = args.strip().lstrip("(").rstrip(")").strip()
+
+    def _value_expr() -> str:
+        # Именованный value=/path=
+        for key in ("value", "path"):
+            m = re.search(rf"\b{key}\s*=\s*", s)
+            if m:
+                tail = _split_params(s[m.end():])
+                return tail[0].strip() if tail else ""
+        # Первый позиционный аргумент (не именованный)
+        first = _split_params(s)
+        if first:
+            cand = first[0].strip()
+            # `method=...` и прочие именованные — не путь
+            if "=" in cand and not cand.lstrip().startswith('"') and not cand.lstrip().startswith("{"):
+                return ""
+            return cand
+        return ""
+
+    expr = _value_expr()
+    if not expr:
+        return ""
+    # Массив {a, b} — берём первый элемент
+    am = re.fullmatch(r"\{(.*)\}", expr.strip(), re.DOTALL)
+    if am:
+        elems = _split_params(am.group(1))
+        expr = elems[0].strip() if elems else ""
+    return _resolve_expr(expr, constants)
+
+
+def _project_constants(files: list[Path]) -> dict[str, str]:
+    """Собрать String-константы по списку файлов (читает их сам). См. _collect_constants."""
+    return _collect_constants(_strip_comments(read_text_safe(p)) for p in files)
+
+
+def _collect_constants(texts) -> dict[str, str]:
+    """Разрешить String-константы по уже очищенным текстам (включая константа←константа)."""
+    raw: dict[str, str] = {}
+    for text in texts:
+        for m in _STRING_CONST_DECL_RE.finditer(text):
+            raw.setdefault(m.group(1), m.group(2).strip())
+    resolved: dict[str, str] = {}
+    # Фикспойнт: сначала чистые литералы, затем конкатенации со ссылками на уже разрешённые.
+    for _ in range(6):
+        progressed = False
+        for name, expr in raw.items():
+            if name in resolved:
+                continue
+            val = _resolve_expr(expr, resolved)
+            if val:
+                resolved[name] = val
+                progressed = True
+        if not progressed:
+            break
+    return resolved
+
+
+def read_text_safe(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
 
 
 def _request_mapping_http(args: str) -> str | None:
@@ -342,7 +452,7 @@ def _is_controller(text: str) -> bool:
     )
 
 
-def _class_info(text: str) -> tuple[str, str] | None:
+def _class_info(text: str, constants: dict[str, str] | None = None) -> tuple[str, str] | None:
     """Вернуть (class_name, base_path) или None."""
     m = re.search(r"\bclass\s+([A-Za-z_]\w*)", text)
     if not m:
@@ -357,7 +467,7 @@ def _class_info(text: str) -> tuple[str, str] | None:
         if j < len(text) and text[j] == "(":
             close = _balanced(text, j, "(", ")")
             if close > 0:
-                base = _annotation_value(text[j:close])
+                base = _annotation_value(text[j:close], constants)
     return class_name, base
 
 
@@ -408,33 +518,16 @@ def _extract_calls(body: str, deps: dict[str, str]) -> list[tuple[str, str]]:
     return calls
 
 
-def parse_file(path: Path) -> Controller | None:
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return None
-    if "@RestController" not in raw and "@Controller" not in raw:
-        return None
-    text = _strip_comments(raw)
-    if not _is_controller(text):
-        return None
-    info = _class_info(text)
-    if not info:
-        return None
-    class_name, base_path = info
-    is_kotlin = path.suffix == ".kt"
-    deps = _dependencies(text, kotlin=is_kotlin)
-    controller = Controller(
-        class_name=class_name, file=str(path), base_path=base_path, dependencies=deps
-    )
-    # Найти все маппинг-аннотации
-    anno_pattern = re.compile(
-        r"@(" + "|".join(MAPPING_ANNOTATIONS.keys()) + r")\b"
-    )
-    for m in anno_pattern.finditer(text):
+_ANNO_PATTERN = re.compile(r"@(" + "|".join(MAPPING_ANNOTATIONS.keys()) + r")\b")
+
+
+def _extract_endpoints(text: str, base_path: str, deps: dict[str, str],
+                       constants: dict[str, str] | None, is_kotlin: bool) -> list[Endpoint]:
+    """Вытащить эндпойнты из тела класса (собственного или унаследованного базового)."""
+    endpoints: list[Endpoint] = []
+    for m in _ANNO_PATTERN.finditer(text):
         anno_name = m.group(1)
         j = m.end()
-        # Захват аргументов аннотации
         args = ""
         k = j
         while k < len(text) and text[k].isspace():
@@ -444,12 +537,11 @@ def parse_file(path: Path) -> Controller | None:
             if close > 0:
                 args = text[k:close]
                 j = close
-        # Должен следовать метод
         sig = _find_method_signature(text, j, kotlin=is_kotlin)
         if not sig:
             continue
         _, params_end, ret_type, method_name, params_raw = sig
-        sub_path = _annotation_value(args)
+        sub_path = _annotation_value(args, constants)
         http = MAPPING_ANNOTATIONS[anno_name]
         if http is None:
             http = _request_mapping_http(args) or "ANY"
@@ -458,31 +550,113 @@ def parse_file(path: Path) -> Controller | None:
             p = _parse_param(raw_p)
             if p:
                 params.append(p)
-        body = _method_body(text, params_end)
-        calls = _extract_calls(body, deps)
-        endpoint = Endpoint(
+        calls = _extract_calls(_method_body(text, params_end), deps)
+        endpoints.append(Endpoint(
             http_method=http,
             path=_join_path(base_path, sub_path),
             method_name=method_name,
             return_type=ret_type,
             params=params,
             calls=calls,
-        )
-        controller.endpoints.append(endpoint)
+        ))
+    return endpoints
+
+
+def _extends_of(text: str, class_name: str) -> str | None:
+    """Имя суперкласса для `class <class_name> ... extends X` (без generics/пакета)."""
+    m = re.search(r"\bclass\s+" + re.escape(class_name) + r"\b([^{]*)\{", text)
+    if not m:
+        return None
+    em = re.search(r"\bextends\s+([A-Za-z_][\w.]*)", m.group(1))
+    if not em:
+        return None
+    return em.group(1).split("<")[0].split(".")[-1]
+
+
+def _class_body(text: str, class_name: str) -> str:
+    """Срез тела класса `{ ... }` по имени (для извлечения методов базового контроллера)."""
+    m = re.search(r"\bclass\s+" + re.escape(class_name) + r"\b", text)
+    if not m:
+        return ""
+    brace = text.find("{", m.end())
+    if brace == -1:
+        return ""
+    close = _balanced(text, brace, "{", "}")
+    return text[brace:close] if close > 0 else text[brace:]
+
+
+def _build_controller(path: Path, text: str, constants: dict[str, str] | None,
+                      class_index: dict[str, str]) -> Controller | None:
+    info = _class_info(text, constants)
+    if not info:
+        return None
+    class_name, base_path = info
+    is_kotlin = path.suffix == ".kt"
+    deps = _dependencies(text, kotlin=is_kotlin)
+    controller = Controller(class_name=class_name, file=str(path), base_path=base_path,
+                            dependencies=deps)
+    seen: set[tuple[str, str, str]] = set()
+    for e in _extract_endpoints(text, base_path, deps, constants, is_kotlin):
+        key = (e.http_method, e.path, e.method_name)
+        if key not in seen:
+            seen.add(key)
+            controller.endpoints.append(e)
+    # Унаследованные эндпойнты: методы с @*Mapping живут в абстрактном базовом классе,
+    # а @RestController + базовый путь — на конкретном наследнике (типовой CRUD-base).
+    base = _extends_of(text, class_name)
+    depth = 0
+    while base and depth < 5:
+        base_text = class_index.get(base)
+        if not base_text:
+            break
+        # Не наследуем от класса, который сам контроллер (он сканируется отдельно — нет дублей).
+        if "@RestController" in base_text or "@Controller" in base_text:
+            break
+        for e in _extract_endpoints(_class_body(base_text, base), base_path, deps, constants, is_kotlin):
+            key = (e.http_method, e.path, e.method_name)
+            if key not in seen:
+                seen.add(key)
+                controller.endpoints.append(e)
+        base = _extends_of(base_text, base)
+        depth += 1
     return controller if controller.endpoints else None
+
+
+def parse_file(path: Path, constants: dict[str, str] | None = None) -> Controller | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if "@RestController" not in raw and "@Controller" not in raw:
+        return None
+    text = _strip_comments(raw)
+    if not _is_controller(text):
+        return None
+    # standalone-вызов: индекса классов нет → только собственные эндпойнты.
+    return _build_controller(path, text, constants, {})
 
 
 def scan(root: Path) -> list[Controller]:
     controllers: list[Controller] = []
     root = root.resolve()
-    for path in root.rglob("*"):
-        if path.is_dir():
+    files = [p for p in root.rglob("*")
+             if not p.is_dir() and not in_skipped_dir(root, p) and p.suffix in (".java", ".kt")]
+    # Один проход чтения: очищенные тексты, проектные константы и индекс классов
+    # (для резолва путей-констант и наследуемых эндпойнтов из базовых контроллеров).
+    texts: dict[Path, str] = {}
+    class_index: dict[str, str] = {}
+    for p in files:
+        t = _strip_comments(read_text_safe(p))
+        texts[p] = t
+        for cm in re.finditer(r"\bclass\s+([A-Za-z_]\w*)", t):
+            class_index.setdefault(cm.group(1), t)
+    constants = _collect_constants(texts.values())
+    for path, text in texts.items():
+        if "@RestController" not in text and "@Controller" not in text:
             continue
-        if in_skipped_dir(root, path):
+        if not _is_controller(text):
             continue
-        if path.suffix not in (".java", ".kt"):
-            continue
-        ctrl = parse_file(path)
+        ctrl = _build_controller(path, text, constants, class_index)
         if ctrl:
             controllers.append(ctrl)
     controllers.sort(key=lambda c: c.class_name)

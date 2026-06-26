@@ -12,7 +12,7 @@ description: >
 
 # Pipeline State
 
-> **Все пути — в `references/skill-paths.json` (секция `skills.pipeline-state`).**
+> **Все пути — в `feature-pipeline/references/skill-paths.json` (секция `skills.pipeline-state`).**
 > Пути к хукам — в `hooks.*`. Не используй `~/.gigacode/...` — читай из конфига.
 
 Общая утилита для надёжного исполнения многошаговых пайплайнов. Решает два
@@ -169,10 +169,11 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
 Это создаёт `manifest.json` со всеми шагами в статусе `pending` (или
 `in_progress` для тех, что главный агент собирается запускать сразу).
 
-> `context.feature` (slug) и `context.iteration` опциональны, но по ним хук-логгер
-> `agent-logger` группирует живые логи тул-вызовов агента и субагентов в
+> Хук-логгер `agent-logger` группирует живые логи тул-вызовов агента и субагентов в
 > `<project>/ground/ai-logs/<feature>/iter-NN/` (см. `<project>/.gigacode/hooks/log-agent.py`).
-> Без них логи лягут под именем скилла + хвост `pipeline_id`.
+> Папка `<feature>` берётся из namespace-флага `--feature` (имя каталога манифеста), а **не** из
+> `context.feature`; из `context` логгер использует только `iteration` (→ `iter-NN`). Без `--feature`
+> логи лягут под именем скилла + хвост `pipeline_id`.
 
 При **резюмировании** (после "Резюмировать" в шаге 0): `init.py` НЕ зовётся —
 вместо этого читается существующий manifest. `update.py` помечает failed →
@@ -188,7 +189,7 @@ python <project>/.gigacode/skills/pipeline-state/scripts/update.py \
     --skill system-analysis \
     --step-id 02-api \
     --status completed \
-    --output-file - << 'EOF'
+    --output-stdin << 'EOF'
 {"openapi_available": false, "endpoints": [...]}
 EOF
 ```
@@ -279,8 +280,9 @@ python <project>/.gigacode/skills/pipeline-state/scripts/read.py \
 |---|---|
 | `scripts/init.py` | Создать manifest при первом запуске |
 | `scripts/add_steps.py` | Дописать новые шаги в существующий manifest (идемпотентно; для шагов, известных только по ходу прогона). Проставляет `required_judges` по единой маске и, если у фичи уже есть `gate.json`, пересобирает его. **Для feature-pipeline канон — `skills/feature-pipeline/scripts/add_steps.py`** (он же дополнительно ведёт `phase-defs.json`); эта generic-версия — для прочих скиллов. |
-| `scripts/update.py` | Обновить статус шага и сохранить JSON-выход |
+| `scripts/update.py` | Обновить статус шага и сохранить JSON-выход. При блокировке судьёй/проверкой subagent-origin печатает путь разблокировки через `override_judge.py` |
 | `scripts/read.py` | Прочитать state, выдать summary или выжимку шага |
+| `scripts/override_judge.py` | Ручной пропуск гейта судьи (`--judge … --feature … --reason …`) — единственный путь закрыть шаг, заблокированный отсутствующим/проваленным вердиктом `required_judges` |
 
 См. `scripts/<name>.py --help` для деталей.
 

@@ -15,7 +15,12 @@ from pathlib import Path
 
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
-PROJECT_ROOT = SKILL_DIR.parents[3]  # .gigacode/skills/feature-pipeline -> .gigacode -> project root
+# Пути в skill-paths.json даны как `.gigacode/skills/...` → корень проекта = каталог, СОДЕРЖАЩИЙ
+# `.gigacode`. В развёрнутом проекте SKILL_DIR = `<proj>/.gigacode/skills/feature-pipeline`,
+# т.е. parents[1] == ".gigacode", корень = parents[2]. Раньше был хардкод parents[3] (off-by-one,
+# указывал НАД корнем → все пути «битые» в любом layout). В source-репо (parents[1] != ".gigacode")
+# каталога `.gigacode/` нет — там проверка неприменима (PROJECT_ROOT=None → skip).
+PROJECT_ROOT = SKILL_DIR.parents[2] if SKILL_DIR.parents[1].name == ".gigacode" else None
 CONFIG_PATH = SKILL_DIR / "references" / "skill-paths.json"
 
 
@@ -39,6 +44,12 @@ def collect_path_values(obj):
 
 def main():
     errors = []
+
+    if PROJECT_ROOT is None:
+        # source-репо (нет `.gigacode/` рядом) — пути `.gigacode/...` существуют только в
+        # развёрнутом проекте. Пропускаем, как doctor.registry-paths-exist (а не ложный FAIL).
+        print("· skip: нет `.gigacode/` среди предков — проверка skill-paths актуальна для deployed-layout")
+        sys.exit(0)
 
     if not CONFIG_PATH.exists():
         print(f"❌ CONFIG NOT FOUND: {CONFIG_PATH}")

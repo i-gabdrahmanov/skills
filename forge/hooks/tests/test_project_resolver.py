@@ -24,15 +24,20 @@ class TestProjectResolver(unittest.TestCase):
     """Тесты для _project.py — единого resolv'ера."""
 
     def test_gigacode_home_exists(self):
-        """GIGACODE_HOME = ~/.gigacode должен существовать."""
+        """ПРОЕКТНАЯ модель: gigacode_home() = база кода (родитель hooks/), а НЕ ~/.gigacode.
+        В source-репо это корень репо; в развёрнутом проекте — <project>/.gigacode."""
         path = gigacode_home()
         self.assertTrue(path.exists(), f"{path} does not exist")
-        self.assertEqual(path, Path.home() / ".gigacode")
+        # База = родитель каталога hooks/, где лежит _project.py.
+        expected = Path(__file__).resolve().parents[2]
+        self.assertEqual(path, expected)
+        self.assertNotEqual(path, Path.home() / ".gigacode",
+                            "регресс: вернулись к мёртвому ~/.gigacode-контракту")
 
     def test_skills_dir(self):
-        """skills_dir = ~/.gigacode/skills/"""
+        """skills_dir = <база>/skills (проектная модель, не ~/.gigacode/skills)."""
         path = skills_dir()
-        self.assertEqual(path, Path.home() / ".gigacode" / "skills")
+        self.assertEqual(path, gigacode_home() / "skills")
         self.assertTrue(path.exists(), f"{path} does not exist")
 
     def test_find_project_root(self):
