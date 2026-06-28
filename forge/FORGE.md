@@ -302,12 +302,18 @@ Verify — пайплайн НЕ дошёл до Document/Deliver.
       SKILL §0.2 их собирает, `jira-task-writer` применяет как дефолты — задачи в едином стиле проекта.
 - [—] **Grounding scope** (B): снято — полный скан всего проекта при первом запуске **так и задумано**
       (разовый кэшируемый ground truth, переиспользуется между фичами). Не меняли.
-- [x] **Гейт межмодульных зависимостей** (E): агент дописал в `build.gradle` зависимость на модуль,
-      который по правилам проекта подключать нельзя. `check_architecture.py` расширен: ловит НОВЫЕ
-      `project(':...')` в diff build-файлов (`check_module_deps`); политика `quality.module_dep_policy`
-      = `deny_new` (дефолт, блок любой новой межмодульной зависимости) | `policy` (только
-      `ground/architecture-policy.json: module_deps.forbidden`) | `off`; allow-list `module_deps.allowed_new`;
-      override-эскейп (§0.6.1). Обязательный гейт SKILL §8.3c. Тесты: `test_check_architecture.py`.
+- [x] **Гейт межмодульных зависимостей + архитектурный граунд** (E): агент дописал в `build.gradle`
+      зависимость на модуль, который по правилам проекта подключать нельзя. `check_architecture.py`
+      расширен: (1) `--emit-ground` строит **архитектурный граунд** проекта
+      (`docs/system-analysis/architecture-ground.json` — граф модулей + `allowed_group_couplings`, что
+      проект УЖЕ соединяет; эмитится на grounding §4, курируется через `ground/architecture-policy.json`);
+      (2) `check_module_deps` ловит НОВЫЕ межмодульные зависимости (Gradle `project(':...')`, Maven
+      `<dependency>` на внутренний модуль в `pom.xml`) в diff build-файлов и проверяет против граунда.
+      Политика `quality.module_dep_policy` = **`graph`** (дефолт — **цикл** или **новая group-связка**,
+      которой проект не делает, блокируются; принятые связки проходят: «соединять можно, но не новым
+      способом молча») | `deny_new` | `policy` (`module_deps.forbidden`) | `off`; allow-list `allowed_new`;
+      override-эскейп (§0.6.1). Если граунда нет — деривация на лету (текущий граф минус новые рёбра).
+      Обязательный гейт SKILL §8.3c. Тесты: `test_check_architecture.py` (33).
 
 ## Известные ограничения (из аудита)
 

@@ -199,5 +199,268 @@ class TestModuleDeps(unittest.TestCase):
             self.assertIn("ЗАПРЕЩЕНА", v[0]["detail"])
 
 
+class TestArchGround(unittest.TestCase):
+    """Архитектурный граунд: модули можно соединять по правилам проекта (graph-режим)."""
+
+    def test_build_module_graph(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "service" / "taskservice").mkdir(parents=True)
+            (root / "api" / "taskservice-api").mkdir(parents=True)
+            (root / "service" / "taskservice" / "build.gradle").write_text(
+                'dependencies { implementation project(":api:taskservice-api") }')
+            (root / "api" / "taskservice-api" / "build.gradle").write_text("dependencies {}")
+            g = ca.build_module_graph(root)
+            self.assertIn(["service:taskservice", "api:taskservice-api"], g["edges"])
+            self.assertIn(["service", "api"], g["allowed_group_couplings"])
+
+    def test_group(self):
+        self.assertEqual(ca._group("service:taskservice"), "service")
+        self.assertEqual(ca._group("database"), "database")
+
+    def test_creates_cycle(self):
+        edges = {("service:a", "api:b")}
+        self.assertTrue(ca._creates_cycle(edges, "api:b", "service:a"))   # b→a замыкает
+        self.assertFalse(ca._creates_cycle(edges, "service:a", "api:c"))  # новое, не цикл
+
+    GROUND = {"edges": [["service:taskservice", "api:taskservice-api"]],
+              "allowed_group_couplings": [["service", "api"]]}
+
+    def _patch(self, edges):
+        self._orig = ca._added_module_dep_edges
+        ca._added_module_dep_edges = lambda root, base: edges
+
+    def tearDown(self):
+        if hasattr(self, "_orig"):
+            ca._added_module_dep_edges = self._orig
+
+    def test_accepted_coupling_passes(self):
+        # новая service→api — проект так уже соединяет → пропуск
+        self._patch([{"file": "service/taskservice/build.gradle", "from": "service:taskservice",
+                      "to": "api:other", "line": 'project(":api:other")'}])
+        v = ca.check_module_deps(Path("/nonexistent"), "HEAD", "graph", arch_ground=self.GROUND)
+        self.assertEqual(v, [])
+
+    def test_new_group_coupling_blocks(self):
+        # service→service — проект так не соединяет → блок
+        self._patch([{"file": "service/taskservice/build.gradle", "from": "service:taskservice",
+                      "to": "service:upzservice", "line": 'project(":service:upzservice")'}])
+        v = ca.check_module_deps(Path("/nonexistent"), "HEAD", "graph", arch_ground=self.GROUND)
+        self.assertEqual(len(v), 1)
+        self.assertIn("group-связка", v[0]["detail"])
+
+    def test_cycle_blocks(self):
+        self._patch([{"file": "api/taskservice-api/build.gradle", "from": "api:taskservice-api",
+                      "to": "service:taskservice", "line": 'project(":service:taskservice")'}])
+        v = ca.check_module_deps(Path("/nonexistent"), "HEAD", "graph", arch_ground=self.GROUND)
+        self.assertEqual(len(v), 1)
+        self.assertIn("ЦИКЛ", v[0]["detail"])
+
+    def test_policy_allowed_new_overrides_graph(self):
+        import tempfile
+        self._patch([{"file": "service/taskservice/build.gradle", "from": "service:taskservice",
+                      "to": "service:upzservice", "line": 'project(":service:upzservice")'}])
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "ground").mkdir()
+            (root / "ground" / "architecture-policy.json").write_text(
+                '{"module_deps":{"allowed_new":[["service:taskservice","service:upzservice"]]}}')
+            v = ca.check_module_deps(root, "HEAD", "graph", arch_ground=self.GROUND)
+            self.assertEqual(v, [])  # allow-list побеждает graph-правило
+
+
+class TestMavenModuleGraph(unittest.TestCase):
+    """Поддержка Maven pom.xml в гейте межмодульных зависимостей (универсально, без допущений о структуре)."""
+
+    POM_PARENT = """<?xml version="1.0"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>ru.x.app</groupId>
+  <artifactId>app-parent</artifactId>
+  <version>1.0</version>
+  <packaging>pom</packaging>
+  <modules>
+    <module>service/upzservice</module>
+    <module>service/taskservice</module>
+  </modules>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.springframework</groupId>
+        <artifactId>spring-core</artifactId>
+        <version>6.0</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>
+"""
+
+    POM_UPZ = """<?xml version="1.0"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent>
+    <groupId>ru.x.app</groupId>
+    <artifactId>app-parent</artifactId>
+    <version>1.0</version>
+  </parent>
+  <artifactId>upzservice</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-core</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+"""
+
+    # taskservice зависит от upzservice (sibling) + внешняя либа guava
+    POM_TASK = """<?xml version="1.0"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent>
+    <groupId>ru.x.app</groupId>
+    <artifactId>app-parent</artifactId>
+    <version>1.0</version>
+  </parent>
+  <artifactId>taskservice</artifactId>
+  <dependencies>
+    <!-- межмодульная зависимость -->
+    <dependency>
+      <groupId>ru.x.app</groupId>
+      <artifactId>upzservice</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.google.guava</groupId>
+      <artifactId>guava</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+"""
+
+    # та же taskservice БЕЗ межмодульной зависимости (baseline для diff)
+    POM_TASK_NO_UPZ = """<?xml version="1.0"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent>
+    <groupId>ru.x.app</groupId>
+    <artifactId>app-parent</artifactId>
+    <version>1.0</version>
+  </parent>
+  <artifactId>taskservice</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>com.google.guava</groupId>
+      <artifactId>guava</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+"""
+
+    def test_parse_pom_own_coords_and_parent_inheritance(self):
+        p = ca._parse_pom(self.POM_TASK)
+        self.assertEqual(p["artifact"], "taskservice")    # своё, НЕ parent app-parent
+        self.assertEqual(p["group"], "ru.x.app")          # наследовано от <parent>
+        self.assertEqual({a for _, a in p["deps"]}, {"upzservice", "guava"})  # только <dependencies>
+
+    def test_parse_pom_excludes_dependency_management(self):
+        p = ca._parse_pom(self.POM_PARENT)
+        self.assertEqual(p["artifact"], "app-parent")
+        self.assertEqual(p["deps"], [])                   # managed-блок и <modules> не считаются deps
+
+    def test_parse_pom_invalid_returns_none(self):
+        self.assertIsNone(ca._parse_pom("<project><unclosed>"))
+        self.assertIsNone(ca._parse_pom("not xml at all"))
+        self.assertIsNone(ca._parse_pom("<notproject/>"))
+
+    def _maven_repo(self, d):
+        root = Path(d)
+        (root / "service" / "upzservice").mkdir(parents=True)
+        (root / "service" / "taskservice").mkdir(parents=True)
+        (root / "pom.xml").write_text(self.POM_PARENT)
+        (root / "service" / "upzservice" / "pom.xml").write_text(self.POM_UPZ)
+        (root / "service" / "taskservice" / "pom.xml").write_text(self.POM_TASK)
+        return root
+
+    def test_maven_modules_resolve_map(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root = self._maven_repo(d)
+            modules, resolve = ca._maven_modules(root)
+            self.assertIn("service:upzservice", modules)
+            self.assertIn("service:taskservice", modules)
+            self.assertNotIn("app-parent", modules)            # агрегатор (path_id None) — не узел
+            self.assertEqual(resolve.get("ru.x.app:upzservice"), "service:upzservice")  # groupId:artifactId
+            self.assertEqual(resolve.get("upzservice"), "service:upzservice")            # голый artifactId
+
+    def test_pom_internal_edges_internal_vs_external(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root = self._maven_repo(d)
+            _, resolve = ca._maven_modules(root)
+            edges = ca._pom_internal_edges(self.POM_TASK, "service:taskservice", resolve)
+            self.assertEqual(edges, {"service:upzservice"})   # guava внешняя → не ребро; self исключён
+
+    def test_build_module_graph_maven(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root = self._maven_repo(d)
+            g = ca.build_module_graph(root)
+            self.assertIn(["service:taskservice", "service:upzservice"], g["edges"])
+            self.assertNotIn("app-parent", g["modules"])                       # агрегатор не узел
+            self.assertFalse(any("guava" in m for m in g["modules"]))          # внешняя не узел
+            self.assertIn(["service", "service"], g["allowed_group_couplings"])
+
+    def test_build_module_graph_mixed_gradle_and_maven(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "api" / "taskservice-api").mkdir(parents=True)
+            (root / "service" / "taskservice").mkdir(parents=True)
+            (root / "service" / "upzservice").mkdir(parents=True)
+            # Gradle-модули
+            (root / "api" / "taskservice-api" / "build.gradle").write_text("dependencies {}")
+            (root / "service" / "taskservice" / "build.gradle").write_text(
+                'dependencies { implementation project(":api:taskservice-api") }')
+            # Maven-модуль рядом
+            (root / "service" / "upzservice" / "pom.xml").write_text(self.POM_UPZ)
+            g = ca.build_module_graph(root)
+            self.assertIn(["service:taskservice", "api:taskservice-api"], g["edges"])  # Gradle ребро
+            self.assertIn("service:upzservice", g["modules"])                           # Maven узел
+
+    def test_pom_diff_new_internal_edge_set_difference(self):
+        # сердцевина parse&compare без git: work − base
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root = self._maven_repo(d)
+            _, resolve = ca._maven_modules(root)
+            base = ca._pom_internal_edges(self.POM_TASK_NO_UPZ, "service:taskservice", resolve)
+            work = ca._pom_internal_edges(self.POM_TASK, "service:taskservice", resolve)
+            self.assertEqual(base, set())                       # guava внешняя — не ребро
+            self.assertEqual(work - base, {"service:upzservice"})
+
+    def test_added_module_dep_edges_maven_git(self):
+        # end-to-end: реальный git-diff ловит дописанную межмодульную зависимость в pom.xml
+        import tempfile, subprocess, shutil
+        if shutil.which("git") is None:
+            self.skipTest("git недоступен")
+        with tempfile.TemporaryDirectory() as d:
+            root = self._maven_repo(d)
+            (root / "service" / "taskservice" / "pom.xml").write_text(self.POM_TASK_NO_UPZ)  # старт без зависимости
+
+            def git(*a):
+                subprocess.run(["git", "-C", str(root), *a], check=True, capture_output=True, text=True)
+            git("init", "-q")
+            git("config", "user.email", "t@t")
+            git("config", "user.name", "t")
+            git("add", "-A")
+            git("commit", "-qm", "init")
+            (root / "service" / "taskservice" / "pom.xml").write_text(self.POM_TASK)          # фича дописала зависимость
+
+            edges = ca._added_module_dep_edges(root, "HEAD")
+            self.assertTrue(any(e["from"] == "service:taskservice" and e["to"] == "service:upzservice"
+                                for e in edges), edges)
+            # gate в deny_new должен заблокировать
+            v = ca.check_module_deps(root, "HEAD", "deny_new")
+            self.assertEqual(len(v), 1)
+            self.assertEqual(v[0]["severity"], "error")
+
+
 if __name__ == "__main__":
     unittest.main()

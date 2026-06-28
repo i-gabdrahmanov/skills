@@ -7,9 +7,17 @@
 имя класса). Консервативен: жёстко (fail) — только универсально-согласованные правила
 (package_root, чистота домена), остальное — warning (видно, но не валит; `--strict` ужесточает).
 
+Плюс гейт МЕЖМОДУЛЬНЫХ зависимостей (build-граф): ловит новые межмодульные зависимости в diff
+build-файлов — Gradle `project(':...')` и Maven `<dependency>` на внутренний модуль в `pom.xml` —
+и проверяет их против «архитектурного граунда» проекта (что проект УЖЕ соединяет). Режим `graph`
+(дефолт): цикл или новая group-связка → блок; принятая связка → пропуск. Граунд эмитится на grounding
+(`--emit-ground`) в docs/system-analysis/architecture-ground.json; уточняется ground/architecture-policy.json.
+
 Usage:
     check_architecture.py [--root .] [--base HEAD] [--changed "a.java b.java"]
         [--pipeline-config pipeline.json] [--package-root ru.x.y] [--strict] [--json]
+        [--module-dep-policy graph|deny_new|policy|off] [--arch-ground PATH]
+    check_architecture.py --root . --emit-ground docs/system-analysis/architecture-ground.json
 Exit: 0 = pass (или только warnings без --strict), 2 = fail (нарушение error-уровня / --strict).
 """
 from __future__ import annotations
@@ -19,6 +27,7 @@ import json
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # Словарь слоёв (сегмент пакета/пути). Совпадает с task-plan layers + типовые доп. пакеты.
@@ -137,6 +146,16 @@ def _git(root: Path, *args: str) -> list[str]:
         return []
 
 
+def _git_show(root: Path, ref: str, path: str) -> str:
+    """Содержимое path на ревизии ref ('' если файла там нет / не git)."""
+    try:
+        out = subprocess.run(["git", "-C", str(root), "show", f"{ref}:{path}"],
+                             capture_output=True, text=True, timeout=30)
+        return out.stdout if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
 def _changed_java(root: Path, base: str) -> list[str]:
     files = set()
     files.update(_git(root, "diff", "--name-only", base))
@@ -151,7 +170,9 @@ def _changed_java(root: Path, base: str) -> list[str]:
 # зависимость на другой модуль (project(':service:upzservice')), которого по правилам проекта
 # подключать нельзя (прогон #3: агент молча подключил модуль УПЗ к task-service). Этот блок ловит
 # НОВЫЕ межмодульные зависимости в diff build-файлов и блокирует (deny-first), если они не
-# в allow-list. Поведение: quality.module_dep_policy = deny_new (дефолт) | policy | off.
+# в allow-list. Gradle: project(':...') построчно. Maven: межмодульный <dependency> синтаксически
+# неотличим от внешней либы — сверяем с множеством модулей проекта (parse&compare изменённых pom.xml).
+# Поведение: quality.module_dep_policy = graph (дефолт) | deny_new | policy | off.
 
 _PROJECT_REF_RE = re.compile(
     r"""project\s*\(\s*(?:path\s*[:=]\s*)?['"](:?[\w.\-]+(?::[\w.\-]+)*)['"]""")
@@ -172,9 +193,11 @@ def _canon_module(ref: str) -> str:
 
 
 def _added_module_dep_edges(root: Path, base: str) -> list[dict]:
-    """Новые межмодульные project(:...) зависимости из diff build-файлов (added-строки).
+    """Новые межмодульные зависимости из diff build-файлов (Gradle + Maven).
 
     Возвращает [{file, from, to, line}]. from — модуль build-файла, to — подключаемый модуль.
+    Gradle: added-строки project(':...'). Maven: parse&compare изменённых pom.xml (base vs рабочее
+    дерево), т.к. межмодульный <dependency> синтаксически неотличим от внешней либы.
     """
     out: list[dict] = []
     diff = _git(root, "diff", "-U0", base, "--",
@@ -190,6 +213,25 @@ def _added_module_dep_edges(root: Path, base: str) -> list[dict]:
                 if to and to != frm:
                     out.append({"file": cur, "from": frm or "(root)", "to": to,
                                 "line": ln[1:].strip()[:120]})
+
+    # Maven: какие pom.xml изменились (tracked + staged + untracked), затем diff множеств внутр. deps.
+    poms = set()
+    poms.update(_git(root, "diff", "--name-only", base, "--", "*pom.xml"))
+    poms.update(_git(root, "diff", "--name-only", "--cached", "--", "*pom.xml"))
+    poms.update(_git(root, "ls-files", "--others", "--exclude-standard", "--", "*pom.xml"))
+    poms = {p for p in poms if Path(p).name == "pom.xml"}
+    if poms:
+        _, resolve = _maven_modules(root)
+        for pom in sorted(poms):
+            frm = _module_from_build_path(pom)
+            base_edges = _pom_internal_edges(_git_show(root, base, pom), frm, resolve)
+            try:
+                work_txt = (root / pom).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                work_txt = ""
+            for to in sorted(_pom_internal_edges(work_txt, frm, resolve) - base_edges):
+                out.append({"file": pom, "from": frm or "(root)", "to": to,
+                            "line": f"<dependency> … <artifactId>{to.split(':')[-1]}</artifactId>"})
     return out
 
 
@@ -225,6 +267,132 @@ def _iter_build_files(root: Path):
         yield p
 
 
+# ── Maven (pom.xml) ───────────────────────────────────────────────────────────
+# В Gradle project(':a:b') самоидентифицирует внутренний модуль. В Maven межмодульная зависимость —
+# обычный <dependency> с <groupId>/<artifactId>, синтаксически неотличимый от внешней либы
+# (org.springframework:spring-core). Чтобы отличить внутренний модуль, нужно ЗНАТЬ множество модулей
+# проекта: сканируем все pom.xml, строим карту координата→path-id (как у Gradle: service/upz/pom.xml
+# → service:upz), ребро существует ⇔ артефакт зависимости есть в карте. Парсим xml.etree, обход по
+# локальному имени тега (namespace-агностично); deps берём только из прямого <dependencies> проекта —
+# вложенный <dependencyManagement><dependencies> туда не попадает.
+
+def _local(tag: str) -> str:
+    """Локальное имя тега без namespace: '{http://…/POM/4.0.0}project' → 'project'."""
+    return tag.rsplit("}", 1)[-1]
+
+
+def _child(elem, name: str):
+    """Первый прямой потомок с локальным именем name (или None)."""
+    if elem is None:
+        return None
+    for ch in elem:
+        if _local(ch.tag) == name:
+            return ch
+    return None
+
+
+def _child_text(elem, name: str) -> "str | None":
+    ch = _child(elem, name)
+    return ch.text.strip() if ch is not None and ch.text and ch.text.strip() else None
+
+
+def _parse_pom(text: str) -> "dict | None":
+    """pom.xml → {group, artifact, deps:[(groupId|None, artifactId)]}; None при ошибке разбора.
+
+    artifact/group — СОБСТВЕННЫЕ координаты модуля: artifactId из <project> (НЕ из <parent>),
+    groupId наследуется от <parent> при отсутствии. deps — только прямой <dependencies>/<dependency>
+    (managed-блок <dependencyManagement> вложен отдельно и сюда не входит).
+    """
+    try:
+        root = ET.fromstring(text or "")
+    except Exception:
+        return None
+    if _local(root.tag) != "project":
+        return None
+    artifact = _child_text(root, "artifactId")
+    group = _child_text(root, "groupId") or _child_text(_child(root, "parent"), "groupId")
+    deps: list = []
+    deps_el = _child(root, "dependencies")
+    if deps_el is not None:
+        for dep in deps_el:
+            if _local(dep.tag) != "dependency":
+                continue
+            a = _child_text(dep, "artifactId")
+            if a:
+                deps.append((_child_text(dep, "groupId"), a))
+    return {"group": group, "artifact": artifact, "deps": deps}
+
+
+def _resolve_dep(resolve: dict, group: "str | None", artifact: str) -> "str | None":
+    """Координата зависимости → path-id внутреннего модуля (или None для внешней)."""
+    if group:
+        hit = resolve.get(f"{group}:{artifact}")
+        if hit:
+            return hit
+    return resolve.get(artifact)
+
+
+def _edges_from_parsed(parsed: dict, frm: "str | None", resolve: dict) -> set:
+    out: set = set()
+    for g, a in parsed.get("deps", []):
+        to = _resolve_dep(resolve, g, a)
+        if to and to != frm:
+            out.add(to)
+    return out
+
+
+def _pom_internal_edges(text: str, frm: "str | None", resolve: dict) -> set:
+    """Множество path-id внутр. модулей, на которые ссылается pom-текст (кроме самого frm)."""
+    parsed = _parse_pom(text)
+    return _edges_from_parsed(parsed, frm, resolve) if parsed else set()
+
+
+def _iter_pom_files(root: Path):
+    for p in root.rglob("pom.xml"):
+        if p.is_dir():
+            continue
+        if set(p.relative_to(root).parts) & _SKIP_DIRS:
+            continue
+        yield p
+
+
+def _maven_modules(root: Path) -> "tuple[dict, dict]":
+    """Скан всех pom.xml → (modules, resolve).
+
+    modules: {path_id: parsed}. resolve: и 'groupId:artifactId', и голый 'artifactId' → path_id
+    (голый — fallback для sibling-dep без groupId / с ${project.groupId}; универсально для любой
+    структуры). При коллизии голого artifactId меж модулями голый ключ убираем — авторитетным
+    остаётся 'groupId:artifactId'. Корневой/агрегатор pom (path_id=None) узлом не становится.
+    """
+    modules: dict = {}
+    parsed_list: list = []
+    for pf in _iter_pom_files(root):
+        try:
+            txt = pf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        parsed = _parse_pom(txt)
+        if parsed is None:
+            continue
+        path_id = _module_from_build_path(str(pf.relative_to(root)))
+        if path_id:
+            modules[path_id] = parsed
+            parsed_list.append((path_id, parsed))
+
+    resolve: dict = {}
+    bare: dict = {}
+    for path_id, parsed in parsed_list:
+        art, grp = parsed.get("artifact"), parsed.get("group")
+        if art and grp:
+            resolve[f"{grp}:{art}"] = path_id
+        if art:
+            bare.setdefault(art, set()).add(path_id)
+    for art, ids in bare.items():
+        if len(ids) == 1:
+            resolve.setdefault(art, next(iter(ids)))
+    return modules, resolve
+
+
 def build_module_graph(root: Path) -> dict:
     """Полный граф модулей из build-файлов: modules, edges (канон.), groups, allowed_group_couplings."""
     modules: set[str] = set()
@@ -242,6 +410,13 @@ def build_module_graph(root: Path) -> dict:
             if frm and to and frm != to:
                 edges.add((frm, to))
                 modules.add(to)
+    # Maven: те же узлы/рёбра из pom.xml (координата зависимости → path-id через карту модулей).
+    mvn_modules, resolve = _maven_modules(root)
+    for path_id, parsed in mvn_modules.items():
+        modules.add(path_id)
+        for to in _edges_from_parsed(parsed, path_id, resolve):
+            edges.add((path_id, to))
+            modules.add(to)
     couplings = {(_group(a), _group(b)) for a, b in edges}
     return {"modules": sorted(modules), "edges": sorted(list(e) for e in edges),
             "groups": sorted({_group(m) for m in modules}),
@@ -351,13 +526,32 @@ def main() -> int:
     ap.add_argument("--changed", help="явный список .java (через ,/пробел) — минует git")
     ap.add_argument("--pipeline-config")
     ap.add_argument("--package-root", help="переопределить conventions.package_root")
-    ap.add_argument("--module-dep-policy", choices=["deny_new", "policy", "off"], default=None,
-                    help="политика новых межмодульных зависимостей (дефолт quality.module_dep_policy / deny_new)")
+    ap.add_argument("--module-dep-policy", choices=["graph", "deny_new", "policy", "off"], default=None,
+                    help="политика новых межмодульных зависимостей (дефолт quality.module_dep_policy / graph)")
+    ap.add_argument("--arch-ground", default=None,
+                    help="путь к architecture-ground.json (дефолт docs/system-analysis/)")
+    ap.add_argument("--emit-ground", default=None,
+                    help="построить граф модулей и записать architecture-ground.json по этому пути (без проверки)")
     ap.add_argument("--strict", action="store_true", help="warnings тоже валят (exit 2)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
     root = Path(args.root).resolve()
+
+    # Режим эмиссии архитектурного граунда (фаза grounding): построить граф и записать.
+    if args.emit_ground:
+        from datetime import datetime, timezone
+        g = build_module_graph(root)
+        g = {"$schema": "feature-pipeline/architecture-ground@1",
+             "generated_at": datetime.now(timezone.utc).isoformat(), **g}
+        out = Path(args.emit_ground)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(g, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"✅ architecture-ground записан: {out}")
+        print(f"   модулей {len(g['modules'])}, рёбер {len(g['edges'])}, "
+              f"групп {len(g['groups'])}, group-связок {len(g['allowed_group_couplings'])}")
+        return 0
+
     package_root = args.package_root
     if package_root is None and args.pipeline_config:
         try:
@@ -385,14 +579,15 @@ def main() -> int:
     # Гейт межмодульных зависимостей (по git diff build-файлов) — независим от --changed/слоёв.
     mode = args.module_dep_policy
     if mode is None:
-        mode = "deny_new"
+        mode = "graph"
         if args.pipeline_config:
             try:
                 cfg = json.loads(Path(args.pipeline_config).read_text(encoding="utf-8"))
-                mode = (cfg.get("quality") or {}).get("module_dep_policy", "deny_new")
+                mode = (cfg.get("quality") or {}).get("module_dep_policy", "graph")
             except Exception:
                 pass
-    mdep = check_module_deps(root, args.base, mode)
+    arch_ground = load_arch_ground(root, args.arch_ground) if mode == "graph" else None
+    mdep = check_module_deps(root, args.base, mode, arch_ground)
     if mdep:
         verdict["violations"].extend(mdep)
         verdict["counts"]["error"] += len(mdep)

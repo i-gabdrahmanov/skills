@@ -490,6 +490,16 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/check_grounding.py --r
 Свежесть между фичами поддерживается инкрементально в фазе Document (`enrich_grounding.py`), поэтому
 полный рескан на каждом прогоне не нужен.
 
+**Архитектурный граунд модулей (эмитни здесь — дёшево, идемпотентно).** Построй граф межмодульных
+зависимостей проекта (что проект УЖЕ соединяет; сканирует и `build.gradle`, и `pom.xml`) — его
+использует гейт §8.3c, чтобы отличать принятые связки от новых арх-связываний:
+```bash
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.py \
+    --root "<project>" --emit-ground "<project>/docs/system-analysis/architecture-ground.json"
+```
+(Если grounding в отдельном репо — путь к `docs/system-analysis/` оттуда.) Файл курируемый: архитектор
+может уточнить правила в `ground/architecture-policy.json` (`module_deps.forbidden`/`allowed_new`).
+
 **Гейт Grounding (ОБЯЗАТЕЛЬНО, перед переходом к спецификации).**
 Спроси у пользователя: «Обзор системы (grounding) собран и актуален. Переходим к
 спецификации (SDD)?». Только после «да». Если grounding не собран — НЕ переходи к §5a,
@@ -1036,18 +1046,25 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py regress
 ### 8.3c Гейт межмодульных зависимостей (ОБЯЗАТЕЛЬНО, перед закрытием `05-tests`)
 
 «Не подключай модуль молча.» На прогоне #3 агент дописал в `build.gradle` зависимость на модуль,
-который по правилам проекта подключать нельзя. Этот гейт ловит **новые межмодульные зависимости**
-(`project(':...')` в diff build-файлов) — детерминированно, без сборки:
+который по правилам проекта подключать нельзя. Гейт ловит **новые межмодульные зависимости**
+(Gradle `project(':...')` и Maven `<dependency>` на внутренний модуль в `pom.xml`, в diff
+build-файлов) и проверяет их против **архитектурного граунда** проекта
+(`docs/system-analysis/architecture-ground.json` — что проект УЖЕ соединяет, эмитится на grounding §4):
 ```bash
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.py \
     --root "<project>" --pipeline-config "<project>/ground/pipeline.json"
 ```
-- **exit 0** — новых межмодульных зависимостей нет (или они в allow-list). Продолжай.
-- **exit 2** — добавлена новая межмодульная зависимость `A → B`. **Не подключай модуль ради того,
-  чтобы код собрался**: используй существующий API-модуль/контракт, или вынеси интеграцию правильно.
-  Если это осознанное архрешение — внеси ребро в `ground/architecture-policy.json` (`module_deps.allowed_new`)
-  или подтверди override (§0.6.1). Политика: `quality.module_dep_policy` = `deny_new` (дефолт; любая новая
-  межмодульная зависимость блокируется) | `policy` (блокирует только `module_deps.forbidden`) | `off`.
+- **exit 0** — новых межмодульных зависимостей нет, либо связка уже принята в проекте (модули
+  соединять МОЖНО — по правилам архитектуры), либо ребро в allow-list. Продолжай.
+- **exit 2** — нарушение: **цикл** между модулями ИЛИ **новая group-связка** `groupA → groupB`,
+  которой проект ещё не делает (напр. `service → service`, как подключение УПЗ к task-service).
+  **Не вводи новое арх-связывание ради того, чтобы код собрался**: используй существующий
+  API-модуль/контракт. Если это осознанное архрешение — внеси ребро в `ground/architecture-policy.json`
+  (`module_deps.allowed_new`) или подтверди override (§0.6.1).
+
+Политика `quality.module_dep_policy`: `graph` (дефолт — проверка против архитектурного граунда:
+цикл/новая group-связка блокируются, принятые связки проходят) | `deny_new` (блок любой новой
+межмодульной зависимости) | `policy` (только `architecture-policy.json: module_deps.forbidden`) | `off`.
 
 ### 8.4 Опциональные детерминированные гейты verify (по флагам `pipeline.json`)
 
