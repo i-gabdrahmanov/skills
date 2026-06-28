@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 import judges_registry
+from _util import safe_load_json
 
 # Back-compat: модули doctor/тесты читают REQUIRED_JUDGES_MASK как атрибут.
 # Источник — единый реестр (judges-registry.json), не отдельная копия.
@@ -28,8 +29,7 @@ def _match_phase(step_id: str) -> list:
 
 
 def patch_manifest(manifest_path: Path, dry_run: bool = False) -> bool:
-    with open(manifest_path) as f:
-        manifest = json.load(f)
+    manifest = safe_load_json(manifest_path, what="manifest")
 
     changed = 0
     for step in manifest.get("steps", []):

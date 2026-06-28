@@ -71,6 +71,27 @@ class TestDocsHooksConsistency(unittest.TestCase):
         self.assertNotIn("subagent-enforcer", raw, "subagent-enforcer должен быть удалён из settings")
         self.assertNotIn("gate-resolver", raw, "gate-resolver должен быть удалён из settings")
 
+    def test_every_wired_hook_in_forge_roster(self):
+        """Каждый проведённый в settings хук обязан присутствовать в ростер-таблице FORGE.md.
+
+        Историческая дыра: pii-boundary/sod-enforcer были проведены не на том событии, а
+        inline-phase-guard вовсе отсутствовал в ростер-таблице — цепочечные тесты выше это
+        не ловили (они сверяют только §«Структура хуков», не таблицу). Этот тест пинит таблицу.
+        """
+        block = json.loads(SETTINGS.read_text(encoding="utf-8")).get("hooks", {})
+        wired: set[str] = set()
+        for groups in block.values():
+            for group in groups:
+                for h in group.get("hooks", []):
+                    b = _basename(h.get("command", ""))
+                    if b:
+                        wired.add(b)
+        forge = FORGE.read_text(encoding="utf-8")
+        roster = set(re.findall(r"^\|\s*`([\w-]+)\.py`", forge, re.MULTILINE))
+        missing = sorted(h for h in wired if h not in roster)
+        self.assertEqual(missing, [],
+                         f"Хуки проведены в settings, но отсутствуют в ростер-таблице FORGE.md: {missing}")
+
 
 if __name__ == "__main__":
     unittest.main()

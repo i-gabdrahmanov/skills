@@ -39,6 +39,7 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 | `destructive-blocker.py` | PreToolUse `^Bash$` | чёрный список (`rm -rf /`, force-push, DROP…) | exit 2 |
 | `pii-boundary.py` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
 | `evidence-enforcer.py` | PreToolUse `^Bash$` | блок доставки без полного evidence bundle | exit 2 |
+| `inline-phase-guard.py` | PreToolUse Bash/Write/Edit | actor-guard: главный агент не производит артефакты/код/билд subagent-фазы inline (по `agent_type`) | exit 2 |
 | `cost-breaker.py` | Pre/Post/Stop/SubagentStop/UserPromptSubmit | token budget: warn ≥80% (**стоп 120% временно отключён — токены безлимитны**); учёт по фазам + финализация на Stop | нет (warn-only) |
 | `prompt-guard.py` | UserPromptSubmit + PostToolUse(read/fetch) | детект prompt-injection → additionalContext | нет |
 | `state-recorder.py` | SubagentStop | авто-запись шага в pipeline-state по `step_id` | нет |
@@ -66,13 +67,7 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 | `defect-analyzer` | Анализ дефекта | — |
 | `bugfix-developer` | Минимальный фикс | — |
 | `brd-grounder` | Grounding для BRD | — |
-| `java-uml-spec` | MD-спека + UML-диаграммы | — |
-| `project-packer` | Упаковка исходников (без чувствительных) | — |
-| `project-assembler` | Сборка проекта из склейки | — |
-| `gigacode-migrator` | Миграция скиллов между CLI-системами | dry-run |
-| `skill-creator` | Создание/правка скиллов | — |
 | `config-helper` | Настройка параметров forge (pipeline/gates/risk) скриптом | `test_config.py` |
-| `plantuml-to-png` | PlantUML → PNG | — |
 | `pdf` / `pptx` | Работа с PDF/PPTX | — |
 
 ## Журнал решений (почему так)
@@ -112,23 +107,29 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 
 **PreToolUse `^Bash$` — sequential:**
 1. `destructive-blocker` — чёрный список
-2. `cost-breaker` — token budget
-3. `evidence-enforcer` — полнота пакета
-4. `gate-guard` — risk ladder
-5. `log-agent` — аудит (последний, неблокирующий)
+2. `pii-boundary` — PII scope (перехват редиректов `>`/`tee`/`dd of=` в файл)
+3. `cost-breaker` — token budget
+4. `evidence-enforcer` — полнота пакета
+5. `sod-enforcer` — separation of duties (роль фазы: design/spec/jira не коммитят/пушат/билдят)
+6. `inline-phase-guard` — actor: главный агент не билдит/тестит inline в subagent-фазе
+7. `gate-guard` — risk ladder
+8. `log-agent` — аудит (последний, неблокирующий)
 
 **PreToolUse `(Write|Edit)` — sequential:**
 1. `pii-boundary` — PII scope
 2. `tdd-guard` — форсинг TDD per-task (RED-тест задачи)
 3. `eval-guard` — форсинг EDD (eval'ы задачи passed)
 4. `sod-enforcer` — separation of duties (роль из активного шага)
-5. `gate-guard` — risk ladder
-6. `log-agent` — аудит
+5. `inline-phase-guard` — actor: главный агент не пишет артефакты/код subagent-фазы inline
+6. `gate-guard` — risk ladder
+7. `log-agent` — аудит
 
 Любой блокирующий может остановить (exit 2) до действия. Логгер — всегда последний и неблокирующий.
 Точный блок — в `settings.hooks.json`. Эта секция пинится `hooks/test_docs_hooks_consistency.py`
-(дрейф «доки ↔ деплой» → fail). Гарантию «фаза закрыта субагентом» держит не PreToolUse-хук, а
-`update._check_subagent_origin` на закрытии шага (PreToolUse срабатывает и внутри субагента).
+(дрейф «доки ↔ деплой» → fail). Изоляцию фаз держат два слоя: `inline-phase-guard` (PreToolUse,
+по `agent_type`) не даёт ГЛАВНОМУ агенту производить артефакты/код subagent-фазы inline, а
+`update._check_subagent_origin` на закрытии шага требует реального `SubagentStop`-evidence
+(`_origins/<step_id>.json`), а не доверяет флагу `--closed-by`.
 
 ## Расположение харнеса
 

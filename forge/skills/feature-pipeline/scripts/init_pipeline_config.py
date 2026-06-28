@@ -167,6 +167,8 @@ def build_config(root):
             "jacoco_configured": has_jacoco,
             "token_budget": 2000000,          # PDLC v3.5 cost circuit breaker (warn 80% / stop 120%)
             "tdd": True,                      # TDD по умолчанию: тесты (RED) → код (GREEN); см. check_tests_red.py
+            "eval_enabled": True,             # Eval-Driven Development: фаза 02-eval-plan + eval-guard (resolve_phases.enabled_by)
+            "eval_threshold": 0.95,           # min доля зелёных eval'ов задачи (см. build_evals_from_design.py)
             "compile_test_command": "./gradlew compileTestJava" if gradle else "mvn -q test-compile",
             "test_layer": "service-unit",     # по умолчанию ТОЛЬКО Mockito unit; НЕ писать JPA/@DataJpaTest/@SpringBootTest (red-judge блокирует)
         },

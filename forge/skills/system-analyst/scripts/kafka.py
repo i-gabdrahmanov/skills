@@ -53,6 +53,15 @@ _TOPIC_CONST_RE = re.compile(
 
 _CLASS_RE = re.compile(r"\bclass\s+([A-Za-z_]\w*)")
 
+# spring-cloud-stream: сигнал, что функциональные бины Consumer/Function/Supplier — это
+# Kafka-биндинги, а не случайные java.util.function. Топик задаётся в конфиге
+# (spring.cloud.stream.bindings.<bean>-in-0.destination), статически по коду неизвестен.
+_STREAM_SIGNAL = "org.springframework.cloud.stream"
+# @Bean ... Consumer<...>/Function<...>/Supplier<...> methodName(
+_FUNCTIONAL_RE = re.compile(
+    r"@Bean\b[\s\S]{0,300}?\b(Consumer|Function|Supplier)\s*<[\s\S]*?>\s+([A-Za-z_]\w*)\s*\("
+)
+
 
 def _resolve_topic(raw: str, constants: dict[str, str]) -> str:
     raw = raw.strip()
@@ -131,10 +140,13 @@ def parse_file(path: Path) -> tuple[list[KafkaConsumer], list[KafkaProducer]]:
         raw = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return [], []
+    has_stream = _STREAM_SIGNAL in raw
     if (
         "@KafkaListener" not in raw
         and "KafkaTemplate" not in raw
         and "@SendTo" not in raw
+        and "@StreamListener" not in raw
+        and not has_stream
     ):
         return [], []
     text = _strip_comments(raw)
@@ -160,7 +172,10 @@ def parse_file(path: Path) -> tuple[list[KafkaConsumer], list[KafkaProducer]]:
         method = sig[3] if sig else ""
         topics = _collect_topics_from_args(args, constants)
         if not topics:
-            continue
+            # @KafkaListener — это всегда консьюмер; топик мог прийти из property-плейсхолдера,
+            # SpEL или фабрики контейнера, который статически не разрешить. Не выкидываем
+            # консьюмера из HARD-категории (иначе gate слеп к недобору) — помечаем топик.
+            topics = ["<unresolved>"]
         group = ""
         gm = re.search(r'groupId\s*=\s*"([^"]+)"', args)
         if gm:
@@ -225,6 +240,44 @@ def parse_file(path: Path) -> tuple[list[KafkaConsumer], list[KafkaProducer]]:
                 file=str(path),
             )
         )
+
+    # --- @StreamListener (spring-cloud-stream, deprecated, но встречается) ---
+    for m in re.finditer(r"@StreamListener\b", text):
+        j = m.end()
+        args = ""
+        k = j
+        while k < len(text) and text[k].isspace():
+            k += 1
+        if k < len(text) and text[k] == "(":
+            close = _balanced(text, k, "(", ")")
+            if close > 0:
+                args = text[k:close]
+                j = close
+        is_kotlin = path.suffix == ".kt"
+        sig = _find_method_signature(text, j, kotlin=is_kotlin)
+        topic = _resolve_topic(re.sub(r"[(){}]", "", args).strip(), constants)
+        consumers.append(
+            KafkaConsumer(
+                class_name=_enclosing_class(text, m.start()),
+                method=sig[3] if sig else "",
+                topics=[topic or "<stream-binding>"],
+                file=str(path),
+            )
+        )
+
+    # --- Функциональные биндинги spring-cloud-stream (Consumer/Function/Supplier @Bean) ---
+    # Топик задаётся в конфиге по имени бина → ставим символический <binding:bean>.
+    if has_stream:
+        for m in _FUNCTIONAL_RE.finditer(text):
+            kind, bean = m.group(1), m.group(2)
+            binding = f"<binding:{bean}>"
+            cls = _enclosing_class(text, m.start())
+            if kind in ("Consumer", "Function"):  # потребляет из input-биндинга
+                consumers.append(KafkaConsumer(class_name=cls, method=bean,
+                                               topics=[binding], file=str(path)))
+            if kind in ("Supplier", "Function"):  # пишет в output-биндинг
+                producers.append(KafkaProducer(class_name=cls, method=bean,
+                                               topics=[binding], file=str(path)))
     return consumers, producers
 
 

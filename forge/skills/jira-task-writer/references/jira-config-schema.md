@@ -91,4 +91,5 @@
 | `FR_ST` | `fr_st_field` |
 | `Процесс` | `process_field` |
 | `ФО/Стрим` | `fo_stream_field` |
-| `Acceptance Criteria` | `acceptance_criteria_field` |
+| `Acceptance Criteria` / `Критерии приемки` | `acceptance_criteria_field` |
+| `Story Points` | `story_points_field` |

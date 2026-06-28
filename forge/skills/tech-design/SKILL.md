@@ -16,7 +16,7 @@ description: >
 
 # Tech Design
 
-> **Все пути — в `references/skill-paths.json` (секция `skills.tech-design`).**
+> **Все пути — в `feature-pipeline/references/skill-paths.json` (секция `skills.tech-design`).**
 > Не используй `~/.gigacode/...` — читай из конфига.
 
 Ты — техлид/архитектор. Твоя работа — превратить **спецификацию** (SDD) в
@@ -124,6 +124,7 @@ description: >
 | `mapper` | `@Component`, entity → response DTO |
 | `service` | интерфейс + `*Impl` (`@Service @RequiredArgsConstructor`) |
 | `controller` | `@RestController`, эндпойнты |
+| `scheduler` | `@Scheduled`-задачи/джобы (батч, периодические) |
 
 **Миграции — Liquibase, а не Flyway.** В реальном проекте схема ведётся через Liquibase
 changeset. Не предлагай Flyway `V__*.sql`. Смотри формат (XML/YAML/SQL) и нейминг по

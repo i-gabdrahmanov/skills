@@ -1,6 +1,6 @@
 {
   "$schema": "config-helper/params-registry@1",
-  "_comment": "Единственный источник правды по настраиваемым параметрам forge. config.py пишет только параметры, описанные здесь (fail-closed). file: pipeline=ground/pipeline.json, gates=ground/feature-gates.json, risk=.gigacode/hooks/risk-policy.json. path — dotted-путь внутри файла. aliases помогают модели смапить свободный запрос на id.",
+  "_comment": "Единственный источник правды по настраиваемым параметрам forge. config.py пишет только параметры, описанные здесь (fail-closed). file: pipeline=ground/pipeline.json, gates=ground/feature-gates.json, risk=.gigacode/hooks/risk-policy.json (config.py резолвит с фолбэком на hooks/risk-policy.json для source-layout forge). path — dotted-путь внутри файла. aliases помогают модели смапить свободный запрос на id.",
   "params": [
     {
       "id": "quality.coverage_threshold",

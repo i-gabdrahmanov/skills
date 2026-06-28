@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Tests for update.py _check_subagent_origin (бывший subagent-enforcer, перенесён на закрытие шага).
+"""Tests for update.py _check_subagent_origin (evidence-based, не доверяет --closed-by).
 
 Фазы из SUBAGENT_PHASE_PREFIXES (02-sdd/02-design/04-test/04-build/05-tests/06-spec) можно закрыть
-completed только если запись пришла от субагента (--closed-by subagent, что делает state-recorder).
-Inline-закрытие блокируется; не-субагентные фазы закрываются inline свободно.
+completed только при НАЛИЧИИ evidence-маркера _origins/<step_id>.json (его пишет state-recorder на
+реальном SubagentStop). Флаг --closed-by subagent сам по себе больше НЕ доказывает происхождение.
+Inline-закрытие без маркера блокируется; не-субагентные фазы закрываются inline свободно.
 """
 from __future__ import annotations
 
@@ -30,6 +31,14 @@ def _make_manifest(tmp: Path, feature: str = "feat") -> None:
     }), encoding="utf-8")
 
 
+def _write_marker(tmp: Path, step_id: str, feature: str = "feat") -> None:
+    """Симулирует evidence-маркер, который пишет state-recorder на реальном SubagentStop."""
+    d = tmp / "ground" / "statements" / "feature-pipeline" / feature / "_origins"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{step_id}.json").write_text(
+        json.dumps({"step_id": step_id, "agent_type": "general-purpose"}), encoding="utf-8")
+
+
 def _run(tmp: Path, step_id: str, closed_by: str, feature: str = "feat") -> int:
     return subprocess.run(
         [sys.executable, str(UPDATE), "--project", str(tmp), "--skill", "feature-pipeline",
@@ -45,9 +54,15 @@ class TestSubagentOrigin(unittest.TestCase):
             tmp = Path(d); _make_manifest(tmp)
             self.assertNotEqual(_run(tmp, "04-build-T1", "inline"), 0)
 
-    def test_subagent_close_of_build_ok(self):
+    def test_closed_by_subagent_without_marker_blocked(self):
+        # Дыра, которую закрываем: флаг --closed-by subagent БЕЗ реального evidence — блок.
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d); _make_manifest(tmp)
+            self.assertNotEqual(_run(tmp, "04-build-T1", "subagent"), 0)
+
+    def test_subagent_close_with_marker_ok(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_manifest(tmp); _write_marker(tmp, "04-build-T1")
             self.assertEqual(_run(tmp, "04-build-T1", "subagent"), 0)
 
     def test_inline_close_of_non_subagent_phase_ok(self):

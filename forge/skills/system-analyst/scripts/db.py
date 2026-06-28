@@ -12,6 +12,8 @@ from common import iter_files, iter_java, read_text, strip_comments
 
 _CREATE_TABLE_SQL = re.compile(r"create\s+table\s+(?:if\s+not\s+exists\s+)?[`\"']?([A-Za-z_][\w.]*)", re.IGNORECASE)
 _CREATE_TABLE_LB = re.compile(r'createTable\s+tableName\s*=\s*"([^"]+)"|<createTable[^>]*tableName="([^"]+)"', re.IGNORECASE)
+# YAML-формат Liquibase: `- createTable:` … `tableName: foo` (имя без кавычек или в кавычках).
+_CREATE_TABLE_LB_YAML = re.compile(r'tableName\s*:\s*["\']?([A-Za-z_][\w.]*)', re.IGNORECASE)
 _TABLE_ANNO = re.compile(r'@Table\s*\([^)]*name\s*=\s*"([^"]+)"')
 _ENTITY_CLASS = re.compile(r"@Entity\b[\s\S]{0,400}?\bclass\s+([A-Za-z_]\w*)")
 
@@ -40,10 +42,18 @@ def scan(root: Path) -> dict:
                 if "changelog" in low:
                     tool = "liquibase"
                     migration_count += 1
-                for m in _CREATE_TABLE_LB.finditer(text):
-                    name = m.group(1) or m.group(2)
-                    if name:
-                        tables.setdefault(name, "liquibase")
+                if p.suffix in (".yaml", ".yml"):
+                    # YAML: ловим tableName только внутри блока createTable (иначе addColumn/
+                    # createIndex с tableName дали бы фантомные таблицы).
+                    for cm in re.finditer(r"createTable\s*:", text, re.IGNORECASE):
+                        nm = _CREATE_TABLE_LB_YAML.search(text, cm.end(), cm.end() + 200)
+                        if nm:
+                            tables.setdefault(nm.group(1).split(".")[-1], "liquibase")
+                else:
+                    for m in _CREATE_TABLE_LB.finditer(text):
+                        name = m.group(1) or m.group(2)
+                        if name:
+                            tables.setdefault(name, "liquibase")
 
     if not tables:  # fallback: из @Table / @Entity
         for p in iter_java(root):

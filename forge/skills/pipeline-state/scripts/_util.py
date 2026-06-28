@@ -9,6 +9,17 @@ from pathlib import Path
 from typing import Optional
 
 
+def safe_load_json(path, *, what: str = "JSON-файл", exit_code: int = 4) -> dict:
+    """Читает JSON с чистым сообщением вместо traceback. Fail-closed: при порче файла
+    или ошибке чтения печатает причину в stderr и завершает процесс exit_code (≠ 0),
+    а не роняет необработанный JSONDecodeError. Файл на диске не трогается."""
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"ERROR: {what} нечитаем/повреждён: {path}: {e}", file=sys.stderr)
+        raise SystemExit(exit_code)
+
+
 def repo_root() -> str:
     """Корень репо: git toplevel или cwd. Чтобы оркестратору не нужен $(pwd)/$(git ...)
     в shell-команде — рантайм Qwen/GigaCode жёстко режет command substitution ($(), backticks),

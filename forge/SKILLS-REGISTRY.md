@@ -3,7 +3,7 @@
 Концепция (стр. 180, 294): AGENTS.md / skills / evals — это **supply chain**. У каждого артефакта
 должен быть **owner**, **validity** (срок переоценки), **scope** (где применим) и **eval coverage**.
 Иначе они тихо устаревают и начинают вредить. Этот реестр — лёгкая реализация: один источник правды
-по жизненному циклу скиллов gigacode3 (без правки 22 frontmatter).
+по жизненному циклу скиллов forge (без правки 22 frontmatter).
 
 - **Owner**: `@team` — заменить на реального владельца на целевой машине.
 - **Validity**: дата следующей ревизии (пересмотреть актуальность к этой дате).
@@ -26,14 +26,8 @@
 | brd-interview | @team | 2026-12 | сбор требований интервью | — |
 | brd-grounder | @team | 2026-12 | grounding для BRD | — |
 | business-requirements | @team | 2026-12 | BRD из идеи | — |
-| java-uml-spec | @team | 2026-12 | MD-спека + UML | — |
-| project-packer | @team | 2026-12 | упаковка исходников | — |
-| project-assembler | @team | 2026-12 | сборка проекта из склейки | — |
-| project-grounder | @team | 2026-12 | см. выше | — |
-| gigacode-migrator | @team | 2026-12 | миграция скиллов Claude→GigaCode | dry-run |
-| skill-creator | @team | 2026-12 | создание/правка скиллов | — |
 | config-helper | @team | 2026-12 | настройка параметров forge (pipeline/gates/risk) | test_config.py |
-| plantuml-to-png | @team | 2026-12 | PlantUML→PNG | — |
+| harness-verifier | @team | 2026-12 | семантическая верификация харнеса (скиллы+хуки) перед релизом | методический (бриф+чек-лист) |
 | pdf / pptx | @team | 2026-12 | работа с PDF/PPTX | — |
 
 ## Control-plane хуки (тоже часть supply chain)
@@ -42,6 +36,8 @@
 |---|---|---|---|---|
 | gate-guard + risk_ladder + risk-policy.json | @team | 2026-12 | risk ladder R0–R5, deny-first | hooks/evals/run-evals.py |
 | destructive-blocker | @team | 2026-12 | блок деструктивных команд | run-evals.py |
+| tdd-guard / eval-guard | @team | 2026-12 | блок src/main без RED-теста / без пройденных eval'ов задачи | run-evals.py |
+| sod-enforcer / inline-phase-guard | @team | 2026-12 | separation of duties / блок inline-работы в subagent-фазах | run-evals.py |
 | pii-boundary | @team | 2026-12 | граница PII при записи | run-evals.py |
 | prompt-guard | @team | 2026-12 | детект prompt-injection | run-evals.py |
 | cost-breaker | @team | 2026-12 | token budget: учёт + warn ≥80% (circuit-breaker/стоп 120% временно отключён — токены безлимитны) | run-evals.py |

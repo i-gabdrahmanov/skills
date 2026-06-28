@@ -18,6 +18,7 @@
       },
       "scripts": {
         "init_pipeline_config": ".gigacode/skills/feature-pipeline/scripts/init_pipeline_config.py",
+        "get_prompt": ".gigacode/skills/feature-pipeline/scripts/get_prompt.py",
         "build_evals_from_design": ".gigacode/skills/feature-pipeline/scripts/build_evals_from_design.py",
         "run_judge": ".gigacode/skills/feature-pipeline/scripts/run_judge.py",
         "add_steps": ".gigacode/skills/feature-pipeline/scripts/add_steps.py",
@@ -128,10 +129,6 @@
     "bugfix-developer": {
       "dir": ".gigacode/skills/bugfix-developer",
       "skill_md": ".gigacode/skills/bugfix-developer/SKILL.md"
-    },
-
-    "java-uml-spec": {
-      "dir": ".gigacode/skills/java-uml-spec"
     },
 
     "config-helper": {

@@ -59,11 +59,11 @@ cat ground/pipeline.json
 ## 2. Проверяем наличие system-analysis (детерминированно, в нескольких местах)
 
 Не проверяй один путь руками — используй детектор, он ищет grounding в типовых местах
-(`system-analysis/`, `ground/**`, `.grounding/`) и не даёт повторять грундинг снова и снова:
+(`system-analysis/`: `grounding-excerpt.json`, `overview.md`, `scan/`) и не даёт повторять грундинг снова и снова:
 ```bash
 python3 <project>/.gigacode/skills/system-analyst/scripts/check_grounding.py --root . --json
 ```
-- **exit 0** → §2a (есть, переиспользуй). Вердикт содержит `kind` (excerpt|scan|overview|legacy),
+- **exit 0** → §2a (есть, переиспользуй). Вердикт содержит `kind` (excerpt|scan|overview),
   `path`, `excerpt_path`.
 - **exit 1** → §2b (нет, запускай system-analyst).
 
@@ -74,8 +74,6 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/check_grounding.py --r
 (`kind`, `path` из вердикта) и идём дальше:
 - `kind=excerpt` → выжимка готова, сразу §5 (сохранение шага).
 - `kind=scan` или `overview` (нет `grounding-excerpt.json`) → собери выжимку из scan (§4) и иди дальше.
-- `kind=legacy` → есть только старые `.grounding` заметки; собери выжимку из них best-effort, при
-  нехватке HARD-данных (§4.1 verify_coverage падает) — тогда и только тогда §3 (полный рескан).
 
 Полный рескан (§3) запускай **только** при явном запросе пользователя или если `verify_coverage.py`
 не сходится (реальный рассинхрон). По умолчанию — reuse.
@@ -104,10 +102,10 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/check_grounding.py --r
 python3 - <<'EOF'
 import json, pathlib, sys
 
-config_path = pathlib.Path.home() / ".gigacode/skills/minor-defect-fix/config.json"
+project = pathlib.Path.cwd()
+config_path = project / ".gigacode/skills/minor-defect-fix/config.json"
 config_path.parent.mkdir(parents=True, exist_ok=True)
 
-project = pathlib.Path.cwd()
 # Читаем docs_path из pipeline.json
 pipeline = json.loads((project / "ground/pipeline.json").read_text())
 docs_path = pipeline["docs"]["docs_path"]
@@ -198,8 +196,14 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/scan_all.py \
 ```bash
 python3 <project>/.gigacode/skills/system-analyst/scripts/verify_coverage.py \
     --scan "<docs_path>/system-analysis/scan" \
-    --reported "<docs_path>/system-analysis/grounding-excerpt.json"
+    --reported "<docs_path>/system-analysis/grounding-excerpt.json" \
+    --code-root .
 ```
+
+`--code-root .` включает независимый кросс-чек: грубый счёт `@Entity`/`@KafkaListener`/
+`@*Mapping` по коду как нижняя граница против недосчёта самого сканера (основной gate
+сверяет excerpt со scan и эту дыру не видит). Предупреждение `⚠ сканер недосчитал` —
+повод на полный рескан через `system-analyst`, даже если HARD-категории формально `pass`.
 
 - `pass` (exit 0) — полнота HARD-категорий подтверждена, иди в §5.
 - `fail` (exit 2) — выжимка недосчитала (гейт печатает `missing N: <имена>`).
@@ -274,4 +278,4 @@ python <project>/.gigacode/skills/pipeline-state/scripts/update.py \
 - `<project>/.gigacode/skills/system-analyst/scripts/scan_all.py` — детерминированный скан (ground truth для excerpt)
 - `<project>/.gigacode/skills/system-analyst/scripts/verify_coverage.py` — gate самопроверки полноты
 - `<project>/.gigacode/skills/pipeline-state/scripts/` — init/read/update
-- `docs/feature-pipeline/contracts.md §6` — стык 1→2 (что именно передаётся дизайнеру)
+- `<project>/.gigacode/skills/tech-design/SKILL.md` — потребитель `grounding-excerpt.json` (что именно передаётся дизайнеру на стыке 1→2)

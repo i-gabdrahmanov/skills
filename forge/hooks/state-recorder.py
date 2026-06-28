@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Используем _project.py для стабильного разрешения путей
@@ -133,6 +134,10 @@ def main() -> int:
         if step_id:
             status = _status_from(obj)
             feature = _resolve_active_feature(root)
+            # Evidence-маркер происхождения: пишем ДО update.py, т.к. его _check_subagent_origin
+            # теперь требует наличия _origins/<step_id>.json (а не доверяет --closed-by).
+            # Это единственное место, где маркер рождается — на реальном SubagentStop.
+            _write_origin_marker(root, feature, step_id, data)
             # SubagentStop вызывается отдельным процессом на каждый шаг — буферизация
             # между вызовами невозможна (была мёртвая абстракция FlushGate). Пишем напрямую.
             _direct_update(root, feature, step_id, status, obj)
@@ -148,6 +153,26 @@ def main() -> int:
     except Exception:
         return 0
     return 0
+
+
+def _write_origin_marker(root: Path, feature: str, step_id: str, data: dict) -> None:
+    """Записать evidence-маркер _origins/<step_id>.json — доказательство, что шаг закрыл
+    реальный SubagentStop. update._check_subagent_origin требует его наличия для subagent-фаз.
+    Никогда не роняет прогон (хук пост-событийный)."""
+    try:
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(step_id)).strip("-") or "x"
+        d = root / "ground" / "statements" / SKILL / feature / "_origins"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{safe}.json").write_text(json.dumps({
+            "step_id": step_id,
+            "agent_id": data.get("agent_id"),
+            "agent_type": data.get("agent_type"),
+            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "agent_transcript_path": data.get("agent_transcript_path"),
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"[state-recorder] не удалось записать origin-маркер для '{step_id}': {e}",
+              file=sys.stderr)
 
 
 def _direct_update(root: Path, feature: str, step_id: str, status: str, obj: dict) -> None:

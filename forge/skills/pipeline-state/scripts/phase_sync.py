@@ -92,8 +92,14 @@ def sync_gate_from_manifest(project_root: str, feature: str, skill: str = "featu
     if not os.path.exists(gate_path):
         return None
 
-    with open(manifest_path) as f:
-        manifest = json.load(f)
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        # Fail-soft как и при отсутствии файла: не роняем вызывающий процесс (update.py),
+        # только сообщаем — синхронизация gate пропускается, а не валит всю команду.
+        print(f"phase_sync: manifest нечитаем/повреждён ({manifest_path}): {e}", file=sys.stderr)
+        return None
 
     return _regenerate_gate(project_root, feature, skill, manifest)
 

@@ -27,14 +27,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import judges_registry
-from _util import repo_root, feature_docs_dir, safe_slug
+from _util import repo_root, feature_docs_dir, safe_slug, safe_load_json
 
 
 def load_json_arg(value: str):
     """Accepts either inline JSON or @<filepath>."""
     if value.startswith("@"):
-        with open(value[1:]) as f:
-            return json.load(f)
+        return safe_load_json(value[1:], what="--steps файл")
     return json.loads(value)
 
 

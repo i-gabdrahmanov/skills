@@ -23,11 +23,12 @@ Paths are normalized to be relative to project root.
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from _util import repo_root
+from _util import repo_root, safe_load_json
 from phase_sync import sync_gate_from_manifest
 
 # Соглашение «какие фазы обязаны идти через субагента» — ЕДИНЫЙ источник pipeline_phases
@@ -60,6 +61,18 @@ def _judges_dir(project: Path, skill: str, feature: str) -> Path:
 def _overrides_dir(project: Path, skill: str, feature: str) -> Path:
     """Путь к каталогу ручных override-файлов."""
     return project / "ground" / "statements" / skill / feature / "overrides"
+
+
+def _origins_dir(project: Path, skill: str, feature: str) -> Path:
+    """Каталог evidence-маркеров происхождения шага. Маркер <step_id>.json пишет ТОЛЬКО
+    state-recorder на реальном SubagentStop — поэтому его наличие доказывает, что шаг
+    выполнен субагентом, а не подделан флагом --closed-by."""
+    return project / "ground" / "statements" / skill / feature / "_origins"
+
+
+def _has_origin_marker(project: Path, skill: str, feature: str, step_id: str) -> bool:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(step_id)).strip("-") or "x"
+    return (_origins_dir(project, skill, feature) / f"{safe}.json").exists()
 
 
 def _load_override(project: Path, skill: str, feature: str, judge_name: str) -> dict | None:
@@ -180,34 +193,39 @@ def _check_judges(step: dict, project: Path, skill: str, feature: str):
 
 
 def _check_subagent_origin(step: dict, closed_by: str, project: Path, skill: str, feature: str):
-    """Гарантия «фаза выполнена ЧЕРЕЗ субагента, а не inline».
+    """Гарантия «фаза выполнена ЧЕРЕЗ субагента, а не inline» — на EVIDENCE, не на доверии.
 
     Раньше это пытался форсить subagent-enforcer (PreToolUse), но PreToolUse срабатывает и
-    ВНУТРИ субагента → он заблокировал бы сам субагент. Поэтому проверка перенесена на закрытие
-    шага: фазы из SUBAGENT_PHASE_PREFIXES можно закрыть completed только если запись пришла от
-    SubagentStop (state-recorder передаёт closed_by=subagent). Inline-закрытие блокируется.
+    ВНУТРИ субагента → он заблокировал бы сам субагент. Проверку перенесли на закрытие шага, но
+    она доверяла флагу --closed-by: оркестратор мог передать --closed-by subagent inline и
+    подделать происхождение. Теперь проверяется НАЛИЧИЕ evidence-маркера _origins/<step_id>.json,
+    который пишет ТОЛЬКО state-recorder на реальном SubagentStop (рантайм-событие, не тул модели).
+    Флаг --closed-by больше не является доказательством.
 
-    Escape-hatch: overrides/subagent-origin.json (как у судей) — снимает блок с предупреждением.
+    Escape-hatch: overrides/subagent-origin.json (как у судей) — снимает блок с предупреждением
+    (для деградации, когда agent() реально недоступен).
     """
-    if not _requires_subagent(step.get("id", "")):
+    step_id = step.get("id", "")
+    if not _requires_subagent(step_id):
         return
-    if closed_by == "subagent":
-        return
+    if _has_origin_marker(project, skill, feature, step_id):
+        return  # реальный SubagentStop оставил evidence — фаза прошла субагентом
     ov = _load_override(project, skill, feature, "subagent-origin")
     if ov:
         step.setdefault("override_warnings", [])
-        msg = (f"⚠️  шаг '{step['id']}' закрыт inline (не субагентом) — пропущено вручную. "
+        msg = (f"⚠️  шаг '{step_id}' закрыт без subagent-evidence — пропущено вручную. "
                f"Причина: {ov.get('reason', '?')}")
         if msg not in step["override_warnings"]:
             step["override_warnings"].append(msg)
         print(f"  {msg}", file=sys.stderr)
         return
     raise RuntimeError(
-        f"Шаг {step['id']} нельзя закрыть inline: фаза обязана выполняться ЧЕРЕЗ "
-        f"agent(subagent_type=...). Прогони её субагентом (state-recorder закроет шаг на "
-        f"SubagentStop), либо поставь override:\n"
+        f"Шаг {step_id} нельзя закрыть: нет evidence, что фаза прошла через субагента "
+        f"(_origins/{step_id}.json от SubagentStop отсутствует; флаг --closed-by теперь не "
+        f"считается доказательством). Прогони фазу через agent(subagent_type=...) — "
+        f"state-recorder запишет evidence и закроет шаг сам. Если agent() недоступен — override:\n"
         f"   python3 {_OVERRIDE_SCRIPT} --judge subagent-origin --feature {feature} "
-        f"--step-id {step['id']} --reason \"<почему inline допустимо>\""
+        f"--step-id {step_id} --reason \"<почему inline допустимо>\""
     )
 
 
@@ -250,8 +268,7 @@ def main():
         print(f"ERROR: manifest not found at {manifest_path}. Run init.py first.", file=sys.stderr)
         sys.exit(3)
 
-    with open(manifest_path) as f:
-        manifest = json.load(f)
+    manifest = safe_load_json(manifest_path, what="manifest")
 
     step = next((s for s in manifest["steps"] if s["id"] == args.step_id), None)
     if step is None:
