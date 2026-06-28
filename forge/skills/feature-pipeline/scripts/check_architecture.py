@@ -146,6 +146,204 @@ def _changed_java(root: Path, base: str) -> list[str]:
             if f.endswith(".java") and "/test/" not in f and "src/main/" in f]
 
 
+# ── Гейт межмодульных зависимостей (build-граф) ──────────────────────────────
+# Слоевой анализ выше смотрит .java-импорты; он НЕ видит, что фича дописала в build.gradle
+# зависимость на другой модуль (project(':service:upzservice')), которого по правилам проекта
+# подключать нельзя (прогон #3: агент молча подключил модуль УПЗ к task-service). Этот блок ловит
+# НОВЫЕ межмодульные зависимости в diff build-файлов и блокирует (deny-first), если они не
+# в allow-list. Поведение: quality.module_dep_policy = deny_new (дефолт) | policy | off.
+
+_PROJECT_REF_RE = re.compile(
+    r"""project\s*\(\s*(?:path\s*[:=]\s*)?['"](:?[\w.\-]+(?::[\w.\-]+)*)['"]""")
+
+
+def _module_from_build_path(path: str) -> "str | None":
+    """'service/taskservice/build.gradle' → 'service:taskservice'. Корневой build.* → None."""
+    parts = Path(path.replace("\\", "/")).parts
+    base = {"build.gradle", "build.gradle.kts", "pom.xml"}
+    p = [x for x in parts if x not in base]
+    return ":".join(p) if p else None
+
+
+def _canon_module(ref: str) -> str:
+    """':service:upzservice' / 'service:upzservice' / 'service-upzservice' → 'service:upzservice'."""
+    return ref.lstrip(":").replace("-", ":") if ":" not in ref.lstrip(":") and "-" in ref \
+        else ref.lstrip(":")
+
+
+def _added_module_dep_edges(root: Path, base: str) -> list[dict]:
+    """Новые межмодульные project(:...) зависимости из diff build-файлов (added-строки).
+
+    Возвращает [{file, from, to, line}]. from — модуль build-файла, to — подключаемый модуль.
+    """
+    out: list[dict] = []
+    diff = _git(root, "diff", "-U0", base, "--",
+                "*.gradle", "*.gradle.kts", "**/build.gradle", "**/build.gradle.kts")
+    cur = None
+    for ln in diff:
+        if ln.startswith("+++ b/"):
+            cur = ln[6:]
+        elif cur and ln.startswith("+") and not ln.startswith("+++"):
+            frm = _module_from_build_path(cur)
+            for m in _PROJECT_REF_RE.finditer(ln):
+                to = _canon_module(m.group(1))
+                if to and to != frm:
+                    out.append({"file": cur, "from": frm or "(root)", "to": to,
+                                "line": ln[1:].strip()[:120]})
+    return out
+
+
+def load_arch_policy(root: Path) -> dict:
+    """ground/architecture-policy.json: {module_deps:{forbidden:[[a,b]], allowed_new:[[c,d]]}}."""
+    p = root / "ground" / "architecture-policy.json"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data.get("module_deps", {}) if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+# ── Граф модулей (архитектурный граунд) ──────────────────────────────────────
+# Модули можно соединять, но по правилам КОНКРЕТНОГО проекта. Правила выводим из фактического
+# графа зависимостей модулей (что проект УЖЕ делает) — это «архитектурный граунд». Канонизация
+# рёбер тут — единственный источник правды и для эмиттера граунда (--emit-ground), и для гейта.
+_BUILD_NAMES = ("build.gradle", "build.gradle.kts")
+_SKIP_DIRS = {".git", "build", "out", "target", ".gradle", ".idea", "node_modules", "bin", ".gigacode"}
+
+
+def _group(mod_id: str) -> str:
+    """Группа модуля = первый сегмент id: 'service:taskservice' → 'service'."""
+    return mod_id.split(":")[0] if mod_id else mod_id
+
+
+def _iter_build_files(root: Path):
+    for p in root.rglob("*"):
+        if p.is_dir() or p.name not in _BUILD_NAMES:
+            continue
+        if set(p.relative_to(root).parts) & _SKIP_DIRS:
+            continue
+        yield p
+
+
+def build_module_graph(root: Path) -> dict:
+    """Полный граф модулей из build-файлов: modules, edges (канон.), groups, allowed_group_couplings."""
+    modules: set[str] = set()
+    edges: set[tuple[str, str]] = set()
+    for bf in _iter_build_files(root):
+        frm = _module_from_build_path(str(bf.relative_to(root)))
+        if frm:
+            modules.add(frm)
+        try:
+            txt = bf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in _PROJECT_REF_RE.finditer(txt):
+            to = _canon_module(m.group(1))
+            if frm and to and frm != to:
+                edges.add((frm, to))
+                modules.add(to)
+    couplings = {(_group(a), _group(b)) for a, b in edges}
+    return {"modules": sorted(modules), "edges": sorted(list(e) for e in edges),
+            "groups": sorted({_group(m) for m in modules}),
+            "allowed_group_couplings": sorted(list(c) for c in couplings)}
+
+
+def _reaches(edges: set, start: str, target: str) -> bool:
+    """Есть ли путь start →…→ target в edges (set рёбер (a,b))."""
+    adj: dict = {}
+    for a, b in edges:
+        adj.setdefault(a, []).append(b)
+    seen, stack = set(), [start]
+    while stack:
+        n = stack.pop()
+        if n == target:
+            return True
+        if n in seen:
+            continue
+        seen.add(n)
+        stack.extend(adj.get(n, []))
+    return False
+
+
+def _creates_cycle(base_edges: set, frm: str, to: str) -> bool:
+    """Добавление frm→to замыкает цикл ⇔ to уже достигает frm."""
+    return _reaches(base_edges, to, frm)
+
+
+def load_arch_ground(root: Path, explicit: "str | None" = None) -> "dict | None":
+    """architecture-ground.json (по умолчанию docs/system-analysis/), либо None."""
+    p = Path(explicit) if explicit else (root / "docs" / "system-analysis" / "architecture-ground.json")
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _mdep_violation(edge: dict, detail: str) -> dict:
+    return {"file": edge["file"], "rule": "module-dependency", "severity": "error", "detail": detail}
+
+
+def check_module_deps(root: Path, base: str, mode: str, arch_ground: "dict | None" = None) -> list[dict]:
+    """Нарушения по новым межмодульным зависимостям. mode: graph | deny_new | policy | off."""
+    if mode == "off":
+        return []
+    policy = load_arch_policy(root)
+    forbidden = {tuple(_canon_module(x) for x in e) for e in policy.get("forbidden", []) if len(e) == 2}
+    allowed = {tuple(_canon_module(x) for x in e) for e in policy.get("allowed_new", []) if len(e) == 2}
+
+    new_edges = _added_module_dep_edges(root, base)
+    if not new_edges:
+        return []
+
+    base_edges: set = set()
+    couplings: set = set()
+    if mode == "graph":
+        ground = arch_ground if arch_ground is not None else load_arch_ground(root)
+        if ground:
+            base_edges = {tuple(e) for e in ground.get("edges", []) if len(e) == 2}
+            couplings = {tuple(c) for c in ground.get("allowed_group_couplings", []) if len(c) == 2}
+        else:
+            # граунда нет → деривация на лету: текущий граф МИНУС новые рёбра = baseline
+            cur = build_module_graph(root)
+            cur_edges = {tuple(e) for e in cur["edges"]}
+            new_set = {(e["from"], e["to"]) for e in new_edges}
+            base_edges = cur_edges - new_set
+            couplings = {(_group(a), _group(b)) for a, b in base_edges}
+
+    violations: list[dict] = []
+    for edge in new_edges:
+        frm, to = edge["from"], edge["to"]
+        pair = (frm, to)
+        if pair in allowed:
+            continue
+        if pair in forbidden:
+            violations.append(_mdep_violation(
+                edge, f"межмодульная зависимость {frm} → {to} ЗАПРЕЩЕНА политикой "
+                      f"(architecture-policy.json): {edge['line']}"))
+            continue
+        if mode == "policy":
+            continue  # вне graph: блокируем только forbidden
+        if mode == "deny_new":
+            violations.append(_mdep_violation(
+                edge, f"новая межмодульная зависимость {frm} → {to} в {edge['file']}: {edge['line']} — "
+                      f"не подключай модуль молча. Используй существующий API-модуль/контракт; если это "
+                      f"осознанное архрешение — override (§0.6.1) или ground/architecture-policy.json allowed_new."))
+            continue
+        # mode == "graph"
+        if _creates_cycle(base_edges, frm, to):
+            violations.append(_mdep_violation(
+                edge, f"ЦИКЛ зависимостей: {frm} → {to} замыкает граф модулей (через {edge['file']}). "
+                      f"Циклы между модулями запрещены — разорви связь (вынеси общий код/контракт)."))
+        elif (_group(frm), _group(to)) not in couplings:
+            violations.append(_mdep_violation(
+                edge, f"НОВАЯ group-связка {_group(frm)} → {_group(to)} ({frm} → {to} в {edge['file']}): "
+                      f"проект так модули не соединяет (нет в architecture-ground). Не вводи новое арх-связывание "
+                      f"молча — используй существующий API-модуль/контракт, либо подтверди: override (§0.6.1) "
+                      f"или ground/architecture-policy.json allowed_new."))
+        # иначе — связка уже принята в проекте → пропуск
+    return violations
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Deterministic ArchUnit-lite layering gate.")
     ap.add_argument("--root", default=".")
@@ -153,6 +351,8 @@ def main() -> int:
     ap.add_argument("--changed", help="явный список .java (через ,/пробел) — минует git")
     ap.add_argument("--pipeline-config")
     ap.add_argument("--package-root", help="переопределить conventions.package_root")
+    ap.add_argument("--module-dep-policy", choices=["deny_new", "policy", "off"], default=None,
+                    help="политика новых межмодульных зависимостей (дефолт quality.module_dep_policy / deny_new)")
     ap.add_argument("--strict", action="store_true", help="warnings тоже валят (exit 2)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
@@ -181,6 +381,23 @@ def main() -> int:
             files[p] = ""
 
     verdict = analyze(files, package_root)
+
+    # Гейт межмодульных зависимостей (по git diff build-файлов) — независим от --changed/слоёв.
+    mode = args.module_dep_policy
+    if mode is None:
+        mode = "deny_new"
+        if args.pipeline_config:
+            try:
+                cfg = json.loads(Path(args.pipeline_config).read_text(encoding="utf-8"))
+                mode = (cfg.get("quality") or {}).get("module_dep_policy", "deny_new")
+            except Exception:
+                pass
+    mdep = check_module_deps(root, args.base, mode)
+    if mdep:
+        verdict["violations"].extend(mdep)
+        verdict["counts"]["error"] += len(mdep)
+        verdict["status"] = "fail"
+
     failed = verdict["counts"]["error"] > 0 or (args.strict and verdict["counts"]["warning"] > 0)
 
     if args.json:

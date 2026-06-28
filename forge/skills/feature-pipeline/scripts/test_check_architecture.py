@@ -127,5 +127,77 @@ class TestAnalyzeVerdict(unittest.TestCase):
         self.assertEqual(r["counts"]["warning"], 1)
 
 
+import check_architecture as ca  # noqa: E402
+
+
+class TestModuleDeps(unittest.TestCase):
+    """Гейт межмодульных зависимостей (прогон #3: молча подключённый модуль)."""
+
+    def test_module_from_build_path(self):
+        self.assertEqual(ca._module_from_build_path("service/taskservice/build.gradle"),
+                         "service:taskservice")
+        self.assertIsNone(ca._module_from_build_path("build.gradle"))
+
+    def test_canon_module(self):
+        self.assertEqual(ca._canon_module(":service:upzservice"), "service:upzservice")
+        self.assertEqual(ca._canon_module("service-upzservice"), "service:upzservice")
+        self.assertEqual(ca._canon_module(":api:taskservice-api"), "api:taskservice-api")
+
+    def test_project_ref_regex(self):
+        m = ca._PROJECT_REF_RE.search('implementation project(":service:upzservice")')
+        self.assertEqual(m.group(1), ":service:upzservice")
+        m2 = ca._PROJECT_REF_RE.search("api project(path: ':a:b')")
+        self.assertEqual(m2.group(1), ":a:b")
+
+    def _patch_edges(self, edges):
+        self._orig = ca._added_module_dep_edges
+        ca._added_module_dep_edges = lambda root, base: edges
+
+    def tearDown(self):
+        if hasattr(self, "_orig"):
+            ca._added_module_dep_edges = self._orig
+
+    EDGE = [{"file": "service/taskservice/build.gradle", "from": "service:taskservice",
+             "to": "service:upzservice", "line": 'implementation project(":service:upzservice")'}]
+
+    def test_deny_new_blocks(self):
+        self._patch_edges(self.EDGE)
+        v = ca.check_module_deps(Path("/tmp"), "HEAD", "deny_new")
+        self.assertEqual(len(v), 1)
+        self.assertEqual(v[0]["severity"], "error")
+        self.assertEqual(v[0]["rule"], "module-dependency")
+
+    def test_off_skips(self):
+        self._patch_edges(self.EDGE)
+        self.assertEqual(ca.check_module_deps(Path("/tmp"), "HEAD", "off"), [])
+
+    def test_policy_allows_non_forbidden(self):
+        # mode=policy: новая, но не forbidden → не блок
+        self._patch_edges(self.EDGE)
+        self.assertEqual(ca.check_module_deps(Path("/tmp"), "HEAD", "policy"), [])
+
+    def test_allowed_new_whitelist(self):
+        import tempfile
+        self._patch_edges(self.EDGE)
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "ground").mkdir()
+            (root / "ground" / "architecture-policy.json").write_text(
+                '{"module_deps":{"allowed_new":[["service:taskservice","service:upzservice"]]}}')
+            self.assertEqual(ca.check_module_deps(root, "HEAD", "deny_new"), [])
+
+    def test_forbidden_blocks_in_policy_mode(self):
+        import tempfile
+        self._patch_edges(self.EDGE)
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "ground").mkdir()
+            (root / "ground" / "architecture-policy.json").write_text(
+                '{"module_deps":{"forbidden":[["service:taskservice","service:upzservice"]]}}')
+            v = ca.check_module_deps(root, "HEAD", "policy")
+            self.assertEqual(len(v), 1)
+            self.assertIn("ЗАПРЕЩЕНА", v[0]["detail"])
+
+
 if __name__ == "__main__":
     unittest.main()

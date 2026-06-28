@@ -19,6 +19,7 @@ Phases:
     spec       — проверка spec-документов
     delivery   — проверка готовности к доставке (перед коммитом)
     coverage   — проверка JaCoCo-покрытия (закрывает шаг 05-tests)
+    regression — тесты затронутых модулей не регрессировали vs baseline (module_tests compare)
     design     — check_taskplan + check_sdd (закрывает шаг 02-design)
 
 Если --recheck указан, скрипт проверяет, что вердикт судьи на диске есть и passed=true.
@@ -26,8 +27,10 @@ Phases:
 
 Exit:
     0 — PASS (все проверки пройдены)
-    1 — FAIL (блокирующие проблемы)
+    1 — FAIL (блокирующие проблемы — чини и перезапусти, в пределах лимита ре-итераций)
     2 — ERROR (скрипт не может выполнить проверку — нет контекста, нет файлов)
+    3 — ESCALATE (исчерпан лимит ре-итераций судьи: quality.max_judge_iterations, дефолт 3) —
+        ОСТАНОВИСЬ и спроси пользователя (§0.6); НЕ гоняй судью снова и не правь прод/тесты ради GREEN
 """
 from __future__ import annotations
 
@@ -53,6 +56,17 @@ SKILL_NAME: str = "feature-pipeline"
 BRD_OVERRIDE: Path | None = None  # явный путь к brd.md (--brd) для standalone-проверки
 REUSE_SCAN_OVERRIDE: Path | None = None  # явный путь к scan/reuse.json (--reuse-scan)
 DIFF_BASE: str = "HEAD"  # база git diff для фазы reuse (--diff-base)
+
+# Слои, непокрываемые юнит-тестами при test_layer=service-unit (data-holders / framework-generated):
+# repository (Spring Data — тело генерит фреймворк), entity (data-класс), dto, config. Coverage-гейт
+# не должен требовать их покрытия, иначе он конфликтует с tdd-guard (тот блокирует @DataJpaTest/
+# @SpringBootTest — единственный способ покрыть репозиторий). Переопределяется в pipeline.json
+# quality.coverage_exclude_globs (список или [] чтобы отключить исключения).
+DEFAULT_SERVICE_UNIT_COVERAGE_EXCLUDES = [
+    "*/repository/*", "*Repository.java",
+    "*/entity/*", "*/entities/*", "*/domain/model/*", "*Entity.java",
+    "*/dto/*", "*/config/*", "*/configuration/*",
+]
 
 
 def _set_paths(project_root: Path, skill: str = "feature-pipeline") -> None:
@@ -149,6 +163,43 @@ def _clear_errors(slug: str) -> None:
     path = _find_errors_store(slug)
     if path.exists():
         path.unlink()
+
+
+def _max_iterations(project_root: Path) -> int:
+    """Потолок ре-итераций судьи (pipeline.json quality.max_judge_iterations, дефолт 3)."""
+    cfg = _load_json(project_root / "ground" / "pipeline.json") or {}
+    try:
+        n = int(cfg.get("quality", {}).get("max_judge_iterations", 3))
+        return n if n > 0 else 3
+    except (TypeError, ValueError):
+        return 3
+
+
+def _judge_iteration_count(slug: str, judge_name: str) -> int:
+    """Сколько раз ЭТОТ судья уже падал (по errors.json) — для лимита ре-итераций."""
+    store = _load_json(_find_errors_store(slug)) or {}
+    return sum(1 for it in store.get("iterations", []) if it.get("judge") == judge_name)
+
+
+def _maybe_escalate(slug: str, judge_name: str, project_root: Path) -> bool:
+    """После сохранения FAIL: исчерпан ли лимит ре-итераций? Если да — печатает STOP-баннер.
+
+    Возвращает True, если оркестратор обязан ОСТАНОВИТЬСЯ и спросить пользователя (exit 3),
+    а не молча гонять судью снова (на прогоне #3 модель крутила Verify 1.5 часа без тормоза).
+    """
+    limit = _max_iterations(project_root)
+    count = _judge_iteration_count(slug, judge_name)
+    if count < limit:
+        return False
+    print()
+    print(f"⛔ STOP: {judge_name} провалился {count} раз (лимит {limit}). "
+          "Авто-ре-итерации исчерпаны.")
+    print("   НЕ запускай судью снова и НЕ правь прод-код/существующие тесты ради зелёного.")
+    print("   Остановись и спроси пользователя (§0.6): (a) сброс errors.json и заново; "
+          "(b) отмена шага; (c) ручной override — только если причина внешняя и неустранима.")
+    print(f"⛔ ESCALATE: {judge_name} {count}/{limit} iterations exhausted — stop and ask user",
+          file=sys.stderr)
+    return True
 
 
 def _make_verdict(
@@ -1184,10 +1235,98 @@ def check_design(slug: str, feature_dir: Path | None) -> dict:
     return _make_verdict("design-judge", slug, passed, checks, blocking_issues, warnings, summary)
 
 
+# Floor «GREEN любой ценой» (C2): паттерны ослабления СУЩЕСТВУЮЩИХ тестов.
+_TEST_DISABLED_RE = re.compile(r"@(?:Disabled|Ignore)\b")
+_VERIFY_TIMES_RE = re.compile(r"\btimes\s*\(\s*(\d+)\s*\)")
+_ASSERT_VERIFY_RE = re.compile(
+    r"\b(?:assert\w*|assertThat|verify|verifyNoInteractions|verifyNoMoreInteractions|"
+    r"thenThrow|expectThrows)\b"
+)
+
+
+def _git_diff_test_changes(base: str) -> dict:
+    """Added/removed строки по `git diff --diff-filter=M` для МОДИФИЦИРОВАННЫХ тест-файлов.
+
+    Только filter=M (изменения СУЩЕСТВУЮЩИХ тестов) — новые тест-файлы (A) трогать ок, риск
+    «прогнул тест под зелёное» именно в правке уже написанного теста. Возвращает {path: {added, removed}}.
+    """
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["git", "diff", "--diff-filter=M", "--unified=0", base, "--",
+             "*Test.java", "*Tests.java", "*IT.java", "*/src/test/*.java"],
+            cwd=str(PROJECT_ROOT), capture_output=True, text=True, timeout=60,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return {}
+    if r.returncode != 0:
+        return {}
+    per_file: dict = {}
+    cur = None
+    for line in r.stdout.splitlines():
+        if line.startswith("+++ b/"):
+            cur = line[6:]
+            per_file.setdefault(cur, {"added": [], "removed": []})
+        elif cur and line.startswith("+") and not line.startswith("+++"):
+            per_file[cur]["added"].append(line[1:])
+        elif cur and line.startswith("-") and not line.startswith("---"):
+            per_file[cur]["removed"].append(line[1:])
+    return per_file
+
+
+def _test_integrity_floor(base: str = "HEAD") -> tuple:
+    """Детерминированный floor фазы Verify: ослабление существующих тестов ради GREEN.
+
+    BLOCK: добавлен @Disabled/@Ignore на ранее активный тест; рост times(N)→times(M) (ослаблена
+    проверка числа вызовов под новое поведение). WARN: нетто-удаление assert/verify (возможная
+    потеря проверок). Консервативно (только filter=M), чтобы не ловить легитимный рефактор тестов.
+    """
+    checks, blocking, warnings = [], [], []
+    per_file = _git_diff_test_changes(base)
+    if not per_file:
+        checks.append({"name": "Целостность существующих тестов", "status": "PASS",
+                       "detail": "нет правок существующих тест-файлов", "severity": "error"})
+        return checks, blocking, warnings
+
+    disabled_hits, weakened_verify, assertion_loss = [], [], []
+    for path, ch in per_file.items():
+        added, removed = ch["added"], ch["removed"]
+        # 1. Добавлен @Disabled/@Ignore (и это не просто перенос существующей аннотации)
+        if any(_TEST_DISABLED_RE.search(a) for a in added) and \
+           not any(_TEST_DISABLED_RE.search(rm) for rm in removed):
+            disabled_hits.append(path)
+        # 2. Рост times(): max добавленный счётчик > max удалённый
+        add_times = [int(m.group(1)) for a in added for m in _VERIFY_TIMES_RE.finditer(a)]
+        rem_times = [int(m.group(1)) for rm in removed for m in _VERIFY_TIMES_RE.finditer(rm)]
+        if add_times and rem_times and max(add_times) > max(rem_times):
+            weakened_verify.append(f"{path}: times {max(rem_times)}→{max(add_times)}")
+        # 3. Нетто-потеря assert/verify
+        a_add = sum(1 for a in added if _ASSERT_VERIFY_RE.search(a))
+        a_rem = sum(1 for rm in removed if _ASSERT_VERIFY_RE.search(rm))
+        if a_rem - a_add >= 2:
+            assertion_loss.append(f"{path}: -{a_rem - a_add} assert/verify")
+
+    name = "Существующие тесты не ослаблены ради GREEN"
+    blocking.extend(f"существующий тест отключён (@Disabled/@Ignore): {p}" for p in disabled_hits[:5])
+    blocking.extend(f"ослаблена проверка числа вызовов: {w}" for w in weakened_verify[:5])
+    if disabled_hits or weakened_verify:
+        checks.append({"name": name, "status": "FAIL",
+                       "detail": "; ".join(disabled_hits + weakened_verify)[:200],
+                       "severity": "error"})
+    else:
+        checks.append({"name": name, "status": "PASS",
+                       "detail": f"{len(per_file)} изменённых тест-файлов без ослабления",
+                       "severity": "error"})
+    for a in assertion_loss[:5]:
+        warnings.append(f"возможная потеря проверок в существующем тесте: {a}")
+    return checks, blocking, warnings
+
+
 def check_coverage(slug: str, feature_dir: Path | None) -> dict:
     """Запускает check_coverage.py (JaCoCo gate) и собирает вердикт coverage-judge.
 
     Имя вердикта (coverage-judge.json) совпадает с required_judges['05-tests'].
+    Плюс floor целостности тестов (C2): блокирует ослабление существующих тестов.
     """
     project_root = PROJECT_ROOT
 
@@ -1200,10 +1339,18 @@ def check_coverage(slug: str, feature_dir: Path | None) -> dict:
     # Порог из pipeline.json quality.coverage_threshold (fallback 0.80)
     threshold = 0.80
     pipeline_cfg = _load_json(project_root / "ground" / "pipeline.json") or {}
+    quality_cfg = pipeline_cfg.get("quality", {}) if isinstance(pipeline_cfg, dict) else {}
     try:
-        threshold = float(pipeline_cfg.get("quality", {}).get("coverage_threshold", threshold))
+        threshold = float(quality_cfg.get("coverage_threshold", threshold))
     except (TypeError, ValueError):
         pass
+
+    # Исключения покрытия: явный список из pipeline.json, иначе дефолт для service-unit
+    # (репозитории/энтити/dto/config не покрываемы юнит-тестом — см. DEFAULT_..._EXCLUDES).
+    test_layer = quality_cfg.get("test_layer", "service-unit")
+    cov_excludes = quality_cfg.get("coverage_exclude_globs")
+    if cov_excludes is None:
+        cov_excludes = DEFAULT_SERVICE_UNIT_COVERAGE_EXCLUDES if test_layer == "service-unit" else []
 
     if not check_cov_script.exists():
         return _make_verdict(
@@ -1217,6 +1364,8 @@ def check_coverage(slug: str, feature_dir: Path | None) -> dict:
     import subprocess
     cmd = [sys.executable, str(check_cov_script), "--root", str(project_root),
            "--threshold", str(threshold), "--strict", "--json"]
+    for g in cov_excludes:
+        cmd += ["--exclude", g]
     try:
         r = subprocess.run(cmd, cwd=str(project_root),
                            capture_output=True, text=True, timeout=120)
@@ -1229,17 +1378,82 @@ def check_coverage(slug: str, feature_dir: Path | None) -> dict:
         )
 
     # check_coverage.py (--strict): exit 0 = pass, 2 = LOW/MISSING/JaCoCo-отчёт не найден
-    passed = r.returncode == 0
+    cov_passed = r.returncode == 0
     detail = (r.stdout.strip() or r.stderr.strip() or f"exit {r.returncode}")[:300]
     checks = [{
         "name": "check_coverage",
-        "status": "PASS" if passed else "FAIL",
+        "status": "PASS" if cov_passed else "FAIL",
         "detail": detail,
         "severity": "error",
     }]
-    blocking = [] if passed else [f"Покрытие ниже порога {threshold}: {detail}"]
-    summary = f"check_coverage exit {r.returncode} (порог {threshold})"
-    return _make_verdict("coverage-judge", slug, passed, checks, blocking, [], summary)
+    cov_block = [] if cov_passed else [f"Покрытие ниже порога {threshold}: {detail}"]
+
+    # Floor «GREEN любой ценой»: ловит ослабление СУЩЕСТВУЮЩИХ тестов (фаза Verify — типичное
+    # место, где модель гнёт тест/прод-код под зелёное). Блокирует, даже если покрытие прошло.
+    floor_checks, floor_block, floor_warn = _test_integrity_floor(DIFF_BASE)
+    checks += floor_checks
+    blocking = cov_block + floor_block
+    passed = cov_passed and not floor_block
+    summary = (f"check_coverage exit {r.returncode} (порог {threshold})"
+               + (f" | integrity: {len(floor_block)} blocking" if floor_block else " | integrity OK"))
+    return _make_verdict("coverage-judge", slug, passed, checks, blocking, floor_warn, summary)
+
+
+def check_regression(slug: str, feature_dir: Path | None) -> dict:
+    """regression-judge (D): тесты ЗАТРОНУТЫХ модулей не должны регрессировать vs baseline.
+
+    Гоняет `module_tests.py compare` (baseline снят на старте Build — SKILL §7). РЕГРЕССИЯ
+    (ранее зелёный тест теперь падает) или невозможность прогнать модуль baseline → FAIL.
+    Пре-существующие/infra-падения (красные и в baseline) НЕ блокируют. «Агент сломал тест → поймали».
+    """
+    project_root = PROJECT_ROOT
+    mt_script = Path(__file__).resolve().parent / "module_tests.py"
+    baseline = GROUND_DIR / "statements" / SKILL_NAME / slug / "test-baseline.json"
+
+    if not mt_script.exists():
+        return _make_verdict(
+            "regression-judge", slug, False,
+            [{"name": "module_tests.py доступен", "status": "FAIL",
+              "detail": f"не найден {mt_script}", "severity": "error"}],
+            ["module_tests.py не найден — регресс не проверить"], [],
+            "REGRESSION-judge: скрипт отсутствует")
+
+    import subprocess
+    cmd = [sys.executable, str(mt_script), "compare", "--root", str(project_root),
+           "--baseline", str(baseline), "--from-diff", DIFF_BASE, "--json"]
+    try:
+        r = subprocess.run(cmd, cwd=str(project_root), capture_output=True, text=True, timeout=1200)
+    except subprocess.TimeoutExpired:
+        return _make_verdict(
+            "regression-judge", slug, False,
+            [{"name": "module_tests compare", "status": "FAIL",
+              "detail": "timeout (1200s)", "severity": "error"}],
+            ["regression: timeout прогона тестов затронутых модулей"], [],
+            "REGRESSION-judge: timeout")
+
+    data = {}
+    if r.stdout.strip():
+        try:
+            data = json.loads(r.stdout.strip().splitlines()[-1])
+        except (json.JSONDecodeError, IndexError):
+            data = {}
+    regressions = data.get("regressions", [])
+    no_run = data.get("modules_without_results", [])
+    passed = r.returncode == 0
+
+    detail = (r.stdout.strip() or r.stderr.strip() or f"exit {r.returncode}")[:300]
+    checks = [{"name": "Нет регрессий тестов затронутых модулей",
+               "status": "PASS" if passed else "FAIL", "detail": detail, "severity": "error"}]
+    blocking = []
+    blocking += [f"регрессия теста (был зелёным, теперь падает): {t}" for t in regressions[:10]]
+    if no_run:
+        blocking.append(f"не удалось прогнать тесты модулей: {', '.join(no_run)} — "
+                        "нельзя подтвердить зелёное (fail-closed)")
+    if not passed and not blocking:
+        # exit 2 без распарсенного JSON (напр. baseline не снят — SKILL §7)
+        blocking.append(f"regression-gate FAIL: {(r.stderr.strip() or r.stdout.strip() or 'exit 2')[:200]}")
+    summary = f"module_tests compare exit {r.returncode}: регрессий {len(regressions)}"
+    return _make_verdict("regression-judge", slug, passed, checks, blocking, [], summary)
 
 
 # Детерминированный слой brd-judge: код-токены, которым не место в БТ.
@@ -1479,6 +1693,7 @@ PHASE_MAP = {
     "delivery": check_delivery,
     "design": check_design,
     "coverage": check_coverage,
+    "regression": check_regression,
 }
 
 
@@ -1587,7 +1802,7 @@ def main():
         # Для детерминированных и гибридных фаз — полная проверка заново (не кэш).
         # build/delivery — гибрид: check_* загружает сохранённый LLM-вердикт и применяет
         # детерминированный пол (stubs/секреты), поэтому recheck обязан их пересчитывать.
-        if args.phase in ("brd", "reuse", "eval", "spec", "red", "coverage", "build", "delivery"):
+        if args.phase in ("brd", "reuse", "eval", "spec", "red", "coverage", "regression", "build", "delivery"):
             try:
                 verdict = PHASE_MAP[args.phase](args.slug, feature_dir)
             except Exception as e:
@@ -1612,6 +1827,8 @@ def main():
             print(f"  Summary: {verdict['summary']}")
             for issue in verdict.get("blocking_issues", []):
                 print(f"  BLOCKING: {issue}")
+            if not verdict["passed"] and _maybe_escalate(args.slug, f"{args.phase}-judge", project_root):
+                sys.exit(3)
             sys.exit(0 if verdict["passed"] else 1)
 
         # Для build/delivery — проверяем, что вердикт уже есть и passed=true
@@ -1681,6 +1898,8 @@ def main():
         print(f"     python3 {_ovr} --judge {judge_name} "
               f"--feature {args.slug} --step-id <step-id> --reason \"<обоснование>\"")
 
+    if not verdict["passed"] and _maybe_escalate(args.slug, judge_name, project_root):
+        sys.exit(3)
     sys.exit(0 if verdict["passed"] else 1)
 
 

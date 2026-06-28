@@ -32,8 +32,9 @@ rel="agents.$ext"
 echo "watch: $BASE/**/$rel   (Ctrl-C для выхода)"
 target=""
 while :; do
-  # каталоги прогонов всегда на глубине 2: <feature>/iter-NN/ либо _adhoc/<run>/
-  newest="$(ls -dt "$BASE"/*/*/ 2>/dev/null | head -1 || true)"
+  # каталог прогона: новый формат run-<session>/ (глубина 1, «один прогон = одна папка»);
+  # legacy-форматы (<feature>/iter-NN/ и _adhoc/<run>/, глубина 2) — для старых логов.
+  newest="$(ls -dt "$BASE"/run-*/ "$BASE"/*/*/ 2>/dev/null | head -1 || true)"
   if [ -n "$newest" ] && [ -f "${newest}${rel}" ]; then target="${newest}${rel}"; break; fi
   sleep 1
 done

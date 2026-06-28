@@ -169,6 +169,43 @@ def guess_sprint_naming(board_name):
     return "Sprint {N}_{YYYY}"
 
 
+def discover_conventions(issues_list):
+    """Выводит конвенции проекта из недавних issue, чтобы создавать задачи «в едином ключе».
+
+    issues_list: [{"summary": str, "components": [str|{"name"}], "labels": [str],
+                   "epic": "KEY"|None}, ...] — последние N issue проекта (jira_search).
+    Возвращает типовые компоненты/лейблы, частый родительский epic и образец префикса нейминга.
+    """
+    from collections import Counter
+    comp, lab, epics, prefixes = Counter(), Counter(), Counter(), Counter()
+    for it in issues_list or []:
+        for c in it.get("components", []) or []:
+            name = c.get("name") if isinstance(c, dict) else c
+            if name:
+                comp[name] += 1
+        for l in it.get("labels", []) or []:
+            if l:
+                lab[l] += 1
+        ep = it.get("epic")
+        if ep:
+            epics[ep] += 1
+        s = (it.get("summary") or "").strip()
+        m = re.match(r"^(\[[^\]]+\]|[A-Za-zА-Яа-я]+:)\s", s)  # "[KID] ..." / "Модуль: ..."
+        if m:
+            prefixes[m.group(1)] += 1
+
+    def top(counter, n):
+        return [k for k, _ in counter.most_common(n)]
+
+    return {
+        "common_components": top(comp, 5),
+        "common_labels": top(lab, 5),
+        "frequent_epic": (epics.most_common(1)[0][0] if epics else None),
+        "summary_prefix": (prefixes.most_common(1)[0][0] if prefixes else None),
+        "sampled_issues": len(issues_list or []),
+    }
+
+
 def build_jira_config(meta):
     """Собирает полную секцию jira из метаданных."""
     project_key = meta.get("project_key", "")
@@ -182,6 +219,9 @@ def build_jira_config(meta):
     # Доска
     board = discover_board(meta.get("boards", []), project_key)
 
+    # Конвенции проекта (компоненты/лейблы/epic/нейминг) из недавних issue — «единый ключ»
+    conventions = discover_conventions(meta.get("issues", []))
+
     config = {
         "enabled": True,
         "project_key": project_key,
@@ -190,6 +230,7 @@ def build_jira_config(meta):
         **discovered_fields,
         **DEFAULT_LINK_TYPES,
         **board,
+        "conventions": conventions,
     }
 
     return config

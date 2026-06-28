@@ -155,7 +155,11 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/resolve_phases.py \
    jira_search_fields(keyword="")           # все кастомные поля
    jira_get_agile_boards(project_key=...)   # Agile-доски
    jira_search(...) по issuetype            # типы задач (можно через createmeta)
+   jira_search("project=<KEY> ORDER BY updated DESC", limit=20)  # недавние issue — для КОНВЕНЦИЙ
    ```
+   Последние ~20 issue нужны, чтобы создавать задачи **«в едином ключе»**: изучить типовые
+   `components`, `labels`, родительский `epic` и стиль нейминга проекта (по ним `jira_discover`
+   выведет `jira.conventions`). Из каждого issue возьми `summary`, `components`, `labels`, Epic Link.
    Если MCP-инструментов нет — шаг пропускается (`auto_discovered` остаётся `false`).
 4. Передай собранную мету в скрипт автоопределения:
    ```bash
@@ -167,13 +171,16 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/resolve_phases.py \
      "project_key": "KIDPPRB",
      "issue_types": [{"name": "Story", "subtask": false}, ...],
      "fields": [{"id": "customfield_11400", "name": "Epic Link"}, ...],
-     "boards": [{"id": 27992, "name": "Развитие и поддержка КИД (sprint)", "type": "scrum"}, ...]
+     "boards": [{"id": 27992, "name": "Развитие и поддержка КИД (sprint)", "type": "scrum"}, ...],
+     "issues": [{"summary": "[KID] …", "components": ["task-service"], "labels": ["kid"], "epic": "KIDPPRB-100"}, ...]
    }
    ```
 5. После успешного прогона в `pipeline.json.jira` появятся:
    - `issue_type_story`, `issue_type_subtask`, `issue_type_epic`, `issue_type_bug`
    - `epic_link_field`, `epic_name_field`, `sprint_field`, `system_field` и др.
    - `board` с id, именем, шаблоном имени спринта
+   - `conventions`: `common_components`, `common_labels`, `frequent_epic`, `summary_prefix` —
+     **применяй их при создании задач** (jira-task-writer), чтобы Story/Sub-task были в едином ключе проекта
    - `auto_discovered: true`
 
    Если какие-то поля не найдены (нет в мете) — они не попадут в конфиг,
@@ -250,12 +257,15 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
 
 **Алгоритм при каждом judge FAIL:**
 
-1. `run_judge.py <phase> <slug>` (уже exit 1 и сохранил blocking_issues в errors.json)
+1. `run_judge.py <phase> <slug>` — exit-коды: **1** = FAIL (чини и перезапусти), **3** = ESCALATE
+   (лимит ре-итераций исчерпан — `run_judge` сам это форсит, см. шаг 3), **0** = PASS.
 2. **Прочитай errors.json** для получения `accumulated_errors` и счётчика `iterations`
-3. Если `len(iterations) >= 3` — **спроси пользователя** (три варианта): «Попыток больше нет.
-   (a) сбросить errors.json и начать заново; (b) отменить шаг; (c) пропустить гейт вручную
-   с обоснованием (override, см. §0.6.1) — выбирай (c) только если причина FAIL внешняя и
-   не устранима правкой артефактов (нет тестовой БД, внешний сервис недоступен и т.п.)»
+3. **Лимит ре-итераций форсится детерминированно:** при `iterations >= quality.max_judge_iterations`
+   (дефолт 3) `run_judge` печатает `⛔ STOP` и возвращает **exit 3**. Получив exit 3 — **НЕ запускай
+   судью снова и НЕ правь прод-код/существующие тесты ради зелёного**; **спроси пользователя** (три
+   варианта): «Попыток больше нет. (a) сбросить errors.json и начать заново; (b) отменить шаг;
+   (c) пропустить гейт вручную с обоснованием (override, см. §0.6.1) — выбирай (c) только если причина
+   FAIL внешняя и не устранима правкой артефактов (нет тестовой БД, внешний сервис недоступен и т.п.)»
 4. Если `< 3` — сформируй промпт для повторного субагента:
    ```
    **⚠️ Ошибки предыдущих прогонов (из errors.json):**
@@ -441,7 +451,8 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py brd <sl
 
 Спроси у пользователя **критичность фичи** (`ask_user_question`) — это задаёт, насколько агрессивно
 форсятся гейты. Без выбора `gate-guard` заблокирует любое R2+ действие (это и форсит шаг — на прошлых
-прогонах его пропускали).
+прогонах его пропускали). _(Лимит рантайма: поле `header` у `ask_user_question` — **≤ 12 символов**,
+иначе вызов падает с ошибкой валидации и тратит лишний round-trip.)_
 
 | Критичность | Что это | `auto_max_risk` | Поведение гейтов |
 |---|---|---|---|
@@ -449,12 +460,15 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py brd <sl
 | **Средняя** | обычная прод-фича (дефолт) | `R1` | commit/push/jira/секьюрные пути — под гейтами |
 | **Высокая** | auth / платежи / PII / инфра / критичный путь | `R0` | почти всё требует подтверждения/approval/evidence |
 
-После ответа **запиши в `ground/pipeline.json`** блок `autonomy`:
-```json
-"autonomy": { "criticality": "<low|medium|high>", "auto_max_risk": "<R2|R1|R0>" }
+После ответа **запиши критичность скриптом** — он атомарно проставит И `criticality`, И производный
+`auto_max_risk` по карте (`low→R2 / medium→R1 / high→R0`). **Не правь `pipeline.json` руками** —
+на прошлых прогонах модель дописывала только `criticality`, а `auto_max_risk` оставался дефолтным
+`R1`, и для low/high порог риска был неверным:
+```bash
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/set_criticality.py --criticality <low|medium|high>
 ```
-(Можно через `init_pipeline_config.py` он уже есть, либо допиши поле.) Только теперь иди дальше —
-`gate-guard` читает `autonomy.auto_max_risk` из конфига и применяет порог per-feature.
+Только теперь иди дальше — `gate-guard` читает `autonomy.auto_max_risk` из конфига и применяет порог
+per-feature.
 
 ---
 
@@ -829,6 +843,20 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py \
 По умолчанию (`pipeline.json quality.tdd: true`) каждая задача делается по TDD: **сначала тесты
 (они падают), потом код, который их зеленит.** Иди по `task-plan.tasks` в порядке `depends_on`.
 
+### 7.0 Baseline зелёного (ОБЯЗАТЕЛЬНО, ОДИН раз, ДО первого кода)
+
+Перед любой правкой кода сними **отметку зелёного** по тестам затронутых модулей — чтобы потом
+детерминированно отличить «я сломал существующий тест» (регресс) от «тест и так был красный»
+(pre-existing/infra). На прогоне #3 агент сломал Spring-тесты и не признал — это закрывает дыру.
+```bash
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/module_tests.py snapshot \
+    --root "<project>" --from-taskplan "<папка фичи>/task-plan.json" \
+    --out "<project>/ground/statements/feature-pipeline/<slug>/test-baseline.json"
+```
+Гоняется ОДИН раз (модули из `task-plan.tasks[].modules`). Файл `test-baseline.json` = отметка;
+её сверяет регресс-гейт в §8. Если затронутый модуль уже красный — это зафиксируется как
+pre-existing и НЕ будет считаться твоей виной (но видно в отчёте).
+
 ### 7.1 Per-task: RED (субагент-тестописатель)
 
 > **ВАЖНО: TDD RED = тесты ОБЯЗАНЫ падать.** Если метод/класс уже частично реализован
@@ -963,6 +991,14 @@ agent(
 )
 ```
 
+> **Объём прогона — только затронутое, не полный `cleanTest`-сьют.** Гоняй тесты ИЗМЕНЁННЫХ модулей
+> и тест-классы фичи (`./gradlew :module:test --tests '*Foo*'`), а не весь проект. `cleanTest` на
+> весь репозиторий в проекте с интеграционными тестами (Kafka/внешние сервисы) стирает кэш и роняет
+> десятки ЧУЖИХ тестов, требующих внешней инфры — сигнал становится непригоден (на прогоне #3 так
+> «упало» 102 несвязанных теста). **Сними baseline pre-existing-падений ДО своих правок** (тот же
+> набор тестов на исходном коде) и сравнивай: чужие падения, воспроизводящиеся в baseline, — НЕ твои.
+> coverage-judge и так считает покрытие только по изменённым файлам (`git diff`).
+
 ### 8.3 Judge-gate coverage (обязательно, перед закрытием `05-tests`)
 
 После тестраннера запусти coverage-judge — он гоняет `check_coverage.py` (JaCoCo) и
@@ -972,19 +1008,57 @@ agent(
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py coverage <slug> --recheck
 ```
 - **exit 0** — закрой `05-tests` (status completed).
-- **exit 1** — покрытие ниже порога → верни тестописателя на доработку (лимит 3).
+- **exit 1** — покрытие ниже порога → верни тестописателя на доработку (в пределах лимита).
+- **exit 3** — лимит ре-итераций исчерпан → **СТОП, спроси пользователя** (§0.6). Не гоняй снова.
 
-После возврата — закрой `05-tests` при pass. При fail — верни тестописателя на доработку (лимит 3).
+coverage-judge также содержит floor **целостности тестов** (блокирует, если ты ослабил СУЩЕСТВУЮЩИЕ
+тесты ради зелёного: добавил `@Disabled`/`@Ignore`, поднял `times(N)→times(M)`, выкинул проверки).
+Если floor блокирует — **не правь тест/прод-код под зелёное**, разберись с настоящей причиной падения.
+coverage исключает из проверки слои, непокрываемые `test_layer` (репозитории/энтити/dto/config при
+`service-unit`) — не пытайся «дорисовать» им тесты через `@DataJpaTest` (его блокирует `tdd-guard`).
+
+После возврата — закрой `05-tests` при pass. При fail — верни тестописателя на доработку (лимит §0.6).
+
+### 8.3b Регресс-гейт затронутых модулей (ОБЯЗАТЕЛЬНО, перед закрытием `05-tests`)
+
+«Успеха нет, пока тесты затронутых модулей не зелёные.» Сверь текущее состояние с baseline (§7.0):
+```bash
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py regression <slug> --recheck
+```
+- **exit 0** — регрессий нет (ранее зелёные тесты по-прежнему зелёные). Можно закрывать `05-tests`.
+- **exit 1** — **РЕГРЕССИЯ**: ты сломал ранее зелёный тест затронутого модуля. **Не правь тест/прод-код
+  ради зелёного и не отрицай** — найди и устрани настоящую причину, затем перезапусти (лимит §0.6).
+- **exit 3** — лимит ре-итераций исчерпан → СТОП, спроси пользователя (§0.6).
+
+Пре-существующие/infra-падения (красные и в baseline) гейт НЕ блокирует — только НОВЫЕ регрессии.
+Если baseline не снят (`test-baseline.json` нет) — гейт fail-closed (exit 2): вернись в §7.0.
+
+### 8.3c Гейт межмодульных зависимостей (ОБЯЗАТЕЛЬНО, перед закрытием `05-tests`)
+
+«Не подключай модуль молча.» На прогоне #3 агент дописал в `build.gradle` зависимость на модуль,
+который по правилам проекта подключать нельзя. Этот гейт ловит **новые межмодульные зависимости**
+(`project(':...')` в diff build-файлов) — детерминированно, без сборки:
+```bash
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.py \
+    --root "<project>" --pipeline-config "<project>/ground/pipeline.json"
+```
+- **exit 0** — новых межмодульных зависимостей нет (или они в allow-list). Продолжай.
+- **exit 2** — добавлена новая межмодульная зависимость `A → B`. **Не подключай модуль ради того,
+  чтобы код собрался**: используй существующий API-модуль/контракт, или вынеси интеграцию правильно.
+  Если это осознанное архрешение — внеси ребро в `ground/architecture-policy.json` (`module_deps.allowed_new`)
+  или подтверди override (§0.6.1). Политика: `quality.module_dep_policy` = `deny_new` (дефолт; любая новая
+  межмодульная зависимость блокируется) | `policy` (блокирует только `module_deps.forbidden`) | `off`.
 
 ### 8.4 Опциональные детерминированные гейты verify (по флагам `pipeline.json`)
 
 Гоняй ПОСЛЕ тестов, до закрытия `05-tests`. Оба по умолчанию `false`; включаются в `pipeline.json`.
 
-- **Архитектура** (`quality.architecture_check: true`) — ArchUnit-lite гейт слоёв (package_root,
-  чистота домена, запрет entity→service / controller→repository) статически по изменённым `.java`:
+- **Архитектура — строгий режим** (`quality.architecture_check: true`) — добавляет `--strict`
+  к гейту §8.3c: ArchUnit-lite слои (package_root, чистота домена, запрет entity→service /
+  controller→repository) валят и на warning-уровне:
   ```bash
   python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.py \
-      --root "<project>" --pipeline-config "<project>/ground/pipeline.json"
+      --root "<project>" --pipeline-config "<project>/ground/pipeline.json" --strict
   ```
 - **Тавтологичные тесты** (`quality.tautology_check: true`) — статический детектор пустых/
   тавтологичных тестов (`assertTrue(true)`, пустое тело, нет ассертов/verify):

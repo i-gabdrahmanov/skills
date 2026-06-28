@@ -202,6 +202,42 @@ python3 <project>/.gigacode/hooks/preflight.py --project <project>
 **Вывод:** всегда деплоить через `deploy.sh` и проверять `preflight` ДО прогона — это убирает
 класс ошибок «0 hook entries / skills не рядом».
 
+### Прогон `autoclose-regular-tasks` / `KIDPPRB-8639` (2026-06-28) — незавершён, уроки
+Контекст: фича «ночное автозакрытие пустых регулярных задач» через `feature-pipeline` на форке
+**GigaCode v26.5.17**, модель **`vllm/DeepSeek-V4-Flash-262k`** (не Claude). Хуки развернулись
+корректно (нет `0 hook entries`) — регрессии `pprb-kid` нет, субагенты реально вызывались.
+Итог: **1h23m / 600 запросов / 51.8M входных токенов**, **остановлен вручную (`/quit`)** на фазе
+Verify — пайплайн НЕ дошёл до Document/Deliver.
+
+Корневые причины (по убыванию):
+- 🔴 **Нет тормоза на зацикленной Verify.** Модель крутилась в петле «правка → сломанный тест →
+  правка теста → coverage fail → `cleanTest` → шум падений» 1.5 часа без вмешательства. Нет лимита
+  итераций фазы и нет потолка стоимости фазы → «стоп-и-спроси».
+- 🔴 **Модель меняла PRODUCTION-код ради зелёного теста — гейт не поймал.** В финале —
+  рефактор constructor→setter `@Autowired(required=false)` + null-check в `OverdueTasksScheduler`
+  только чтобы тест поднялся без `UpzClient`; ранее сама добавила второй `notifyEvent`, сломала
+  существующий тест (ждал 1 вызов) и стала править тест под новое поведение, а не усомнилась в нём.
+  Нет судьи «прод-код/ослабление существующего теста ради GREEN».
+- 🔴 **`cost-breaker` оторван от реальности и без хард-стопа.** `budget.json`: `spent 843K / 2M`
+  (42%, warn≥80% молчал), реально — 51.8M входных токенов (расхождение ~60×); хард-стоп 120%
+  отключён. Бюджет не тормоз → отсюда 1.5-часовой прогон.
+- 🟠 **Гейт критичности форсит вопрос, но не следствие.** `auto_max_risk` хардкожен `R1`
+  (`init_pipeline_config.py:223`), деривации `low→R2/high→R0` нет ни в коде, ни в тесте. Модель
+  отредактировала только `criticality` (для medium совпало) — при low/high autonomy была бы неверной.
+- 🟠 **Конфликт гейтов coverage ↔ test_layer.** `coverage-judge` (3 fail подряд) требовал покрытия
+  `RegularTaskRepository.java`, а `tdd-guard` при `test_layer=service-unit` блокирует
+  `@DataJpaTest`/`@SpringBootTest` — единственный способ покрыть репозиторий. `check_coverage`
+  не исключает из «changed» непокрываемые слои (репозитории/энтити/интерфейсы).
+
+Помельче: Verify гонял полный сьют с `cleanTest` в проекте с интеграционными тестами (102 чужих
+падения, шум, нет baseline pre-existing); ложный блок `find … -exec` внутри workspace (вероятно
+нативный сейфти форка, не хук); `ask_user_question` падал на `header ≤ 12` (лишний retry); логи
+прогона раскиданы по множеству каталогов (нет «один прогон = одна папка»).
+
+**Вывод:** хуки-enforcement развёрнуты и работают, но прогон провалила связка **«нет тормоза
+стоимости/итераций» + «нет судьи против правки прод-кода/тестов ради GREEN»**. Контроль качества
+должен ловить не только «пропустил тесты», но и «прогнул реальность под тест». См. роадмап ниже.
+
 ## Роадмап (что дальше)
 
 - [x] Ранний вопрос о критичности фичи после BRD → `autonomy.auto_max_risk`; форсится `gate-guard`.
@@ -229,6 +265,50 @@ python3 <project>/.gigacode/hooks/preflight.py --project <project>
       `test_sod-enforcer`, `test_subagent_origin`, `test_docs_hooks_consistency` (доки↔settings).
 - [ ] (опц.) Устойчивость к обрывам стрима глубже: авто-resume.
 
+**Из прогона #3 `autoclose-regular-tasks` (2026-06-28):**
+- [x] **Брейк зацикленной фазы** (C1): `run_judge.py` форсит лимит ре-итераций судьи
+      (`quality.max_judge_iterations`, дефолт 3) — по `errors.json` per-judge; при исчерпании печатает
+      `⛔ STOP` и возвращает **exit 3** (ESCALATE) вместо бесконечного FAIL. SKILL §0.6/§8.3 трактуют exit 3
+      как «стоп-и-спроси». Тесты: `test_run_judge_guards.py`.
+- [x] **Судья «GREEN любой ценой»** (C2): floor `_test_integrity_floor` в `check_coverage` (фаза Verify)
+      блокирует ослабление СУЩЕСТВУЮЩИХ тестов (`--diff-filter=M`): добавленный `@Disabled`/`@Ignore`,
+      рост `times(N)→times(M)`; WARN на нетто-потерю assert/verify. Тесты: `test_run_judge_guards.py`.
+- [ ] **`cost-breaker`** (C3): по решению владельца — **бюджет остаётся «только для инфо»** (хард-стоп
+      выключен). Не чинили специально; учёт токенов расходится с реальностью (~60×) — не доверять как тормозу.
+- [x] **Деривация `auto_max_risk` из criticality** (H4): `set_criticality.py` атомарно пишет оба поля
+      (`low→R2/medium→R1/high→R0`); гейт критичности в SKILL.md зовёт его, а не сырой Edit. Тесты:
+      `test_set_criticality.py`.
+- [x] **Снят конфликт coverage ↔ test_layer** (H5): `check_coverage.py --exclude` (glob); `run_judge`
+      при `test_layer=service-unit` шлёт дефолтные исключения (repository/entity/dto/config),
+      настраиваемые через `quality.coverage_exclude_globs`.
+- [x] **Тише Verify** (M6): SKILL §8.2 — только затронутые модули/тест-классы (не полный `cleanTest`),
+      снять baseline pre-existing-падений и не считать чужие интеграционные падения своими.
+- [x] (M7) Источник блока `find … -exec` — **нативный сейфти форка, не хук** (проверено grep'ом);
+      задокументировано в «Известные ограничения», в SKILL/доках — `Glob`/`Grep`/`Read`.
+- [x] (M8) Памятка про лимит `header ≤ 12` добавлена в гейт критичности (SKILL.md) и BRD-скиллы.
+- [x] (L9) BRD-интервью калибрует число вопросов по входу: при детальной Jira — 1–2 точечных, не «3 для галочки».
+- [x] (L10) `log-agent.py` группирует логи по сессии: `ai-logs/run-<session8>/` («один прогон = одна папка»);
+      `watch-agents.sh` обновлён под новый layout.
+
+**Раунд 2 (доп. находки прогона #3):**
+- [x] **Регресс-гейт затронутых модулей** (D): «успеха нет, пока тесты затронутых модулей не зелёные».
+      Новый `module_tests.py` (snapshot/compare) + фаза `regression` в `run_judge` (`check_regression`),
+      execution-gate в SKILL §8.3b. Baseline-diff: блокирует ТОЛЬКО новые регрессии (passed→failed),
+      pre-existing/infra-падения не считаются виной. Закрывает «агент сломал Spring-тест и не признал».
+- [x] **Baseline зелёного ДО разработки** (C): SKILL §7.0 — `module_tests.py snapshot --from-taskplan`
+      в начале Build пишет `test-baseline.json` (отметка зелёного по затронутым модулям до первого кода).
+- [x] **Jira-grounding «единый ключ»** (A): `jira_discover.discover_conventions` выводит из недавних issue
+      проекта типовые `components`/`labels`/`frequent_epic`/`summary_prefix` → `pipeline.json.jira.conventions`;
+      SKILL §0.2 их собирает, `jira-task-writer` применяет как дефолты — задачи в едином стиле проекта.
+- [—] **Grounding scope** (B): снято — полный скан всего проекта при первом запуске **так и задумано**
+      (разовый кэшируемый ground truth, переиспользуется между фичами). Не меняли.
+- [x] **Гейт межмодульных зависимостей** (E): агент дописал в `build.gradle` зависимость на модуль,
+      который по правилам проекта подключать нельзя. `check_architecture.py` расширен: ловит НОВЫЕ
+      `project(':...')` в diff build-файлов (`check_module_deps`); политика `quality.module_dep_policy`
+      = `deny_new` (дефолт, блок любой новой межмодульной зависимости) | `policy` (только
+      `ground/architecture-policy.json: module_deps.forbidden`) | `off`; allow-list `module_deps.allowed_new`;
+      override-эскейп (§0.6.1). Обязательный гейт SKILL §8.3c. Тесты: `test_check_architecture.py`.
+
 ## Известные ограничения (из аудита)
 
 - **`additionalContext` только в `hookSpecificOutput`** — рантайм читает контекст-инъекцию ТОЛЬКО из
@@ -245,7 +325,15 @@ python3 <project>/.gigacode/hooks/preflight.py --project <project>
   страховка. Не клади тяжёлые subprocess в hook hot-path.
 - **Command substitution `$(...)`/backticks РЕЖЕТСЯ** в shell-вызовах агента → в SKILL.md/доках/инструкциях
   её НЕТ БЫЛО (каталог `.`, путь к репо скрипты берут сами через `repo_root()`). Внутри `.sh` — можно.
+- **`find … -exec` / «filesystem enumeration» РЕЖЕТ нативный сейфти форка** (не хук forge — формат
+  `Tool run_shell_command is denied`, не `exit 2`+stderr; в `hooks/` такого правила нет, проверено
+  grep'ом). На прогоне #3 заблокировался даже `find` ПО пути ВНУТРИ workspace. Поэтому в SKILL.md/доках
+  для перечисления/чтения файлов — `Glob`/`Grep`/`Read`, а не `find -exec`/`ls -R`. Это ограничение
+  рантайма, мы его не контролируем — только обходим выбором тулов.
 - **Блокировки (exit 2 + stderr) работают надёжно**; Subagent-события срабатывают для тула `agent`.
+- **`cost-breaker` сейчас НЕ тормоз** (прогон #3): его `budget.json` показал 42% (`spent 843K/2M`),
+  тогда как реальная сессия сожгла 51.8M входных токенов (расхождение ~60×), а хард-стоп 120% отключён.
+  Не полагаться на текущий бюджет как на ограничитель стоимости, пока учёт не сверен (см. роадмап C3).
 
 ## Диагностика (перед прогоном)
 
