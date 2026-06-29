@@ -142,7 +142,7 @@ def blocked_paths(phase_id: str) -> list:
 def allowed_skills(phase_id: str) -> list:
     return {
         "00-brd":       ["brd-grounder", "brd-interview", "business-requirements"],
-        "01-grounding": ["system-analyst", "Explore"],
+        "01-grounding": ["project-grounder", "system-analyst", "Explore"],
         "02-sdd":       ["sdd"],
         "02-design":    ["tech-design"],
         "02-eval-plan": ["general-purpose"],

@@ -53,7 +53,21 @@ description: >
 > hooks = enforcement, SKILL.md = guidance.
 >
 > **Возвращай из субагентов JSON с полем `step_id`** — иначе
-> `state-recorder` не пометит шаг.
+> `state-recorder` не пометит шаг. В повторном (fix) прогоне после FAIL судьи — **тот же
+> контракт и тот же `step_id`**, что и в первичном (см. §0.6), иначе fix-прогон не запишется.
+>
+> **Шаг закрывает явный `update.py --status completed` ПОСЛЕ PASS судьи — не `state-recorder`.**
+> На `SubagentStop` рабочего субагента судья ещё не прошёл, поэтому авто-закрытие там
+> детерминированно блокируется (by-design: `update._check_judges`). Закрытие делается один раз в
+> конце фазы явной командой (§7–§10) и переживает любое число fix-раундов. Пропустишь — шаг
+> застрянет в `in_progress`, и на ресьюме фаза прогонится заново.
+>
+> **Лимиты `ask_user_question` (любой гейт/вопрос оркестратора).** Иначе вызов падает на
+> валидации и тратит round-trip (на прогоне №3 — 5 раз):
+> - `header` — **≤ 12 символов** (это короткий тег-чип, не вопрос; вопрос кладётся в `question`);
+> - `options` — **ровно 2–4** непустых варианта, у каждого непустой `description`;
+> - нужен **свободный ответ** (например «опиши задачу в 2–3 предложениях») — `ask_user_question`
+>   не подходит (он всегда требует 2–4 опции): задай вопрос обычным текстом и жди ответа.
 
 ---
 
@@ -66,9 +80,20 @@ description: >
 python3 <project>/.gigacode/hooks/preflight.py --project .
 ```
 - **exit 0** — харнес активен, продолжай.
-- **exit 1** — ENFORCEMENT OFF. **Остановись и предупреди пользователя**: хуки не срабатывают
-  (нет блока `hooks` в settings / `disableAllHooks` / не задеплоено). Не веди пайплайн вслепую —
-  сначала `deploy.sh` + `doctor.py`. Дальше только после подтверждения, что харнес поднят.
+- **exit 1** — посмотри `errors`. Различай две причины (они требуют разного):
+  - **Только** `ground/pipeline.json not found` (или `incomplete`) — это нормальный первый запуск.
+    Инициализируй конфиг (§0.1) и **обязательно перезапусти preflight** — он должен стать **exit 0**
+    до первого субагента.
+  - Ошибки про `settings.json` / `hooks block empty` / `essential hook НЕ подключён` /
+    `resolve_hook_paths` — это **ENFORCEMENT OFF**: хуки реально не срабатывают. **Остановись и
+    предупреди пользователя**, сначала `deploy.sh` + `bash .gigacode/deploy-local.sh` + `doctor.py`.
+    Дальше только после подтверждения, что харнес поднят.
+
+> **ЖЁСТКИЙ ГЕЙТ АРМИНГА.** Не вызывай **ни одного `agent()`**, пока `preflight.py` не вернул
+> **exit 0**. Хуки рантайм связывает при запуске сессии; если на старте было `enforcement off`,
+> ранние субагентные фазы (02-sdd, 02-design, 03-jira, build) пройдут **без записи**
+> `_origins/<step>.json` от SubagentStop → каждый шаг придётся закрывать через `override_judge.py`
+> (шторм override на прогоне №3). Сначала PASS — потом субагенты.
 
 - Текущая директория — корень репо кода (Java/Spring, Gradle/Maven).
 - Подключены MCP **Atlassian (Jira)** и **Bitbucket** — для фаз 2.5 и 6. Если их нет,
@@ -129,6 +154,11 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/resolve_phases.py \
 
 Если `project.is_git=false`, а пользователь хочет дойти до PR — предложи `git init` до фазы 6
 (иначе ветки/stacked-PR и ключ `pipeline-state` не работают).
+
+5. **Перезапусти preflight — гейт арминга.** Как только `_incomplete` пуст, **повторно** прогони
+   `python3 <project>/.gigacode/hooks/preflight.py --project .` и убедись в **exit 0**. Это
+   единственная проверка, что харнес действительно поднят, прежде чем пойдут субагенты. Пока не
+   PASS — `agent()` не вызывай (см. жёсткий гейт в §0.0).
 
 **Расположение документных артефактов `<docs_path>` (in-repo / separate-repo).**
 Везде ниже `<docs_path>` = база документов, резолвится из `docs.*`:
@@ -266,7 +296,9 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
    варианта): «Попыток больше нет. (a) сбросить errors.json и начать заново; (b) отменить шаг;
    (c) пропустить гейт вручную с обоснованием (override, см. §0.6.1) — выбирай (c) только если причина
    FAIL внешняя и не устранима правкой артефактов (нет тестовой БД, внешний сервис недоступен и т.п.)»
-4. Если `< 3` — сформируй промпт для повторного субагента:
+4. Если `< 3` — собери промпт повторного прогона как **тот же контракт фазы**
+   (`get_prompt.py <§>` того же рабочего субагента, что и в первичном прогоне) **плюс** блок
+   ошибок в конце:
    ```
    **⚠️ Ошибки предыдущих прогонов (из errors.json):**
    - <accumulated_errors[0]>
@@ -276,9 +308,16 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
    НЕ повторяй эти ошибки. Проверь, что каждая из них исправлена.
    iteration=NN из 3 max.
    ```
-5. **Запусти субагента той же фазы повторно** с blocking issues в промпте.
-   Субагент НЕ пишет артефакты с нуля — он **исправляет** ошибки из списка.
-6. Запусти judge снова (PASS → закрыть шаг; FAIL → loop на шаг 2)
+   Субагент **обязан вернуть тот же финальный JSON с `step_id`**, что и в первичном прогоне —
+   иначе `state-recorder` уйдёт в ветку «нет step_id — не угадываем» и **не запишет** fix-прогон
+   (ни `_origins`, ни вывод). НЕ отправляй один лишь блок ошибок без контракта фазы.
+5. **Запусти субагента той же фазы повторно** этим контрактом. Субагент НЕ пишет артефакты
+   с нуля — он **исправляет** ошибки из списка.
+6. Запусти judge снова. **FAIL → loop на шаг 2.** **PASS → закрой шаг явной командой**
+   `update.py --status completed` (per-phase блок из §7–§10). Это закрытие — единственное, что
+   реально пишет статус шага; его НЕ делает ни `state-recorder` (на момент `SubagentStop` судья
+   ещё не прошёл), ни сам судья, и оно переживает любое число fix-раундов. Пропустишь — шаг
+   останется `in_progress`.
 
 **После judge PASS:** errors.json автоматически удаляется, ошибки считаются исправленными.
 
@@ -911,6 +950,12 @@ agent(subagent_type="general-purpose", description="red-judge for <taskId>",
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py red <slug> --recheck
 ```
 
+**При PASS — закрой `04-test-<taskId>` явной командой** (RED зафиксирован), затем к стабам:
+```bash
+python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py \
+    --skill feature-pipeline --feature <slug> --step-id 04-test-<taskId> --status completed
+```
+
 ### 7.2 Per-task: стабы сигнатур (оркестратор)
 
 После прохождения red-judge — запусти субагента для создания стабов. Контракт: `get_prompt.py 4.2`:
@@ -977,7 +1022,11 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py reuse <
 доработку — замени велосипед на библиотеку/util из каталога. Закрывай `04-build-<taskId>`
 только когда **оба** судьи (build-judge И reuse-judge) PASS (`required_judges` шага — оба).
 
-Обнови `04-build-<taskId>` (completed) при pass.
+Закрой `04-build-<taskId>` явной командой, только когда **оба** судьи PASS:
+```bash
+python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py \
+    --skill feature-pipeline --feature <slug> --step-id 04-build-<taskId> --status completed
+```
 
 > Если `quality.eval_enabled: false` — хук пропускает eval-проверки.
 > Если `quality.tdd: false` — допускается старый порядок.
@@ -1038,7 +1087,8 @@ coverage-judge также содержит floor **целостности тес
 coverage исключает из проверки слои, непокрываемые `test_layer` (репозитории/энтити/dto/config при
 `service-unit`) — не пытайся «дорисовать» им тесты через `@DataJpaTest` (его блокирует `tdd-guard`).
 
-После возврата — закрой `05-tests` при pass. При fail — верни тестописателя на доработку (лимит §0.6).
+При fail — верни тестописателя на доработку (лимит §0.6). Закрытие `05-tests` — явной командой
+в конце §8.4, после того как **все** verify-гейты (coverage + regression + arch) PASS.
 
 ### 8.3b Регресс-гейт затронутых модулей (ОБЯЗАТЕЛЬНО, перед закрытием `05-tests`)
 
@@ -1095,7 +1145,11 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.p
       --root "<project>"
   ```
 `exit 2` любого — blocking: почини нарушения и перезапусти (`--strict` ужесточает warnings).
-`exit 0` — продолжай к закрытию `05-tests`.
+`exit 0` — закрой `05-tests` явной командой (только когда coverage + regression + arch-гейт все PASS):
+```bash
+python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py \
+    --skill feature-pipeline --feature <slug> --step-id 05-tests --status completed
+```
 
 ---
 
@@ -1144,7 +1198,11 @@ agent(subagent_type="general-purpose", description="spec-judge for <slug>",
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py spec <slug> --recheck
 ```
 
-Обнови `06-spec` только при pass.
+При PASS — закрой `06-spec` явной командой:
+```bash
+python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py \
+    --skill feature-pipeline --feature <slug> --step-id 06-spec --status completed
+```
 
 ---
 
@@ -1209,8 +1267,15 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_delivery.py \
     --manifest "<project>/ground/statements/feature-pipeline/<slug>/manifest.json" \
     --pipeline-config "<project>/ground/pipeline.json"
 ```
-По закрытому `07-deliver-<id>` на каждую задачу (при bitbucket off — skip). Обнови
-`07-deliver-*` и `07-report`.
+На каждую задачу (при bitbucket off — skip) закрывай `07-deliver-<id>` явной командой, а в
+самом конце — `07-report`:
+```bash
+python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py \
+    --skill feature-pipeline --feature <slug> --step-id 07-deliver-<taskId> --status completed
+# после доставки всех задач и отчёта в Jira:
+python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py \
+    --skill feature-pipeline --feature <slug> --step-id 07-report --status completed
+```
 
 Детали MCP-команд (Jira-комментарий, создание PR, workspace/repo) — общие с
 `minor-defect-fix`: `<project>/.gigacode/skills/minor-defect-fix/references/{jira-workflow,bitbucket-workflow,coverage}.md`.

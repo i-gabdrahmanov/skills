@@ -219,6 +219,16 @@ def _check_subagent_origin(step: dict, closed_by: str, project: Path, skill: str
             step["override_warnings"].append(msg)
         print(f"  {msg}", file=sys.stderr)
         return
+    origins_dir = project / DATA_DIR / "statements" / skill / feature / "_origins"
+    no_markers_at_all = not origins_dir.exists() or not any(origins_dir.glob("*.json"))
+    arming_hint = ""
+    if no_markers_at_all:
+        arming_hint = (
+            "\n   ДИАГНОСТИКА: ни одного _origins-маркера у фичи нет — вероятно харнес не армлен "
+            "(SubagentStop-хук не срабатывает). Прогони `python3 .gigacode/hooks/preflight.py "
+            "--project .` — он должен вернуть exit 0; если ругается на settings.json/hooks — "
+            "сначала deploy. Override уместен только когда agent() реально недоступен."
+        )
     raise RuntimeError(
         f"Шаг {step_id} нельзя закрыть: нет evidence, что фаза прошла через субагента "
         f"(_origins/{step_id}.json от SubagentStop отсутствует; флаг --closed-by теперь не "
@@ -226,6 +236,7 @@ def _check_subagent_origin(step: dict, closed_by: str, project: Path, skill: str
         f"state-recorder запишет evidence и закроет шаг сам. Если agent() недоступен — override:\n"
         f"   python3 {_OVERRIDE_SCRIPT} --judge subagent-origin --feature {feature} "
         f"--step-id {step_id} --reason \"<почему inline допустимо>\""
+        f"{arming_hint}"
     )
 
 

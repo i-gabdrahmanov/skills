@@ -56,6 +56,7 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 |---|---|---|
 | `feature-pipeline` | Оркестратор: ведёт фичу по фазам от BRD до PR | gate-скрипты + evals |
 | `pipeline-state` | Состояние многошаговых пайплайнов с субагентами | косвенно через evals |
+| `project-grounder` | Фаза 1 (grounding): переиспользует обзор или зовёт `system-analyst` | `verify_coverage.py` |
 | `system-analyst` | Скан Java/Spring сервиса (модули, API, Kafka, БД) | `verify_coverage.py` |
 | `sdd` | BRD → спецификация `sdd.md` (GWT, API, данные, приёмка) | `check_sdd_doc.py` |
 | `tech-design` | SDD → план + `task-plan.json` + структура слоёв | `check_taskplan.py` |
@@ -68,6 +69,7 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 | `bugfix-developer` | Минимальный фикс | — |
 | `brd-grounder` | Grounding для BRD | — |
 | `config-helper` | Настройка параметров forge (pipeline/gates/risk) скриптом | `test_config.py` |
+| `harness-verifier` | Семантическая верификация харнеса (скиллы+хуки) перед релизом | методический (бриф+чек-лист) |
 | `pdf` / `pptx` | Работа с PDF/PPTX | — |
 
 ## Журнал решений (почему так)
@@ -376,14 +378,14 @@ forge/
 ├── deploy.sh                 # установщик (разворачивает в проект)
 ├── deploy-local.sh           # in-project фиксер путей (копируется в .gigacode/)
 ├── docs/                     # документация (deployment.md, user-guide.md, troubleshooting.md, …)
-├── hooks/                    # control-plane (~35 скриптов)
+├── hooks/                    # control-plane (~38 скриптов)
 │   ├── settings.hooks.json   # эталон блока hooks (${PROJECT_ROOT})
 │   ├── resolve_hook_paths.py # подстановка путей + merge в settings.json
 │   ├── risk-policy.json      # политика рисков
 │   ├── preflight.py          # self-check готовности
 │   ├── evals/                # eval-набор
 │   └── test_*.py             # тесты хуков
-└── skills/                   # пайплайн-скиллы (14 шт)
+└── skills/                   # пайплайн-скиллы (16 шт)
     ├── feature-pipeline/     # оркестратор
     ├── pipeline-state/       # состояние
     ├── system-analyst/       # grounding

@@ -12,6 +12,9 @@ ground/
 **/settings.json.bak
 **/settings.json.*.bak
 
+# Локальные дампы прогонов харнеса (ai-logs, транскрипты) — не исходник
+прогоны харнес/
+
 # IDE
 .idea/
 .gigaide/

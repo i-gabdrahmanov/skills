@@ -51,7 +51,12 @@ _(Лимит рантайма `ask_user_question`: поле `header` — **≤ 1
 
 ## Структура документа
 
-Документ всегда сохраняется как Markdown-файл в проекте по пути `business-requirements/<краткое-имя-задачи>.md` (имя в kebab-case, на латинице или транслите). Если директории нет — создай её.
+Документ сохраняется как Markdown-файл `docs/feature-pipeline/<slug>/brd.md`, где `<slug>` —
+идентификатор задачи: **Jira-ключ** (напр. `KIDPPRB-8639`), если задача пришла из Jira — тогда
+путь сам привязан к задаче; иначе короткий kebab-case по сути задачи (латиница или транслит).
+Имя файла — всегда `brd.md` (единообразно с пайплайном); все артефакты одной задачи лежат в её
+папке `docs/feature-pipeline/<slug>/` (туда же лягут sdd/tech-design, если задача пойдёт в пайплайн).
+Если папки `docs/feature-pipeline/<slug>/` нет — создай её.
 
 Используй ровно эту структуру (не пропускай разделы — если данных нет, явно напиши "Не определено на данном этапе" и при необходимости включи это в "Допущения"):
 
@@ -188,7 +193,7 @@ _(Лимит рантайма `ask_user_question`: поле `header` — **≤ 1
 
 ```
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py brd <slug> \
-  --brd business-requirements/<slug>.md --project-root <project>
+  --brd docs/feature-pipeline/<slug>/brd.md --project-root <project>
 ```
 
 - exit 0 (PASS) — БТ чистые, продолжай.

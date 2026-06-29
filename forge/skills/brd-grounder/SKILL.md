@@ -59,8 +59,8 @@ when_to_use: >
 Ищи готовые требования в репозитории:
 
 ```bash
-ls business-requirements/*.md 2>/dev/null
-ls docs/feature-pipeline/*/brd.md 2>/dev/null
+ls docs/feature-pipeline/*/brd.md 2>/dev/null   # основное место BRD
+ls business-requirements/*.md 2>/dev/null        # legacy: старые плоские БТ
 ```
 
 По ключевым терминам найди релевантные файлы (`grep_search` по содержимому). Для каждого
@@ -98,7 +98,7 @@ ls docs/feature-pipeline/*/brd.md 2>/dev/null
 ## Выход
 
 Сохрани компактную выжимку в `ground/brd-grounding/<slug>.md` (создай папку, если нет; `<slug>` —
-kebab-case темы). **НЕ клади рядом с BRD** (`business-requirements/`) — это внутренняя рабочая заметка,
+kebab-case темы). **НЕ клади рядом с BRD** (`docs/feature-pipeline/<slug>/`, legacy `business-requirements/`) — это внутренняя рабочая заметка,
 а не документ требований; соседство путало (выглядело как второй BRD). Структура:
 
 ```markdown
@@ -111,7 +111,7 @@ kebab-case темы). **НЕ клади рядом с BRD** (`business-requireme
 ## Связанные существующие БТ
 | Источник | Где | Суть | Пересечение |
 |----------|-----|------|-------------|
-| локально | business-requirements/x.md | ... | дублирует разд. 6 |
+| локально | docs/feature-pipeline/<slug>/brd.md | ... | дублирует разд. 6 |
 | Confluence | <ссылка> | ... | смежная тема |
 *(если ничего не найдено — «Существующих требований по теме не найдено».)*
 
@@ -147,7 +147,7 @@ kebab-case темы). **НЕ клади рядом с BRD** (`business-requireme
 ## Что НЕ делать
 
 - Не писать в исходники проекта — только в `ground/brd-grounding/`.
-- Не класть выжимку в `business-requirements/` рядом с BRD (путает; это рабочая заметка, не требования).
+- Не класть выжимку рядом с BRD (в `docs/feature-pipeline/<slug>/`, legacy `business-requirements/`) — путает; это рабочая заметка, не требования.
 - Не угадывать имена MCP-тулов — искать по шаблонам, при отсутствии сервера деградировать.
 - Не блокироваться на отсутствии любого источника — собрать что есть, остальное в «Пробелы».
 - Не имитировать веб-поиск: без URL от пользователя в интернет не ходим (`web_fetch` — только

@@ -112,7 +112,7 @@ def _evaluate_enabled_by(expr, pipeline, gates):
 # источником списка фаз).
 DEFAULT_PHASES = [
     {"id": "00-brd",          "skill": "business-requirements", "enabled_by": None,              "skip_if": None,           "gates": ["brd"],        "description": "Discovery / BRD"},
-    {"id": "01-grounding",    "skill": "system-analyst",        "enabled_by": None,              "skip_if": "grounding.exists", "gates": None,       "description": "System overview ensured"},
+    {"id": "01-grounding",    "skill": "project-grounder",      "enabled_by": None,              "skip_if": "grounding.exists", "gates": None,       "description": "System overview ensured"},
     {"id": "02-sdd",          "skill": "sdd",                   "enabled_by": None,              "skip_if": None,           "gates": ["sdd"],        "description": "SDD specification"},
     {"id": "02-design",       "skill": "tech-design",           "enabled_by": None,              "skip_if": None,           "gates": ["design"],     "description": "Tech design + task plan"},
     {"id": "02-eval-plan",    "skill": None,                    "enabled_by": "quality.eval_enabled", "skip_if": None,     "gates": None,           "description": "Eval-plan generated"},

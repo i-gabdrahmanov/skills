@@ -1714,7 +1714,7 @@ def main():
                         help="Путь к docs/system-analysis (по умолчанию <project-root>/docs/system-analysis)")
     parser.add_argument("--brd", default=None,
                         help="Явный путь к документу БТ для фазы brd (standalone-проверка, "
-                             "напр. business-requirements/<slug>.md). Относительный путь — от --project-root.")
+                             "напр. docs/feature-pipeline/<slug>/brd.md). Относительный путь — от --project-root.")
     parser.add_argument("--diff-base", default="HEAD",
                         help="База git diff для фазы reuse (по умолчанию HEAD).")
     parser.add_argument("--reuse-scan", default=None,
