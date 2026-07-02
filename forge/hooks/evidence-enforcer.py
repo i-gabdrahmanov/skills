@@ -61,6 +61,24 @@ def main() -> int:
             return 0
         deliver = True
         root = _project_root(data.get("cwd", ""))
+
+        # Lite-ветка (forgelite): task-plan нет — доставку гейтим по шагам манифеста
+        # (lite-green + lite-verify completed). Активный манифест резолвит risk_ladder (newest).
+        try:
+            import risk_ladder as _R
+            lite_status = _R.manifest_status(root)
+        except Exception:
+            lite_status = {}
+        if "lite-green" in lite_status:
+            missing = [s for s in ("lite-green", "lite-verify") if lite_status.get(s) != "completed"]
+            if missing:
+                return _block(
+                    "доставка (push/PR) до зелёной сборки. Не завершены шаги: "
+                    + ", ".join(f"{s}={lite_status.get(s)}" for s in missing)
+                    + ". Сначала GREEN (lite-green) и тесты+покрытие (lite-verify)."
+                )
+            return 0
+
         plans = sorted(glob.glob(str(root / "ground" / "**" / "task-plan.json"), recursive=True))
         if not plans:
             return _block("доставка без task-plan.json — нечего подтверждать evidence.")

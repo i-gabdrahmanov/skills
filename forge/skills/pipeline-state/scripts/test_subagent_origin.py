@@ -39,6 +39,15 @@ def _write_marker(tmp: Path, step_id: str, feature: str = "feat") -> None:
         json.dumps({"step_id": step_id, "agent_type": "general-purpose"}), encoding="utf-8")
 
 
+def _write_gate_result(tmp: Path, step_id: str, feature: str = "feat") -> None:
+    """Симулирует evidence детерминированного гейта (пишет record_gate.py)."""
+    d = tmp / "ground" / "statements" / "feature-pipeline" / feature / "gates"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{step_id}.json").write_text(json.dumps({
+        "produced_by": "record_gate", "step_id": step_id, "passed": True, "exit_code": 0,
+    }), encoding="utf-8")
+
+
 def _run(tmp: Path, step_id: str, closed_by: str, feature: str = "feat") -> int:
     return subprocess.run(
         [sys.executable, str(UPDATE), "--project", str(tmp), "--skill", "feature-pipeline",
@@ -63,6 +72,7 @@ class TestSubagentOrigin(unittest.TestCase):
     def test_subagent_close_with_marker_ok(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d); _make_manifest(tmp); _write_marker(tmp, "04-build-T1")
+            _write_gate_result(tmp, "04-build-T1")
             self.assertEqual(_run(tmp, "04-build-T1", "subagent"), 0)
 
     def test_inline_close_of_non_subagent_phase_ok(self):
@@ -77,6 +87,7 @@ class TestSubagentOrigin(unittest.TestCase):
             ov.mkdir(parents=True, exist_ok=True)
             (ov / "subagent-origin.json").write_text(
                 json.dumps({"reason": "тест: ручное закрытие"}), encoding="utf-8")
+            _write_gate_result(tmp, "04-build-T1")
             self.assertEqual(_run(tmp, "04-build-T1", "inline"), 0)
 
 

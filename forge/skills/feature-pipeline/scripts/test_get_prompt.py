@@ -44,11 +44,13 @@ def referenced_ids():
     спутать с внутренними §-ссылками SKILL.md на собственные секции (§5b, §6, §0.5 …).
     """
     ids = set()
-    for line in SKILL_MD.read_text(encoding="utf-8").splitlines():
-        if "get_prompt.py" in line:
-            ids.update(_GETPROMPT_RE.findall(line))
-        if "subagent-prompts" in line:
-            ids.update(_SECTION_RE.findall(line))
+    sources = [SKILL_MD] + sorted((SKILL_MD.parent / "references" / "phases").glob("*.md"))
+    for src in sources:  # диспетчер + фазовые брифы (контракты вызываются из брифов)
+        for line in src.read_text(encoding="utf-8").splitlines():
+            if "get_prompt.py" in line:
+                ids.update(_GETPROMPT_RE.findall(line))
+            if "subagent-prompts" in line:
+                ids.update(_SECTION_RE.findall(line))
     return sorted(ids)
 
 

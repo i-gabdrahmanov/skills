@@ -172,23 +172,27 @@ def agent_cap(agent_type: str | None) -> str | None:
 
 # ── проверки выполнения требований уровня ─────────────────────────────────────────────
 def active_manifest(root: Path) -> Path | None:
-    """Активная фича = самый свежий manifest под statements/<SKILL>/*/ (кроме archived).
-    Совместимо со старым layout (.../pipeline/manifest.json) и новым (.../<feature>/manifest.json)."""
-    base = root / "ground" / "statements" / SKILL
+    """Активная фича = самый свежий manifest под statements/*/*/ ПО ВСЕМ skill-namespace
+    (feature-pipeline И forgelite), кроме archived. Так один общий control-plane обслуживает
+    и full-, и lite-ветку: активной считается та, чей manifest свежее."""
+    base = root / "ground" / "statements"
     newest, mt = None, -1.0
     try:
-        for d in base.iterdir():
-            if not d.is_dir() or d.name == "archived":
+        for skill_dir in base.iterdir():
+            if not skill_dir.is_dir():
                 continue
-            mp = d / "manifest.json"
-            if not mp.exists():
-                continue
-            try:
-                m = mp.stat().st_mtime
-            except OSError:
-                continue
-            if m > mt:
-                newest, mt = mp, m
+            for d in skill_dir.iterdir():
+                if not d.is_dir() or d.name == "archived":
+                    continue
+                mp = d / "manifest.json"
+                if not mp.exists():
+                    continue
+                try:
+                    m = mp.stat().st_mtime
+                except OSError:
+                    continue
+                if m > mt:
+                    newest, mt = mp, m
     except Exception:
         return None
     return newest

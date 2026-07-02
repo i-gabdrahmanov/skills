@@ -1242,6 +1242,19 @@ _ASSERT_VERIFY_RE = re.compile(
     r"\b(?:assert\w*|assertThat|verify|verifyNoInteractions|verifyNoMoreInteractions|"
     r"thenThrow|expectThrows)\b"
 )
+_TEST_ANNOTATION_RE = re.compile(r"@(?:Test|ParameterizedTest|RepeatedTest)\b")
+# Assert-строки, чьи литералы можно «прогнуть под новое поведение»
+_EXPECTED_ASSERT_RE = re.compile(r"\b(?:assertEquals|assertThat|assertSame|isEqualTo)\b")
+_LITERAL_RE = re.compile(r'"(?:[^"\\]|\\.)*"|\b\d+(?:\.\d+)?[LlFfDd]?\b')
+
+
+def _assert_skeleton(line: str):
+    """Скелет assert-строки: литералы заменены плейсхолдером, пробелы схлопнуты.
+    Одинаковый скелет у removed/added при разных литералах = «переписано ожидаемое значение»."""
+    if not _EXPECTED_ASSERT_RE.search(line):
+        return None
+    skel = _LITERAL_RE.sub("§", line)
+    return re.sub(r"\s+", "", skel)
 
 
 def _git_diff_test_changes(base: str) -> dict:
@@ -1277,9 +1290,10 @@ def _git_diff_test_changes(base: str) -> dict:
 def _test_integrity_floor(base: str = "HEAD") -> tuple:
     """Детерминированный floor фазы Verify: ослабление существующих тестов ради GREEN.
 
-    BLOCK: добавлен @Disabled/@Ignore на ранее активный тест; рост times(N)→times(M) (ослаблена
-    проверка числа вызовов под новое поведение). WARN: нетто-удаление assert/verify (возможная
-    потеря проверок). Консервативно (только filter=M), чтобы не ловить легитимный рефактор тестов.
+    BLOCK: добавлен @Disabled/@Ignore на ранее активный тест; рост times(N)→times(M);
+    нетто-потеря assert/verify ≥2; переписаны ожидаемые значения в существующих assert'ах;
+    удалены @Test-методы. Консервативно (только filter=M), чтобы не ловить легитимный
+    рефактор тестов; осознанный пропуск — override coverage-judge (§0.6.1).
     """
     checks, blocking, warnings = [], [], []
     per_file = _git_diff_test_changes(base)
@@ -1289,6 +1303,7 @@ def _test_integrity_floor(base: str = "HEAD") -> tuple:
         return checks, blocking, warnings
 
     disabled_hits, weakened_verify, assertion_loss = [], [], []
+    expected_rewrites, removed_tests = [], []
     for path, ch in per_file.items():
         added, removed = ch["added"], ch["removed"]
         # 1. Добавлен @Disabled/@Ignore (и это не просто перенос существующей аннотации)
@@ -1305,20 +1320,44 @@ def _test_integrity_floor(base: str = "HEAD") -> tuple:
         a_rem = sum(1 for rm in removed if _ASSERT_VERIFY_RE.search(rm))
         if a_rem - a_add >= 2:
             assertion_loss.append(f"{path}: -{a_rem - a_add} assert/verify")
+        # 4. Переписаны ожидаемые значения: скелет assert совпал, литералы разные
+        rem_skels = {}
+        for rm in removed:
+            sk = _assert_skeleton(rm)
+            if sk:
+                rem_skels.setdefault(sk, []).append(rm)
+        for a in added:
+            sk = _assert_skeleton(a)
+            if not sk or sk not in rem_skels:
+                continue
+            a_lits = _LITERAL_RE.findall(a)
+            if all(_LITERAL_RE.findall(rm) != a_lits for rm in rem_skels[sk]):
+                expected_rewrites.append(
+                    f"{path}: {rem_skels[sk][0].strip()[:60]} → {a.strip()[:60]}")
+                break
+        # 5. Удалены @Test-методы (нетто-потеря аннотаций @Test)
+        t_add = sum(1 for a in added if _TEST_ANNOTATION_RE.search(a))
+        t_rem = sum(1 for rm in removed if _TEST_ANNOTATION_RE.search(rm))
+        if t_rem > t_add:
+            removed_tests.append(f"{path}: -{t_rem - t_add} @Test")
 
     name = "Существующие тесты не ослаблены ради GREEN"
     blocking.extend(f"существующий тест отключён (@Disabled/@Ignore): {p}" for p in disabled_hits[:5])
     blocking.extend(f"ослаблена проверка числа вызовов: {w}" for w in weakened_verify[:5])
-    if disabled_hits or weakened_verify:
+    blocking.extend(f"потеря проверок в существующем тесте: {a}" for a in assertion_loss[:5])
+    blocking.extend(f"переписано ожидаемое значение под новое поведение: {e}"
+                    for e in expected_rewrites[:5])
+    blocking.extend(f"удалён(ы) @Test-метод(ы) из существующего файла: {t}" for t in removed_tests[:5])
+    weakened_all = (disabled_hits + weakened_verify + assertion_loss
+                    + expected_rewrites + removed_tests)
+    if weakened_all:
         checks.append({"name": name, "status": "FAIL",
-                       "detail": "; ".join(disabled_hits + weakened_verify)[:200],
+                       "detail": "; ".join(weakened_all)[:200],
                        "severity": "error"})
     else:
         checks.append({"name": name, "status": "PASS",
                        "detail": f"{len(per_file)} изменённых тест-файлов без ослабления",
                        "severity": "error"})
-    for a in assertion_loss[:5]:
-        warnings.append(f"возможная потеря проверок в существующем тесте: {a}")
     return checks, blocking, warnings
 
 

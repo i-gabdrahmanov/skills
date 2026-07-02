@@ -17,7 +17,11 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-SKILL = (REPO / "skills/feature-pipeline/SKILL.md").read_text(encoding="utf-8")
+# Корпус = SKILL.md-диспетчер + фазовые брифы (команды закрытия шагов живут в брифах фаз)
+_SKILL_DIR = REPO / "skills/feature-pipeline"
+SKILL = (_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8") + "".join(
+    p.read_text(encoding="utf-8")
+    for p in sorted((_SKILL_DIR / "references" / "phases").glob("*.md")))
 
 # Шаги per-task/phase TDD-цикла, закрываемые ЯВНОЙ командой (а не прозой).
 CLOSABLE_STEPS = [

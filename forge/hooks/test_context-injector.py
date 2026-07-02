@@ -9,12 +9,20 @@ importlib (ловит регрессии синтаксиса/импорта) и
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 HOOK = Path(__file__).resolve().parent / "context-injector.py"
+
+
+def _run_in(tmp: Path) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(HOOK)],
+                          input=json.dumps({"cwd": str(tmp)}),
+                          capture_output=True, text=True, timeout=30)
 
 
 class T(unittest.TestCase):
@@ -29,6 +37,41 @@ class T(unittest.TestCase):
         r = subprocess.run([sys.executable, str(HOOK)], input="",
                            capture_output=True, text=True, timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_broken_excerpt_json_not_injected(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            sa = tmp / "docs" / "system-analysis"
+            sa.mkdir(parents=True)
+            (sa / "grounding-excerpt.json").write_text('{"modules": [broken', encoding="utf-8")
+            r = _run_in(tmp)
+            self.assertEqual(r.returncode, 0)
+            self.assertNotIn("grounding-excerpt", r.stdout)  # битый файл не инъектится
+            self.assertIn("битый JSON", r.stderr)
+
+    def test_valid_excerpt_injected(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            sa = tmp / "docs" / "system-analysis"
+            sa.mkdir(parents=True)
+            (sa / "grounding-excerpt.json").write_text(
+                json.dumps({"modules": ["m1"], "conventions": {"build": "gradle"}}),
+                encoding="utf-8")
+            r = _run_in(tmp)
+            self.assertEqual(r.returncode, 0)
+            self.assertIn("grounding-excerpt", r.stdout)
+            self.assertIn("additionalContext", r.stdout)
+
+    def test_excerpt_missing_keys_warns_but_injects(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            sa = tmp / "docs" / "system-analysis"
+            sa.mkdir(parents=True)
+            (sa / "grounding-excerpt.json").write_text(json.dumps({"foo": 1}), encoding="utf-8")
+            r = _run_in(tmp)
+            self.assertEqual(r.returncode, 0)
+            self.assertIn("grounding-excerpt", r.stdout)
+            self.assertIn("WARNING", r.stderr)
 
 
 if __name__ == "__main__":

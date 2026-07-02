@@ -23,6 +23,16 @@
       "aliases": ["eval", "эвалы", "eval-driven", "edd", "проверки до кода"]
     },
     {
+      "id": "quality.max_step_reopens",
+      "file": "pipeline",
+      "path": "quality.max_step_reopens",
+      "type": "int", "min": 1, "max": 20, "default": 3,
+      "category": "quality", "sensitive": false,
+      "title": "Лимит ре-итераций шага",
+      "description": "Сколько раз шаг манифеста можно переоткрыть/провалить, прежде чем update.py вернёт exit 3 (ESCALATE — стоп-и-спроси)",
+      "aliases": ["лимит итераций", "reopens", "переоткрытия шага", "брейк итераций", "max reopens"]
+    },
+    {
       "id": "quality.eval_threshold",
       "file": "pipeline",
       "path": "quality.eval_threshold",

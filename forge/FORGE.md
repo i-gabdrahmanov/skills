@@ -13,7 +13,7 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 Модель **проектная**: разворачивается в `<project>/.gigacode/` (см. [docs/deployment.md](docs/deployment.md)).
 
 - `hooks/` — control-plane (см. `hooks/DEPLOY.md` — полный ростер, порядок, диагностика).
-- `skills/` — пайплайн-скиллы (оркестратор `feature-pipeline` + фазовые).
+- `skills/` — пайплайн-скиллы: вход `router` → `feature-pipeline` (full) или `forgelite` (lite) + фазовые (см. «Router + режимы full/lite»).
 - `deploy.sh` — установщик: разворачивает Forge в указанный проект одной командой
   (co-location hooks+skills + доки, мерж hooks-блока с бэкапом).
 - `deploy-local.sh` — in-project фиксер путей в `settings.json` (живёт в `<project>/.gigacode/`).
@@ -28,6 +28,37 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 **Ключевой принцип:** Правила качества форсит сам рантайм (хуки), а не «добрая воля» модели —
 пропустить тесты, выкатить без проверок или сделать рискованное «молча» нельзя.
 
+## Router + режимы full / lite (одна обвязка, две ветки)
+
+Точка входа — скилл `router` (`skills/router/SKILL.md`). ПЕРВЫМ действием он спрашивает
+пользователя, каким путём вести работу, и делегирует на общий control-plane (один `.gigacode`,
+одни хуки):
+
+- **full** → `feature-pipeline` — фича с нуля (BRD→…→deliver), вокабуляр шагов `04-test-<id>`/
+  `04-build-<id>`/`07-deliver-<id>`, стейт в namespace `feature-pipeline`.
+- **lite** → `forgelite` (`skills/forgelite/SKILL.md`) — исполнение УЖЕ ПОДГОТОВЛЕННОЙ подзадачи
+  Jira: grounding → план → TDD RED→GREEN → покрытие → PR → отчёт. Плоские шаги `lite-*`
+  (`lite-jira/lite-ground/lite-plan/lite-red/lite-green/lite-verify/lite-deliver/lite-report`),
+  стейт в namespace `forgelite`. Без BRD/SDD/tech-design/постановки задач; гейты RED/GREEN —
+  прямыми gradle/maven-командами субагента, покрытие — `check_coverage.py`; без run_judge/eval/
+  task-plan. Роутер выставляет lite-профиль: `autonomy.auto_max_risk=R2`, `criticality=medium`,
+  `quality.eval_enabled=false` (через `config-helper`).
+
+**Почему форк не нужен.** Хуки — **dual-vocabulary**: понимают оба набора префиксов и резолвят
+активный skill/feature по САМОМУ СВЕЖЕМУ манифесту в `ground/statements/*/*/` (не по фикс-namespace).
+`tdd-guard` (блок `src/main` до RED: `04-test-<id>` ИЛИ `lite-red`), `sod-enforcer`
+(`STEP_ROLE` c `lite-*`), `inline-phase-guard`/`pipeline_phases.SUBAGENT_PHASE_PREFIXES`
+(+`lite-red/green/verify`), `evidence-enforcer` (доставка по `lite-green`+`lite-verify` либо по
+task-plan для full), `state-recorder`/`risk_ladder` (newest-manifest across skills). Lite-ids
+намеренно НЕ пересекаются с масками `judges-registry` и с `PREFIX_PHASE` full-пути → lite не тянет
+судей и фазовые артефакты full. `eval-guard` для lite сам fail-open (нет `04-build-<id>` +
+`eval_enabled=false`). Инвариант «каждая subagent-фаза покрыта хуком» пинится
+`test_phase_enforcement_coverage.py` (включая `lite-*`).
+
+Установка и запуск — те же: `bash deploy.sh <project>` (router+forgelite едут в `skills/`),
+затем `gigacode --experimental-hooks -p "..."`. Отдельного lite-инсталлятора нет; коллизии
+`.gigacode` нет — харнес один.
+
 ### Хуки (control-plane)
 
 | Скрипт | Событие | Назначение | Блок |
@@ -37,6 +68,7 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 | `eval-guard.py` | PreToolUse Write/Edit | форсит EDD: блок `src/main` пока eval'ы задачи не passed в кэше `evals.json` (read-only; прогон — `run_pending_evals.py`) | exit 2 |
 | `sod-enforcer.py` | PreToolUse Write/Edit/Bash | separation of duties: роль из активного шага манифеста (test не пишет src/main; design/spec не коммитят/пушат/билдят) | exit 2 |
 | `destructive-blocker.py` | PreToolUse `^Bash$` | чёрный список (`rm -rf /`, force-push, DROP…) | exit 2 |
+| `fork-syntax-guard.py` | PreToolUse `^Bash$` | инструктивный блок синтаксиса, который режет нативный сейфти форка (`$(...)`, backticks, `find -exec`, `ls -R`) — вместо молчаливого deny объясняет замену (Glob/Grep/Read) | exit 2 |
 | `pii-boundary.py` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
 | `evidence-enforcer.py` | PreToolUse `^Bash$` | блок доставки без полного evidence bundle | exit 2 |
 | `inline-phase-guard.py` | PreToolUse Bash/Write/Edit | actor-guard: главный агент не производит артефакты/код/билд subagent-фазы inline (по `agent_type`) | exit 2 |
@@ -109,13 +141,14 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 
 **PreToolUse `^Bash$` — sequential:**
 1. `destructive-blocker` — чёрный список
-2. `pii-boundary` — PII scope (перехват редиректов `>`/`tee`/`dd of=` в файл)
-3. `cost-breaker` — token budget
-4. `evidence-enforcer` — полнота пакета
-5. `sod-enforcer` — separation of duties (роль фазы: design/spec/jira не коммитят/пушат/билдят)
-6. `inline-phase-guard` — actor: главный агент не билдит/тестит inline в subagent-фазе
-7. `gate-guard` — risk ladder
-8. `log-agent` — аудит (последний, неблокирующий)
+2. `fork-syntax-guard` — инструктивный блок синтаксиса, который режет форк (`$(...)`, backticks, `find -exec`, `ls -R`)
+3. `pii-boundary` — PII scope (перехват редиректов `>`/`tee`/`dd of=` в файл)
+4. `cost-breaker` — token budget
+5. `evidence-enforcer` — полнота пакета
+6. `sod-enforcer` — separation of duties (роль фазы: design/spec/jira не коммитят/пушат/билдят)
+7. `inline-phase-guard` — actor: главный агент не билдит/тестит inline в subagent-фазе
+8. `gate-guard` — risk ladder
+9. `log-agent` — аудит (последний, неблокирующий)
 
 **PreToolUse `(Write|Edit)` — sequential:**
 1. `pii-boundary` — PII scope
@@ -268,6 +301,48 @@ Verify — пайплайн НЕ дошёл до Document/Deliver.
       `test_sod-enforcer`, `test_subagent_origin`, `test_docs_hooks_consistency` (доки↔settings).
 - [ ] (опц.) Устойчивость к обрывам стрима глубже: авто-resume.
 
+**Hardening под слабую модель (2026-07-02, прогон на DeepSeek-V4-Flash):**
+- [x] **Детерминированный брейк ре-итераций шага.** Лимиты «перезапусти, лимит 3» были прозой →
+      `update.py` считает `reopens` (переоткрытие completed/failed → pending/in_progress, блок ДО
+      записи) и `failures` (повторные транзишены в failed; провал фиксируется, затем exit 3).
+      Лимит `quality.max_step_reopens` (дефолт 3, registry config-helper); exit 3 = ESCALATE
+      («стоп-и-спроси», как у run_judge); эскейп `override_judge.py --judge step-reopen-<step_id>`.
+      `state-recorder` печатает баннер эскалации целиком. Тесты: `test_step_reopens.py`.
+- [x] **Gate-result артефакт: закрытие build/verify-шагов не по слову модели.** `state-recorder`
+      закрывал шаг по JSON субагента (`status:"completed"`) без проверки — flash-модель возвращает
+      completed при упавшей сборке. Теперь `update._check_gate_result` требует
+      `gates/<step_id>.json` с провенансом `produced_by:"record_gate"` + `passed:true` для
+      `04-test/04-build/05-tests/lite-red/lite-green/lite-verify` (единый источник —
+      `pipeline_phases.GATE_RESULT_PREFIXES`). Артефакт пишет `pipeline-state/scripts/record_gate.py`
+      по фактическому exit-коду команды гейта (`--expect red` — семантика «компиляция OK, тесты
+      падают»). Эскейп `--judge gate-result-<step_id>`. Тесты: `test_gate_result.py`.
+- [x] **Floor «GREEN любой ценой» расширен** (`run_judge._test_integrity_floor`): нетто-потеря
+      assert/verify ≥2 — теперь БЛОК (был WARN); новые блок-детекторы: переписанные ожидаемые
+      значения в существующих assert'ах (скелет совпал, литералы разные) и удаление
+      @Test-методов из существующих файлов. Тесты: `test_run_judge_guards.py` (16).
+- [x] **`fork-syntax-guard.py`** — новый PreToolUse Bash хук: `$(...)`, backticks, `find -exec`,
+      `ls -R` блокируются с ИНСТРУКТИВНЫМ stderr (чем заменить) вместо молчаливого нативного deny
+      форка, на котором слабая модель жгла итерации. Не essential (эргономика).
+- [x] **Preflight жёстче:** doctor-находка `registry-paths-exist` (битые межскилловые пути из
+      `skill-paths.json`, напр. forgelite → `minor-defect-fix/scripts/check_coverage.py`) — теперь
+      exit 1, не warning. Router: «preflight exit 1 = стоп».
+- [x] **`context-injector` валидирует grounding-excerpt.json** перед инъекцией: битый JSON не
+      инъектится (stderr-warning), отсутствие ключей `modules`/`conventions` — warning.
+- [x] **Детерминированный скоуп-чек lite** (`forgelite/scripts/check_scope.py`): issuetype
+      Epic/Story/New Feature, пустое описание, нераспознанные AC, refactor/migration-слова →
+      exit 3 ESCALATE («lite или full?»). Обязателен перед закрытием `lite-jira`.
+      Тесты: `test_check_scope.py`.
+- [x] **Фазовые брифы вместо монолитного SKILL.md** (контекст-гигиена). SKILL.md feature-pipeline
+      (1399 строк — flash-модель роняла правила из середины) разбит: диспетчер ~570 строк (общие
+      правила §0–§2, ре-итерация, устойчивость, цикл фаз) + 10 брифов
+      `references/phases/<phase>.md` (§3–§10 перенесены дословно). Оркестратор перед каждой
+      фазой: `resolve_phases.py --current --feature <slug>` → `{current_phase, brief, gates}`
+      (обёртка над `pipeline_phases.live_phase_decision`) → `read_file(бриф)`. Поле `brief`
+      в `DEFAULT_PHASES`/выводе resolve_phases, переопределяемо через `phases_override`.
+      Дрейф пинится `test_phase_briefs.py` (брифы существуют/непустые, SKILL.md без фазовых
+      секций и ≤700 строк, каждый бриф упоминает гейт закрытия и SKILL.md §0.6);
+      `test_skill_close_commands.py`/`test_get_prompt.py` сканируют корпус SKILL.md+брифы.
+
 **Из прогона #3 `autoclose-regular-tasks` (2026-06-28):**
 - [x] **Брейк зацикленной фазы** (C1): `run_judge.py` форсит лимит ре-итераций судьи
       (`quality.max_judge_iterations`, дефолт 3) — по `errors.json` per-judge; при исчерпании печатает
@@ -334,11 +409,17 @@ Verify — пайплайн НЕ дошёл до Document/Deliver.
   страховка. Не клади тяжёлые subprocess в hook hot-path.
 - **Command substitution `$(...)`/backticks РЕЖЕТСЯ** в shell-вызовах агента → в SKILL.md/доках/инструкциях
   её НЕТ БЫЛО (каталог `.`, путь к репо скрипты берут сами через `repo_root()`). Внутри `.sh` — можно.
+- **Вход через `router` не форсится** (у рантайма нет события «скилл выбран») — модель может
+  зайти напрямую в оркестратор. Последствия смягчены: gate-guard форсит критичность, eval-guard
+  без eval-plan fail-open, `check_scope.py` ловит неверный выбор lite на первом шаге. Инвариант
+  «один активный пайплайн за прогон» — тоже проза; нарушение проявится как блок `phase-gate`
+  по висящему `in_progress` у брошенного манифеста.
 - **`find … -exec` / «filesystem enumeration» РЕЖЕТ нативный сейфти форка** (не хук forge — формат
   `Tool run_shell_command is denied`, не `exit 2`+stderr; в `hooks/` такого правила нет, проверено
   grep'ом). На прогоне #3 заблокировался даже `find` ПО пути ВНУТРИ workspace. Поэтому в SKILL.md/доках
   для перечисления/чтения файлов — `Glob`/`Grep`/`Read`, а не `find -exec`/`ls -R`. Это ограничение
-  рантайма, мы его не контролируем — только обходим выбором тулов.
+  рантайма, мы его не контролируем — обходим выбором тулов, а `fork-syntax-guard.py` перехватывает
+  паттерн раньше нативного deny и объясняет модели замену.
 - **Блокировки (exit 2 + stderr) работают надёжно**; Subagent-события срабатывают для тула `agent`.
 - **`cost-breaker` сейчас НЕ тормоз** (прогон #3): его `budget.json` показал 42% (`spent 843K/2M`),
   тогда как реальная сессия сожгла 51.8M входных токенов (расхождение ~60×), а хард-стоп 120% отключён.
@@ -386,7 +467,7 @@ forge/
 │   ├── evals/                # eval-набор
 │   └── test_*.py             # тесты хуков
 └── skills/                   # пайплайн-скиллы (16 шт)
-    ├── feature-pipeline/     # оркестратор
+    ├── feature-pipeline/     # оркестратор (SKILL.md — диспетчер; фазы — references/phases/*.md)
     ├── pipeline-state/       # состояние
     ├── system-analyst/       # grounding
     ├── tech-design/          # проектирование

@@ -56,14 +56,58 @@ class TestTestIntegrityFloor(unittest.TestCase):
         _checks, blocking, _w = rj._test_integrity_floor("HEAD")
         self.assertEqual(blocking, [])
 
-    def test_assertion_loss_warns_not_blocks(self):
+    def test_assertion_loss_blocks(self):
+        # раньше был WARN; для слабой модели «выкинуть проверки» — основной путь к GREEN → блок
         self._patch({"FooTest.java": {
             "added": [],
             "removed": ["assertEquals(1, x);", "assertNotNull(y);", "verify(z).f();"],
         }})
-        _checks, blocking, warnings = rj._test_integrity_floor("HEAD")
+        _checks, blocking, _w = rj._test_integrity_floor("HEAD")
+        self.assertTrue(any("потеря проверок" in b for b in blocking))
+
+    def test_single_assertion_loss_not_blocked(self):
+        # потеря одного assert (< 2) — допускается как легитимный рефактор
+        self._patch({"FooTest.java": {
+            "added": [],
+            "removed": ["assertEquals(1, x);"],
+        }})
+        _checks, blocking, _w = rj._test_integrity_floor("HEAD")
         self.assertEqual(blocking, [])
-        self.assertTrue(any("потеря проверок" in w for w in warnings))
+
+    def test_expected_value_rewrite_blocks(self):
+        # тот же скелет assert, другой литерал — «прогнули ожидаемое значение под новое поведение»
+        self._patch({"FooTest.java": {
+            "added": ["assertEquals(2, service.countTasks());"],
+            "removed": ["assertEquals(1, service.countTasks());"],
+        }})
+        _checks, blocking, _w = rj._test_integrity_floor("HEAD")
+        self.assertTrue(any("ожидаемое значение" in b for b in blocking))
+
+    def test_assert_refactor_same_literal_not_blocked(self):
+        # перенос строки без изменения литералов — не блокируем
+        self._patch({"FooTest.java": {
+            "added": ["assertEquals(1, service.countTasks());"],
+            "removed": ["assertEquals(1,  service.countTasks());"],
+        }})
+        _checks, blocking, _w = rj._test_integrity_floor("HEAD")
+        self.assertEqual(blocking, [])
+
+    def test_removed_test_method_blocks(self):
+        self._patch({"FooTest.java": {
+            "added": [],
+            "removed": ["    @Test", "    void shouldNotify() {"],
+        }})
+        _checks, blocking, _w = rj._test_integrity_floor("HEAD")
+        self.assertTrue(any("@Test" in b for b in blocking))
+
+    def test_moved_test_method_not_blocked(self):
+        # @Test удалён и добавлен (перенос) — не блокируем
+        self._patch({"FooTest.java": {
+            "added": ["    @Test"],
+            "removed": ["    @Test"],
+        }})
+        _checks, blocking, _w = rj._test_integrity_floor("HEAD")
+        self.assertEqual(blocking, [])
 
 
 class TestIterationCap(unittest.TestCase):

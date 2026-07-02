@@ -72,6 +72,21 @@ def main() -> int:
                 txt = p.read_text(encoding="utf-8", errors="replace")
             except Exception:
                 continue
+            # JSON-файлы валидируем перед инъекцией: битый grounding-excerpt (недописанный
+            # субагентом/обрыв) размножился бы во всех последующих субагентов как мусор.
+            if p.suffix == ".json":
+                try:
+                    parsed = json.loads(txt)
+                except json.JSONDecodeError as e:
+                    print(f"[context-injector] {label} битый JSON — не инъектится: {e}",
+                          file=sys.stderr)
+                    continue
+                if label.endswith("grounding-excerpt.json") and isinstance(parsed, dict):
+                    missing = [k for k in ("modules", "conventions") if k not in parsed]
+                    if missing:
+                        print(f"[context-injector] WARNING: {label} без ключей {missing} — "
+                              f"инъектится как есть, но grounding может быть неполным",
+                              file=sys.stderr)
             if len(txt) > PER_FILE_LIMIT:
                 txt = txt[:PER_FILE_LIMIT] + f"\n…(усечено, всего {len(txt)} символов)"
             chunks.append(f"### Контекст пайплайна: `{label}`\n```\n{txt}\n```")

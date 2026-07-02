@@ -122,6 +122,10 @@ DEFAULT_PHASES = [
     {"id": "06-document",     "skill": None,                    "enabled_by": None,              "skip_if": None,           "gates": None,           "description": "Spec updated"},
     {"id": "07-deliver",      "skill": None,                    "enabled_by": None,              "skip_if": None,           "gates": ["commit","pr","report"], "description": "Stacked PR delivery"},
 ]
+# Бриф фазы (оркестрационная инструкция) — читается оркестратором ПЕРЕД фазой.
+# Путь относительно каталога скилла feature-pipeline; переопределяем через phases_override.
+for _p in DEFAULT_PHASES:
+    _p["brief"] = f"references/phases/{_p['id']}.md"
 
 
 def resolve_phases(project_root, feature_slug=None, gates_path=None):
@@ -178,9 +182,36 @@ def resolve_phases(project_root, feature_slug=None, gates_path=None):
             "skill": phase["skill"],
             "gates": phase.get("gates", []),
             "description": phase.get("description", ""),
+            "brief": phase.get("brief", f"references/phases/{phase['id']}.md"),
         })
 
     return {"phases": result, "skipped": skipped, "total": len(result), "skipped_count": len(skipped)}
+
+
+def current_phase(project_root, feature_slug, gates_path=None):
+    """«Где я и что читать» одним вызовом: текущая фаза из live-снимка pipeline-state
+    (pipeline_phases.live_phase_decision — источник истины manifest, не кэш gate.json)
+    + бриф/гейты фазы из активного реестра."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import pipeline_phases
+
+    manifest = load_json(os.path.join(project_root, "ground", "statements",
+                                      "feature-pipeline", feature_slug, "manifest.json"))
+    if manifest is None:
+        print(f"manifest.json фичи '{feature_slug}' не найден — сначала init.py", file=sys.stderr)
+        sys.exit(1)
+    decision = pipeline_phases.live_phase_decision(manifest)
+    cur = decision.get("current_phase", "")
+
+    resolved = resolve_phases(project_root, feature_slug, gates_path)
+    info = next((p for p in resolved["phases"] if p["id"] == cur), None)
+    return {
+        "current_phase": cur,  # "" — все фазы завершены
+        "brief": (info or {}).get("brief", f"references/phases/{cur}.md" if cur else None),
+        "gates": (info or {}).get("gates") or [],
+        "skill": (info or {}).get("skill"),
+        "done": cur == "",
+    }
 
 
 def main():
@@ -189,7 +220,17 @@ def main():
     parser.add_argument("--feature", help="Feature slug (for skip_if context)")
     parser.add_argument("--gates", help="Path to feature-gates.json")
     parser.add_argument("--list", action="store_true", help="Show all phases with reasons")
+    parser.add_argument("--current", action="store_true",
+                        help="Текущая фаза + бриф (требует --feature): {current_phase, brief, gates}")
     args = parser.parse_args()
+
+    if args.current:
+        if not args.feature:
+            print("--current требует --feature <slug>", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(current_phase(args.project, args.feature, args.gates),
+                         indent=2, ensure_ascii=False))
+        return
 
     result = resolve_phases(args.project, args.feature, args.gates)
 

@@ -72,10 +72,15 @@ class MultiFeatureGate(unittest.TestCase):
     def _close_all(self, feat):
         odir = self.proj / "ground/statements/feature-pipeline" / feat / "_origins"
         odir.mkdir(parents=True, exist_ok=True)
+        gdir = self.proj / "ground/statements/feature-pipeline" / feat / "gates"
+        gdir.mkdir(parents=True, exist_ok=True)
         for sid in ALL_STEPS:
             # evidence-маркер, который пишет state-recorder на реальном SubagentStop —
             # update._check_subagent_origin требует его для subagent-фаз (а не флаг --closed-by)
             (odir / f"{sid}.json").write_text(json.dumps({"step_id": sid}))
+            # gate-result evidence (пишет record_gate.py) — нужен build/verify-шагам
+            (gdir / f"{sid}.json").write_text(json.dumps(
+                {"produced_by": "record_gate", "step_id": sid, "passed": True}))
             r = _run([UPDATE, "--project", self.proj, "--skill", "feature-pipeline",
                       "--feature", feat, "--step-id", sid, "--status", "completed",
                       "--closed-by", "subagent",  # как state-recorder на SubagentStop (C3)

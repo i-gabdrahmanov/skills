@@ -235,7 +235,13 @@ def preflight(project_root: str) -> dict:
             if res.returncode == 1:
                 if detail.get("problems"):
                     for prob in detail["problems"]:
-                        warnings.append(f"doctor: {prob}")
+                        # Битые межскилловые пути (skill-paths.json) — ЖЁСТКАЯ ошибка: гейты,
+                        # которые скиллы зовут по этим путям, молча отвалятся в рантайме
+                        # (например forgelite → minor-defect-fix/scripts/check_coverage.py).
+                        if str(prob).startswith("registry-paths-exist"):
+                            errors.append(f"doctor: {prob}")
+                        else:
+                            warnings.append(f"doctor: {prob}")
                 else:
                     warnings.append("doctor: обнаружены проблемы целостности (см. doctor.py)")
             elif res.returncode == 2:

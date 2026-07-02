@@ -45,7 +45,35 @@ def _make(tmp: Path, *, wired: list[str], policy_ok: bool = True) -> None:
     rp.write_text('{"version":1}' if policy_ok else "{ broken json", encoding="utf-8")
 
 
+def _fake_doctor(tmp: Path, problems: list[str]) -> None:
+    """Стаб doctor.py, возвращающий заданные problems (exit 1)."""
+    d = tmp / ".gigacode" / "skills" / "feature-pipeline" / "scripts"
+    d.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"passed": not problems, "problems": problems, "checks": []})
+    (d / "doctor.py").write_text(
+        f"import sys\nprint({payload!r})\nsys.exit({1 if problems else 0})\n", encoding="utf-8")
+
+
 class TestPreflight(unittest.TestCase):
+    def test_broken_registry_paths_is_error(self):
+        # Битые межскилловые пути (skill-paths.json) должны ВАЛИТЬ preflight, не warn
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _make(tmp, wired=ESSENTIAL)
+            _fake_doctor(tmp, ["registry-paths-exist: битые пути: ['minor-defect-fix/...']"])
+            res = preflight.preflight(str(tmp))
+            self.assertFalse(res["passed"])
+            self.assertTrue(any("registry-paths-exist" in e for e in res["errors"]), res)
+
+    def test_other_doctor_problems_stay_warnings(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _make(tmp, wired=ESSENTIAL)
+            _fake_doctor(tmp, ["evals-declared: у скилла нет evals"])
+            res = preflight.preflight(str(tmp))
+            self.assertTrue(res["passed"], res.get("errors"))
+            self.assertTrue(any("evals-declared" in w for w in res.get("warnings", [])), res)
+
     def test_all_wired_passes(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)

@@ -128,7 +128,7 @@ def main() -> int:
     # ── src/test — разрешено (но проверяем TDD-цикл при интеграционных тестах) ──
     target_str = str(target).replace("\\", "/")
 
-    if "/src/test/" in target_str:
+    if "src/test/" in target_str:
         # Если пишем тест с интеграционными аннотациями — логируем предупреждение,
         # но не блокируем (тесты можно писать даже без TDD)
         if _is_integration_test(content):
@@ -138,8 +138,8 @@ def main() -> int:
                       file=sys.stderr)
         return 0
 
-    # Не src/main — не наш сценарий
-    if "/src/main/" not in target_str:
+    # Не src/main — не наш сценарий. Матчим и относительный путь (рантайм Qwen может отдать relative).
+    if "src/main/" not in target_str:
         return 0
 
     # TDD выключен — пропускаем
@@ -180,10 +180,21 @@ def main() -> int:
                       f"({scan['integration_count']} шт.) — TDD пропущен.", file=sys.stderr)
                 return 0
 
-    # ── Проверка RED-теста в manifest (per-task) ──
+    # ── Проверка RED-теста в manifest ──
     steps = R.manifest_status(root)
 
-    # Какую задачу строим? Активный (in_progress) build-шаг 04-build-<id> → задача.
+    # Lite-ветка (forgelite): плоский RED-шаг 'lite-red'. Есть в манифесте → это lite-прогон;
+    # блок src/main пока lite-red не completed. (Full-манифест его не содержит → пропуск ниже.)
+    lite_red = steps.get("lite-red")
+    if lite_red is not None:
+        if lite_red != "completed":
+            return _block(
+                f"RED-шаг lite-red не завершён (status={lite_red}). "
+                f"Сначала падающие тесты (src/test/), затем код (src/main/)."
+            )
+        return 0
+
+    # Full-ветка (feature-pipeline): какую задачу строим? Активный build-шаг 04-build-<id> → задача.
     active_task = None
     for sid, st in steps.items():
         tid = _build_task_id(sid)

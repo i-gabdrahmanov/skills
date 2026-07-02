@@ -4,6 +4,7 @@
     "PreToolUse": [
       {"matcher": "^Bash$", "sequential": true, "hooks": [
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/destructive-blocker.py", "name": "destructive-blocker"},
+        {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/fork-syntax-guard.py", "name": "fork-syntax-guard"},
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/pii-boundary.py", "name": "pii-boundary"},
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/cost-breaker.py", "name": "cost-breaker"},
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/evidence-enforcer.py", "name": "evidence-enforcer"},

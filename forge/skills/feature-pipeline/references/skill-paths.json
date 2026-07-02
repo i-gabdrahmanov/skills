@@ -75,7 +75,16 @@
         "init": ".gigacode/skills/pipeline-state/scripts/init.py",
         "read": ".gigacode/skills/pipeline-state/scripts/read.py",
         "update": ".gigacode/skills/pipeline-state/scripts/update.py",
-        "add_steps": ".gigacode/skills/pipeline-state/scripts/add_steps.py"
+        "add_steps": ".gigacode/skills/pipeline-state/scripts/add_steps.py",
+        "record_gate": ".gigacode/skills/pipeline-state/scripts/record_gate.py"
+      }
+    },
+
+    "forgelite": {
+      "dir": ".gigacode/skills/forgelite",
+      "skill_md": ".gigacode/skills/forgelite/SKILL.md",
+      "scripts": {
+        "check_scope": ".gigacode/skills/forgelite/scripts/check_scope.py"
       }
     },
 

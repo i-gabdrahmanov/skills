@@ -86,7 +86,20 @@ TEST_STEP_PREFIX = "04-test-"        # 04-test-<taskId>  — RED-фаза зад
 DELIVER_STEP_PREFIX = "07-deliver-"  # 07-deliver-<taskId> — доставка задачи (PR/commit)
 
 # Фазы, ОБЯЗАННЫЕ исполняться субагентом (не inline). Совпадает с префиксами шагов.
-SUBAGENT_PHASE_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec")
+# Хвост lite-* — плоские шаги lite-ветки (forgelite): RED/GREEN/verify тоже идут субагентом.
+SUBAGENT_PHASE_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
+                           "lite-red", "lite-green", "lite-verify")
+
+# Фазы, закрытие которых требует gate-result артефакта (gates/<step_id>.json от record_gate.py):
+# «шаг закрыт, потому что детерминированный гейт РЕАЛЬНО прошёл», а не потому что субагент
+# вернул status:"completed". Подмножество SUBAGENT_PHASE_PREFIXES — только код/тесты/сборка.
+GATE_RESULT_PREFIXES = ("04-test", "04-build", "05-tests",
+                        "lite-red", "lite-green", "lite-verify")
+
+
+def requires_gate_result(step_id) -> bool:
+    """Требует ли закрытие шага evidence-артефакта детерминированного гейта."""
+    return isinstance(step_id, str) and step_id.startswith(GATE_RESULT_PREFIXES)
 
 
 def _task_id_after(step_id, prefix: str):

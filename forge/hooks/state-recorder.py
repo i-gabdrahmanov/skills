@@ -114,6 +114,33 @@ def _status_from(obj: dict) -> str:
     return "completed"
 
 
+def _resolve_active(root: Path) -> tuple[str, str]:
+    """(skill, feature) активной фичи = самый свежий manifest.json в ground/statements/*/*/
+    ПО ВСЕМ skill-namespace (feature-pipeline И forgelite) — один control-plane на обе ветки.
+    Fallback (SKILL, 'pipeline')."""
+    base = root / "ground" / "statements"
+    best, bm = None, -1.0
+    try:
+        for skill_dir in base.iterdir():
+            if not skill_dir.is_dir():
+                continue
+            for d in skill_dir.iterdir():
+                if not d.is_dir() or d.name == "archived":
+                    continue
+                mp = d / "manifest.json"
+                if not mp.exists():
+                    continue
+                try:
+                    m = mp.stat().st_mtime
+                except OSError:
+                    continue
+                if m > bm:
+                    best, bm = (skill_dir.name, d.name), m
+    except Exception:
+        pass
+    return best or (SKILL, "pipeline")
+
+
 def main() -> int:
     try:
         raw = sys.stdin.read()
@@ -133,14 +160,14 @@ def main() -> int:
         step_id = obj.get("step_id")
         if step_id:
             status = _status_from(obj)
-            feature = _resolve_active_feature(root)
+            skill, feature = _resolve_active(root)
             # Evidence-маркер происхождения: пишем ДО update.py, т.к. его _check_subagent_origin
             # теперь требует наличия _origins/<step_id>.json (а не доверяет --closed-by).
             # Это единственное место, где маркер рождается — на реальном SubagentStop.
-            _write_origin_marker(root, feature, step_id, data)
+            _write_origin_marker(root, skill, feature, step_id, data)
             # SubagentStop вызывается отдельным процессом на каждый шаг — буферизация
             # между вызовами невозможна (была мёртвая абстракция FlushGate). Пишем напрямую.
-            _direct_update(root, feature, step_id, status, obj)
+            _direct_update(root, skill, feature, step_id, status, obj)
             _update_gate_phase(root, feature, step_id, status)
             return 0
 
@@ -155,13 +182,13 @@ def main() -> int:
     return 0
 
 
-def _write_origin_marker(root: Path, feature: str, step_id: str, data: dict) -> None:
+def _write_origin_marker(root: Path, skill: str, feature: str, step_id: str, data: dict) -> None:
     """Записать evidence-маркер _origins/<step_id>.json — доказательство, что шаг закрыл
     реальный SubagentStop. update._check_subagent_origin требует его наличия для subagent-фаз.
     Никогда не роняет прогон (хук пост-событийный)."""
     try:
         safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(step_id)).strip("-") or "x"
-        d = root / "ground" / "statements" / SKILL / feature / "_origins"
+        d = root / "ground" / "statements" / skill / feature / "_origins"
         d.mkdir(parents=True, exist_ok=True)
         (d / f"{safe}.json").write_text(json.dumps({
             "step_id": step_id,
@@ -175,18 +202,18 @@ def _write_origin_marker(root: Path, feature: str, step_id: str, data: dict) -> 
               file=sys.stderr)
 
 
-def _direct_update(root: Path, feature: str, step_id: str, status: str, obj: dict) -> None:
+def _direct_update(root: Path, skill: str, feature: str, step_id: str, status: str, obj: dict) -> None:
     """Прямая запись в pipeline-state (fallback, когда FlushGate неактивен).
 
-    Пишет в namespace активной фичи (--feature) — иначе update.py уходит в дефолтный
-    'pipeline' и не находит manifest feature-pipeline. Ошибки не глушим: при ненулевом
-    коде логируем stderr update.py (иначе судейная блокировка остаётся незаметной).
+    Пишет в namespace активной фичи (--skill/--feature) — резолвится по свежести манифеста,
+    чтобы обслуживать и feature-pipeline, и forgelite. Ошибки не глушим: при ненулевом коде
+    логируем stderr update.py (иначе судейная блокировка остаётся незаметной).
     """
     if UPDATE.exists():
         try:
             r = subprocess.run(
                 [sys.executable, str(UPDATE),
-                 "--project", str(root), "--skill", SKILL, "--feature", feature,
+                 "--project", str(root), "--skill", skill, "--feature", feature,
                  "--step-id", str(step_id), "--status", status,
                  # SubagentStop → запись пришла ОТ субагента: снимает блок «фаза должна идти
                  # через agent()» в update._check_subagent_origin (бывший subagent-enforcer).
@@ -194,7 +221,13 @@ def _direct_update(root: Path, feature: str, step_id: str, status: str, obj: dic
                  "--output-json", json.dumps(obj, ensure_ascii=False)],
                 capture_output=True, text=True, timeout=20,
             )
-            if r.returncode != 0:
+            if r.returncode == 3:
+                # ESCALATE от брейка ре-итераций (quality.max_step_reopens) — печатаем
+                # баннер целиком, чтобы оркестратор увидел «стоп-и-спроси», а не глухой rc=3.
+                print(f"[state-recorder] ⛔ ESCALATE (exit 3) от update.py для шага "
+                      f"'{step_id}' (feature={feature}):\n{(r.stderr or '').strip()}",
+                      file=sys.stderr)
+            elif r.returncode != 0:
                 print(f"[state-recorder] update.py failed for step '{step_id}' "
                       f"(feature={feature}, rc={r.returncode}): "
                       f"{(r.stderr or '').strip()[:500]}", file=sys.stderr)

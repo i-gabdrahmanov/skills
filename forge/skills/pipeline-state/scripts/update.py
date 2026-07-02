@@ -28,21 +28,28 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from _util import repo_root, safe_load_json
+from _util import load_pipeline_config, repo_root, safe_load_json
 from phase_sync import sync_gate_from_manifest
 
 # Соглашение «какие фазы обязаны идти через субагента» — ЕДИНЫЙ источник pipeline_phases
 # (co-located feature-pipeline). best-effort импорт + inline-fallback, чтобы переименование
 # префикса в одном месте не отключало enforcement молча.
-_SUBAGENT_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec")
+_SUBAGENT_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
+                      "lite-red", "lite-green", "lite-verify")
+_GATE_RESULT_PREFIXES = ("04-test", "04-build", "05-tests", "lite-red", "lite-green", "lite-verify")
 try:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1].parent / "feature-pipeline" / "scripts"))
     import pipeline_phases as _pp
     _requires_subagent = _pp.requires_subagent
     _SUBAGENT_PREFIXES = _pp.SUBAGENT_PHASE_PREFIXES
+    _requires_gate_result = _pp.requires_gate_result
+    _GATE_RESULT_PREFIXES = _pp.GATE_RESULT_PREFIXES
 except Exception:
     def _requires_subagent(step_id) -> bool:
         return isinstance(step_id, str) and step_id.startswith(tuple(_SUBAGENT_PREFIXES))
+
+    def _requires_gate_result(step_id) -> bool:
+        return isinstance(step_id, str) and step_id.startswith(tuple(_GATE_RESULT_PREFIXES))
 
 
 VALID_STATUSES = {"pending", "in_progress", "completed", "failed", "skipped"}
@@ -240,6 +247,145 @@ def _check_subagent_origin(step: dict, closed_by: str, project: Path, skill: str
     )
 
 
+def _gate_result_path(project: Path, skill: str, feature: str, step_id: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(step_id)).strip("-") or "x"
+    return project / "ground" / "statements" / skill / feature / "gates" / f"{safe}.json"
+
+
+def _check_gate_result(step: dict, project: Path, skill: str, feature: str):
+    """Гарантия «шаг закрыт, потому что детерминированный гейт РЕАЛЬНО прошёл».
+
+    Для build/verify-шагов (04-test/04-build/05-tests, lite-red/green/verify) слово субагента
+    («status: completed» в его JSON) — не доказательство: слабая модель возвращает completed
+    при упавшей сборке. Требуем gates/<step_id>.json с провенансом produced_by:"record_gate"
+    и passed:true — его пишет record_gate.py по фактическому exit-коду команды гейта.
+    Escape-hatch: overrides/gate-result-<step_id>.json.
+    """
+    step_id = step.get("id", "")
+    if not _requires_gate_result(step_id):
+        return
+    gp = _gate_result_path(project, skill, feature, step_id)
+    problem = None
+    if not gp.exists():
+        problem = f"артефакт гейта gates/{gp.name} не найден — гейт шага не запускался через record_gate.py"
+    else:
+        try:
+            rec = json.loads(gp.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            rec = None
+            problem = f"артефакт гейта повреждён: {e}"
+        if rec is not None:
+            if not isinstance(rec, dict) or rec.get("produced_by") != "record_gate" \
+                    or not isinstance(rec.get("passed"), bool):
+                problem = ("артефакт гейта не похож на вывод record_gate.py "
+                           "(нужно produced_by:'record_gate' + passed:bool) — не пиши его руками")
+            elif rec.get("passed") is not True:
+                problem = f"гейт шага НЕ пройден (passed:false): {rec.get('reason', 'exit code != 0')}"
+    if problem is None:
+        return
+    ov = _load_override(project, skill, feature, f"gate-result-{step_id}")
+    if ov:
+        step.setdefault("override_warnings", [])
+        msg = (f"⚠️  шаг '{step_id}' закрыт без валидного gate-result ({problem}) — "
+               f"пропущено вручную. Причина: {ov.get('reason', '?')}")
+        if msg not in step["override_warnings"]:
+            step["override_warnings"].append(msg)
+        print(f"  {msg}", file=sys.stderr)
+        return
+    record_script = Path(__file__).resolve().parent / "record_gate.py"
+    raise RuntimeError(
+        f"Шаг {step_id} нельзя закрыть: {problem}.\n"
+        f"   Прогони гейт через раннер (он сам запишет evidence):\n"
+        f"   python3 {record_script} --project {project} --skill {skill} --feature {feature} "
+        f"--step-id {step_id} --cmd \"<команда гейта>\"  "
+        f"(для RED: --expect red --compile-cmd \"<компиляция>\")\n"
+        f"   Если гейт объективно неприменим — override:\n"
+        f"   python3 {_OVERRIDE_SCRIPT} --judge gate-result-{step_id} --feature {feature} "
+        f"--step-id {step_id} --reason \"<почему>\""
+    )
+
+
+_REOPEN_DEFAULT_LIMIT = 3
+
+
+def _max_step_reopens(project: Path) -> int:
+    """Лимит переоткрытий шага: quality.max_step_reopens из ground/pipeline.json (дефолт 3)."""
+    try:
+        v = int(load_pipeline_config(project).get("quality", {}).get(
+            "max_step_reopens", _REOPEN_DEFAULT_LIMIT))
+        return v if v > 0 else _REOPEN_DEFAULT_LIMIT
+    except (TypeError, ValueError):
+        return _REOPEN_DEFAULT_LIMIT
+
+
+def _check_reopen_limit(step: dict, project: Path, skill: str, feature: str):
+    """Детерминированный брейк ре-итераций: переоткрытие закрытого шага
+    (completed|failed → pending|in_progress) считается в step["reopens"]; при исчерпании
+    quality.max_step_reopens транзишен блокируется с exit 3 (ESCALATE — «стоп-и-спроси»),
+    а не молча продолжает цикл. Прозаические «лимит 3» в SKILL.md модель не держит —
+    держит этот счётчик. Escape-hatch: overrides/step-reopen-<step_id>.json."""
+    step_id = step.get("id", "")
+    reopens = step.get("reopens", 0)
+    limit = _max_step_reopens(project)
+    if reopens < limit:
+        step["reopens"] = reopens + 1
+        return
+    ov = _load_override(project, skill, feature, f"step-reopen-{step_id}")
+    if ov:
+        step["reopens"] = reopens + 1
+        step.setdefault("override_warnings", [])
+        msg = (f"⚠️  шаг '{step_id}' переоткрыт сверх лимита ({reopens}/{limit}) — "
+               f"пропущено вручную. Причина: {ov.get('reason', '?')}")
+        if msg not in step["override_warnings"]:
+            step["override_warnings"].append(msg)
+        print(f"  {msg}", file=sys.stderr)
+        return
+    print(
+        "=" * 60 + "\n"
+        f"⛔ STOP: шаг '{step_id}' переоткрывался уже {reopens} раз(а) — лимит "
+        f"quality.max_step_reopens={limit} исчерпан.\n"
+        f"⛔ ESCALATE: не продолжай цикл правок. Останови работу и спроси пользователя:\n"
+        f"   покажи, что не сходится (последние ошибки/вердикты), и предложи варианты.\n"
+        f"   Осознанно продолжить: python3 {_OVERRIDE_SCRIPT} --judge step-reopen-{step_id} "
+        f"--feature {feature} --step-id {step_id} --reason \"<почему ещё итерация оправдана>\"\n"
+        + "=" * 60,
+        file=sys.stderr,
+    )
+    sys.exit(3)
+
+
+def _check_failure_limit(step: dict, project: Path, skill: str, feature: str) -> bool:
+    """Вторая половина брейка: считает повторные провалы шага (транзишены в failed).
+    Возвращает True, когда лимит исчерпан — вызывающий код ДОПИСЫВАЕТ манифест (провал
+    фиксируется) и завершает процесс exit 3. Тот же лимит и тот же override, что у reopens."""
+    step_id = step.get("id", "")
+    step["failures"] = step.get("failures", 0) + 1
+    limit = _max_step_reopens(project)
+    if step["failures"] < limit:
+        return False
+    ov = _load_override(project, skill, feature, f"step-reopen-{step_id}")
+    if ov:
+        step.setdefault("override_warnings", [])
+        msg = (f"⚠️  шаг '{step_id}' провален {step['failures']} раз(а) (лимит {limit}) — "
+               f"эскалация снята вручную. Причина: {ov.get('reason', '?')}")
+        if msg not in step["override_warnings"]:
+            step["override_warnings"].append(msg)
+        print(f"  {msg}", file=sys.stderr)
+        return False
+    print(
+        "=" * 60 + "\n"
+        f"⛔ STOP: шаг '{step_id}' провален уже {step['failures']} раз(а) — лимит "
+        f"quality.max_step_reopens={limit} исчерпан.\n"
+        f"⛔ ESCALATE: не перезапускай фазу ещё раз. Останови работу и спроси пользователя:\n"
+        f"   покажи последние ошибки и предложи варианты (сменить подход / сузить задачу / отложить).\n"
+        f"   Осознанно продолжить: python3 {_OVERRIDE_SCRIPT} --judge step-reopen-{step_id} "
+        f"--feature {feature} --step-id {step_id} --reason \"<почему ещё попытка оправдана>\"\n"
+        + "=" * 60,
+        file=sys.stderr,
+    )
+    return True
+
+
 def iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -289,14 +435,25 @@ def main():
     now = iso_now()
     prev_status = step.get("status")
 
+    # Брейк ре-итераций: переоткрытие закрытого шага лимитируется quality.max_step_reopens
+    if (not args.skip_judges and args.status in ("pending", "in_progress")
+            and prev_status in ("completed", "failed")):
+        _check_reopen_limit(step, project, args.skill, args.feature)
+
     # Детерминированная блокировка: не даём закрыть шаг без судей и без субагентного происхождения
     if not args.skip_judges and args.status == "completed" and prev_status != "completed":
         _check_subagent_origin(step, args.closed_by, project, args.skill, args.feature)
+        _check_gate_result(step, project, args.skill, args.feature)
         _check_judges(step, project, args.skill, args.feature)
 
     step["status"] = args.status
     if args.status == "completed":
         step["closed_by"] = args.closed_by
+
+    # Счётчик провалов: повторный failed сверх лимита → зафиксировать провал и exit 3
+    escalate_failed = False
+    if args.status == "failed" and not args.skip_judges:
+        escalate_failed = _check_failure_limit(step, project, args.skill, args.feature)
 
     # Track timestamps
     if args.status == "in_progress" and prev_status != "in_progress":
@@ -382,6 +539,9 @@ def main():
         "new_status": args.status,
         "output_saved": step.get("output_file") is not None and args.status == "completed",
     }, ensure_ascii=False))
+
+    if escalate_failed:
+        sys.exit(3)
 
 
 if __name__ == "__main__":

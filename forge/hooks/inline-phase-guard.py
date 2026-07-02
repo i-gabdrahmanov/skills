@@ -44,7 +44,8 @@ except Exception:  # pragma: no cover
 # Единый источник истины «какие фазы обязаны идти субагентом» — pipeline_phases.
 # best-effort импорт + inline-fallback (как в update.py), чтобы переименование префикса
 # в одном месте не отключало enforcement молча.
-_SUBAGENT_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec")
+_SUBAGENT_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
+                      "lite-red", "lite-green", "lite-verify")
 try:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "feature-pipeline" / "scripts"))
     import pipeline_phases as _pp
@@ -121,7 +122,8 @@ def _is_phase_work(step_id: str, tool_name: str, tool_input: dict) -> str | None
     if tool_name in BASH_TOOLS:
         if _CONTROL_BASH_RE.search(norm):
             return None
-        if step_id.startswith(("04-test", "04-build", "05-tests")) and re.search(BUILD_CMD_RE, norm):
+        if step_id.startswith(("04-test", "04-build", "05-tests",
+                               "lite-red", "lite-green", "lite-verify")) and re.search(BUILD_CMD_RE, norm):
             return f"запуск сборки/тестов ({BUILD_CMD_RE})"
         return None
 
@@ -144,6 +146,16 @@ def _is_phase_work(step_id: str, tool_name: str, tool_input: dict) -> str | None
     elif step_id.startswith("06-spec"):
         if (norm.endswith(".md") or norm.endswith(".puml")) and ("docs/" in norm or "ground/system-analysis" in norm):
             return "запись артефактов спецификации"
+    # Lite-ветка (forgelite)
+    elif step_id.startswith("lite-red"):
+        if "src/test/" in norm:
+            return "запись RED-тестов в src/test/"
+    elif step_id.startswith("lite-green"):
+        if "src/main/" in norm or norm.endswith(".java"):
+            return "запись кода в src/main/ (*.java)"
+    elif step_id.startswith("lite-verify"):
+        if "src/" in norm:
+            return "правка src/ в фазе прогона тестов"
     return None
 
 
