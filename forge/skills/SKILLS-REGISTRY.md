@@ -3,7 +3,7 @@
 Концепция (стр. 180, 294): AGENTS.md / skills / evals — это **supply chain**. У каждого артефакта
 должен быть **owner**, **validity** (срок переоценки), **scope** (где применим) и **eval coverage**.
 Иначе они тихо устаревают и начинают вредить. Этот реестр — лёгкая реализация: один источник правды
-по жизненному циклу скиллов forge (без правки 16 frontmatter).
+по жизненному циклу скиллов forge (без правки 18 frontmatter).
 
 - **Owner**: `@team` — заменить на реального владельца на целевой машине.
 - **Validity**: дата следующей ревизии (пересмотреть актуальность к этой дате).
@@ -12,7 +12,9 @@
 
 | Skill | Owner | Validity | Scope | Evals |
 |---|---|---|---|---|
-| feature-pipeline | @team | 2026-12 | Java/Spring фичи end-to-end | gate-скрипты + hooks/evals |
+| router | @team | 2026-12 | точка входа: выбор режима full/lite, делегация на общий control-plane | — (вход не форсится рантаймом; смягчения — preflight, check_scope) |
+| feature-pipeline | @team | 2026-12 | Java/Spring фичи end-to-end (режим full) | gate-скрипты + hooks/evals |
+| forgelite | @team | 2026-12 | исполнение подготовленной подзадачи Jira (режим lite: grounding→план→RED→GREEN→PR) | check_scope.py + record_gate (RED/GREEN) + check_coverage.py |
 | pipeline-state | @team | 2026-12 | оркестраторы >3 субагентов | косвенно через evals |
 | project-grounder | @team | 2026-12 | фаза grounding | verify_coverage.py |
 | system-analyst | @team | 2026-12 | скан Java/Spring сервиса | verify_coverage.py |
@@ -28,7 +30,7 @@
 | business-requirements | @team | 2026-12 | BRD из идеи | — |
 | config-helper | @team | 2026-12 | настройка параметров forge (pipeline/gates/risk) | test_config.py |
 | harness-verifier | @team | 2026-12 | семантическая верификация харнеса (скиллы+хуки) перед релизом | методический (бриф+чек-лист) |
-| pdf / pptx | @team | 2026-12 | работа с PDF/PPTX | — |
+| pdf / pptx | @team | 2026-12 | работа с PDF/PPTX — внешние скиллы рантайма, каталогов в `skills/` этого репо НЕТ (не деплоятся Forge) | — |
 
 ## Control-plane хуки (тоже часть supply chain)
 

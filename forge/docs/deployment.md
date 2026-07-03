@@ -137,8 +137,11 @@ gigacode --experimental-hooks
 
 ## Требования
 
-- **Python ≥ 3.10** — `resolve_hook_paths.py` использует синтаксис `str | None`.
-  На системном `python3` 3.9 деплой упадёт; используйте `python3.10+` в `PATH`.
+- **Python ≥ 3.10 рекомендован** для скриптов пайплайна (`run_all_tests.py` и часть
+  скилл-скриптов рассчитаны на 3.10+). Сам деплой при этом 3.9-совместим:
+  `resolve_hook_paths.py`/`doctor.py` используют ленивые аннотации
+  (`from __future__ import annotations`), `preflight.py` — без PEP 604; на системном
+  `python3` 3.9 `deploy.sh` отработает.
 
 ---
 

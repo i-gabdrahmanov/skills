@@ -203,6 +203,17 @@ def cmd_set(project: Path, params: list, args) -> int:
     assign(data, e["path"], new_val)
     if e["file"] == "gates":
         assign(data, "_meta.updated_at", iso_now())
+    # Ответ на вопрос §0.1 снимает поле из маркера _incomplete (его читает preflight как
+    # гейт арминга). Раньше маркер НИКТО не чистил → preflight не мог позеленеть в принципе.
+    if e["file"] == "pipeline" and new_val is not None:
+        inc = data.get("_incomplete")
+        if isinstance(inc, list):
+            keep = [i for i in inc
+                    if not (i == e["path"] or str(i).startswith(e["path"] + " "))]
+            if not keep:
+                data.pop("_incomplete", None)
+            elif keep != inc:
+                data["_incomplete"] = keep
     atomic_write(target, data)
 
     print(json.dumps({"status": "applied", "id": e["id"], "file": str(target),
@@ -253,6 +264,8 @@ def cmd_phase(project: Path, params: list, args) -> int:
             existing["gates"] = args.gates
         if args.desc:
             existing["description"] = args.desc
+        if args.after:
+            existing["after"] = args.after
 
     data["phases_override"] = overrides
     bak = backup(target, project)
@@ -428,6 +441,8 @@ def main() -> int:
     pp.add_argument("--skill", default=None)
     pp.add_argument("--gates", nargs="*", default=None)
     pp.add_argument("--desc", default=None)
+    pp.add_argument("--after", default=None,
+                    help="Для add: id фазы, СРАЗУ ПОСЛЕ которой вставить новую (без него — в конец)")
 
     pr = sub.add_parser("risk", help="Мутации risk-policy (всегда --confirm)")
     pr.add_argument("action", choices=["list-add", "list-remove", "cap-set"])

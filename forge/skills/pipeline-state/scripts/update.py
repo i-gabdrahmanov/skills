@@ -60,6 +60,21 @@ VALID_STATUSES = {"pending", "in_progress", "completed", "failed", "skipped"}
 _OVERRIDE_SCRIPT = Path(__file__).resolve().parent / "override_judge.py"
 
 
+def _override_hint(judge: str, feature: str, step_id: str, why_ph: str = "<обоснование>") -> str:
+    """Подсказка снятия гейта. Снятие — R4-класс: gate-guard пропустит override_judge ТОЛЬКО
+    при approval-маркере ground/approvals/gate-override-<judge>.json, который фиксируется
+    после ЯВНОГО согласия пользователя (раньше баннеры печатали готовую команду без
+    approval-шага — модель снимала гейт молча)."""
+    return (
+        f"   Снять гейт можно ТОЛЬКО после явного «да» пользователя (R4):\n"
+        f"   1) спроси пользователя, показав что не сходится;\n"
+        f"   2) зафиксируй согласие: ground/approvals/gate-override-{judge}.json "
+        f"{{\"approved_by\": \"user\", \"reason\": \"{why_ph}\"}};\n"
+        f"   3) python3 {_OVERRIDE_SCRIPT} --judge {judge} --feature {feature} "
+        f"--step-id {step_id} --reason \"{why_ph}\""
+    )
+
+
 def _judges_dir(project: Path, skill: str, feature: str) -> Path:
     """Путь к каталогу вердиктов судей."""
     return project / "ground" / "statements" / skill / feature / "judges"
@@ -100,7 +115,9 @@ def _check_judges(step: dict, project: Path, skill: str, feature: str):
 
     Исключение: если для судьи есть ручной override-файл (overrides/<judge>.json),
     блокировка снимается и факт отклонения фиксируется в manifest-step как предупреждение.
-    Создать override: python3 override_judge.py --judge <name> --feature <slug> --reason "..."
+    Создание override — R4-класс: gate-guard пропускает override_judge.py только при
+    approval-маркере ground/approvals/gate-override-<judge>.json (после явного «да»
+    пользователя). См. _override_hint.
     """
     required = step.get("required_judges", [])
     if not required:
@@ -124,9 +141,7 @@ def _check_judges(step: dict, project: Path, skill: str, feature: str):
                 continue
             blocking.append(
                 f"❌ Вердикт '{judge_name}.json' не найден — судья не запускался.\n"
-                f"   Чтобы пропустить: python3 {_OVERRIDE_SCRIPT} "
-                f"--judge {judge_name} --feature {feature} --step-id {step['id']} "
-                f"--reason \"<объяснение>\""
+                + _override_hint(judge_name, feature, step["id"], "<объяснение>")
             )
             continue
 
@@ -179,9 +194,7 @@ def _check_judges(step: dict, project: Path, skill: str, feature: str):
             blocking.append(
                 f"❌ Вердикт '{judge_name}.json' — FAIL.\n"
                 f"   Blocking issues: {issues}\n"
-                f"   Чтобы пропустить: python3 {_OVERRIDE_SCRIPT} "
-                f"--judge {judge_name} --feature {feature} --step-id {step['id']} "
-                f"--reason \"<объяснение>\""
+                + _override_hint(judge_name, feature, step["id"], "<объяснение>")
             )
 
     # Записываем предупреждения об override в step (для аудита)
@@ -240,10 +253,9 @@ def _check_subagent_origin(step: dict, closed_by: str, project: Path, skill: str
         f"Шаг {step_id} нельзя закрыть: нет evidence, что фаза прошла через субагента "
         f"(_origins/{step_id}.json от SubagentStop отсутствует; флаг --closed-by теперь не "
         f"считается доказательством). Прогони фазу через agent(subagent_type=...) — "
-        f"state-recorder запишет evidence и закроет шаг сам. Если agent() недоступен — override:\n"
-        f"   python3 {_OVERRIDE_SCRIPT} --judge subagent-origin --feature {feature} "
-        f"--step-id {step_id} --reason \"<почему inline допустимо>\""
-        f"{arming_hint}"
+        f"state-recorder запишет evidence и закроет шаг сам. Если agent() реально недоступен:\n"
+        + _override_hint("subagent-origin", feature, step_id, "<почему inline допустимо>")
+        + f"{arming_hint}"
     )
 
 
@@ -299,9 +311,8 @@ def _check_gate_result(step: dict, project: Path, skill: str, feature: str):
         f"   python3 {record_script} --project {project} --skill {skill} --feature {feature} "
         f"--step-id {step_id} --cmd \"<команда гейта>\"  "
         f"(для RED: --expect red --compile-cmd \"<компиляция>\")\n"
-        f"   Если гейт объективно неприменим — override:\n"
-        f"   python3 {_OVERRIDE_SCRIPT} --judge gate-result-{step_id} --feature {feature} "
-        f"--step-id {step_id} --reason \"<почему>\""
+        f"   Если гейт объективно неприменим:\n"
+        + _override_hint(f"gate-result-{step_id}", feature, step_id, "<почему>")
     )
 
 
@@ -346,8 +357,8 @@ def _check_reopen_limit(step: dict, project: Path, skill: str, feature: str):
         f"quality.max_step_reopens={limit} исчерпан.\n"
         f"⛔ ESCALATE: не продолжай цикл правок. Останови работу и спроси пользователя:\n"
         f"   покажи, что не сходится (последние ошибки/вердикты), и предложи варианты.\n"
-        f"   Осознанно продолжить: python3 {_OVERRIDE_SCRIPT} --judge step-reopen-{step_id} "
-        f"--feature {feature} --step-id {step_id} --reason \"<почему ещё итерация оправдана>\"\n"
+        + _override_hint(f"step-reopen-{step_id}", feature, step_id,
+                         "<почему ещё итерация оправдана>") + "\n"
         + "=" * 60,
         file=sys.stderr,
     )
@@ -378,8 +389,8 @@ def _check_failure_limit(step: dict, project: Path, skill: str, feature: str) ->
         f"quality.max_step_reopens={limit} исчерпан.\n"
         f"⛔ ESCALATE: не перезапускай фазу ещё раз. Останови работу и спроси пользователя:\n"
         f"   покажи последние ошибки и предложи варианты (сменить подход / сузить задачу / отложить).\n"
-        f"   Осознанно продолжить: python3 {_OVERRIDE_SCRIPT} --judge step-reopen-{step_id} "
-        f"--feature {feature} --step-id {step_id} --reason \"<почему ещё попытка оправдана>\"\n"
+        + _override_hint(f"step-reopen-{step_id}", feature, step_id,
+                         "<почему ещё попытка оправдана>") + "\n"
         + "=" * 60,
         file=sys.stderr,
     )

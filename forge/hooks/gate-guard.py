@@ -155,6 +155,40 @@ def check_phase_gate(tool_name: str, tool_input: dict, agent_type: str | None,
     return True
 
 
+def check_gate_override(command: str, root: Path) -> str | None:
+    """R4-класс: снятие детерминированного гейта через override_judge.py требует
+    approval-маркера ground/approvals/gate-override-<judge>.json (кладётся ТОЛЬКО после
+    явного согласия пользователя). Возвращает причину блокировки или None (пропустить).
+
+    --list/--remove свободны: чтение и ВОССТАНОВЛЕНИЕ enforcement'а не гейтятся.
+    Держится всегда (и вне пайплайна) — как deny-first для R4+. Ошибка разбора →
+    fail-CLOSED (снятие гейта без ясности опаснее ложного блока)."""
+    try:
+        policy = R.load_policy().get("gate_override") or {}
+        pat = policy.get("command_pattern", r"override_judge\.py")
+        if not command or not re.search(pat, command):
+            return None
+        ro = policy.get("readonly_args_pattern", r"--list\b|--remove\b")
+        if re.search(ro, command):
+            return None
+        m = re.search(r"--judge[\s=]+[\"']?([\w./-]+)", command)
+        judge = m.group(1) if m else ""
+        prefix = policy.get("approval_prefix", "gate-override")
+        key = f"{prefix}-{judge}" if judge else prefix
+        if R.approval_exists(root, key):
+            return None
+        return (
+            f"снятие гейта (override_judge) — R4-класс, нужен approval-маркер "
+            f"ground/approvals/{key}.json. Порядок: (1) останови работу и спроси "
+            f"пользователя (покажи, что не сходится); (2) ТОЛЬКО после явного «да» "
+            f"зафиксируй согласие маркером {{\"approved_by\": \"user\", \"reason\": \"<кто/почему>\"}}; "
+            f"(3) повтори команду. Молча снимать гейт нельзя. "
+            f"--list/--remove не гейтятся."
+        )
+    except Exception as e:
+        return f"deny-first: ошибка проверки gate-override ({e})."
+
+
 def _kind(tool_name: str, command: str) -> str:
     if tool_name in ("Bash", "run_shell_command"):
         if re.search(r"\bgit\s+commit\b", command):
@@ -189,6 +223,12 @@ def main() -> int:
         level = info["level"]
         command = info["command"]
         kind = _kind(tool_name, command)
+
+        # ── R4-класс: снятие детерминированного гейта (override_judge) без approval ──
+        # ДО auto-early-return: classify даёт таким командам default-R1 → иначе прошли бы авто.
+        deny = check_gate_override(command, root)
+        if deny:
+            return _block(deny)
 
         # ── Phase gate: проверка последовательности фаз пайплайна ──────────
         if not check_phase_gate(tool_name, tool_input, agent_type, root):

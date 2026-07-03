@@ -95,6 +95,61 @@ def main() -> int:
         rc, j, out = run(_project(td, None))
         check("нет pipeline.json → exit 1", rc == 1, f"rc={rc} {out}")
 
+    # 6. phases_override c ЛИТЕРАЛЬНЫМ bool (так пишет config.py phase disable) —
+    #    регресс B1: раньше bool.startswith ронял резолвер AttributeError'ом.
+    with tempfile.TemporaryDirectory() as td:
+        cfg = {**FULL, "phases_override": [{"id": "04-tdd", "enabled_by": False},
+                                           {"id": "02-sdd", "enabled_by": True},
+                                           {"id": "01-grounding", "skip_if": True}]}
+        rc, j, out = run(_project(td, cfg))
+        check("bool enabled_by: exit 0, не трейсбек", rc == 0, out)
+        check("enabled_by=false (bool) → фаза skipped", "04-tdd" in _skipped(j), str(j))
+        check("enabled_by=true (bool) → фаза активна", "02-sdd" in _ids(j), str(j))
+        check("skip_if=true (bool) → фаза skipped", "01-grounding" in _skipped(j), str(j))
+
+    # 7. Интеграция config-helper → resolve_phases: документированный путь
+    #    «phase disable 04-tdd» не должен ломать резолвер (стык, который жил без теста).
+    config_py = SCRIPT.parent.parent.parent / "config-helper" / "scripts" / "config.py"
+    with tempfile.TemporaryDirectory() as td:
+        project = _project(td, FULL)
+        r = subprocess.run([sys.executable, str(config_py), "--project", str(project),
+                            "phase", "disable", "04-tdd"], capture_output=True, text=True)
+        check("config.py phase disable → exit 0", r.returncode == 0, r.stdout + r.stderr)
+        rc, j, out = run(project)
+        check("после phase disable резолвер жив и фаза выключена",
+              rc == 0 and "04-tdd" in _skipped(j) and "04-tdd" not in _ids(j), out)
+
+    # 8. Новая фаза через phases_override ДОБАВЛЯЕТСЯ (M1): без after — в конец,
+    #    c after — сразу после указанной. Раньше новые id молча игнорировались.
+    with tempfile.TemporaryDirectory() as td:
+        cfg = {**FULL, "phases_override": [
+            {"id": "05.5-security", "skill": None, "enabled_by": None,
+             "gates": ["security_approved"], "after": "05-verify"},
+            {"id": "99-custom", "enabled_by": None},
+        ]}
+        rc, j, out = run(_project(td, cfg))
+        order = [p["id"] for p in j.get("phases", [])]
+        check("новая фаза с after — сразу после 05-verify",
+              "05.5-security" in order and order.index("05.5-security") == order.index("05-verify") + 1,
+              str(order))
+        check("новая фаза без after — в конце", order and order[-1] == "99-custom", str(order))
+        sec = next((p for p in j.get("phases", []) if p["id"] == "05.5-security"), {})
+        check("новая фаза несёт свои gates", sec.get("gates") == ["security_approved"], str(sec))
+
+    # 9. Интеграция config.py phase add --after → фаза видна в резолве
+    with tempfile.TemporaryDirectory() as td:
+        project = _project(td, FULL)
+        r = subprocess.run([sys.executable, str(config_py), "--project", str(project),
+                            "phase", "add", "05.5-security", "--skill", "null",
+                            "--gates", "security_approved", "--after", "05-verify"],
+                           capture_output=True, text=True)
+        check("config.py phase add --after → exit 0", r.returncode == 0, r.stdout + r.stderr)
+        rc, j, out = run(project)
+        order = [p["id"] for p in j.get("phases", [])]
+        check("добавленная через config.py фаза попала в резолв после 05-verify",
+              "05.5-security" in order and order.index("05.5-security") == order.index("05-verify") + 1,
+              str(order))
+
     print(f"\n{PASSED} passed, {FAILED} failed")
     return 1 if FAILED else 0
 

@@ -83,7 +83,9 @@ def main() -> int:
         return 0
 
     cwd = data.get("cwd", "")
-    root = Path(cwd) if cwd else Path.cwd()
+    # git-toplevel, как у соседей по цепочке (gate/sod/inline): при cwd=подкаталог
+    # сырой Path(cwd) не находил ground/ и единственный форсер EDD молча fail-open'ил
+    root = Path(R.project_root(cwd))
     tool_name = data.get("tool_name", "")
     tool_input = data.get("tool_input") or {}
     target = _target_path(tool_name, tool_input)

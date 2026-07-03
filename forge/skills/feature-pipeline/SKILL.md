@@ -126,11 +126,13 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/resolve_phases.py \
 
 **Переопределение фаз:** можно добавить секцию `phases_override` в `pipeline.json`,
 чтобы переопределить `enabled_by`/`skip_if`/`gates` для конкретной фазы или добавить
-новую (например `security-review`). Пример:
+новую (например `security-review`). Новая фаза (id вне базового списка) вставляется
+сразу после фазы из ключа `after`, без него — в конец. Не правь JSON руками —
+`config-helper` (`phase enable|disable|add … [--after ID]`). Пример:
 ```json
 "phases_override": [
   {"id": "02-eval-plan", "enabled_by": false},
-  {"id": "05.5-security", "skill": null, "enabled_by": "gates.security_review", "gates": ["security_approved"]}
+  {"id": "05.5-security", "skill": null, "enabled_by": "gates.security_review", "gates": ["security_approved"], "after": "05-verify"}
 ]
 ```
 
@@ -254,7 +256,7 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
 | `02-sdd` | SDD specification (sdd.md) | `00-brd`, `01-grounding` |
 | `02-design` | Tech design + task plan | `02-sdd` |
 | `02-eval-plan` | Eval-plan generated (eval-plan.json) | `02-design` |
-| `03-jira` | Jira issues created | `02-design` |
+| `03-jira` | Jira issues created — УСЛОВНЫЙ: только при `jira.enabled=true` (по умолчанию false, resolve_phases фазу пропустит — тогда шаг в манифест не включай) | `02-design` |
 | `04-test-<taskId>` | TDD RED: тесты компилируются и падают | `02-design` |
 | `04-build-<taskId>` | TDD GREEN: код зеленит тесты задачи | `04-test-<taskId>`, `02-eval-plan` |
 | `05-tests` | Полный прогон + coverage | все `04-build-*` |
@@ -325,7 +327,8 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
 дефолт 3): `update.py` считает переоткрытия шага (completed/failed → pending/in_progress) и
 повторные провалы; на исчерпании возвращает **exit 3 (ESCALATE)** с баннером. Трактовка та же,
 что у exit 3 судьи: **СТОП, спроси пользователя** — не продолжай цикл правок молча.
-Эскейп (только с согласия пользователя): `override_judge.py --judge step-reopen-<step_id> …`.
+Эскейп (только с согласия пользователя): `override_judge.py --judge step-reopen-<step_id> …` —
+R4, `gate-guard` требует approval-маркер `gate-override-step-reopen-<step_id>.json` (§0.6.1).
 
 > **Почему это правило:** на прошлых прогонах пайплайн делал inline-правку после judge FAIL,
 > что приводило к пропуску TDD-цикла, нарушению изоляции и потере контекста при обрыве
@@ -341,12 +344,24 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
 **Когда применять:** только после исчерпания 3 ре-итераций (§0.6) и **только с явного
 согласия пользователя**. Не предлагай override на первом FAIL — сначала чини.
 
-**Шаг 1.** Создай override-файл (`--reason` обязателен — это аудит-след):
+> **Снятие гейта — R4-класс и форсится рантаймом:** `gate-guard` блокирует запуск
+> `override_judge.py` (exit 2), пока нет approval-маркера
+> `ground/approvals/gate-override-<judge-name>.json`. Маркер фиксируется ТОЛЬКО после
+> явного «да» пользователя — молча снять гейт нельзя. `--list`/`--remove` не гейтятся
+> (чтение и восстановление enforcement'а свободны).
+
+**Шаг 1.** Останови работу, покажи пользователю blocking issues и спроси. После явного
+«да» зафиксируй согласие approval-маркером (это аудит-след санкции):
+```bash
+python3 -c "import json,os; os.makedirs('ground/approvals',exist_ok=True); json.dump({'approved_by':'user','reason':'<кто и почему разрешил>'},open('ground/approvals/gate-override-<judge-name>.json','w'),ensure_ascii=False)"
+```
+
+**Шаг 2.** Создай override-файл (`--reason` обязателен — это аудит-след):
 ```bash
 python3 <project>/.gigacode/skills/pipeline-state/scripts/override_judge.py --judge <judge-name> --feature <slug> --step-id <step-id> --reason "<почему пропуск допустим>"
 ```
 
-**Шаг 2.** Закрой шаг как обычно — `update.py` увидит override, пропустит блокировку и
+**Шаг 3.** Закрой шаг как обычно — `update.py` увидит override, пропустит блокировку и
 запишет предупреждение в `step.override_warnings` манифеста (для аудита):
 ```bash
 python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py --skill feature-pipeline --feature <slug> --step-id <step-id> --status completed

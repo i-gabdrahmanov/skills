@@ -85,7 +85,8 @@
 ## Конфиг
 
 При первом запуске скилл спрашивает путь к git-репо со спецификацией и сохраняет в
-`~/.gigacode/skills/minor-defect-fix/config.json`:
+`<project>/.gigacode/skills/minor-defect-fix/config.json` (шаблон — `config.json.example`
+рядом; сам `config.json` в репо Forge не версионируется — в нём реальные пути машины):
 
 ```json
 {

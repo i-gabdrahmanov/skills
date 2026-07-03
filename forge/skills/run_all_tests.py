@@ -42,6 +42,19 @@ def discover(skill: str | None) -> list[Path]:
     return skills_tests + _hooks_tests()
 
 
+def _pollution_snapshot() -> dict[str, int]:
+    """Гард изоляции тестов: runtime-каталоги репо (ai-logs-archive/, ground/) не должны
+    меняться прогоном тестов. Прецедент: смоук log-agent с пустым stdin без tmp-cwd и
+    GIGACODE_AILOG_ARCHIVE дописывал all-null записи в боевой кросс-прогонный архив."""
+    snap: dict[str, int] = {}
+    for base in (REPO / "ai-logs-archive", REPO / "ground"):
+        if base.is_dir():
+            for p in sorted(base.rglob("*")):
+                if p.is_file():
+                    snap[str(p)] = p.stat().st_size
+    return snap
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--skill", default=None, help="ограничить одним скиллом")
@@ -53,6 +66,7 @@ def main() -> int:
         print("Тесты не найдены")
         return 0
 
+    pollution_before = _pollution_snapshot()
     passed, failed = [], []
     for t in tests:
         r = subprocess.run([sys.executable, str(t)], capture_output=True, text=True)
@@ -67,6 +81,16 @@ def main() -> int:
             tail = (r.stderr or r.stdout).strip().splitlines()[-4:]
             for ln in tail:
                 print(f"       {ln}")
+
+    pollution_after = _pollution_snapshot()
+    if pollution_after != pollution_before:
+        changed = sorted(set(pollution_after.items()) ^ set(pollution_before.items()))
+        print("\n❌ ИЗОЛЯЦИЯ НАРУШЕНА: тесты изменили runtime-каталоги репо "
+              "(ai-logs-archive/ или ground/):")
+        for path, size in changed:
+            print(f"   {path} ({size}b)")
+        print("   Тест обязан писать в tmp (cwd=tmp, GIGACODE_AILOG_ARCHIVE=tmp).")
+        failed.append(Path("pollution-guard"))
 
     print(f"\n=== PASS={len(passed)} FAIL={len(failed)} (всего {len(tests)}) ===")
     return 0 if not failed else 1

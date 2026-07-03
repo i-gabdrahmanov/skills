@@ -130,6 +130,69 @@ def main():
         check("phase add мержит поля", rc == 0 and ov and ov["skill"] is None
               and ov["enabled_by"] == "gates.security_review" and ov["gates"] == ["security_approved"], out)
 
+        # ── пин: ручки, которые ЧИТАЕТ пайплайн, обязаны быть в реестре ──
+        # (run_judge: max_judge_iterations/coverage_exclude_globs/test_layer;
+        #  check_architecture: module_dep_policy; resolve_phases+tdd-guard: tdd, eval_enabled)
+        registry = json.loads((SCRIPT.parent.parent / "references" / "params-registry.json")
+                              .read_text(encoding="utf-8"))
+        reg_ids = {p["id"] for p in registry["params"]}
+        readers_keys = ["quality.max_judge_iterations", "quality.module_dep_policy",
+                        "quality.test_layer", "quality.coverage_exclude_globs",
+                        "quality.tdd", "quality.eval_enabled", "quality.max_step_reopens"]
+        missing = [k for k in readers_keys if k not in reg_ids]
+        check("реестр покрывает ключи-читатели пайплайна", not missing, f"missing: {missing}")
+
+        # живая ручка TDD пишется и читается
+        rc, out, _ = run(project, "set", "quality.tdd", "false")
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        check("set quality.tdd false пишет в pipeline.json",
+              rc == 0 and cfg["quality"]["tdd"] is False, out)
+
+        # enum-ручки
+        rc, out, _ = run(project, "set", "quality.module_dep_policy", "deny_new")
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        check("set module_dep_policy deny_new", rc == 0 and cfg["quality"]["module_dep_policy"] == "deny_new", out)
+        rc, out, _ = run(project, "set", "quality.test_layer", "integration")
+        check("плохой test_layer → exit 1", rc == 1, out)
+
+        # list-тип: JSON-массив и CSV
+        rc, out, _ = run(project, "set", "quality.coverage_exclude_globs", '["**/dto/**", "**/config/**"]')
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        check("list из JSON-массива", rc == 0 and cfg["quality"]["coverage_exclude_globs"] == ["**/dto/**", "**/config/**"], out)
+        rc, out, _ = run(project, "set", "quality.coverage_exclude_globs", "**/entity/**,**/repo/**")
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        check("list из CSV", rc == 0 and cfg["quality"]["coverage_exclude_globs"] == ["**/entity/**", "**/repo/**"], out)
+        rc, out, _ = run(project, "set", "quality.coverage_exclude_globs", "null")
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        check("list: null → None (дефолты слоя)", rc == 0 and cfg["quality"]["coverage_exclude_globs"] is None, out)
+        rc, out, _ = run(project, "validate", "--json")
+        check("validate ok после list/None-ручек", rc == 0 and json.loads(out)["status"] == "ok", out)
+
+        # ── пин B2: set чистит маркер _incomplete (гейт арминга preflight §0.1) ──
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        cfg["_incomplete"] = ["project.build_system", "conventions.package_root",
+                              "jira.enabled", "bitbucket.enabled",
+                              "project.is_git (нужен git init для фаз 6 и pipeline-state)"]
+        (project / "ground" / "pipeline.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
+        run(project, "set", "project.build_system", "gradle")
+        run(project, "set", "conventions.package_root", "com.acme.app")
+        rc, out, _ = run(project, "set", "jira.enabled", "false")
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        check("set снимает отвеченные поля из _incomplete (false — валидный ответ)",
+              rc == 0 and cfg.get("_incomplete") == [
+                  "bitbucket.enabled",
+                  "project.is_git (нужен git init для фаз 6 и pipeline-state)"], str(cfg.get("_incomplete")))
+        run(project, "set", "bitbucket.enabled", "false")
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        check("запись с пояснением в скобках не снимается чужим set",
+              cfg.get("_incomplete") == ["project.is_git (нужен git init для фаз 6 и pipeline-state)"],
+              str(cfg.get("_incomplete")))
+        cfg["_incomplete"] = ["jira.enabled"]
+        (project / "ground" / "pipeline.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
+        run(project, "set", "jira.enabled", "true")
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        check("пустой маркер снимается целиком", "_incomplete" not in cfg, str(cfg.get("_incomplete")))
+
         # risk list-add без confirm → блок
         rc, out, _ = run(project, "risk", "list-add", "destructive_blacklist", "DROP SCHEMA")
         check("risk без --confirm → exit 1", rc == 1, out)

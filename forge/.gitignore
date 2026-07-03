@@ -15,3 +15,7 @@ ground/
 
 # Runtime audit-логи агентов (пишет log-agent.py; не исходник харнеса)
 ai-logs-archive/
+
+# Локальный конфиг оператора (маппинг проект→спека с реальными путями машины).
+# В репо едет только config.json.example — supply-chain без личных путей.
+skills/minor-defect-fix/config.json

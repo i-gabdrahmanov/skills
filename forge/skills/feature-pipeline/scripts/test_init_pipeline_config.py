@@ -425,6 +425,44 @@ class TestMain(unittest.TestCase):
         # project обновилось
         self.assertIn("project", reloaded)
 
+    def test_update_does_not_clobber_answers_and_recomputes_incomplete(self):
+        """Пин B2: --update не затирает человеческие ответы None-детектом и пересобирает
+        _incomplete по факту (раньше detected-маркер переносился безусловно — jira/bitbucket
+        попадали всегда, и гейт арминга «_incomplete пуст» был недостижим). Проект — ПУСТОЙ
+        (без build-файлов): детект слеп, ответы даёт только человек."""
+        empty_root = Path(tempfile.mkdtemp())
+        try:
+            sys.argv = ["init_pipeline_config.py", "--project", str(empty_root)]
+            try:
+                ipc.main()
+            except SystemExit:
+                pass
+            path = empty_root / "ground" / "pipeline.json"
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertIn("project.build_system", data.get("_incomplete", []))
+            # человек ответил на вопросы §0.1
+            data["project"]["build_system"] = "gradle"
+            data["conventions"]["package_root"] = "com.acme.app"
+            data.setdefault("jira", {})["enabled"] = False
+            data.setdefault("bitbucket", {})["enabled"] = False
+            path.write_text(json.dumps(data), encoding="utf-8")
+
+            sys.argv = ["init_pipeline_config.py", "--project", str(empty_root), "--update"]
+            try:
+                ipc.main()
+            except SystemExit:
+                pass
+            reloaded = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(reloaded["project"]["build_system"], "gradle",
+                             "None-детект затер ответ человека")
+            self.assertEqual(reloaded["conventions"]["package_root"], "com.acme.app")
+            leftovers = [i for i in reloaded.get("_incomplete", [])
+                         if not i.startswith("project.is_git")]
+            self.assertEqual(leftovers, [], f"отвеченные поля остались в маркере: {leftovers}")
+        finally:
+            import shutil
+            shutil.rmtree(empty_root, ignore_errors=True)
+
     def test_dry_run(self):
         """--print не создаёт файл."""
         self._run_main(["--print"])

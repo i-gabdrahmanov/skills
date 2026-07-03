@@ -1928,13 +1928,18 @@ def main():
         if check["status"] != "PASS":
             print(f"  [{check['status']}] {check['name']}: {check['detail']}")
 
-    # Подсказка: как вручную пропустить заблокированный гейт (последнее средство).
-    # Однострочная команда — Qwen-рантайм надёжнее выполняет команды без переносов.
+    # Подсказка: как снимается заблокированный гейт (последнее средство). Снятие — R4-класс:
+    # gate-guard пропустит override_judge ТОЛЬКО при approval-маркере, который фиксируется
+    # после ЯВНОГО согласия пользователя (раньше тут печаталась готовая команда без
+    # approval-шага — модель снимала гейт молча).
     if not verdict["passed"] and verdict.get("blocking_issues"):
         _ovr = Path(__file__).resolve().parents[2] / "pipeline-state" / "scripts" / "override_judge.py"
         print()
-        print("  ℹ️  Гейт можно пропустить вручную (последнее средство, после 3 ре-итераций):")
-        print(f"     python3 {_ovr} --judge {judge_name} "
+        print("  ℹ️  Снять гейт можно ТОЛЬКО после явного «да» пользователя (R4, последнее средство):")
+        print("     1) останови работу, покажи пользователю blocking issues и спроси;")
+        print(f"     2) после «да» зафиксируй согласие: ground/approvals/gate-override-{judge_name}.json "
+              "{\"approved_by\": \"user\", \"reason\": \"<кто/почему>\"};")
+        print(f"     3) python3 {_ovr} --judge {judge_name} "
               f"--feature {args.slug} --step-id <step-id> --reason \"<обоснование>\"")
 
     if not verdict["passed"] and _maybe_escalate(args.slug, judge_name, project_root):

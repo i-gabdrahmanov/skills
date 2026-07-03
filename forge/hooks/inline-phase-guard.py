@@ -165,10 +165,10 @@ def _block(step_id: str, what: str, feature: str | None) -> int:
         f"[inline-phase-guard] DENY: фаза '{step_id}' обязана выполняться ЧЕРЕЗ "
         f"agent(subagent_type=...), а не inline главным агентом. Заблокировано: {what}.\n"
         f"  Запусти эту работу субагентом. Если agent() реально недоступен (деградация) — "
-        f"поставь override:\n"
-        f"   python3 <project>/.gigacode/skills/pipeline-state/scripts/override_judge.py "
-        f"--judge subagent-origin --feature {feat} --step-id {step_id} "
-        f"--reason \"<почему inline допустимо>\"",
+        f"снятие гейта только через override_judge (судья subagent-origin), и это R4: "
+        f"gate-guard пропустит его ТОЛЬКО при approval-маркере "
+        f"ground/approvals/gate-override-subagent-origin.json, который фиксируется после "
+        f"ЯВНОГО «да» пользователя (спроси, покажи причину; feature={feat}, step={step_id}).",
         file=sys.stderr,
     )
     return 2

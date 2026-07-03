@@ -2,7 +2,7 @@
 
 Хуки переносят enforcement пайплайна из текста SKILL.md в **рантайм** и реализуют Forge v3.5:
 risk ladder R0–R5, evidence bundle, cost circuit breaker, security-хуки. Главный принцип концепции:
-**hooks = enforcement, CLAUDE.md/SKILL.md = только guidance** (модель текст может проигнорировать).
+**hooks = enforcement, FORGE.md/SKILL.md = только guidance** (модель текст может проигнорировать).
 Это конфиг рантайма, НЕ скиллы. Скрипты path-агностичны: состояние берут из
 `<project>/ground/...`, гейты ищут по `../skills/...`, политику — из `risk-policy.json` рядом.
 

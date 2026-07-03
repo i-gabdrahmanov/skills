@@ -240,6 +240,21 @@ def build_config(root):
     return cfg
 
 
+def _answered(cfg: dict, entry: str) -> bool:
+    """Отвечено ли поле из _incomplete. Ключ — первый токен записи (хвост в скобках —
+    пояснение для оператора). None/отсутствие = не отвечено; False — валидный ответ
+    (jira.enabled=false), КРОМЕ project.is_git: там False значит «git так и не завёлся»."""
+    key = entry.split(" ")[0]
+    val = cfg
+    for part in key.split("."):
+        if not isinstance(val, dict) or part not in val:
+            return False
+        val = val[part]
+    if key == "project.is_git":
+        return bool(val)
+    return val is not None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--project", default=None, help="Project root (default: git toplevel или cwd)")
@@ -269,9 +284,22 @@ def main():
         with open(dest, encoding="utf-8") as f:
             existing = json.load(f)
         for sect in ("project", "conventions", "quality"):
-            existing.setdefault(sect, {}).update({k: v for k, v in detected[sect].items()})
+            cur = existing.setdefault(sect, {})
+            for k, v in detected[sect].items():
+                # None-детект не затирает ответ человека (раньше update() клобберил
+                # заполненный build_system/package_root обратно в null)
+                if v is None and cur.get(k) is not None:
+                    continue
+                cur[k] = v
         existing["$schema"] = SCHEMA_VERSION
-        existing["_incomplete"] = detected["_incomplete"]
+        # Маркер пересобирается ПО ФАКТУ: остаются только всё ещё не отвеченные поля.
+        # Раньше detected["_incomplete"] переносился безусловно (jira/bitbucket попадали
+        # всегда) → гейт арминга «_incomplete пуст» был недостижим.
+        still = [i for i in detected["_incomplete"] if not _answered(existing, i)]
+        if still:
+            existing["_incomplete"] = still
+        else:
+            existing.pop("_incomplete", None)
         result = existing
     else:
         result = detected
