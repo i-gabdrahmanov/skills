@@ -77,7 +77,7 @@ description: >
 | `list [--category C] [--file pipeline\|gates\|risk] [--json]` | каталог: id, текущее значение, источник (file/default), диапазон/enum, 🔒 |
 | `get <id>` | текущее значение + default + источник |
 | `set <id> <value> [--dry-run] [--confirm]` | валидирует, бэкапит, пишет атомарно; печатает было→стало |
-| `phase <enable\|disable\|add> <phase-id> [--enabled-by EXPR] [--skill S] [--gates G...] [--desc D]` | мержит фазу в `phases_override` |
+| `phase <enable\|disable\|add> <phase-id> [--enabled-by EXPR] [--skill S] [--gates G...] [--desc D] [--after ID]` | мержит фазу в `phases_override`; для `add` `--after` задаёт позицию новой фазы (без него — в конец) |
 | `risk <list-add\|list-remove> <key> <pattern> --confirm` | правка списков risk-policy (destructive_blacklist и др.) |
 | `risk cap-set <agent-regex> <R-level> --confirm` | separation-of-duties: кап риска по типу агента |
 | `validate [--strict] [--json]` | проверка конфига на ЧТЕНИЕ: типы/диапазоны/enum + кросс-проверки |
@@ -118,7 +118,7 @@ python3 .../config.py validate --strict   # preflight: варнинги = оши
 | Пользователь сказал | Команда |
 |---|---|
 | «подними покрытие до 90%» | `set quality.coverage_threshold 0.9` |
-| «выключи TDD» | `set tdd_enforced false` |
+| «выключи TDD» | `set quality.tdd false` (гасит и фазу 04-tdd, и tdd-guard; `tdd_enforced` — мёртвый gates-флаг, ничем не читается) |
 | «включи security review» | `set security_review true` |
 | «разреши авто-аппрув до R2» 🔒 | `set autonomy.auto_max_risk R2 --confirm` (после подтверждения) |
 | «доки клади в отдельный репо /abs/spec» | `set docs.mode separate-repo` + `set docs.repo_path /abs/spec` |

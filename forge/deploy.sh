@@ -44,10 +44,28 @@ GIG="$TARGET/.gigacode"
 echo "== deploy Forge → $GIG =="
 mkdir -p "$GIG/hooks" "$GIG/skills"
 
-# 1. co-location: hooks И skills в один .gigacode (overwrite — source-managed)
-cp -a "$SRC/hooks/." "$GIG/hooks/"
-cp -a "$SRC/skills/." "$GIG/skills/"
-echo "  ✓ скопированы hooks/ и skills/ (co-located)"
+# 1. co-location: hooks И skills в один .gigacode (overwrite — source-managed).
+# tar-pipe вместо cp -a: копия работает от рабочего дерева, поэтому руками отсекаем
+# runtime-мусор (__pycache__/.pyc/.DS_Store) и ЛОКАЛЬНЫЙ конфиг оператора
+# (minor-defect-fix/config.json с реальными путями машины — в таргет едет только
+# config.json.example; сам конфиг оператор заводит на первом запуске).
+copy_tree() {  # $1=src-dir  $2=dst-dir
+  (cd "$1" && tar -cf - \
+      --exclude '*__pycache__*' --exclude '*.pyc' --exclude '*.DS_Store' \
+      --exclude '*.pytest_cache*' --exclude '*minor-defect-fix/config.json' \
+      .) | (cd "$2" && tar -xf -)
+}
+copy_tree "$SRC/hooks" "$GIG/hooks"
+copy_tree "$SRC/skills" "$GIG/skills"
+echo "  ✓ скопированы hooks/ и skills/ (co-located, без __pycache__/.DS_Store/локального config.json)"
+
+# Пустой config.json на месте (skill-paths.json/doctor требуют файл; маппинг проект→спека
+# оператор заполняет на первом запуске). Существующий конфиг таргета НЕ перетираем.
+MDF_CFG="$GIG/skills/minor-defect-fix/config.json"
+if [ ! -f "$MDF_CFG" ]; then
+  printf '{\n  "projects": {}\n}\n' > "$MDF_CFG"
+  echo "  ✓ заведён пустой minor-defect-fix/config.json (маппинг заполняется на первом запуске)"
+fi
 
 # 2. in-project фиксер
 cp "$SRC/deploy-local.sh" "$GIG/deploy-local.sh"

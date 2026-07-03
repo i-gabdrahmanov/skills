@@ -30,6 +30,11 @@
       }
     },
 
+    "project-grounder": {
+      "dir": ".gigacode/skills/project-grounder",
+      "skill_md": ".gigacode/skills/project-grounder/SKILL.md"
+    },
+
     "system-analyst": {
       "dir": ".gigacode/skills/system-analyst",
       "skill_md": ".gigacode/skills/system-analyst/SKILL.md",

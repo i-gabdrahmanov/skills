@@ -282,7 +282,7 @@ python <project>/.gigacode/skills/pipeline-state/scripts/read.py \
 | `scripts/add_steps.py` | Дописать новые шаги в существующий manifest (идемпотентно; для шагов, известных только по ходу прогона). Проставляет `required_judges` по единой маске и, если у фичи уже есть `gate.json`, пересобирает его. **Для feature-pipeline канон — `skills/feature-pipeline/scripts/add_steps.py`** (он же дополнительно ведёт `phase-defs.json`); эта generic-версия — для прочих скиллов. |
 | `scripts/update.py` | Обновить статус шага и сохранить JSON-выход. При блокировке судьёй/проверкой subagent-origin печатает путь разблокировки через `override_judge.py` |
 | `scripts/read.py` | Прочитать state, выдать summary или выжимку шага |
-| `scripts/override_judge.py` | Ручной пропуск гейта судьи (`--judge … --feature … --reason …`) — единственный путь закрыть шаг, заблокированный отсутствующим/проваленным вердиктом `required_judges` |
+| `scripts/override_judge.py` | Ручной пропуск гейта судьи (`--judge … --feature … --reason …`) — единственный путь закрыть шаг, заблокированный отсутствующим/проваленным вердиктом `required_judges`. **Создание override — R4**: `gate-guard` пропустит команду только при approval-маркере `ground/approvals/gate-override-<judge>.json`, фиксируемом после ЯВНОГО «да» пользователя (молча — exit 2); `--list`/`--remove` свободны |
 
 См. `scripts/<name>.py --help` для деталей.
 

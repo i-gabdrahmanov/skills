@@ -142,6 +142,23 @@ def coerce_and_validate(entry: dict, raw) -> Any:
     if t == "string":
         return str(raw)
 
+    if t == "list":
+        # Принимаем JSON-массив строк ('["a","b"]') или CSV ("a,b"); пустая строка → []
+        if isinstance(raw, list):
+            vals = raw
+        elif s.startswith("["):
+            try:
+                vals = json.loads(s)
+            except json.JSONDecodeError as ex:
+                raise ValueError(f"невалидный JSON-массив: {ex}")
+            if not isinstance(vals, list):
+                raise ValueError(f"ожидался JSON-массив, получено {type(vals).__name__}")
+        else:
+            vals = [p.strip() for p in s.split(",") if p.strip()]
+        if not all(isinstance(v, str) for v in vals):
+            raise ValueError("список должен содержать только строки")
+        return vals
+
     raise ValueError(f"неизвестный тип параметра: {t!r}")
 
 
@@ -186,6 +203,11 @@ def validate_typed(entry: dict, value: Any) -> None:
     if t == "string":
         if not isinstance(value, str):
             raise ValueError(f"ожидалась строка, в файле {type(value).__name__}: {value!r}")
+        return
+
+    if t == "list":
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise ValueError(f"ожидался список строк, в файле {type(value).__name__}: {value!r}")
         return
 
     raise ValueError(f"неизвестный тип параметра: {t!r}")

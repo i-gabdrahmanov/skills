@@ -393,6 +393,75 @@ Verify — пайплайн НЕ дошёл до Document/Deliver.
       override-эскейп (§0.6.1). Если граунда нет — деривация на лету (текущий граф минус новые рёбра).
       Обязательный гейт SKILL §8.3c. Тесты: `test_check_architecture.py` (33).
 
+**Финальная верификация харнеса перед релизом (2026-07-03, методика harness-verifier):**
+семантический проход по всем зонам (хуки/ядро скиллов/периферия+деплой) + статический анализ
+hook-payload установленного qwen-code 0.19.3. Чисто: проводка 15 хуков (settings↔FORGE↔DEPLOY),
+dual-vocabulary, контракты pipeline-state, payload-схема snake_case совпадает с парсерами хуков.
+Найдено и закрыто (1 BLOCKER / 4 MAJOR / 8 MINOR):
+- [x] **B: `resolve_phases` падал на литеральном bool `enabled_by`** — ровно то, что пишет
+      документированный `config.py phase disable` → `AttributeError` вместо JSON у `--current`
+      на каждой фазе. Фикс: bool-guard в `_evaluate_enabled_by`/`_evaluate_skip_if`. Пин:
+      интеграционные кейсы config↔resolver в `test_resolve_phases.py` (стык двух скиллов раньше
+      не покрывался ни одним тестом).
+- [x] **M: `phases_override` не умел ДОБАВЛЯТЬ фазу** (доки обещали в 2 местах, `phase add`
+      писал в конфиг — резолвер молча игнорировал новые id). Фикс: append неизвестных id
+      с позицией через ключ `after` (`config.py phase add --after <id>`; без него — в конец;
+      сортировка по id невозможна — канон-порядок не лексикографический). Пин: там же.
+- [x] **M: 5 ручек `quality.*`, которые пайплайн реально читает, отсутствовали в
+      params-registry** (config-helper fail-closed → ручки были недоступны):
+      `max_judge_iterations`, `tdd`, `test_layer`, `coverage_exclude_globs` (новый тип `list`
+      в `_util.py`), `module_dep_policy`. Заодно: `tdd_enforced` (gates) оказался МЁРТВЫМ
+      флагом — его никто не читает, а SKILL.md советовал им «выключать TDD»; дока и описания
+      перенаправлены на живой `quality.tdd` (гасит и фазу 04-tdd, и tdd-guard). Пин:
+      «реестр покрывает ключи-читатели» в `test_config.py`.
+- [x] **M: реальные пути оператора уезжали в каждый деплой** — `minor-defect-fix/config.json`
+      с `/Users/<имя>/…` был закоммичен и копировался `deploy.sh`. Фикс: файл раскоммичен и
+      в .gitignore, в репо — нейтральный `config.json.example`; `deploy.sh` исключает локальный
+      конфиг из копии. Пин: `test_no_hardcoded_paths_left.py` сканирует все md/json скиллов
+      на машинные `/Users/<имя>/`-пути.
+- [x] **M: тесты log-agent замусоривали боевой кросс-прогонный архив** — смоук с пустым stdin
+      без изоляции дописывал all-null записи в `ai-logs-archive/` (17 шт. накопилось; это же
+      объясняло «загадочные» null-логи — НЕ сбой рантайма) и создавал `ground/` в git-toplevel
+      каталога запуска тестов. Фикс: tmp-cwd + `GIGACODE_AILOG_ARCHIVE` в тестах, мусор вычищен.
+      Пин: pollution-guard в `run_all_tests.py` (прогон, изменивший `ai-logs-archive/`/`ground/`
+      репо, — красный).
+- [x] Минорные: `tdd-guard`/`eval-guard` резолвят корень через `project_root(cwd)` (git-toplevel),
+      как соседи по цепочке — при cwd=подкаталог единственные форсеры TDD/EDD молча fail-open'или
+      (пин: кейс «блок из подкаталога» в `test_tdd-guard.py`); `run-hook-tests.sh` теперь гоняет
+      юнит-тесты хуков + eval-набор (был deprecated-шимом, 20 test_*.py не имели shell-входа);
+      `project-grounder` добавлен в `skill-paths.json` (исполнитель фазы 01 не имел записи);
+      §0.5 помечает `03-jira` условным (`jira.enabled`, дефолт false — расходился с resolve_phases);
+      SKILLS-REGISTRY (обе копии) дополнен `router`/`forgelite`, pdf/pptx помечены external;
+      deployment.md: требование Python 3.10 переформулировано (деплой-цепочка 3.9-safe,
+      обоснование было ложным); `deploy.sh` копирует через tar-pipe без `__pycache__`/`.DS_Store`;
+      DEPLOY.md: остаточный «CLAUDE.md» → «FORGE.md/SKILL.md».
+- [x] **B: закрыт самоснимаемый эскейп-хатч — `override_judge` стал R4 с approval-гейтом.**
+      Раньше снятие ЛЮБОГО детерминированного гейта (step-reopen, gate-result, судьи,
+      subagent-origin) требовало только `--reason` (текст пишет сама модель), скрипт стоял в
+      exemption `inline-phase-guard`, а deny-баннеры печатали ГОТОВУЮ команду — вся пирамида
+      гейтов 1.11 снималась одной командой без человека. Теперь: policy-секция `gate_override`
+      в risk-policy.json + проверка в `gate-guard` (до auto-early-return, fail-closed) —
+      создание override блокируется (exit 2), пока нет approval-маркера
+      `ground/approvals/gate-override-<judge>.json`, который фиксируется ТОЛЬКО после явного
+      «да» пользователя; `--list`/`--remove` (чтение/восстановление enforcement'а) свободны.
+      Все подсказки (update.py ×6 через `_override_hint`, run_judge, inline-phase-guard,
+      SKILL §0.6.1 — теперь трёхшаговый: спроси → маркер → override) переписаны с
+      escalate-first порядком. Пины: `TGateOverride` в `test_gate-guard.py` (без маркера →
+      exit 2; с маркером → 0; чужой маркер не снимает; --list/--remove свободны).
+- [x] **B (найден деплой-смоуком в чистый проект): гейт арминга §0.1 был недостижим —
+      `_incomplete` никто не очищал.** `config.py set` писал значения, не трогая маркер;
+      `init --update` переносил detected-маркер безусловно (jira/bitbucket попадали ВСЕГДА)
+      и клобберил человеческие ответы None-детектом (`update()` поверх заполненных полей).
+      «Как только `_incomplete` пуст — прогони preflight» не мог наступить. Фикс: `config.py set`
+      снимает отвеченное поле из маркера (false — валидный ответ; пустой маркер удаляется);
+      `init --update` не затирает ответы None-детектом и пересобирает маркер по факту
+      (`_answered`; `project.is_git` отвечен только когда True). Заодно `project.build_system`
+      добавлен в params-registry (частый житель `_incomplete`, санкционированно ответить было
+      нельзя), а `deploy.sh` сеет пустой `minor-defect-fix/config.json` (skill-paths/doctor
+      требуют файл, который перестал ехать из репо). Смоук: deploy → init → ответы через
+      config-helper → set_criticality → **preflight exit 0**. Пины: `test_config.py`
+      (set чистит маркер), `test_init_pipeline_config.py` (update не клобберит + пересборка).
+
 ## Известные ограничения (из аудита)
 
 - **`additionalContext` только в `hookSpecificOutput`** — рантайм читает контекст-инъекцию ТОЛЬКО из
@@ -424,6 +493,16 @@ Verify — пайплайн НЕ дошёл до Document/Deliver.
 - **`cost-breaker` сейчас НЕ тормоз** (прогон #3): его `budget.json` показал 42% (`spent 843K/2M`),
   тогда как реальная сессия сожгла 51.8M входных токенов (расхождение ~60×), а хард-стоп 120% отключён.
   Не полагаться на текущий бюджет как на ограничитель стоимости, пока учёт не сверен (см. роадмап C3).
+- **Payload-схема хуков подтверждена по стоковому qwen-code 0.19.3** (верификация 2026-07-03):
+  вход хука строится `createBaseInput` → `stdin.write(JSON.stringify(input))` со snake_case-ключами
+  (`hook_event_name`/`session_id`/`cwd`/`tool_name`) — ровно то, что читают наши парсеры. В стоке
+  хуки включены по умолчанию (гейт `!getDisableAllHooks()`); `--experimental-hooks` — специфика
+  форка GigaCode на более старой базе. При апгрейде форка перепроверять схему по свежим записям
+  `ai-logs` (сплошные `event=null` = схема/поставка payload сломана, enforcement под вопросом).
+- **User-level settings могут подключать УСТАРЕВШУЮ копию харнеса** (найдено на машине оператора:
+  `~/.qwen/settings.json` вёл на `$HOME/.qwen/hooks/` со старым ростером без fork-syntax-guard/
+  sod/inline/eval-guard). Канон — проектный деплой `deploy.sh`; user-level блок hooks либо убрать,
+  либо держать синхронным, иначе локальные смоуки бегут на другом (старом) control-plane.
 
 ## Диагностика (перед прогоном)
 

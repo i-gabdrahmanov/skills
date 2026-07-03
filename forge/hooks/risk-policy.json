@@ -63,6 +63,13 @@
     "R4": ["\\bgit\\s+push\\b", "\\bpull[-_ ]?request\\b", "\\bpullrequests\\b", "\\bacli\\b.*\\bpr\\b"]
   },
 
+  "gate_override": {
+    "_comment": "Снятие детерминированного гейта (override_judge.py) — R4-класс, deny-first. СОЗДАНИЕ оверрайда (есть --judge, нет --list/--remove) требует approval-маркера ground/approvals/gate-override-<judge>.json — он фиксируется ТОЛЬКО после явного согласия пользователя. --list (чтение) и --remove (восстановление enforcement'а) свободны. Раньше override требовал лишь --reason, стоял в exemption inline-phase-guard, и deny-баннеры сами печатали готовую команду — вся пирамида гейтов снималась моделью одной командой без человека.",
+    "command_pattern": "override_judge\\.py",
+    "readonly_args_pattern": "--list\\b|--remove\\b",
+    "approval_prefix": "gate-override"
+  },
+
   "level_requirements": {
     "_comment": "Что должно быть выполнено, чтобы действие уровня прошло. step = completed-шаг manifest; approval = файл ground/approvals/<key>.json; evidence = ground/evidence/* >= порога. ВАЖНО: evidence требуется ТОЛЬКО на доставке (R4/R5) — на R2/R3 (запись кода/чувствительных путей) его нет, т.к. бандл собирается ПОСЛЕ билда (иначе дедлок medium/high критичности). Доставочный evidence дополнительно форсит evidence-enforcer на push/PR/report. SoD форсит sod-enforcer (не ключи политики); audit — лог-агент.",
     "R0": {"mode": "auto"},

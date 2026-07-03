@@ -59,6 +59,8 @@ def _evaluate_skip_if(skip_expr, pipeline, gates, feature_ctx):
       - "!quality.eval_enabled" — отрицание поля из pipeline.json
       - "gates.parallel_build" — gate-флаг из feature-gates.json
     """
+    if isinstance(skip_expr, bool):
+        return skip_expr
     negate = False
     expr = skip_expr.strip()
     if expr.startswith("!"):
@@ -93,11 +95,15 @@ def _evaluate_enabled_by(expr, pipeline, gates):
     """Проверить условие enabled_by (аналог compile-time feature() из Bun).
 
     Если enabled_by нет или None — фаза включена по умолчанию.
+    Если это литеральный bool — берём как есть (config.py phase enable/disable
+    пишет true/false в phases_override).
     Если это строка — проверяем как путь в pipeline.json или gates.
     Отсутствующий ключ берёт дефолт из ENABLED_BY_DEFAULTS (по умолчанию False).
     """
     if expr is None:
         return True
+    if isinstance(expr, bool):
+        return expr
     if expr.startswith("gates."):
         gate_name = expr.split(".", 1)[1]
         gates_data = gates or {}
@@ -159,6 +165,30 @@ def resolve_phases(project_root, feature_slug=None, gates_path=None):
         for i, phase in enumerate(phases_definitions):
             if phase["id"] in override_index:
                 phases_definitions[i] = {**phase, **override_index[phase["id"]]}
+        # Новые id (которых нет в DEFAULT_PHASES) ДОБАВЛЯЮТСЯ — так работает
+        # «добавить новую фазу без правки кода скилла» (config.py phase add).
+        # Позиция — ключ "after": "<phase-id>" (вставка сразу после), без него — в конец.
+        # Сортировать по id нельзя: канонический порядок не лексикографический
+        # (02-sdd → 02-design → 02-eval-plan).
+        known = {p["id"] for p in phases_definitions}
+        for entry in override:
+            if entry.get("id") in known or not entry.get("id"):
+                continue
+            new_phase = {
+                "skill": None, "enabled_by": None, "skip_if": None,
+                "gates": None, "description": "",
+                "brief": f"references/phases/{entry['id']}.md",
+                **entry,
+            }
+            after = new_phase.pop("after", None)
+            idx = len(phases_definitions)
+            if after:
+                for i, p in enumerate(phases_definitions):
+                    if p["id"] == after:
+                        idx = i + 1
+                        break
+            phases_definitions.insert(idx, new_phase)
+            known.add(entry["id"])
 
     result = []
     skipped = []

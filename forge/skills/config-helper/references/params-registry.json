@@ -33,6 +33,66 @@
       "aliases": ["лимит итераций", "reopens", "переоткрытия шага", "брейк итераций", "max reopens"]
     },
     {
+      "id": "project.build_system",
+      "file": "pipeline",
+      "path": "project.build_system",
+      "type": "enum", "enum": ["gradle", "maven"], "default": null,
+      "category": "project", "sensitive": false,
+      "title": "Сборочная система",
+      "description": "gradle или maven. Обычно детектится init_pipeline_config.py по build-файлам; ручка нужна, когда детект не смог и поле попало в _incomplete (§0.1)",
+      "aliases": ["build system", "сборка", "билд-система", "gradle", "maven"]
+    },
+    {
+      "id": "quality.max_judge_iterations",
+      "file": "pipeline",
+      "path": "quality.max_judge_iterations",
+      "type": "int", "min": 1, "max": 20, "default": 3,
+      "category": "quality", "sensitive": false,
+      "title": "Лимит ре-итераций судьи",
+      "description": "Сколько fail'ов подряд может дать один судья run_judge, прежде чем вернёт exit 3 (ESCALATE — стоп-и-спроси) вместо бесконечного FAIL",
+      "aliases": ["лимит судьи", "judge iterations", "ре-итерации судьи", "max judge", "брейк судьи"]
+    },
+    {
+      "id": "quality.tdd",
+      "file": "pipeline",
+      "path": "quality.tdd",
+      "type": "bool", "default": true,
+      "category": "quality", "sensitive": false,
+      "title": "TDD-цикл (RED→GREEN)",
+      "description": "ЖИВАЯ ручка TDD: выключает и фазу 04-tdd (resolve_phases), и блок tdd-guard (запись в src/main без RED-теста). Гейт-флаг gates.tdd_enforced фазой/хуком НЕ читается",
+      "aliases": ["tdd", "тдд", "выключи tdd", "red green", "тест до кода"]
+    },
+    {
+      "id": "quality.test_layer",
+      "file": "pipeline",
+      "path": "quality.test_layer",
+      "type": "enum", "enum": ["service-unit", "mixed"], "default": "service-unit",
+      "category": "quality", "sensitive": false,
+      "title": "Слой тестирования",
+      "description": "service-unit: только Mockito-юниты, tdd-guard блокирует @DataJpaTest/@SpringBootTest; mixed: escape-hatch, интеграционные аннотации разрешены",
+      "aliases": ["test layer", "слой тестов", "mixed", "разреши интеграционные тесты", "datajpatest"]
+    },
+    {
+      "id": "quality.coverage_exclude_globs",
+      "file": "pipeline",
+      "path": "quality.coverage_exclude_globs",
+      "type": "list", "default": null,
+      "category": "quality", "sensitive": false,
+      "title": "Исключения покрытия (glob'ы)",
+      "description": "Список glob'ов, исключаемых из coverage-гейта (check_coverage --exclude). null — дефолты слоя: при service-unit исключаются repository/entity/dto/config",
+      "aliases": ["исключения покрытия", "coverage exclude", "глобы покрытия", "не считать покрытие"]
+    },
+    {
+      "id": "quality.module_dep_policy",
+      "file": "pipeline",
+      "path": "quality.module_dep_policy",
+      "type": "enum", "enum": ["graph", "deny_new", "policy", "off"], "default": "graph",
+      "category": "quality", "sensitive": false,
+      "title": "Политика межмодульных зависимостей",
+      "description": "check_module_deps в фазе verify: graph — блок циклов и новых group-связок, которых проект не делает (дефолт); deny_new — блок любых новых; policy — по module_deps.forbidden; off — выключено",
+      "aliases": ["module deps", "межмодульные зависимости", "политика модулей", "граф модулей"]
+    },
+    {
       "id": "quality.eval_threshold",
       "file": "pipeline",
       "path": "quality.eval_threshold",
@@ -339,9 +399,9 @@
       "path": "gates.tdd_enforced.enabled",
       "type": "bool", "default": true,
       "category": "gates", "sensitive": false,
-      "title": "Гейт: TDD",
-      "description": "Включает tdd-guard (RED-тест до кода)",
-      "aliases": ["tdd", "тдд", "red test", "тест до кода"]
+      "title": "Gate-флаг TDD (только для phases_override)",
+      "description": "Флаг для enabled_by/skip_if кастомных фаз (gates.tdd_enforced). НЕ управляет tdd-guard и фазой 04-tdd — их живая ручка quality.tdd",
+      "aliases": ["gates tdd", "tdd gate flag"]
     },
     {
       "id": "parallel_build",
