@@ -8,7 +8,7 @@
   "destructive_blacklist": [
     "rm\\s+(-[a-z]*\\s+)*-?[rf]*r[rf]*\\s+(-[a-z]*\\s+)*(/|~|\\*|\\$HOME|\\.)(\\s|$)",
     "\\bgit\\s+push\\b.*--force(-with-lease)?\\b.*\\b(main|master|origin)\\b",
-    "\\bgit\\s+push\\s+--force\\b(?!.*--force-with-lease)",
+    "\\bgit\\s+push\\s+--force(?!-with-lease)\\b",
     "\\b(DROP|TRUNCATE)\\s+(TABLE|DATABASE|SCHEMA)\\b",
     "\\bchmod\\s+-R?\\s*777\\b",
     "\\bmkfs\\b|\\bdd\\s+if=.*of=/dev/",
@@ -66,7 +66,7 @@
   "gate_override": {
     "_comment": "Снятие детерминированного гейта (override_judge.py) — R4-класс, deny-first. СОЗДАНИЕ оверрайда (есть --judge, нет --list/--remove) требует approval-маркера ground/approvals/gate-override-<judge>.json — он фиксируется ТОЛЬКО после явного согласия пользователя. --list (чтение) и --remove (восстановление enforcement'а) свободны. Раньше override требовал лишь --reason, стоял в exemption inline-phase-guard, и deny-баннеры сами печатали готовую команду — вся пирамида гейтов снималась моделью одной командой без человека.",
     "command_pattern": "override_judge\\.py",
-    "readonly_args_pattern": "--list\\b|--remove\\b",
+    "readonly_arg_flags": ["--list", "--remove"],
     "approval_prefix": "gate-override"
   },
 

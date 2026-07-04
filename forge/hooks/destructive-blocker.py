@@ -20,11 +20,18 @@ _CORE_BLACKLIST = [
     r"\brm\b(?:\s+(?:-\S+|--\w[\w-]*))*\s+(?:(?:/|~|\$HOME|\*)(?:\s|/|\*|$)|\.(?:\s|$))",  # rm <любые флаги> опасная цель (/, /*, ~, $HOME, *, бар. .) — но НЕ ./subdir
     r"\brm\b(?=.*\b(?:-[a-z]*r[a-z]*|--recursive)\b)(?=.*\b(?:-[a-z]*f[a-z]*|--force)\b).*(?:/|~|\$HOME|\*)",
     r"\bfind\s+(?:/|~|\$HOME)\S*\s.*-(?:delete|exec\s+rm)\b",  # find в опасном корне + удаление
-    r"\bgit\s+push\b.*--force\b(?!.*--force-with-lease)",
+    # force-push и в короткой форме `-f` (кластер флагов), кроме --force-with-lease
+    r"\bgit\s+push\b(?=.*(?:--force\b|\s-[A-Za-z]*f))(?!.*--force-with-lease)",
     r"\b(?:DROP|TRUNCATE)\s+(?:TABLE|DATABASE|SCHEMA)\b",
     r"\bmkfs\b|\bdd\s+if=.*of=/dev/",
     r":\(\)\s*\{.*\};:",
     r"(?:curl|wget)\s+[^|]*\|\s*(?:sudo\s+)?(?:ba)?sh",
+    # обфусцированный exec: base64 -d | (ba)sh
+    r"\bbase64\s+(?:-d|--decode|-D)\b[^|]*\|\s*(?:sudo\s+)?(?:ba)?sh\b",
+    # xargs, скармливающий rm (цель подставляет xargs — прямой rm-паттерн её не видит)
+    r"\bxargs\b(?:\s+-\S+)*\s+rm\b",
+    # python-деструктив без токена rm: shutil.rmtree корня/дома
+    r"\brmtree\s*\(\s*['\"]?(?:/|~|\$HOME)",
 ]
 
 

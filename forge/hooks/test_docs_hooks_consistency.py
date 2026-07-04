@@ -53,9 +53,11 @@ def _forge_list(header: str) -> list[str]:
 
 class TestDocsHooksConsistency(unittest.TestCase):
     def test_bash_chain_matches(self):
-        settings = _settings_chain(lambda m: m == "^Bash$")
-        forge = _forge_list("**PreToolUse `^Bash$` — sequential:**")
-        self.assertTrue(settings, "не нашёл ^Bash$ цепочку в settings.hooks.json")
+        # matcher переведён на канон-имя рантайма (run_shell_command); старый ^Bash$ не матчил
+        # ничего — см. hooks/test_matcher_canonical_names.py.
+        settings = _settings_chain(lambda m: "run_shell_command" in m and "write_file" not in m)
+        forge = _forge_list("**PreToolUse `run_shell_command` (Bash) — sequential:**")
+        self.assertTrue(settings, "не нашёл run_shell_command цепочку в settings.hooks.json")
         self.assertEqual(forge, settings,
                          f"FORGE.md §Структура хуков (Bash) разошлась с settings: forge={forge} settings={settings}")
 

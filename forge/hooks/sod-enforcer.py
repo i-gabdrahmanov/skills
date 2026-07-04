@@ -139,10 +139,12 @@ def _detect_role(root: Path) -> str | None:
 
 
 def _target_path(tool_name: str, tool_input: dict) -> str:
-    """Извлекает целевой путь из tool_input."""
-    if tool_name in ("Write", "WriteFile", "Edit"):
-        return tool_input.get("file_path", "")
-    if tool_name == "Bash":
+    """Извлекает целевой путь из tool_input. Канон-имена рантайма (write_file/edit/notebook_edit,
+    run_shell_command) + Claude-алиасы — иначе роль-блок на записи молча не срабатывал."""
+    if tool_name in ("Write", "WriteFile", "Edit", "edit", "write_file",
+                     "NotebookEdit", "notebook_edit"):
+        return tool_input.get("file_path") or tool_input.get("path") or ""
+    if tool_name in ("Bash", "run_shell_command"):
         return tool_input.get("command", "")
     return ""
 

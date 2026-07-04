@@ -62,10 +62,23 @@ class TGateOverride(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             appr = Path(td) / "ground" / "approvals"
             appr.mkdir(parents=True)
+            # маркер засчитывается только с провенансом record_approval (как пишет record_approval.py)
+            (appr / "gate-override-step-reopen-04-build-T1.json").write_text(
+                json.dumps({"produced_by": "record_approval", "approved_by": "user",
+                            "reason": "ok"}), encoding="utf-8")
+            r = _run(self.CMD, td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_handwritten_approval_without_provenance_blocked(self):
+        # BLOCKER-1 backstop: маркер БЕЗ produced_by:"record_approval" (самовыписанный) не снимает гейт
+        with tempfile.TemporaryDirectory() as td:
+            appr = Path(td) / "ground" / "approvals"
+            appr.mkdir(parents=True)
             (appr / "gate-override-step-reopen-04-build-T1.json").write_text(
                 json.dumps({"approved_by": "user", "reason": "ok"}), encoding="utf-8")
             r = _run(self.CMD, td)
-            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.returncode, 2, "рукописный маркер без провенанса не должен снимать гейт")
+            self.assertIn("провенанс", r.stderr.lower())
 
     def test_foreign_approval_does_not_unlock(self):
         with tempfile.TemporaryDirectory() as td:
@@ -74,6 +87,16 @@ class TGateOverride(unittest.TestCase):
             (appr / "gate-override-coverage-judge.json").write_text("{}", encoding="utf-8")
             r = _run(self.CMD, td)
             self.assertEqual(r.returncode, 2, "approval чужого судьи не должен снимать этот гейт")
+
+    def test_reason_text_containing_list_is_not_readonly(self):
+        # M2: --list ВНУТРИ значения --reason не должен трактоваться как readonly-флаг (обход)
+        with tempfile.TemporaryDirectory() as td:
+            cmd = ("python3 .gigacode/skills/pipeline-state/scripts/override_judge.py "
+                   "--judge step-reopen-04-build-T1 --feature f1 --step-id 04-build-T1 "
+                   "--reason \"cleanup --list marker\"")
+            r = _run(cmd, td)
+            self.assertEqual(r.returncode, 2,
+                             "--list в тексте --reason не снимает approval-гейт")
 
     def test_list_and_remove_are_free(self):
         with tempfile.TemporaryDirectory() as td:

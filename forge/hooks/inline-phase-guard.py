@@ -66,7 +66,7 @@ _CONTROL_BASH_RE = re.compile(
     r"|\bgit\s+(status|diff|log|rev-parse|branch|show)\b)"
 )
 
-WRITE_TOOLS = ("Write", "WriteFile", "Edit", "edit", "write_file", "NotebookEdit")
+WRITE_TOOLS = ("Write", "WriteFile", "Edit", "edit", "write_file", "NotebookEdit", "notebook_edit")
 BASH_TOOLS = ("Bash", "run_shell_command")
 
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -44,6 +45,14 @@ def _read_json(path: Path) -> dict | None:
     except Exception:
         pass
     return None
+
+
+def _approval_valid(root: Path, key: str) -> bool:
+    """approval-маркер засчитывается ТОЛЬКО с провенансом produced_by:"record_approval"
+    (BLOCKER-1): рукописный/самовыписанный маркер без провенанса не снимает гейт, даже если
+    он как-то просочился мимо state-write-guard."""
+    d = _read_json(root / "ground" / "approvals" / f"{key}.json")
+    return isinstance(d, dict) and d.get("produced_by") == "record_approval"
 
 
 def check_phase_gate(tool_name: str, tool_input: dict, agent_type: str | None,
@@ -168,22 +177,34 @@ def check_gate_override(command: str, root: Path) -> str | None:
         pat = policy.get("command_pattern", r"override_judge\.py")
         if not command or not re.search(pat, command):
             return None
-        ro = policy.get("readonly_args_pattern", r"--list\b|--remove\b")
-        if re.search(ro, command):
+        # readonly (--list/--remove) свободны — но проверяем по РЕАЛЬНЫМ токенам-аргументам,
+        # а не подстрокой: иначе `--reason "cleanup --list"` ложно трактуется как readonly (обход).
+        ro_flags = policy.get("readonly_arg_flags") or ["--list", "--remove"]
+        try:
+            toks = shlex.split(command)
+        except ValueError:
+            toks = command.split()
+        if any(f in toks for f in ro_flags):
             return None
         m = re.search(r"--judge[\s=]+[\"']?([\w./-]+)", command)
         judge = m.group(1) if m else ""
         prefix = policy.get("approval_prefix", "gate-override")
         key = f"{prefix}-{judge}" if judge else prefix
-        if R.approval_exists(root, key):
+        if _approval_valid(root, key):
             return None
+        exists_no_prov = R.approval_exists(root, key) and not _approval_valid(root, key)
+        prov_note = (
+            " Маркер есть, но БЕЗ провенанса record_approval — рукописный маркер не считается "
+            "(его мог выписать сам агент). " if exists_no_prov else " "
+        )
         return (
             f"снятие гейта (override_judge) — R4-класс, нужен approval-маркер "
-            f"ground/approvals/{key}.json. Порядок: (1) останови работу и спроси "
-            f"пользователя (покажи, что не сходится); (2) ТОЛЬКО после явного «да» "
-            f"зафиксируй согласие маркером {{\"approved_by\": \"user\", \"reason\": \"<кто/почему>\"}}; "
-            f"(3) повтори команду. Молча снимать гейт нельзя. "
-            f"--list/--remove не гейтятся."
+            f"ground/approvals/{key}.json.{prov_note}Порядок: (1) останови работу и спроси "
+            f"пользователя (покажи, что не сходится); (2) ТОЛЬКО после явного «да» зафиксируй "
+            f"согласие СКРИПТОМ pipeline-state/scripts/record_approval.py --key {key} "
+            f"--approved-by user --reason \"<кто/почему>\" (он штампует провенанс; прямой Write "
+            f"в approvals/ заблокирован state-write-guard); (3) повтори команду. "
+            f"Молча снимать гейт нельзя. --list/--remove не гейтятся."
         )
     except Exception as e:
         return f"deny-first: ошибка проверки gate-override ({e})."
@@ -223,6 +244,14 @@ def main() -> int:
         level = info["level"]
         command = info["command"]
         kind = _kind(tool_name, command)
+
+        # M6: policy битая ВНЕ пайплайна — классификатор слеп (command_risk пуст → push/PR/jira
+        # упали бы в R1-auto). Не пропускаем доставку по слепому auto; deny-first для delivery.
+        if not R.policy_loaded() and not R.manifest_exists(root) and kind in ("push", "jira"):
+            return _block(
+                "risk-policy.json не загружена/битая — классификатор рисков неактивен; "
+                f"доставка ({kind}) заблокирована вне пайплайна до починки policy."
+            )
 
         # ── R4-класс: снятие детерминированного гейта (override_judge) без approval ──
         # ДО auto-early-return: classify даёт таким командам default-R1 → иначе прошли бы авто.

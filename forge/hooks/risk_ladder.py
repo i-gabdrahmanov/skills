@@ -76,14 +76,27 @@ def pipeline_cfg(root: Path) -> dict:
         return {}
 
 
+# Потолок авто-прохода. Доставка (R4 push/PR, R5) и чувствительные пути НИКОГДА не проходят
+# авто, даже если pipeline.json выставит auto_max_risk=R4/R5 (защита от прямой правки конфига —
+# см. BLOCKER-1: пусть state-write-guard и блокирует Write в pipeline.json, кламп — второй слой).
+_AUTO_MAX_CEILING = "R3"
+
+
 def auto_max_risk(root: Path) -> str:
     """Порог авто-прохода: из pipeline.json autonomy.auto_max_risk (выбор критичности фичи),
-    иначе из risk-policy.json autonomy_auto_max, иначе R1."""
+    иначе из risk-policy.json autonomy_auto_max, иначе R1. Клампится потолком R3 — R4/R5 всегда
+    требуют requirement (approval+evidence), обойти авто-порогом нельзя."""
     cfg = (pipeline_cfg(root).get("autonomy") or {})
     lvl = cfg.get("auto_max_risk")
     if isinstance(lvl, str) and lvl in _LEVELS:
-        return lvl
-    return load_policy().get("autonomy_auto_max", "R1")
+        resolved = lvl
+    else:
+        resolved = load_policy().get("autonomy_auto_max", "R1")
+        if resolved not in _LEVELS:
+            resolved = "R1"
+    if level_order(resolved) > level_order(_AUTO_MAX_CEILING):
+        return _AUTO_MAX_CEILING
+    return resolved
 
 
 def criticality_set(root: Path) -> bool:

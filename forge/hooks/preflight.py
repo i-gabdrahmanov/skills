@@ -7,6 +7,7 @@ Pre-flight check для feature-pipeline.
 Exit 0 — харнес активен, можно продолжать.
 Exit 1 — ENFORCEMENT OFF. Предупредить пользователя.
 """
+from __future__ import annotations
 
 import json
 import os
@@ -62,6 +63,42 @@ def _referenced_hook_basenames(hooks_block: dict) -> set:
     return names
 
 
+# Канон-имена инструментов рантайма (TOOL_NAME_ALIASES qwen-code) → цель матчинга хуков.
+# Матчер, который их НЕ матчит, молча выключает всю цепочку (BLOCKER-0).
+_CANON_SHELL = "run_shell_command"
+_CANON_WRITES = ("write_file", "edit", "notebook_edit")
+
+
+def _group_matcher_for(hooks_block: dict, event: str, hook_py: str) -> str | None:
+    """matcher группы события `event`, содержащей хук `hook_py` (или None)."""
+    for group in hooks_block.get(event, []):
+        for h in group.get("hooks", []):
+            if re.search(rf"\b{re.escape(hook_py)}\b", str(h.get("command", ""))):
+                return group.get("matcher", "")
+    return None
+
+
+def _check_matchers_canonical(hooks_block: dict, wiring_src: str | None) -> list[str]:
+    """Проверяет, что matcher-ы блок-цепочек матчат канон-имена рантайма (мимикрия JS RegExp.test)."""
+    errs: list[str] = []
+    bash_m = _group_matcher_for(hooks_block, "PreToolUse", "destructive-blocker.py")
+    if bash_m is not None and not re.search(bash_m, _CANON_SHELL):
+        errs.append(
+            f"matcher Bash-цепочки {bash_m!r} в {wiring_src} НЕ матчит канон-имя "
+            f"{_CANON_SHELL!r} → destructive/pii/sod/gate на shell не сработают (BLOCKER-0). "
+            f"Ожидается напр. ^(run_shell_command|Bash)$."
+        )
+    write_m = _group_matcher_for(hooks_block, "PreToolUse", "tdd-guard.py")
+    if write_m is not None:
+        missing = [n for n in _CANON_WRITES if not re.search(write_m, n)]
+        if missing:
+            errs.append(
+                f"matcher Write/Edit-цепочки {write_m!r} в {wiring_src} НЕ матчит канон-имена "
+                f"{missing} → tdd/eval/sod/gate/state-write на записи не сработают (BLOCKER-0)."
+            )
+    return errs
+
+
 # Минимальная версия Python (копия doctor.MIN_PYTHON; пинится test_doctor). Скрипты/хуки
 # используют синтаксис 3.10+ (PEP604 `X | None`, match); на 3.9 phase_sync падал.
 MIN_PYTHON = (3, 10)
@@ -114,6 +151,7 @@ def preflight(project_root: str) -> dict:
         "phase-gate.py",
         "state-recorder.py",
         "eval-guard.py",
+        "state-write-guard.py",
         "log-agent.py",
     ]
     hooks_dir = Path(project_root) / ".gigacode" / "hooks"
@@ -142,6 +180,11 @@ def preflight(project_root: str) -> dict:
                     f"essential hook НЕ подключён в {wiring_src}: {hook} "
                     f"(файл есть, но рантайм его не вызывает → enforcement off для этого хука)"
                 )
+        # 3a. Матчеры PreToolUse-цепочек ДОЛЖНЫ матчить КАНОНИЧЕСКИЕ имена инструментов рантайма
+        #     (run_shell_command/write_file/edit), а не Claude-нотацию (^Bash$/Write|Edit). Иначе
+        #     блок-хуки не попадают в execution-plan и весь deny-first молчит (BLOCKER-0). Рантайм
+        #     матчит как new RegExp(matcher).test(canonicalToolName) — здесь мимикрия через re.search.
+        errors.extend(_check_matchers_canonical(wiring_block, wiring_src))
 
     # 3b. risk-policy.json должен существовать и парситься — иначе risk_ladder тихо
     #     деградирует до R1-auto («allow all»). Fail-closed на уровне готовности.

@@ -67,10 +67,11 @@ task-plan для full), `state-recorder`/`risk_ladder` (newest-manifest across s
 | `tdd-guard.py` | PreToolUse Write/Edit | форсит TDD per-task (блок `src/main` пока RED-тест задачи `04-test-<id>` не completed) + тест-стратегию (блок `@DataJpaTest`/`@SpringBootTest` при `test_layer=service-unit`) | exit 2 |
 | `eval-guard.py` | PreToolUse Write/Edit | форсит EDD: блок `src/main` пока eval'ы задачи не passed в кэше `evals.json` (read-only; прогон — `run_pending_evals.py`) | exit 2 |
 | `sod-enforcer.py` | PreToolUse Write/Edit/Bash | separation of duties: роль из активного шага манифеста (test не пишет src/main; design/spec не коммитят/пушат/билдят) | exit 2 |
-| `destructive-blocker.py` | PreToolUse `^Bash$` | чёрный список (`rm -rf /`, force-push, DROP…) | exit 2 |
-| `fork-syntax-guard.py` | PreToolUse `^Bash$` | инструктивный блок синтаксиса, который режет нативный сейфти форка (`$(...)`, backticks, `find -exec`, `ls -R`) — вместо молчаливого deny объясняет замену (Glob/Grep/Read) | exit 2 |
+| `destructive-blocker.py` | PreToolUse `run_shell_command` | чёрный список (`rm -rf /`, force-push, DROP…) | exit 2 |
+| `fork-syntax-guard.py` | PreToolUse `run_shell_command` | инструктивный блок синтаксиса, который режет нативный сейфти форка (`$(...)`, backticks, `find -exec`, `ls -R`) — вместо молчаливого deny объясняет замену (Glob/Grep/Read) | exit 2 |
 | `pii-boundary.py` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
-| `evidence-enforcer.py` | PreToolUse `^Bash$` | блок доставки без полного evidence bundle | exit 2 |
+| `state-write-guard.py` | PreToolUse Write/Edit/Bash | запрет прямой записи моделью в control-plane-файлы (`manifest.json`, `_origins`, `gates`, `overrides`, `approvals`, `pipeline.json`) — мутация только через санкц. скрипты | exit 2 |
+| `evidence-enforcer.py` | PreToolUse `run_shell_command` | блок доставки без полного evidence bundle | exit 2 |
 | `inline-phase-guard.py` | PreToolUse Bash/Write/Edit | actor-guard: главный агент не производит артефакты/код/билд subagent-фазы inline (по `agent_type`) | exit 2 |
 | `cost-breaker.py` | Pre/Post/Stop/SubagentStop/UserPromptSubmit | token budget: warn ≥80% (**стоп 120% временно отключён — токены безлимитны**); учёт по фазам + финализация на Stop | нет (warn-only) |
 | `prompt-guard.py` | UserPromptSubmit + PostToolUse(read/fetch) | детект prompt-injection → additionalContext | нет |
@@ -139,25 +140,27 @@ task-plan для full), `state-recorder`/`risk_ladder` (newest-manifest across s
 
 ### Структура хуков (порядок в массивах значим)
 
-**PreToolUse `^Bash$` — sequential:**
+**PreToolUse `run_shell_command` (Bash) — sequential:**
 1. `destructive-blocker` — чёрный список
 2. `fork-syntax-guard` — инструктивный блок синтаксиса, который режет форк (`$(...)`, backticks, `find -exec`, `ls -R`)
 3. `pii-boundary` — PII scope (перехват редиректов `>`/`tee`/`dd of=` в файл)
-4. `cost-breaker` — token budget
-5. `evidence-enforcer` — полнота пакета
-6. `sod-enforcer` — separation of duties (роль фазы: design/spec/jira не коммитят/пушат/билдят)
-7. `inline-phase-guard` — actor: главный агент не билдит/тестит inline в subagent-фазе
-8. `gate-guard` — risk ladder
-9. `log-agent` — аудит (последний, неблокирующий)
+4. `state-write-guard` — запрет прямой записи в control-plane state (редирект/`python -c open()`)
+5. `cost-breaker` — token budget
+6. `evidence-enforcer` — полнота пакета
+7. `sod-enforcer` — separation of duties (роль фазы: design/spec/jira не коммитят/пушат/билдят)
+8. `inline-phase-guard` — actor: главный агент не билдит/тестит inline в subagent-фазе
+9. `gate-guard` — risk ladder
+10. `log-agent` — аудит (последний, неблокирующий)
 
 **PreToolUse `(Write|Edit)` — sequential:**
 1. `pii-boundary` — PII scope
-2. `tdd-guard` — форсинг TDD per-task (RED-тест задачи)
-3. `eval-guard` — форсинг EDD (eval'ы задачи passed)
-4. `sod-enforcer` — separation of duties (роль из активного шага)
-5. `inline-phase-guard` — actor: главный агент не пишет артефакты/код subagent-фазы inline
-6. `gate-guard` — risk ladder
-7. `log-agent` — аудит
+2. `state-write-guard` — запрет прямой записи в manifest/approvals/overrides/gates/_origins/pipeline.json
+3. `tdd-guard` — форсинг TDD per-task (RED-тест задачи)
+4. `eval-guard` — форсинг EDD (eval'ы задачи passed)
+5. `sod-enforcer` — separation of duties (роль из активного шага)
+6. `inline-phase-guard` — actor: главный агент не пишет артефакты/код subagent-фазы inline
+7. `gate-guard` — risk ladder
+8. `log-agent` — аудит
 
 Любой блокирующий может остановить (exit 2) до действия. Логгер — всегда последний и неблокирующий.
 Точный блок — в `settings.hooks.json`. Эта секция пинится `hooks/test_docs_hooks_consistency.py`
@@ -462,6 +465,41 @@ dual-vocabulary, контракты pipeline-state, payload-схема snake_cas
       config-helper → set_criticality → **preflight exit 0**. Пины: `test_config.py`
       (set чистит маркер), `test_init_pipeline_config.py` (update не клобберит + пересборка).
 
+**Аудит логических дыр + исправление (2026-07-04):** проверка по исходникам рантайма
+(qwen-code, локально `gigacode`=alias) выявила, что бо́льшая часть заявленного enforcement
+фактически НЕ исполнялась. Закрыто:
+- [x] **BLOCKER-0: весь блокирующий control-plane не срабатывал (matcher ↔ канон-имя).** Рантайм
+      матчит хуки как `new RegExp(matcher).test(canonicalToolName)`
+      (`hookPlanner.matchesToolName`), где имя КАНОНИЧЕСКОЕ (`run_shell_command`/`write_file`/
+      `edit`), а `Bash`/`Write`/`Edit` — лишь входные алиасы (`TOOL_NAME_ALIASES`). Матчеры были
+      `^Bash$` и `(Write|Edit|WriteFile|NotebookEdit)` → `/^Bash$/.test("run_shell_command")`=false
+      → из execution-plan выпадали ВСЕ deny-first хуки (destructive/pii/sod/inline/gate/tdd/eval/
+      evidence/fork-syntax + PostToolUse prompt-guard). Работали только `*`-хуки (лог/cost/state/
+      phase-gate). Это же объясняет постмортемы «гейт не поймал прод-код» (прогон #3) — гейты не
+      бежали. Пережило «верификацию 2026-07-03», т.к. eval-набор дёргает скрипты хуков напрямую,
+      минуя рантайм-матчинг. Фикс: матчеры на канон-имена (`^(run_shell_command|Bash)$`,
+      `^(write_file|edit|notebook_edit|…)$`, PostToolUse `^(read_file|web_fetch|run_shell_command|…)$`).
+      Пины: `hooks/test_matcher_canonical_names.py`, `preflight._check_matchers_canonical`
+      (валит preflight, если матчер не матчит канон-имя — статическая «firing»-страховка).
+- [x] **BLOCKER-1: state-файлы свободно писались моделью напрямую.** approval-маркеры, manifest,
+      overrides, gates, _origins, pipeline.json — JSON в `ground/` (whitelist pii/gate, R1-auto);
+      провенанс `update.py` обходился прямым `Write .../manifest.json` (все completed) или
+      `Write ground/approvals/<judge>.json` (само-approval). Заявление «эскейп-хатч override_judge
+      закрыт» было неверным: маркер писался тем же Write. Фикс: новый `state-write-guard.py`
+      (deny прямой Write/Edit + shell-редирект/`python -c open()` в control-plane-пути; мутация
+      только санкц. скриптами), `record_approval.py` (единственный легальный писатель approval с
+      провенансом `produced_by:record_approval`), gate-guard засчитывает approval ТОЛЬКО с этим
+      провенансом, `auto_max_risk` клампится ≤ R3 (доставка R4/R5 никогда не авто). Пины:
+      `test_state-write-guard.py` (15), `test_gate-guard.py` (провенанс+handwritten-block).
+- [x] **MAJOR-фиксы блок-хуков** (актуальны после BLOCKER-0): readonly-байпас override
+      (`--reason "…--list"` → токенный `shlex`-парсинг вместо substring); `destructive-blocker`
+      добрал `git push -f`, `shutil.rmtree('/')`, `base64 -d|sh`, `xargs rm`; поправлен ложный блок
+      `--force-with-lease` (позиционный lookahead); `pii-boundary` ловит inline-python запись PII;
+      `gate-guard` не пропускает доставку (push/PR/jira) вне пайплайна при битой policy.
+- [ ] **Незакрытые зоны аудита** (не пройдены — субагенты упали на session-limit): ядро
+      пайплайн-скриптов (обходы `record_gate`/`run_judge`-floor, деривация criticality→risk) и
+      деплой/гигиена git (утечки логов прогонов, дубли реестров). Допройти отдельным заходом.
+
 ## Известные ограничения (из аудита)
 
 - **`additionalContext` только в `hookSpecificOutput`** — рантайм читает контекст-инъекцию ТОЛЬКО из
@@ -489,7 +527,12 @@ dual-vocabulary, контракты pipeline-state, payload-схема snake_cas
   для перечисления/чтения файлов — `Glob`/`Grep`/`Read`, а не `find -exec`/`ls -R`. Это ограничение
   рантайма, мы его не контролируем — обходим выбором тулов, а `fork-syntax-guard.py` перехватывает
   паттерн раньше нативного deny и объясняет модели замену.
-- **Блокировки (exit 2 + stderr) работают надёжно**; Subagent-события срабатывают для тула `agent`.
+- **Блокировки (exit 2 + stderr) работают надёжно — ТОЛЬКО если хук попал в execution-plan.**
+  Попадание решает matcher против КАНОН-имени инструмента (`run_shell_command`/`write_file`/`edit`),
+  не Claude-нотации. Матчер `^Bash$`/`Write|Edit` = хук не вызывается вовсе (была дыра BLOCKER-0,
+  2026-07-04). При апгрейде рантайма/правке `settings.hooks.json` сверять матчеры с канон-именами
+  (`test_matcher_canonical_names.py` / `preflight._check_matchers_canonical`). Subagent-события
+  срабатывают для тула `agent`.
 - **`cost-breaker` сейчас НЕ тормоз** (прогон #3): его `budget.json` показал 42% (`spent 843K/2M`),
   тогда как реальная сессия сожгла 51.8M входных токенов (расхождение ~60×), а хард-стоп 120% отключён.
   Не полагаться на текущий бюджет как на ограничитель стоимости, пока учёт не сверен (см. роадмап C3).
