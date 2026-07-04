@@ -4,7 +4,9 @@
 PDLC v3.5: pii-boundary-check (стр. 153). Матчер: `(Write|Edit|WriteFile|NotebookEdit)` и `^Bash$`
 (перехват редиректов в файл). Если в записываемом содержимом есть PII/секреты (паттерны из
 risk-policy.json `pii_patterns`) И цель — вне разрешённого scope (по умолчанию репо-дерево, кроме
-логов/тестов-фикстур) → deny (R3, fail-closed). Внутри scope — пропуск (лог оставляем хуку-логгеру).
+логов/тестов-фикстур) → deny (R3). Внутри scope — пропуск (лог оставляем хуку-логгеру).
+NB: при внутренней ошибке хук fail-OPEN (не может определить цель/контент → не блокирует) —
+это вторичный слой; первичную защиту рисковых путей форсит gate-guard.
 
 «Scope»: разрешено писать PII только под `**/test*/`, `**/fixtures/`, `ground/` (рабочие данные).
 Запись PII в `src/main`, конфиги, docs — блок (утечка персональных данных в код/спеку).
@@ -41,10 +43,13 @@ def _content(tool_name: str, ti: dict) -> str:
 def _target(tool_name: str, ti: dict) -> str:
     if tool_name in ("Bash", "run_shell_command"):
         cmd = str(ti.get("command") or "")
-        # перенаправление в файл: > >> , tee [-a], dd of=
+        # перенаправление/запись в файл: > >> , tee [-a], dd of=, а также inline-python
+        # (open('path','w'|'a'), Path('path').write_text(...)) — иначе PII писали мимо редиректа.
         m = (re.search(r">>?\s*([\w./~-]+)", cmd)
              or re.search(r"\btee\s+(?:-a\s+)?([\w./~-]+)", cmd)
-             or re.search(r"\bdd\b[^|]*\bof=([\w./~-]+)", cmd))
+             or re.search(r"\bdd\b[^|]*\bof=([\w./~-]+)", cmd)
+             or re.search(r"\bopen\s*\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"][aw]", cmd)
+             or re.search(r"\bPath\(\s*['\"]([^'\"]+)['\"]\s*\)\s*\.write_text", cmd))
         return m.group(1) if m else ""
     return str(ti.get("file_path") or ti.get("path") or ti.get("filename") or "")
 

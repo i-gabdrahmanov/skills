@@ -2,9 +2,10 @@
 name: forgelite
 description: >
   Лёгкая ветка forge для исполнения УЖЕ ПОДГОТОВЛЕННОЙ подзадачи из Jira (есть описание и
-  acceptance criteria) для Java/Spring: grounding → план → TDD RED→GREEN → покрытие →
-  ветка/commit/PR → отчёт в Jira. Без BRD, SDD, тех-дизайна и постановки задач — только
-  исполнение готового тикета. Обычно вызывается роутером (skills/router), когда пользователь
+  acceptance criteria) для Java/Spring: grounding → tech-design по СУЩЕСТВУЮЩЕЙ спеке (source of
+  truth) → TDD RED→GREEN → покрытие → ветка/commit/PR → отчёт в Jira. Без BRD и без написания
+  SDD с нуля, без постановки задач — только исполнение готового тикета (tech-design строится по
+  уже готовой спеке, а не пишется заново). Обычно вызывается роутером (skills/router), когда пользователь
   выбрал путь «готовая задача»; работает и автономно. Триггеры: «выполни задачу из jira»,
   «сделай KIDPPRB-1234», «прогони готовый subtask до PR». Отличие от feature-pipeline —
   тот с нуля (BRD→PR); от minor-defect-fix — тот баг + спека в отдельном репо. Никогда не
@@ -24,11 +25,16 @@ description: >
 >   `ask_user_question` не активны одновременно.
 
 Плоский цикл (feature = ключ Jira; стейт в namespace `forgelite`, отдельно от `feature-pipeline`):
-**Jira → grounding → план → RED → GREEN → покрытие → commit → PR → отчёт**. Ничего
+**Jira → grounding → tech-design по спеке → RED → GREEN → покрытие → commit → PR → отчёт**. Ничего
 необратимого (commit, push, PR, комментарий в Jira) — без явного «да» (Gate 1–4).
 
 Шаги стейта (`lite-*`, чтобы НЕ пересекаться с фазовой машиной full-пути и масками судей):
-`lite-jira → lite-ground → lite-plan → lite-red → lite-green → lite-verify → lite-deliver → lite-report`.
+`lite-jira → lite-ground → lite-design → lite-red → lite-green → lite-verify → lite-deliver → lite-report`.
+
+> **lite ≠ «без дизайна».** Для простой задачи спека (SDD) уже существует — это **source of
+> truth**. `lite-design` строит tech-design/task-plan ПО НЕЙ (скилл `tech-design`, субагент),
+> BRD/SDD заново НЕ пишутся. Путь к спеке — обязательное решение `sources.spec`: пока оно не
+> записано, `gate-guard` блокирует запись фазы `lite-design` (fail-closed). См. §4.
 
 ---
 
@@ -46,7 +52,7 @@ description: >
 |---|---|---|---|
 | Fetch Jira + скоуп-чек | `lite-jira` | главный агент | MCP |
 | Лёгкий grounding | `lite-ground` | reuse или субагент | agent() |
-| План (Gate 1) | `lite-plan` | главный агент | — |
+| Tech-design по спеке (Gate 1) | `lite-design` | субагент (`tech-design`) | agent() |
 | TDD RED | `lite-red` | субагент-тестописатель | agent() |
 | TDD GREEN | `lite-green` | java-spring-dev (субагент) | agent() |
 | Тесты + покрытие | `lite-verify` | субагент-раннер | agent() |
@@ -57,8 +63,9 @@ description: >
 > прогон тестов не пиши inline (заблокирует `inline-phase-guard`; нет SubagentStop → молчат
 > проверки). Субагент ПОСЛЕДНИМ действием сам гоняет свой детерминированный гейт и возвращает
 > JSON с `step_id` и `status` (`completed` только при прохождении гейта). Хук `state-recorder`
-> закрывает шаг по этому статусу. Инлайн-шаги (lite-jira/lite-plan/lite-deliver/lite-report)
-> закрывает главный агент через `update.py`.
+> закрывает шаг по этому статусу. Инлайн-шаги (lite-jira/lite-deliver/lite-report) закрывает
+> главный агент через `update.py`. `lite-design` — субагентная фаза (tech-design; главный агент не
+> пишет tech-design.md/task-plan.json inline — заблокирует `inline-phase-guard`).
 
 ### 1.1. Инициализация (один раз)
 ```
@@ -86,16 +93,19 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py --project <t
 Через MCP получи: summary, description, **acceptance criteria**, issuetype, priority, статус,
 последние 5–10 комментариев, имена вложений.
 
-**Скоуп-чек — детерминированный (ОБЯЗАТЕЛЬНО перед закрытием `lite-jira`).** Сохрани JSON issue
-из MCP в файл и прогони:
+**Скоуп-чек — детерминированный (enforced: `update.py` НЕ закроет `lite-jira` без
+evidence-артефакта от record_gate).** Сохрани JSON issue из MCP в файл и прогони ЧЕРЕЗ РАННЕР:
 ```
-python3 <project>/.gigacode/skills/forgelite/scripts/check_scope.py --issue-json <файл-с-issue.json>
+python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-jira --cmd "python3 <project>/.gigacode/skills/forgelite/scripts/check_scope.py --issue-json <файл-с-issue.json>"
 ```
 - **exit 0** — скоуп ок, продолжай.
-- **exit 3 (ESCALATE)** — СТОП, спроси пользователя: «Задача не похожа на готовую подзадачу
-  (причины в stderr). Продолжить в lite или взять full (feature-pipeline)?» Не решай молча.
-  Если пользователь явно сказал «продолжаем lite» — продолжай.
-- **exit 2** — нечитаемый JSON: перечитай issue из MCP и повтори.
+- **exit 1** (внутри — exit 3 ESCALATE от check_scope, причины в артефакте гейта) — СТОП, спроси
+  пользователя: «Задача не похожа на готовую подзадачу. Продолжить в lite или взять full
+  (feature-pipeline)?» Не решай молча. Если пользователь явно сказал «продолжаем lite» —
+  зафиксируй его согласие и сними гейт (это R4: сначала `record_approval.py --key
+  gate-override-gate-result-lite-jira --approved-by user --reason "..."`, затем
+  `override_judge.py --judge gate-result-lite-jira --reason "..."`), после чего закрывай шаг.
+- Нечитаемый JSON issue — перечитай из MCP и повтори раннер.
 
 Дополнительно останови и спроси сам, если видишь несколько независимых сценариев в одной задаче.
 
@@ -122,11 +132,38 @@ prompt:
 ```
 Файл подхватывает `context-injector` (вкладывает в последующих субагентов). Reuse — закрой инлайн.
 
-## 4. План реализации → `lite-plan` (Gate 1)
-Короткий план из AC: какие файлы/слои, суть изменения (1–3 предложения), какие тесты под AC.
-> **Gate 1:** «Делаем так?» — код начинай только после «да».
+## 4. Tech-design по существующей спеке → `lite-design` (Gate 1)
 
-Закрой `lite-plan`.
+Спека (SDD) для задачи **уже существует** — это source of truth. НЕ пиши BRD/SDD заново.
+
+1. **Зафиксируй путь к спеке** (обязательное решение `sources.spec`). Интерактивно — спроси
+   пользователя «где лежит спецификация задачи?» (`ask_user_question`); headless — путь предзаписан.
+   Запиши артефакт:
+   ```
+   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set sources.spec <путь-к-спеке>
+   ```
+   Пока `sources.spec` не записан, `gate-guard` заблокирует запись фазы `lite-design` (fail-closed).
+   **Если путь не получить интерактивно** (вопрос не отрендерился — headless/форк): НЕ угадывай и
+   НЕ пропускай `lite-design` (это обязательный шаг — `update.py` даст `exit 3`). Остановись и
+   попроси предзапись `config.py set sources.spec <путь>` + перезапуск.
+2. **Субагентом** (`tech-design`) построй `tech-design.md` + `task-plan.json` ПО ЭТОЙ спеке
+   (вход — `sources.spec`, а не свежий `sdd.md`). Главный агент tech-design.md/task-plan.json inline
+   НЕ пишет (заблокирует `inline-phase-guard`). Гейт: `check_taskplan.py` + `check_sdd.py --sdd
+   <sources.spec>` — ЧЕРЕЗ РАННЕР `record_gate.py` (он пишет evidence; `update.py` НЕ закроет
+   `lite-design` без него — слово субагента не доказательство).
+   ```
+   subagent_type: general-purpose
+   prompt: |
+     Ты — tech-design. Прочитай СУЩЕСТВУЮЩУЮ спеку (source of truth) по пути <sources.spec> и
+     grounding-excerpt. Построй tech-design.md + task-plan.json по слоям СТРОГО по этой спеке
+     (sdd_ref якори — на её разделы). НЕ пиши BRD/SDD заново.
+     ПОСЛЕДНИМ действием прогони гейт ЧЕРЕЗ РАННЕР (без него шаг не закроется):
+     python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-design --cmd "python3 <project>/.gigacode/skills/tech-design/scripts/check_taskplan.py <путь-к-task-plan.json> && python3 <project>/.gigacode/skills/tech-design/scripts/check_sdd.py <путь-к-task-plan.json> --sdd <sources.spec>"
+     Верни JSON {"step_id":"lite-design","status":"completed"} только если раннер дал exit 0.
+   ```
+> **Gate 1:** «Дизайн такой?» — к коду только после «да» (или предзаписи в headless).
+
+Субагент закрывает `lite-design` сам (SubagentStop → `state-recorder`).
 
 ## 5. TDD RED — субагент → `lite-red`
 Хук `tdd-guard` не даст писать `src/main/`, пока `lite-red` не закрыт.
@@ -201,7 +238,8 @@ status:"completed" ТОЛЬКО если тесты зелёные И coverage_g
 
 ### 8.1. Коммит (Gate 2)
 Стиль коммитов: `git log -30 --pretty=format:%s`. Сообщение: по стилю, «почему», с ключом Jira,
-**без** `Co-Authored-By`.
+**без** `Co-Authored-By`. Это enforced: на `git push` хук `evidence-enforcer` детерминированно
+проверяет HEAD-коммит (Co-Authored-By → блок; нет ключа Jira → блок) — чинить `git commit --amend`.
 > **Gate 2:** «Коммитим с этим сообщением? (да / правки)».
 `git add` только нужное. Ветка `feature/<JIRA-KEY>` (от default-ветки).
 
@@ -238,8 +276,9 @@ PR через Bitbucket MCP: title = первая строка коммита; d
 - Необратимое (commit/push/PR/Jira) — только после «да» (Gate 2–4).
 - RED/GREEN/прогон — только субагентом (иначе `inline-phase-guard`).
 - Не обходи через `git push --force`/`reset --hard`/`checkout .`.
-- Не бери BRD/SDD/дизайн/постановку задач (это full-путь feature-pipeline) и спеку в отдельном
-  репо (minor-defect-fix).
+- Не пиши BRD и не пиши SDD с нуля, не ставь задачи в Jira (это full-путь feature-pipeline).
+  Tech-design (`lite-design`) строй ТОЛЬКО по существующей спеке (`sources.spec`), а не заново.
+  Спеку в отдельном репо не бери (это minor-defect-fix).
 
 ## Связь
 Ветка forge: вызывается роутером (`skills/router`) при выборе «готовая задача», full-путь —

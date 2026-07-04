@@ -112,8 +112,10 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.p
   python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.py \
       --root "<project>" --pipeline-config "<project>/ground/pipeline.json" --strict
   ```
-- **Тавтологичные тесты** (`quality.tautology_check: true`) — статический детектор пустых/
-  тавтологичных тестов (`assertTrue(true)`, пустое тело, нет ассертов/verify):
+- **Тавтологичные тесты** — статический детектор пустых/тавтологичных тестов
+  (`assertTrue(true)`, пустое тело, нет ассертов/verify). ВШИТ floor'ом в coverage-judge
+  (дефолт ВКЛ; выключение — явное `quality.tautology_check: false`), т.е. форсится гейтом
+  `05-tests` автоматически. Ручной прогон — для ранней обратной связи:
   ```bash
   python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_tautological_tests.py \
       --root "<project>"

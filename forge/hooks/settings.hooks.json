@@ -2,10 +2,11 @@
   "_comment": "Эталон блока hooks для gigacode3 control-plane под PDLC v3.5. Пути используют ${PROJECT_ROOT} — resolve_hook_paths.py подставляет реальный путь. Порядок в массивах значим; блокирующие на PreToolUse идут sequential. Логгер последним. disableAllHooks не трогать.",
   "hooks": {
     "PreToolUse": [
-      {"matcher": "^Bash$", "sequential": true, "hooks": [
+      {"matcher": "^(run_shell_command|Bash)$", "sequential": true, "hooks": [
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/destructive-blocker.py", "name": "destructive-blocker"},
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/fork-syntax-guard.py", "name": "fork-syntax-guard"},
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/pii-boundary.py", "name": "pii-boundary"},
+        {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/state-write-guard.py", "name": "state-write-guard"},
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/cost-breaker.py", "name": "cost-breaker"},
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/evidence-enforcer.py", "name": "evidence-enforcer"},
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/sod-enforcer.py", "name": "sod-enforcer"},
@@ -13,8 +14,9 @@
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/gate-guard.py", "name": "gate-guard"},
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/log-agent.py", "name": "agent-logger"}
       ]},
-      {"matcher": "(Write|Edit|WriteFile|NotebookEdit)", "sequential": true, "hooks": [
+      {"matcher": "^(write_file|edit|notebook_edit|Write|Edit|WriteFile|NotebookEdit)$", "sequential": true, "hooks": [
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/pii-boundary.py", "name": "pii-boundary"},
+        {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/state-write-guard.py", "name": "state-write-guard"},
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/tdd-guard.py", "name": "tdd-guard"},
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/eval-guard.py", "name": "eval-guard"},
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/sod-enforcer.py", "name": "sod-enforcer"},
@@ -27,7 +29,7 @@
       ]}
     ],
     "PostToolUse": [
-      {"matcher": "(Read|ReadFile|Fetch|WebFetch|Bash)", "hooks": [
+      {"matcher": "^(read_file|web_fetch|run_shell_command|Read|ReadFile|Fetch|WebFetch|Bash)$", "hooks": [
         {"type": "command", "command": "python3 ${PROJECT_ROOT}/.gigacode/hooks/prompt-guard.py", "name": "prompt-guard"}
       ]},
       {"matcher": "*", "hooks": [

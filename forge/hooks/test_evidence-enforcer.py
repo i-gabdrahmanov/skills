@@ -5,7 +5,9 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -40,6 +42,56 @@ class TestMain(unittest.TestCase):
     def test_non_delivery_command_passthrough(self):
         """Команда не доставка (ls) → пропуск (0)."""
         self.assertEqual(self._run({"tool_input": {"command": "ls -la"}}), 0)
+
+
+class TestCommitMsgFloor(unittest.TestCase):
+    """Пол сообщения HEAD-коммита перед push: запрет Co-Authored-By (оба потока) и
+    обязательный ключ Jira для forgelite (feature манифеста = ключ)."""
+
+    def _repo(self, msg: str) -> Path:
+        self._tmp = tempfile.TemporaryDirectory()
+        p = Path(self._tmp.name)
+        (p / "f.txt").write_text("x", encoding="utf-8")
+        for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                    ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                     "commit", "-qm", msg]):
+            subprocess.run(cmd, cwd=str(p), capture_output=True, timeout=30)
+        return p
+
+    def tearDown(self):
+        if hasattr(self, "_tmp"):
+            self._tmp.cleanup()
+
+    def _lite_manifest(self, p: Path, key: str):
+        d = p / "ground" / "statements" / "forgelite" / key
+        d.mkdir(parents=True)
+        (d / "manifest.json").write_text(json.dumps({"steps": []}), encoding="utf-8")
+
+    def test_co_authored_by_blocked(self):
+        p = self._repo("KID-1: fix\n\nCo-Authored-By: Bot <b@b>")
+        deny = mod._commit_msg_floor(p)
+        self.assertIsNotNone(deny)
+        self.assertIn("Co-Authored-By", deny)
+
+    def test_clean_message_ok(self):
+        p = self._repo("KID-1: fix NPE in mapper")
+        self.assertIsNone(mod._commit_msg_floor(p))
+
+    def test_lite_without_jira_key_blocked(self):
+        p = self._repo("fix mapper")
+        self._lite_manifest(p, "KID-7")
+        deny = mod._commit_msg_floor(p)
+        self.assertIsNotNone(deny)
+        self.assertIn("KID-7", deny)
+
+    def test_lite_with_jira_key_ok(self):
+        p = self._repo("KID-7: fix mapper")
+        self._lite_manifest(p, "KID-7")
+        self.assertIsNone(mod._commit_msg_floor(p))
+
+    def test_no_git_skipped(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(mod._commit_msg_floor(Path(d)))
 
 
 if __name__ == "__main__":

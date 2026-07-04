@@ -17,7 +17,8 @@ spec = importlib.util.spec_from_file_location("preflight", HOOKS / "preflight.py
 preflight = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(preflight)
 
-ESSENTIAL = ["gate-guard.py", "phase-gate.py", "state-recorder.py", "eval-guard.py", "log-agent.py"]
+ESSENTIAL = ["gate-guard.py", "phase-gate.py", "state-recorder.py", "eval-guard.py",
+             "state-write-guard.py", "log-agent.py"]
 
 
 def _hooks_block(root: Path, names: list[str]) -> dict:
@@ -105,6 +106,30 @@ class TestPreflight(unittest.TestCase):
             res = preflight.preflight(str(tmp))
             self.assertFalse(res["passed"])
             self.assertTrue(any("risk-policy" in e for e in res["errors"]), res["errors"])
+
+
+class TestMatcherCanonical(unittest.TestCase):
+    """BLOCKER-0 на уровне preflight: матчеры блок-цепочек обязаны матчить канон-имена рантайма."""
+
+    @staticmethod
+    def _block(bash_m: str, write_m: str) -> dict:
+        return {"PreToolUse": [
+            {"matcher": bash_m, "hooks": [{"command": "python3 x/destructive-blocker.py"}]},
+            {"matcher": write_m, "hooks": [{"command": "python3 x/tdd-guard.py"}]},
+        ]}
+
+    def test_claude_notation_matchers_flagged(self):
+        errs = preflight._check_matchers_canonical(
+            self._block("^Bash$", "(Write|Edit|WriteFile|NotebookEdit)"), "settings.json")
+        self.assertEqual(len(errs), 2, errs)
+        self.assertTrue(any("run_shell_command" in e for e in errs))
+
+    def test_canonical_matchers_ok(self):
+        errs = preflight._check_matchers_canonical(
+            self._block("^(run_shell_command|Bash)$",
+                        "^(write_file|edit|notebook_edit|Write|Edit|WriteFile|NotebookEdit)$"),
+            "settings.json")
+        self.assertEqual(errs, [])
 
 
 if __name__ == "__main__":

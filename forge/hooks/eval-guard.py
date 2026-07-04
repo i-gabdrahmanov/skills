@@ -68,8 +68,11 @@ def _is_src_main(target_path: str | None) -> bool:
 
 
 def _target_path(tool_name: str, tool_input: dict) -> str | None:
-    if tool_name in ("Write", "WriteFile", "Edit"):
-        return (tool_input.get("file_path") or "").strip()
+    # канон-имена рантайма (write_file/edit/notebook_edit) + Claude-алиасы — иначе на реальном
+    # рантайме (tool_name=write_file/edit) target был бы None и eval-guard молча fail-open'ил.
+    if tool_name in ("Write", "WriteFile", "Edit", "edit", "write_file",
+                     "NotebookEdit", "notebook_edit"):
+        return (tool_input.get("file_path") or tool_input.get("path") or "").strip()
     return None
 
 

@@ -62,10 +62,23 @@ class TGateOverride(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             appr = Path(td) / "ground" / "approvals"
             appr.mkdir(parents=True)
+            # маркер засчитывается только с провенансом record_approval (как пишет record_approval.py)
+            (appr / "gate-override-step-reopen-04-build-T1.json").write_text(
+                json.dumps({"produced_by": "record_approval", "approved_by": "user",
+                            "reason": "ok"}), encoding="utf-8")
+            r = _run(self.CMD, td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_handwritten_approval_without_provenance_blocked(self):
+        # BLOCKER-1 backstop: маркер БЕЗ produced_by:"record_approval" (самовыписанный) не снимает гейт
+        with tempfile.TemporaryDirectory() as td:
+            appr = Path(td) / "ground" / "approvals"
+            appr.mkdir(parents=True)
             (appr / "gate-override-step-reopen-04-build-T1.json").write_text(
                 json.dumps({"approved_by": "user", "reason": "ok"}), encoding="utf-8")
             r = _run(self.CMD, td)
-            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.returncode, 2, "рукописный маркер без провенанса не должен снимать гейт")
+            self.assertIn("провенанс", r.stderr.lower())
 
     def test_foreign_approval_does_not_unlock(self):
         with tempfile.TemporaryDirectory() as td:
@@ -75,6 +88,16 @@ class TGateOverride(unittest.TestCase):
             r = _run(self.CMD, td)
             self.assertEqual(r.returncode, 2, "approval чужого судьи не должен снимать этот гейт")
 
+    def test_reason_text_containing_list_is_not_readonly(self):
+        # M2: --list ВНУТРИ значения --reason не должен трактоваться как readonly-флаг (обход)
+        with tempfile.TemporaryDirectory() as td:
+            cmd = ("python3 .gigacode/skills/pipeline-state/scripts/override_judge.py "
+                   "--judge step-reopen-04-build-T1 --feature f1 --step-id 04-build-T1 "
+                   "--reason \"cleanup --list marker\"")
+            r = _run(cmd, td)
+            self.assertEqual(r.returncode, 2,
+                             "--list в тексте --reason не снимает approval-гейт")
+
     def test_list_and_remove_are_free(self):
         with tempfile.TemporaryDirectory() as td:
             base = "python3 .gigacode/skills/pipeline-state/scripts/override_judge.py --feature f1"
@@ -83,6 +106,42 @@ class TGateOverride(unittest.TestCase):
             r = _run(f"{base} --judge coverage-judge --remove", td)
             self.assertEqual(r.returncode, 0,
                              f"--remove (восстановление enforcement) не гейтится: {r.stderr}")
+
+
+def _write_run(file_path: str, cwd: str):
+    payload = json.dumps({"hook_event_name": "PreToolUse", "cwd": cwd,
+                          "tool_name": "write_file", "tool_input": {"file_path": file_path}})
+    return subprocess.run([sys.executable, str(HOOK)], input=payload,
+                          capture_output=True, text=True, timeout=30)
+
+
+class TRequiredDecisions(unittest.TestCase):
+    """Thrust 1 fail-closed: продуктивная запись фазы блокируется без записанного решения."""
+
+    @staticmethod
+    def _mk(td: str, spec: str | None = None):
+        d = Path(td) / "ground" / "statements" / "forgelite" / "f1"
+        d.mkdir(parents=True)
+        (d / "manifest.json").write_text(
+            json.dumps({"steps": [{"id": "lite-design", "status": "in_progress"}]}),
+            encoding="utf-8")
+        cfg = {"autonomy": {"criticality": "medium", "auto_max_risk": "R2"}}
+        if spec:
+            cfg["sources"] = {"spec": spec}
+        (Path(td) / "ground" / "pipeline.json").write_text(json.dumps(cfg), encoding="utf-8")
+
+    def test_write_blocked_without_required_decision(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._mk(td)
+            r = _write_run("docs/feature-pipeline/f1/tech-design.md", td)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("sources.spec", r.stderr)
+
+    def test_write_passes_when_decision_recorded(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._mk(td, spec="docs/feature-pipeline/f1/existing-spec.md")
+            r = _write_run("docs/feature-pipeline/f1/tech-design.md", td)
+            self.assertEqual(r.returncode, 0, r.stderr)
 
 
 if __name__ == "__main__":

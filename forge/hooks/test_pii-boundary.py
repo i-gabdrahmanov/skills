@@ -9,12 +9,20 @@ importlib (ловит регрессии синтаксиса/импорта) и
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 import unittest
 from pathlib import Path
 
 HOOK = Path(__file__).resolve().parent / "pii-boundary.py"
+
+
+def _run(tool_name: str, tool_input: dict):
+    payload = json.dumps({"hook_event_name": "PreToolUse", "cwd": ".",
+                          "tool_name": tool_name, "tool_input": tool_input})
+    return subprocess.run([sys.executable, str(HOOK)], input=payload,
+                          capture_output=True, text=True, timeout=30)
 
 
 class T(unittest.TestCase):
@@ -28,6 +36,26 @@ class T(unittest.TestCase):
     def test_failopen_empty_stdin(self):
         r = subprocess.run([sys.executable, str(HOOK)], input="",
                            capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+
+class TPythonWriteVector(unittest.TestCase):
+    """M5: запись PII через inline-python (без shell-редиректа) — раньше проходила мимо _target."""
+
+    def test_block_open_write_pii_to_src_main(self):
+        cmd = "python3 -c \"open('src/main/java/X.java','w').write('user@example.com')\""
+        r = _run("run_shell_command", {"command": cmd})
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_pathlib_write_text_pii(self):
+        cmd = ("python3 -c \"from pathlib import Path; "
+               "Path('src/main/X.java').write_text('AKIA1234567890ABCDEF')\"")
+        r = _run("run_shell_command", {"command": cmd})
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_allow_pii_into_test_scope(self):
+        cmd = "python3 -c \"open('src/test/Fixtures.java','w').write('user@example.com')\""
+        r = _run("run_shell_command", {"command": cmd})
         self.assertEqual(r.returncode, 0, r.stderr)
 
 

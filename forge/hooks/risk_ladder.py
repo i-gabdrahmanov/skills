@@ -76,19 +76,58 @@ def pipeline_cfg(root: Path) -> dict:
         return {}
 
 
+# Потолок авто-прохода. Доставка (R4 push/PR, R5) и чувствительные пути НИКОГДА не проходят
+# авто, даже если pipeline.json выставит auto_max_risk=R4/R5 (защита от прямой правки конфига —
+# см. BLOCKER-1: пусть state-write-guard и блокирует Write в pipeline.json, кламп — второй слой).
+_AUTO_MAX_CEILING = "R3"
+
+
 def auto_max_risk(root: Path) -> str:
     """Порог авто-прохода: из pipeline.json autonomy.auto_max_risk (выбор критичности фичи),
-    иначе из risk-policy.json autonomy_auto_max, иначе R1."""
+    иначе из risk-policy.json autonomy_auto_max, иначе R1. Клампится потолком R3 — R4/R5 всегда
+    требуют requirement (approval+evidence), обойти авто-порогом нельзя."""
     cfg = (pipeline_cfg(root).get("autonomy") or {})
     lvl = cfg.get("auto_max_risk")
     if isinstance(lvl, str) and lvl in _LEVELS:
-        return lvl
-    return load_policy().get("autonomy_auto_max", "R1")
+        resolved = lvl
+    else:
+        resolved = load_policy().get("autonomy_auto_max", "R1")
+        if resolved not in _LEVELS:
+            resolved = "R1"
+    if level_order(resolved) > level_order(_AUTO_MAX_CEILING):
+        return _AUTO_MAX_CEILING
+    return resolved
 
 
 def criticality_set(root: Path) -> bool:
     """Выбрана ли критичность фичи (autonomy.criticality в pipeline.json)."""
     return bool((pipeline_cfg(root).get("autonomy") or {}).get("criticality"))
+
+
+def config_get(root: Path, dotpath: str):
+    """Значение по dot-path из pipeline.json (напр. 'sources.spec'); None если нет."""
+    cur = pipeline_cfg(root)
+    for part in str(dotpath).split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(part)
+    return cur
+
+
+def active_step_id(root: Path) -> str | None:
+    """id активного (in_progress) шага самого свежего манифеста активной фичи.
+    Единый резолвер для хуков (был скопирован в sod-enforcer/inline-phase-guard)."""
+    p = active_manifest(root)
+    if not p:
+        return None
+    try:
+        man = json.loads(p.read_text(encoding="utf-8"))
+        for s in man.get("steps", []):
+            if s.get("status") == "in_progress":
+                return s.get("id") or None
+    except Exception:
+        return None
+    return None
 
 
 def project_root(cwd: str) -> Path:

@@ -7,9 +7,11 @@ description: >
   на общем control-plane (один .gigacode, одни хуки). Используй этот скилл, когда запрос
   неоднозначен между «сделать фичу end-to-end» и «выполнить готовый тикет»: «сделай задачу
   из jira», «прогони KIDPPRB-1234», «нужно реализовать <фичу/задачу> до PR», «запусти forge».
-  Если пользователь ЯВНО просит полный цикл с BRD/анализом — можно сразу feature-pipeline;
-  если явно «выполни готовую подзадачу» — сразу forgelite; во всех остальных случаях —
-  спроси через этот роутер. Роутер сам не пишет код и не трогает Jira — только выбирает
+  Упоминание НАЗВАНИЯ харнеса («через feature pipeline / forge / фичепайплайн») — это НЕ выбор
+  пути full, а просто «прогони через forge»: всё равно классифицируй. Сигнал full — только явное
+  «с нуля / собери требования / нет тикета / нужен BRD/анализ». Есть Jira-ключ + «сделай задачу/
+  фичу [KEY]» и спека уже существует → скорее lite (tech-design по готовой спеке). Во всех
+  неоднозначных случаях — спроси. Роутер сам не пишет код и не трогает Jira — только выбирает
   путь, выставляет конфиг и делегирует.
 ---
 
@@ -26,23 +28,35 @@ description: >
   ```
 
 ## 1. Выбор пути (ПЕРВОЕ действие)
+
+> **Путь — это ОБЯЗАТЕЛЬНОЕ решение (`pipeline.mode`), а не догадка.** Порядок: (1) если
+> `pipeline.mode` уже записан в `pipeline.json` (headless-предзапись) — используй его, не
+> переспрашивай; (2) иначе спроси `ask_user_question`; (3) если вопрос не отрендерился (headless/
+> форк — пустой ответ), НЕ угадывай и НЕ уходи в full по названию харнеса: остановись и попроси
+> предзапись `config.py set pipeline.mode lite|full` + перезапуск. «feature pipeline» в промпте
+> ≠ full.
+
 Спроси пользователя (`ask_user_question`) — до любого субагента/агента:
 
 > **Что делаем?**
 > - **full** — фича/изменение С НУЛЯ: собрать требования (BRD), спроектировать (SDD/tech-design),
 >   завести задачи в Jira, реализовать и довести до PR. Путь `feature-pipeline`.
 > - **lite** — исполнить УЖЕ ПОДГОТОВЛЕННУЮ подзадачу из Jira (есть описание + acceptance
->   criteria): grounding → план → TDD → покрытие → PR → отчёт. Путь `forgelite`.
+>   criteria) по СУЩЕСТВУЮЩЕЙ спеке: grounding → tech-design по спеке → TDD → покрытие → PR →
+>   отчёт. Путь `forgelite`.
 
 Подсказки для рекомендации (не решай молча, но можешь предложить):
-- Есть ключ Jira и это Sub-task/Task/Bug с внятными AC, один сценарий → скорее **lite**.
-- Свободная идея, Story/Epic, нет AC, несколько сценариев, нужен анализ/дизайн → **full**.
+- Есть ключ Jira и это Sub-task/Task/Bug с внятными AC, спека уже есть, один сценарий → **lite**.
+- Свободная идея, Story/Epic, нет AC/нет спеки, несколько сценариев, нужен BRD с нуля → **full**.
+- Просто назвали «feature pipeline / forge» без «с нуля/BRD» — это НЕ сигнал full; классифицируй по сути.
 
 ## 2. Делегирование
 
 ### Выбран **lite**
-1. Выстави lite-конфиг (один общий `.gigacode`; `--project` ДО `set`; `auto_max_risk` sensitive → `--confirm`):
+1. Выстави lite-конфиг (один общий `.gigacode`; `--project` ДО `set`; `auto_max_risk` sensitive → `--confirm`).
+   **`pipeline.mode` — записать первым** (артефакт решения о пути, universal-режим fail-closed):
    ```
+   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set pipeline.mode lite
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set autonomy.auto_max_risk R2 --confirm
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set autonomy.criticality medium
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set quality.eval_enabled false
@@ -52,7 +66,10 @@ description: >
    Дальше веди задачу по нему (стейт в namespace `forgelite`).
 
 ### Выбран **full**
-1. Не переопределяй autonomy — у full свой гейт критичности (после BRD).
+1. Запиши путь и не переопределяй autonomy — у full свой гейт критичности (после BRD):
+   ```
+   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set pipeline.mode full
+   ```
 2. Прочитай и строго следуй: `read_file("<project>/.gigacode/skills/feature-pipeline/SKILL.md")`.
    Дальше веди фичу по нему (стейт в namespace `feature-pipeline`).
 

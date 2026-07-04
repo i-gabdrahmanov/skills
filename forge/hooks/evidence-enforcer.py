@@ -28,6 +28,39 @@ _DELIVER = re.compile(
     re.I,
 )
 
+_PUSH = re.compile(r"\bgit\s+push\b", re.I)
+_JIRA_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]*-\d+$")
+
+
+def _commit_msg_floor(root: Path) -> str | None:
+    """Детерминированный пол сообщения HEAD-коммита перед push (None — ок).
+
+    Оба потока запрещают трейлер Co-Authored-By в рабочих репо; lite (forgelite) дополнительно
+    требует ключ Jira в сообщении (feature манифеста = ключ). Best-effort: нет HEAD/git —
+    пропуск (push сам упадёт), жёсткая часть доставки — evidence ниже."""
+    try:
+        r = subprocess.run(["git", "log", "-1", "--pretty=%B"], cwd=str(root),
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            return None
+        msg = r.stdout or ""
+    except Exception:
+        return None
+    if re.search(r"(?i)co-authored-by", msg):
+        return ("сообщение HEAD-коммита содержит 'Co-Authored-By' — стиль forge запрещает "
+                "трейлер в рабочих репо. Поправь: git commit --amend (убери трейлер), затем push.")
+    try:
+        import risk_ladder as _R
+        mp = _R.active_manifest(root)
+        feature = mp.parent.name if mp else ""
+        skill = mp.parent.parent.name if mp else ""
+    except Exception:
+        return None
+    if skill == "forgelite" and _JIRA_KEY_RE.match(feature) and feature not in msg:
+        return (f"сообщение HEAD-коммита не содержит ключ Jira {feature} — lite-доставка требует "
+                f"ключ задачи в сообщении. Поправь: git commit --amend, затем push.")
+    return None
+
 
 def _project_root(cwd: str) -> Path:
     try:
@@ -61,6 +94,13 @@ def main() -> int:
             return 0
         deliver = True
         root = _project_root(data.get("cwd", ""))
+
+        # Пол сообщения коммита (только git push — коммит уже существует):
+        # Co-Authored-By запрещён; forgelite требует ключ Jira в сообщении.
+        if _PUSH.search(cmd):
+            deny = _commit_msg_floor(root)
+            if deny:
+                return _block(deny)
 
         # Lite-ветка (forgelite): task-plan нет — доставку гейтим по шагам манифеста
         # (lite-green + lite-verify completed). Активный манифест резолвит risk_ladder (newest).

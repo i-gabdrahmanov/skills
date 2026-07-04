@@ -30,9 +30,10 @@ try:
 except Exception:  # pragma: no cover
     _R = None
 
-# Команда сборки/тестов — Gradle ИЛИ Maven. Роль build/test закрыта для spec/design/jira-фаз;
-# раньше распознавался только `./gradlew`, и на Maven-проекте SoD-кап для `mvn` не срабатывал (P1-16).
-BUILD_CMD_RE = r"(?:\./gradlew\s+|\bmvn\b)"
+# Команда сборки/тестов/линта — Gradle ИЛИ Maven ИЛИ standalone-линтер. Роль build/test закрыта
+# для spec/design/jira-фаз; раньше распознавался только `./gradlew` (на Maven `mvn` не срабатывал,
+# P1-16), + standalone checkstyle/ktlint/detekt/spotless (checkstyle inline в дизайн-фазе).
+BUILD_CMD_RE = r"(?:\./gradlew\s+|\bmvn\b|\b(?:checkstyle|ktlint|detekt|spotless)\b)"
 
 # Роли и их разрешённые действия
 # role → { allowed_path_prefixes, blocked_commands, blocked_path_patterns }
@@ -104,6 +105,7 @@ STEP_ROLE = {
     "06-spec": "spec",
     "06-": "spec",
     # Lite-ветка (forgelite): плоские шаги lite-*.
+    "lite-design": "design",
     "lite-red": "test",
     "lite-green": "dev",
     "lite-verify": "test",
@@ -139,10 +141,12 @@ def _detect_role(root: Path) -> str | None:
 
 
 def _target_path(tool_name: str, tool_input: dict) -> str:
-    """Извлекает целевой путь из tool_input."""
-    if tool_name in ("Write", "WriteFile", "Edit"):
-        return tool_input.get("file_path", "")
-    if tool_name == "Bash":
+    """Извлекает целевой путь из tool_input. Канон-имена рантайма (write_file/edit/notebook_edit,
+    run_shell_command) + Claude-алиасы — иначе роль-блок на записи молча не срабатывал."""
+    if tool_name in ("Write", "WriteFile", "Edit", "edit", "write_file",
+                     "NotebookEdit", "notebook_edit"):
+        return tool_input.get("file_path") or tool_input.get("path") or ""
+    if tool_name in ("Bash", "run_shell_command"):
         return tool_input.get("command", "")
     return ""
 

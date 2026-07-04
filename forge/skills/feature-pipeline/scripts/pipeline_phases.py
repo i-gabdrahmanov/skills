@@ -88,18 +88,32 @@ DELIVER_STEP_PREFIX = "07-deliver-"  # 07-deliver-<taskId> — доставка 
 # Фазы, ОБЯЗАННЫЕ исполняться субагентом (не inline). Совпадает с префиксами шагов.
 # Хвост lite-* — плоские шаги lite-ветки (forgelite): RED/GREEN/verify тоже идут субагентом.
 SUBAGENT_PHASE_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
-                           "lite-red", "lite-green", "lite-verify")
+                           "lite-design", "lite-red", "lite-green", "lite-verify")
 
 # Фазы, закрытие которых требует gate-result артефакта (gates/<step_id>.json от record_gate.py):
 # «шаг закрыт, потому что детерминированный гейт РЕАЛЬНО прошёл», а не потому что субагент
-# вернул status:"completed". Подмножество SUBAGENT_PHASE_PREFIXES — только код/тесты/сборка.
+# вернул status:"completed". Код/тесты/сборка + lite-контроль: lite-jira (скоуп-чек check_scope —
+# иначе его молча пропускали) и lite-design (check_taskplan + check_sdd по sources.spec — иначе
+# шаг закрывался со слов субагента: судей у lite-* нет по дизайну, evidence — единственный пол).
 GATE_RESULT_PREFIXES = ("04-test", "04-build", "05-tests",
-                        "lite-red", "lite-green", "lite-verify")
+                        "lite-jira", "lite-design", "lite-red", "lite-green", "lite-verify")
 
 
 def requires_gate_result(step_id) -> bool:
     """Требует ли закрытие шага evidence-артефакта детерминированного гейта."""
     return isinstance(step_id, str) and step_id.startswith(GATE_RESULT_PREFIXES)
+
+
+# Обязательные шаги: их НЕЛЬЗЯ тихо пропустить (status=skipped) без override — иначе fallback
+# «не смог спросить → пропущу фазу» тихо выкидывает качество-гейты (Thrust 1: fallback=STOP).
+# grounding/brd/report сюда НЕ входят (grounding легитимно reuse-skip, report — пост-доставка).
+# lite-design уже в SUBAGENT_PHASE_PREFIXES (tech-design обязан идти субагентом).
+REQUIRED_STEP_PREFIXES = SUBAGENT_PHASE_PREFIXES
+
+
+def requires_no_silent_skip(step_id) -> bool:
+    """True — шаг обязательный, skip только через override (иначе exit 3 ESCALATE)."""
+    return isinstance(step_id, str) and step_id.startswith(REQUIRED_STEP_PREFIXES)
 
 
 def _task_id_after(step_id, prefix: str):

@@ -66,5 +66,143 @@ class Ingest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
 
+GOOD_BRD = """# БТ: статус заказа в личном кабинете
+
+## Контекст и проблема
+Клиенты не видят текущий статус своего заказа и обращаются в поддержку. Операторы
+перегружены однотипными вопросами «где мой заказ», среднее время ответа растёт,
+удовлетворённость падает. Бизнес хочет разгрузить поддержку и дать клиенту прозрачность.
+
+## Цели
+Снизить долю обращений о статусе заказа, сократить время ответа поддержки и повысить
+удовлетворённость клиентов за счёт самостоятельного отслеживания заказа.
+
+## Требования и сценарии
+Пользователь в личном кабинете видит актуальный статус каждого своего заказа. При смене
+этапа обработки статус обновляется без участия оператора. История смен статусов доступна
+клиенту в карточке заказа.
+
+## Критерии приёмки
+Статус отображается для всех типов заказов. Обновление видно клиенту не позднее чем через
+минуту после смены этапа. Доля обращений о статусе снижается по данным поддержки.
+"""
+
+
+class BrdIngestFloor(unittest.TestCase):
+    """Ингест LLM-вердикта brd применяет детерминированный пол (check_brd + check_brd_doc):
+    штамп «PASS» от LLM-судьи на мусорном БТ больше не сохраняется как passed:true
+    (раньше update.py закрывал 00-brd, ни разу не выполнив детерминированные проверки)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.proj = Path(self._tmp.name)
+        self.fdir = self.proj / "docs/feature-pipeline/feat"
+        self.fdir.mkdir(parents=True)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _verdict(self):
+        p = self.proj / "ground/statements/feature-pipeline/feat/judges/brd-judge.json"
+        return json.loads(p.read_text()) if p.exists() else None
+
+    def _ingest_llm_pass(self):
+        return _run(["brd", "feat", "--from-output", "-", "--project-root", self.proj],
+                    self.proj,
+                    stdin=json.dumps({"passed": True, "blocking_issues": [],
+                                      "summary": "великолепный БТ"}))
+
+    def test_llm_pass_on_trash_brd_fails(self):
+        (self.fdir / "brd.md").write_text("Сделать хорошо и быстро.", encoding="utf-8")
+        r = self._ingest_llm_pass()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertFalse(self._verdict()["passed"])
+
+    def test_llm_pass_on_missing_brd_fails(self):
+        r = self._ingest_llm_pass()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertFalse(self._verdict()["passed"])
+
+    def test_llm_pass_on_good_brd_passes_and_recheck_structural(self):
+        (self.fdir / "brd.md").write_text(GOOD_BRD, encoding="utf-8")
+        r = self._ingest_llm_pass()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(self._verdict()["passed"])
+        # recheck пересчитывает тот же детерминированный слой
+        r2 = _run(["brd", "feat", "--recheck", "--project-root", self.proj], self.proj)
+        self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+
+    def test_recheck_is_structural_on_trash(self):
+        (self.fdir / "brd.md").write_text("Короткая заглушка без секций.", encoding="utf-8")
+        r = _run(["brd", "feat", "--recheck", "--project-root", self.proj], self.proj)
+        self.assertNotEqual(r.returncode, 0, "recheck обязан валить структурно-мусорный БТ")
+        self.assertFalse(self._verdict()["passed"])
+
+    def test_llm_fail_stays_fail_on_good_brd(self):
+        # пол только ужесточает: детерминированный PASS не спасает LLM-FAIL
+        (self.fdir / "brd.md").write_text(GOOD_BRD, encoding="utf-8")
+        r = _run(["brd", "feat", "--from-output", "-", "--project-root", self.proj],
+                 self.proj, stdin=json.dumps({"passed": False,
+                                              "blocking_issues": ["написано как спека"]}))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertFalse(self._verdict()["passed"])
+
+
+class HybridIngestFloor(unittest.TestCase):
+    """build/delivery — гибриды merges_saved: на ингесте LLM-вердикт сохраняется, затем
+    check_build/check_delivery читают его и применяют детерминированный пол (stubs/секреты).
+    Раньше пол применялся только на необязательном --recheck."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.proj = Path(self._tmp.name)
+        (self.proj / "docs/feature-pipeline/feat").mkdir(parents=True)
+        self.src = self.proj / "src/main/java/App.java"
+        self.src.parent.mkdir(parents=True)
+        self.src.write_text("class App {}\n", encoding="utf-8")
+        for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                    ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                     "commit", "-qm", "init"]):
+            subprocess.run(cmd, cwd=str(self.proj), capture_output=True, timeout=30)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _verdict(self, judge):
+        p = self.proj / "ground/statements/feature-pipeline/feat/judges" / f"{judge}.json"
+        return json.loads(p.read_text()) if p.exists() else None
+
+    def _ingest(self, phase):
+        return _run([phase, "feat", "--from-output", "-", "--project-root", self.proj],
+                    self.proj, stdin=json.dumps({"passed": True, "blocking_issues": [],
+                                                 "summary": "LLM: всё отлично"}))
+
+    def test_build_llm_pass_with_stub_fails(self):
+        self.src.write_text(
+            "class App { void x() { throw new UnsupportedOperationException(); } }\n",
+            encoding="utf-8")
+        r = self._ingest("build")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertFalse(self._verdict("build-judge")["passed"])
+
+    def test_build_llm_pass_clean_passes(self):
+        r = self._ingest("build")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(self._verdict("build-judge")["passed"])
+
+    def test_delivery_llm_pass_with_secret_fails(self):
+        self.src.write_text(
+            'class App { String password = "P@ssw0rd12345"; }\n', encoding="utf-8")
+        r = self._ingest("delivery")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertFalse(self._verdict("delivery-judge")["passed"])
+
+    def test_eval_llm_pass_without_plan_fails(self):
+        # standalone-пол eval: LLM-PASS без eval-plan.json не сохраняется как passed:true
+        r = self._ingest("eval")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertFalse(self._verdict("eval-judge")["passed"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
