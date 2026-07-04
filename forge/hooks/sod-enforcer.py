@@ -30,9 +30,10 @@ try:
 except Exception:  # pragma: no cover
     _R = None
 
-# Команда сборки/тестов — Gradle ИЛИ Maven. Роль build/test закрыта для spec/design/jira-фаз;
-# раньше распознавался только `./gradlew`, и на Maven-проекте SoD-кап для `mvn` не срабатывал (P1-16).
-BUILD_CMD_RE = r"(?:\./gradlew\s+|\bmvn\b)"
+# Команда сборки/тестов/линта — Gradle ИЛИ Maven ИЛИ standalone-линтер. Роль build/test закрыта
+# для spec/design/jira-фаз; раньше распознавался только `./gradlew` (на Maven `mvn` не срабатывал,
+# P1-16), + standalone checkstyle/ktlint/detekt/spotless (checkstyle inline в дизайн-фазе).
+BUILD_CMD_RE = r"(?:\./gradlew\s+|\bmvn\b|\b(?:checkstyle|ktlint|detekt|spotless)\b)"
 
 # Роли и их разрешённые действия
 # role → { allowed_path_prefixes, blocked_commands, blocked_path_patterns }

@@ -20,12 +20,16 @@ from pathlib import Path
 HOOK = Path(__file__).resolve().parent / "log-agent.py"
 
 
-def _run_isolated(payload: str, td: str):
+def _run_isolated(payload: str, td: str, extra_env: dict | None = None):
     """Запуск хука с ПОЛНОЙ изоляцией записи. log-agent выводит run-dir из git-toplevel
     cwd, а кросс-прогонный архив — из расположения ФАЙЛА хука; без tmp-cwd и
     GIGACODE_AILOG_ARCHIVE смоук-запуск замусоривал боевой ai-logs-archive/ all-null
     записями и создавал ground/ в чужом репозитории (git-toplevel каталога запуска тестов)."""
     env = {**os.environ, "GIGACODE_AILOG_ARCHIVE": str(Path(td) / "archive")}
+    # изоляция от возможного GIGACODE_RUN_ID в окружении разработчика
+    env.pop("GIGACODE_RUN_ID", None)
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run([sys.executable, str(HOOK)], input=payload,
                           capture_output=True, text=True, timeout=30,
                           cwd=td, env=env)
@@ -63,6 +67,17 @@ class T(unittest.TestCase):
             rec = json.loads(rec_lines[-1])
             self.assertEqual(rec["event"], "PreToolUse")
             self.assertEqual(rec["tool_name"], "Bash")
+
+    def test_run_id_env_overrides_dir(self):
+        # Thrust 4: GIGACODE_RUN_ID даёт стабильный каталог прогона независимо от session_id
+        with tempfile.TemporaryDirectory() as td:
+            base = {"hook_event_name": "PreToolUse", "session_id": "sessAAAA",
+                    "tool_name": "Bash", "tool_input": {"command": "echo hi"}, "cwd": td}
+            r = _run_isolated(json.dumps(base), td, extra_env={"GIGACODE_RUN_ID": "myrun42"})
+            self.assertEqual(r.returncode, 0, r.stderr)
+            dirs = [p.name for p in (Path(td) / "ground" / "ai-logs").glob("run-*")]
+            self.assertIn("run-myrun42", dirs)
+            self.assertNotIn("run-sessAAAA", dirs)  # env приоритетнее session_id
 
 
 if __name__ == "__main__":

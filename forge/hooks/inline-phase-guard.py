@@ -55,8 +55,10 @@ except Exception:
     def _requires_subagent(step_id) -> bool:
         return isinstance(step_id, str) and step_id.startswith(tuple(_SUBAGENT_PREFIXES))
 
-# Команда сборки/тестов — Gradle ИЛИ Maven (как в sod-enforcer.BUILD_CMD_RE).
-BUILD_CMD_RE = r"(?:\./gradlew\s+|\bmvn\b)"
+# Команда сборки/тестов/линта — Gradle ИЛИ Maven ИЛИ standalone-линтер (checkstyle/ktlint/…).
+# Gradle/Maven-таск (напр. `./gradlew checkstyleMain`) уже покрыт `./gradlew`; standalone-инструмент
+# добавлен явно, чтобы «checkstyle inline» ловился независимо от способа запуска.
+BUILD_CMD_RE = r"(?:\./gradlew\s+|\bmvn\b|\b(?:checkstyle|ktlint|detekt|spotless)\b)"
 
 # Bash control-plane — оркестратору эти команды можно даже в subagent-фазе (это управление
 # состоянием/гейтами/судьями, а не productive-работа фазы). Блок только для productive bash.

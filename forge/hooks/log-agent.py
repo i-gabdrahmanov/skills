@@ -83,9 +83,16 @@ def _run_dir(root: str, data: dict) -> str:
     анализ — в общем архиве (`_archive_path`). Бонус: убран per-event glob+read манифестов → хук легче.
     """
     base = os.path.join(root, "ground", "ai-logs")
-    raw = data.get("session_id") or ""
-    sess = _safe(raw)[:8] if raw else "nosess"
-    return os.path.join(base, f"run-{sess}")
+    # Приоритет ключа каталога: GIGACODE_RUN_ID (детерминированный стабильный ключ — операторская
+    # обёртка/headless задаёт один на прогон) → session_id (стабилен в интерактиве) → 'nosess'.
+    # Так «один прогон = одна папка» держится и когда рантайм не даёт стабильный session_id.
+    env_run = os.environ.get("GIGACODE_RUN_ID") or ""
+    if env_run:
+        key = _safe(env_run)[:16]
+    else:
+        raw = data.get("session_id") or ""
+        key = _safe(raw)[:8] if raw else "nosess"
+    return os.path.join(base, f"run-{key}")
 
 
 def _agent_label(data: dict) -> str:

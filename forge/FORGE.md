@@ -500,6 +500,33 @@ dual-vocabulary, контракты pipeline-state, payload-схема snake_cas
       пайплайн-скриптов (обходы `record_gate`/`run_judge`-floor, деривация criticality→risk) и
       деплой/гигиена git (утечки логов прогонов, дубли реестров). Допройти отдельным заходом.
 
+**Ужесточение под слабую модель (2026-07-04, по прогону fable/DeepSeek-Flash на форке).**
+Принцип: **enforcement на границе рантайма + fail-closed на отсутствии решения + детерминизм
+вместо LLM-судей + меньше степеней свободы**. Хук не заставит модель «спросить» или «написать
+хороший BRD», но заставит НЕ идти дальше без нужного артефакта.
+- [x] **Thrust 1 — fail-closed решения (universal).** Решение (критичность/путь/спека) =
+      обязательный артефакт в `pipeline.json`; интерактивный вопрос его заполняет, headless —
+      предзапись `config.py set`. Нет артефакта → `gate-guard._required_decisions_missing` блокирует
+      продуктивную запись фазы (`required_decisions` в risk-policy.json). Пустой ответ вопроса для
+      **обязательной** фазы → `update._check_required_skip` даёт `exit 3` (STOP, не тихий skip) —
+      закрыт баг «не отрендерился диалог → пайплайн пропустил фазу». Ключи `pipeline.mode`,
+      `sources.spec` в params-registry; router пишет `pipeline.mode`.
+- [x] **Thrust 2 — lite + tech-design по существующей спеке.** «Простая Jira + готовая спека» не
+      покрывалась ни lite (без дизайна), ни full (BRD с нуля). forgelite: `lite-plan`→`lite-design`
+      (скилл `tech-design` по `sources.spec` — source of truth, субагент; BRD/SDD заново не пишутся).
+      Проведён через sod (design), inline-phase-guard, required/subagent-префиксы, fail-closed
+      `sources.spec`.
+- [x] **Thrust 3 — судьи → детерминизм.** LLM-судья BRD штамповал мусор. `check_brd_doc.py`
+      (детерминированный: бизнес-секции, содержательность, ОТСУТСТВИЕ кода/классов/SQL) — хард-гейт
+      закрытия `00-brd`; brd-judge понижен до advisory. Принцип: LLM-вердикт сам шаг не закрывает.
+- [x] **Thrust 4 — гигиена логов + inline-покрытие.** `GIGACODE_RUN_ID` (env) → стабильный
+      `run-<id>` независимо от `session_id` («один прогон = одна папка» и в headless; UUID субагента
+      в имени файла — идентификатор, не мусор). `checkstyle/ktlint/detekt/spotless` добавлены в
+      `BUILD_CMD_RE` (inline-phase-guard + sod) — «checkstyle inline» ловится и standalone.
+> **ВАЖНО (эксплуатация):** всё это работает, только если хуки РЕАЛЬНО срабатывают — т.е. после
+> `deploy.sh` (матчеры→канон, BLOCKER-0) и запуска с `--experimental-hooks`. На форке проверь
+> firing-smoke: рисковое действие даёт `DENY`. Без этого новые гейты — тоже труп.
+
 ## Известные ограничения (из аудита)
 
 - **`additionalContext` только в `hookSpecificOutput`** — рантайм читает контекст-инъекцию ТОЛЬКО из

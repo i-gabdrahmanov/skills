@@ -134,6 +134,26 @@ class TestInlinePhaseGuard(unittest.TestCase):
             self.assertEqual(_run(tmp, {"tool_name": "Write",
                 "tool_input": {"file_path": str(tmp / "docs/feature-pipeline/feat/tech-design.md")}}), 0)
 
+    # ── Thrust 2: lite-design — субагентная фаза (главный агент не пишет tech-design inline) ──
+    def test_main_agent_blocked_lite_design_write(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make(tmp, "lite-design", slug="f1")
+            self.assertEqual(_run(tmp, {"tool_name": "write_file",
+                "tool_input": {"file_path": str(tmp / "docs/feature-pipeline/f1/tech-design.md")}}), 2)
+
+    # ── Thrust 4: checkstyle/lint inline главным агентом в build/test-фазе → блок ──
+    def test_main_agent_blocked_gradle_checkstyle_inline(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make(tmp, "lite-green")
+            self.assertEqual(_run(tmp, {"tool_name": "run_shell_command",
+                "tool_input": {"command": "./gradlew checkstyleMain"}}), 2)
+
+    def test_main_agent_blocked_standalone_checkstyle_inline(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make(tmp, "04-build-T1")
+            self.assertEqual(_run(tmp, {"tool_name": "run_shell_command",
+                "tool_input": {"command": "checkstyle -c config.xml src/main/java"}}), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
