@@ -37,11 +37,14 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 - **full** → `feature-pipeline` — фича с нуля (BRD→…→deliver), вокабуляр шагов `04-test-<id>`/
   `04-build-<id>`/`07-deliver-<id>`, стейт в namespace `feature-pipeline`.
 - **lite** → `forgelite` (`skills/forgelite/SKILL.md`) — исполнение УЖЕ ПОДГОТОВЛЕННОЙ подзадачи
-  Jira: grounding → план → TDD RED→GREEN → покрытие → PR → отчёт. Плоские шаги `lite-*`
-  (`lite-jira/lite-ground/lite-plan/lite-red/lite-green/lite-verify/lite-deliver/lite-report`),
-  стейт в namespace `forgelite`. Без BRD/SDD/tech-design/постановки задач; гейты RED/GREEN —
-  прямыми gradle/maven-командами субагента, покрытие — `check_coverage.py`; без run_judge/eval/
-  task-plan. Роутер выставляет lite-профиль: `autonomy.auto_max_risk=R2`, `criticality=medium`,
+  Jira: grounding → tech-design по СУЩЕСТВУЮЩЕЙ спеке → TDD RED→GREEN → покрытие → PR → отчёт.
+  Плоские шаги `lite-*`
+  (`lite-jira/lite-ground/lite-design/lite-red/lite-green/lite-verify/lite-deliver/lite-report`),
+  стейт в namespace `forgelite`. Без BRD и без написания SDD с нуля, без постановки задач;
+  `lite-design` строит tech-design + task-plan по готовой спеке (`sources.spec`, source of truth,
+  форсится `required_decisions`). Гейты RED/GREEN — прямыми gradle/maven-командами субагента,
+  покрытие — `check_coverage.py`; без run_judge/eval. Роутер выставляет lite-профиль:
+  `autonomy.auto_max_risk=R2`, `criticality=medium`,
   `quality.eval_enabled=false` (через `config-helper`).
 
 **Почему форк не нужен.** Хуки — **dual-vocabulary**: понимают оба набора префиксов и резолвят

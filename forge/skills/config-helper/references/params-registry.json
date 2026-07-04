@@ -208,8 +208,8 @@
       "path": "pipeline.mode",
       "type": "enum", "enum": ["lite", "full"], "default": "",
       "category": "pipeline", "sensitive": false,
-      "title": "Режим пайплайна (fail-closed решение)",
-      "description": "Выбранный путь: lite (готовая Jira-подзадача, forgelite) | full (фича с нуля, feature-pipeline). Записывает router. Часть required_decisions.",
+      "title": "Режим пайплайна (выбранный путь)",
+      "description": "Выбранный путь: lite (готовая Jira-подзадача, forgelite) | full (фича с нуля, feature-pipeline). Записывает router — для аудита и headless-предзаписи выбора. Хуком НЕ гейтится (сам путь кодирует namespace активного манифеста); required_decisions форсит sources.spec/криктичность, а не mode.",
       "aliases": ["режим", "путь", "mode", "lite/full"]
     },
     {

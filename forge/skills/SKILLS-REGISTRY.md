@@ -14,7 +14,7 @@
 |---|---|---|---|---|
 | router | @team | 2026-12 | точка входа: выбор режима full/lite, делегация на общий control-plane | — (вход не форсится рантаймом; смягчения — preflight, check_scope) |
 | feature-pipeline | @team | 2026-12 | Java/Spring фичи end-to-end (режим full) | gate-скрипты + hooks/evals |
-| forgelite | @team | 2026-12 | исполнение подготовленной подзадачи Jira (режим lite: grounding→план→RED→GREEN→PR) | check_scope.py + record_gate (RED/GREEN) + check_coverage.py |
+| forgelite | @team | 2026-12 | исполнение подготовленной подзадачи Jira (режим lite: grounding→tech-design по спеке→RED→GREEN→PR) | check_scope.py + record_gate (RED/GREEN) + check_coverage.py |
 | pipeline-state | @team | 2026-12 | оркестраторы >3 субагентов | косвенно через evals |
 | project-grounder | @team | 2026-12 | фаза grounding | verify_coverage.py |
 | system-analyst | @team | 2026-12 | скан Java/Spring сервиса | verify_coverage.py |

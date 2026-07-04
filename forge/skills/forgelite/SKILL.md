@@ -2,9 +2,10 @@
 name: forgelite
 description: >
   Лёгкая ветка forge для исполнения УЖЕ ПОДГОТОВЛЕННОЙ подзадачи из Jira (есть описание и
-  acceptance criteria) для Java/Spring: grounding → план → TDD RED→GREEN → покрытие →
-  ветка/commit/PR → отчёт в Jira. Без BRD, SDD, тех-дизайна и постановки задач — только
-  исполнение готового тикета. Обычно вызывается роутером (skills/router), когда пользователь
+  acceptance criteria) для Java/Spring: grounding → tech-design по СУЩЕСТВУЮЩЕЙ спеке (source of
+  truth) → TDD RED→GREEN → покрытие → ветка/commit/PR → отчёт в Jira. Без BRD и без написания
+  SDD с нуля, без постановки задач — только исполнение готового тикета (tech-design строится по
+  уже готовой спеке, а не пишется заново). Обычно вызывается роутером (skills/router), когда пользователь
   выбрал путь «готовая задача»; работает и автономно. Триггеры: «выполни задачу из jira»,
   «сделай KIDPPRB-1234», «прогони готовый subtask до PR». Отличие от feature-pipeline —
   тот с нуля (BRD→PR); от minor-defect-fix — тот баг + спека в отдельном репо. Никогда не
@@ -139,6 +140,9 @@ prompt:
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set sources.spec <путь-к-спеке>
    ```
    Пока `sources.spec` не записан, `gate-guard` заблокирует запись фазы `lite-design` (fail-closed).
+   **Если путь не получить интерактивно** (вопрос не отрендерился — headless/форк): НЕ угадывай и
+   НЕ пропускай `lite-design` (это обязательный шаг — `update.py` даст `exit 3`). Остановись и
+   попроси предзапись `config.py set sources.spec <путь>` + перезапуск.
 2. **Субагентом** (`tech-design`) построй `tech-design.md` + `task-plan.json` ПО ЭТОЙ спеке
    (вход — `sources.spec`, а не свежий `sdd.md`). Главный агент tech-design.md/task-plan.json inline
    НЕ пишет (заблокирует `inline-phase-guard`). Гейт: `check_taskplan.py` + `check_sdd.py --sdd <sources.spec>`.
@@ -265,8 +269,9 @@ PR через Bitbucket MCP: title = первая строка коммита; d
 - Необратимое (commit/push/PR/Jira) — только после «да» (Gate 2–4).
 - RED/GREEN/прогон — только субагентом (иначе `inline-phase-guard`).
 - Не обходи через `git push --force`/`reset --hard`/`checkout .`.
-- Не бери BRD/SDD/дизайн/постановку задач (это full-путь feature-pipeline) и спеку в отдельном
-  репо (minor-defect-fix).
+- Не пиши BRD и не пиши SDD с нуля, не ставь задачи в Jira (это full-путь feature-pipeline).
+  Tech-design (`lite-design`) строй ТОЛЬКО по существующей спеке (`sources.spec`), а не заново.
+  Спеку в отдельном репо не бери (это minor-defect-fix).
 
 ## Связь
 Ветка forge: вызывается роутером (`skills/router`) при выборе «готовая задача», full-путь —
