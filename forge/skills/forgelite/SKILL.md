@@ -93,16 +93,19 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py --project <t
 Через MCP получи: summary, description, **acceptance criteria**, issuetype, priority, статус,
 последние 5–10 комментариев, имена вложений.
 
-**Скоуп-чек — детерминированный (ОБЯЗАТЕЛЬНО перед закрытием `lite-jira`).** Сохрани JSON issue
-из MCP в файл и прогони:
+**Скоуп-чек — детерминированный (enforced: `update.py` НЕ закроет `lite-jira` без
+evidence-артефакта от record_gate).** Сохрани JSON issue из MCP в файл и прогони ЧЕРЕЗ РАННЕР:
 ```
-python3 <project>/.gigacode/skills/forgelite/scripts/check_scope.py --issue-json <файл-с-issue.json>
+python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-jira --cmd "python3 <project>/.gigacode/skills/forgelite/scripts/check_scope.py --issue-json <файл-с-issue.json>"
 ```
 - **exit 0** — скоуп ок, продолжай.
-- **exit 3 (ESCALATE)** — СТОП, спроси пользователя: «Задача не похожа на готовую подзадачу
-  (причины в stderr). Продолжить в lite или взять full (feature-pipeline)?» Не решай молча.
-  Если пользователь явно сказал «продолжаем lite» — продолжай.
-- **exit 2** — нечитаемый JSON: перечитай issue из MCP и повтори.
+- **exit 1** (внутри — exit 3 ESCALATE от check_scope, причины в артефакте гейта) — СТОП, спроси
+  пользователя: «Задача не похожа на готовую подзадачу. Продолжить в lite или взять full
+  (feature-pipeline)?» Не решай молча. Если пользователь явно сказал «продолжаем lite» —
+  зафиксируй его согласие и сними гейт (это R4: сначала `record_approval.py --key
+  gate-override-gate-result-lite-jira --approved-by user --reason "..."`, затем
+  `override_judge.py --judge gate-result-lite-jira --reason "..."`), после чего закрывай шаг.
+- Нечитаемый JSON issue — перечитай из MCP и повтори раннер.
 
 Дополнительно останови и спроси сам, если видишь несколько независимых сценариев в одной задаче.
 
@@ -145,15 +148,18 @@ prompt:
    попроси предзапись `config.py set sources.spec <путь>` + перезапуск.
 2. **Субагентом** (`tech-design`) построй `tech-design.md` + `task-plan.json` ПО ЭТОЙ спеке
    (вход — `sources.spec`, а не свежий `sdd.md`). Главный агент tech-design.md/task-plan.json inline
-   НЕ пишет (заблокирует `inline-phase-guard`). Гейт: `check_taskplan.py` + `check_sdd.py --sdd <sources.spec>`.
+   НЕ пишет (заблокирует `inline-phase-guard`). Гейт: `check_taskplan.py` + `check_sdd.py --sdd
+   <sources.spec>` — ЧЕРЕЗ РАННЕР `record_gate.py` (он пишет evidence; `update.py` НЕ закроет
+   `lite-design` без него — слово субагента не доказательство).
    ```
    subagent_type: general-purpose
    prompt: |
      Ты — tech-design. Прочитай СУЩЕСТВУЮЩУЮ спеку (source of truth) по пути <sources.spec> и
      grounding-excerpt. Построй tech-design.md + task-plan.json по слоям СТРОГО по этой спеке
-     (sdd_ref якори — на её разделы). НЕ пиши BRD/SDD заново. Прогони check_taskplan.py и
-     check_sdd.py --sdd <sources.spec>; верни JSON {"step_id":"lite-design","status":"completed"}
-     только если гейты прошли.
+     (sdd_ref якори — на её разделы). НЕ пиши BRD/SDD заново.
+     ПОСЛЕДНИМ действием прогони гейт ЧЕРЕЗ РАННЕР (без него шаг не закроется):
+     python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-design --cmd "python3 <project>/.gigacode/skills/tech-design/scripts/check_taskplan.py <путь-к-task-plan.json> && python3 <project>/.gigacode/skills/tech-design/scripts/check_sdd.py <путь-к-task-plan.json> --sdd <sources.spec>"
+     Верни JSON {"step_id":"lite-design","status":"completed"} только если раннер дал exit 0.
    ```
 > **Gate 1:** «Дизайн такой?» — к коду только после «да» (или предзаписи в headless).
 
@@ -232,7 +238,8 @@ status:"completed" ТОЛЬКО если тесты зелёные И coverage_g
 
 ### 8.1. Коммит (Gate 2)
 Стиль коммитов: `git log -30 --pretty=format:%s`. Сообщение: по стилю, «почему», с ключом Jira,
-**без** `Co-Authored-By`.
+**без** `Co-Authored-By`. Это enforced: на `git push` хук `evidence-enforcer` детерминированно
+проверяет HEAD-коммит (Co-Authored-By → блок; нет ключа Jira → блок) — чинить `git commit --amend`.
 > **Gate 2:** «Коммитим с этим сообщением? (да / правки)».
 `git add` только нужное. Ветка `feature/<JIRA-KEY>` (от default-ветки).
 

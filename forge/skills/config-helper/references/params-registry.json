@@ -146,10 +146,10 @@
       "id": "quality.tautology_check",
       "file": "pipeline",
       "path": "quality.tautology_check",
-      "type": "bool", "default": false,
+      "type": "bool", "default": true,
       "category": "quality", "sensitive": false,
       "title": "Гейт тавтологичных тестов",
-      "description": "Включить статический детектор пустых/тавтологичных тестов check_tautological_tests.py (assertTrue(true), пустое тело, нет ассертов). Дополняет RED-гейт, работает без build",
+      "description": "Статический детектор пустых/тавтологичных тестов check_tautological_tests.py (assertTrue(true), пустое тело, нет ассертов). Вшит floor'ом в coverage-judge (05-tests); дефолт ВКЛ, выключение — явное false. Дополняет RED-гейт, работает без build",
       "aliases": ["тавтология", "тавтологичные тесты", "tautology", "пустые тесты", "tautology_check"]
     },
     {

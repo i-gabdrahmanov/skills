@@ -2,9 +2,9 @@
 """state-write-guard.py — PreToolUse: запрет ПРЯМОЙ записи моделью в control-plane-файлы forge.
 
 Закрывает BLOCKER-1 аудита. Вся пирамида целостности пайплайна — approval-маркеры, manifest,
-overrides, gates, _origins, pipeline.json — это обычные JSON внутри `ground/`, а `ground/`
-разрешён к записи (pii-boundary/gate-guard его whitelist-ят, классификатор рисков даёт .json в
-ground/ уровень R1→auto). Провенанс-проверки в pipeline-state/update.py
+overrides, gates, _origins, judges (вердикты судей), pipeline.json, ground/phases (фазовая
+машина) — это обычные JSON внутри `ground/`, а `ground/` разрешён к записи (pii-boundary/
+gate-guard его whitelist-ят, классификатор рисков даёт .json в ground/ уровень R1→auto). Провенанс-проверки в pipeline-state/update.py
 (`_check_subagent_origin`/`_check_gate_result`/`_check_judges`, счётчики reopen/failure)
 срабатывают ТОЛЬКО если мутация идёт ЧЕРЕЗ update.py. Прямой `Write .../manifest.json` со всеми
 `status:"completed"` — или `Write ground/approvals/human-approval.json` — обходит всё это.
@@ -33,11 +33,16 @@ BASH_TOOLS = ("Bash", "run_shell_command")
 
 # Пути control-plane. Lookbehind `(?<![\w-])` ловит путь и как bare file_path (Write), и внутри
 # shell-команды (после пробела/кавычки/`/`), но не в составе большего слова (myground/…).
+# judges/ — вердикты судей: подделанный Write с produced_by:"run_judge" проходил провенанс-
+# проверку update._check_judges (легитимный путь — только run_judge.py). ground/phases/ —
+# фазовая машина (gate.json/phase-defs.json/agent-evidence.jsonl), её читает phase-lock
+# gate-guard; пишут только init_phase_gate.py/phase_sync.py и хук log-agent (не тул-вызовы).
 _CP_PATTERNS = [
     r"(?<![\w-])ground/pipeline\.json\b",
     r"(?<![\w-])ground/statements/[^/]+/[^/]+/manifest\.json\b",
-    r"(?<![\w-])ground/statements/[^/]+/[^/]+/(?:_origins|gates|overrides)(?:/|\b)",
+    r"(?<![\w-])ground/statements/[^/]+/[^/]+/(?:_origins|gates|overrides|judges)(?:/|\b)",
     r"(?<![\w-])ground/approvals(?:/|\b)",
+    r"(?<![\w-])ground/phases(?:/|\b)",
 ]
 _CP_RE = re.compile("|".join(_CP_PATTERNS))
 
@@ -58,6 +63,8 @@ def _hint(target: str) -> str:
         f"State меняется ТОЛЬКО санкционированными скриптами (провенанс форсится update.py):\n"
         f"  • шаги/manifest → pipeline-state/scripts/update.py (--feature ...)\n"
         f"  • gate-result → pipeline-state/scripts/record_gate.py\n"
+        f"  • вердикт судьи → feature-pipeline/scripts/run_judge.py (--from-output / --recheck)\n"
+        f"  • фазовая машина (ground/phases) → init_phase_gate.py / phase_sync.py\n"
         f"  • снятие судьи → pipeline-state/scripts/override_judge.py\n"
         f"  • параметры pipeline.json → config-helper/scripts/config.py set\n"
         f"  • approval-маркер → pipeline-state/scripts/record_approval.py (ТОЛЬКО после явного "

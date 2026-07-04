@@ -43,6 +43,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import skill_paths  # единый реестр путей (references/skill-paths.json)
+import check_brd_doc as _brd_doc  # структурный слой судьи БТ (co-located, Thrust 3)
 
 SCHEMA_VERSION = "feature-pipeline/judge-verdict@1"
 
@@ -1361,11 +1362,41 @@ def _test_integrity_floor(base: str = "HEAD") -> tuple:
     return checks, blocking, warnings
 
 
+def _tautology_floor(project_root: Path, quality_cfg: dict) -> tuple:
+    """Floor тавтологичных тестов (P2-10): статический детектор пустых/тавтологичных @Test
+    (check_tautological_tests.py, co-located). `assertTrue(true)` / пустое тело не должны
+    «покрывать» код и зеленить 05-tests. Дефолт ON — выключение только явным
+    quality.tautology_check=false; warnings не валят (без --strict)."""
+    if quality_cfg.get("tautology_check", True) is False:
+        return ([{"name": "check_tautological_tests", "status": "SKIP",
+                  "detail": "выключен (quality.tautology_check=false)", "severity": "warning"}],
+                [], [])
+    import subprocess
+    script = Path(__file__).resolve().parent / "check_tautological_tests.py"
+    try:
+        r = subprocess.run(
+            [sys.executable, str(script), "--root", str(project_root),
+             "--base", DIFF_BASE, "--json"],
+            cwd=str(project_root), capture_output=True, text=True, timeout=60)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return ([{"name": "check_tautological_tests", "status": "FAIL",
+                  "detail": f"не выполнился: {e}", "severity": "error"}],
+                [f"check_tautological_tests не выполнился: {e}"], [])
+    if r.returncode == 0:
+        return ([{"name": "check_tautological_tests", "status": "PASS",
+                  "detail": "тавтологичных/пустых тестов нет", "severity": "error"}], [], [])
+    detail = (r.stdout.strip() or r.stderr.strip() or f"exit {r.returncode}")[:300]
+    return ([{"name": "check_tautological_tests", "status": "FAIL",
+              "detail": detail, "severity": "error"}],
+            [f"тавтологичные/пустые тесты: {detail}"], [])
+
+
 def check_coverage(slug: str, feature_dir: Path | None) -> dict:
     """Запускает check_coverage.py (JaCoCo gate) и собирает вердикт coverage-judge.
 
     Имя вердикта (coverage-judge.json) совпадает с required_judges['05-tests'].
     Плюс floor целостности тестов (C2): блокирует ослабление существующих тестов.
+    Плюс floor тавтологичных тестов (P2-10): пустой/тавтологичный @Test не «покрывает».
     """
     project_root = PROJECT_ROOT
 
@@ -1430,12 +1461,16 @@ def check_coverage(slug: str, feature_dir: Path | None) -> dict:
     # Floor «GREEN любой ценой»: ловит ослабление СУЩЕСТВУЮЩИХ тестов (фаза Verify — типичное
     # место, где модель гнёт тест/прод-код под зелёное). Блокирует, даже если покрытие прошло.
     floor_checks, floor_block, floor_warn = _test_integrity_floor(DIFF_BASE)
-    checks += floor_checks
-    blocking = cov_block + floor_block
-    passed = cov_passed and not floor_block
+    # Floor тавтологичных тестов: покрытие пустыми/тавтологичными @Test не считается.
+    taut_checks, taut_block, taut_warn = _tautology_floor(project_root, quality_cfg)
+    checks += floor_checks + taut_checks
+    blocking = cov_block + floor_block + taut_block
+    passed = cov_passed and not floor_block and not taut_block
     summary = (f"check_coverage exit {r.returncode} (порог {threshold})"
-               + (f" | integrity: {len(floor_block)} blocking" if floor_block else " | integrity OK"))
-    return _make_verdict("coverage-judge", slug, passed, checks, blocking, floor_warn, summary)
+               + (f" | integrity: {len(floor_block)} blocking" if floor_block else " | integrity OK")
+               + (f" | tautology: {len(taut_block)} blocking" if taut_block else ""))
+    return _make_verdict("coverage-judge", slug, passed, checks, blocking,
+                         floor_warn + taut_warn, summary)
 
 
 def check_regression(slug: str, feature_dir: Path | None) -> dict:
@@ -1535,11 +1570,12 @@ def _resolve_brd_path(slug: str, feature_dir: Path | None) -> Path | None:
 
 
 def check_brd(slug: str, feature_dir: Path | None) -> dict:
-    """Детерминированный слой судьи БТ: ловит литеральные код-токены в документе БТ.
+    """Детерминированный слой судьи БТ: структура документа (check_brd_doc) + код-токены.
 
     Семантику («написано как спецификация, а не как БТ») проверяет LLM-судья brd-judge —
-    его вердикт ингестится через --from-output. Здесь — дешёвый regex-гейт, который
-    работает и standalone (вне feature-pipeline) через флаг --brd.
+    его вердикт ингестится через --from-output (и там же AND-ится с этим слоем, см.
+    INGEST_FLOOR_PHASES). Здесь — дешёвые детерминированные проверки, которые работают
+    и standalone (вне feature-pipeline) через флаг --brd.
     """
     brd_path = _resolve_brd_path(slug, feature_dir)
     if brd_path is None:
@@ -1556,6 +1592,20 @@ def check_brd(slug: str, feature_dir: Path | None) -> dict:
     checks = []
     blocking_issues = []
     warnings = []
+
+    # 0. Структурный слой (check_brd_doc): обязательные бизнес-секции, содержательность,
+    #    утечка реализации. Вшит в судью, а не только в guidance 00-brd.md — иначе шаг 00-brd
+    #    закрывался ингестом LLM-вердикта, ни разу не выполнив структурную проверку.
+    doc_errors, doc_warnings = _brd_doc.check(text)
+    if doc_errors:
+        for e in doc_errors:
+            checks.append({"name": "Структура БТ (check_brd_doc)", "status": "FAIL",
+                           "detail": e, "severity": "error"})
+            blocking_issues.append(e)
+    else:
+        checks.append({"name": "Структура БТ (check_brd_doc)", "status": "PASS",
+                       "detail": "секции/объём/нет утечки реализации — ок", "severity": "error"})
+    warnings.extend(doc_warnings)
 
     # 1. Fenced-блоки кода (```) — в БТ их быть не должно
     fenced = re.findall(r"```.*?```", text, re.DOTALL)
@@ -1735,6 +1785,20 @@ PHASE_MAP = {
     "regression": check_regression,
 }
 
+# Гибридные судьи, чей детерминированный слой пересчитывается ПРЯМО на ингесте LLM-вердикта
+# (--from-output). Иначе штамп «PASS» от LLM-судьи на мусорном артефакте сохранялся как
+# passed:true и update.py закрывал шаг, ни разу не выполнив детерминированные проверки
+# (--recheck не обязателен и мог не запускаться). Две семантики слоя:
+#   "standalone"   — check_* не знает про LLM-вердикт (brd/eval) → AND-им явно;
+#   "merges_saved" — check_* САМ читает СОХРАНЁННЫЙ вердикт и применяет пол (build: stubs,
+#                    delivery: секреты) → его результат уже финальный (сохранять ДО пересчёта).
+INGEST_FLOOR_PHASES = {
+    "brd": "standalone",
+    "eval": "standalone",
+    "build": "merges_saved",
+    "delivery": "merges_saved",
+}
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -1825,7 +1889,32 @@ def main():
             subagent.get("warnings", []),
             subagent.get("summary", f"{judge_name}: вердикт принят от субагента"),
         )
+        # Сохраняем LLM-вердикт ДО пересчёта пола: гибридные check_* (build/delivery)
+        # читают сохранённый вердикт с диска и мержат его с полом сами.
         out_path = _save_verdict(args.slug, judge_name, verdict)
+        # Детерминированный пол на ингесте (INGEST_FLOOR_PHASES): LLM-вердикт сам по себе
+        # шаг не закрывает — пересчитываем детерминированный слой.
+        if args.phase in INGEST_FLOOR_PHASES:
+            try:
+                det = PHASE_MAP[args.phase](args.slug, feature_dir)
+            except Exception as e:
+                print(f"ERROR: детерминированный слой {args.phase} упал при ингесте: {e}",
+                      file=sys.stderr)
+                sys.exit(2)
+            if INGEST_FLOOR_PHASES[args.phase] == "merges_saved":
+                # check_* уже прочитал сохранённый LLM-вердикт и применил пол — результат финальный
+                verdict = det
+            else:
+                # standalone-слой (brd/eval) про LLM-вердикт не знает — AND-им явно
+                verdict = _make_verdict(
+                    judge_name, args.slug,
+                    bool(verdict.get("passed")) and bool(det.get("passed")),
+                    det.get("checks", []) + verdict.get("checks", []),
+                    det.get("blocking_issues", []) + verdict.get("blocking_issues", []),
+                    det.get("warnings", []) + verdict.get("warnings", []),
+                    f"det: {det.get('summary', '')} | LLM: {verdict.get('summary', '')}",
+                )
+            out_path = _save_verdict(args.slug, judge_name, verdict)
         if verdict["passed"]:
             _clear_errors(args.slug)
         elif verdict.get("blocking_issues"):

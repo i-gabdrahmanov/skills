@@ -36,7 +36,8 @@ from phase_sync import sync_gate_from_manifest
 # префикса в одном месте не отключало enforcement молча.
 _SUBAGENT_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
                       "lite-design", "lite-red", "lite-green", "lite-verify")
-_GATE_RESULT_PREFIXES = ("04-test", "04-build", "05-tests", "lite-red", "lite-green", "lite-verify")
+_GATE_RESULT_PREFIXES = ("04-test", "04-build", "05-tests",
+                         "lite-jira", "lite-design", "lite-red", "lite-green", "lite-verify")
 _REQUIRED_STEP_PREFIXES = _SUBAGENT_PREFIXES
 try:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1].parent / "feature-pipeline" / "scripts"))

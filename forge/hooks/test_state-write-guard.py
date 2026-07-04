@@ -51,6 +51,20 @@ class TWriteVector(unittest.TestCase):
         r = _write("ground/statements/feature-pipeline/f1/_origins/04-build-T1.json")
         self.assertEqual(r.returncode, 2, r.stderr)
 
+    def test_block_judges(self):
+        # подделанный вердикт с produced_by:"run_judge" прошёл бы провенанс update._check_judges
+        r = _write("ground/statements/feature-pipeline/f1/judges/brd-judge.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_phase_gate(self):
+        # gate.json читает phase-lock gate-guard — подделка снимала бы фазовую блокировку
+        r = _write("ground/phases/f1/gate.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_phase_defs_legacy_path(self):
+        r = _write("ground/phases/phase-defs.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
     def test_block_edit_tool_too(self):
         r = _run("edit", {"file_path": "ground/statements/feature-pipeline/f1/manifest.json"})
         self.assertEqual(r.returncode, 2, r.stderr)
@@ -88,6 +102,25 @@ class TBashVector(unittest.TestCase):
     def test_pass_read_of_manifest(self):
         # чтение control-plane файла — можно (нет токена записи)
         r = _bash("cat ground/statements/feature-pipeline/f1/manifest.json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_block_redirect_into_judges(self):
+        r = _bash("echo '{}' > ground/statements/forgelite/f1/judges/coverage-judge.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_python_write_phase_gate(self):
+        r = _bash("python3 -c \"open('ground/phases/f1/gate.json','w').write('{}')\"")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_pass_run_judge_ingest_command(self):
+        # легальный путь вердикта: run_judge пишет judges/ внутри python — в тексте команды
+        # нет ни редиректа, ни control-plane-пути → не блокируется
+        r = _bash("python3 .gigacode/skills/feature-pipeline/scripts/run_judge.py brd feat "
+                  "--from-output verdict.json --project-root .")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_pass_read_phase_gate(self):
+        r = _bash("cat ground/phases/f1/gate.json")
         self.assertEqual(r.returncode, 0, r.stderr)
 
 

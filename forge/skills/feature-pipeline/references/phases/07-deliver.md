@@ -27,7 +27,9 @@ agent(subagent_type="general-purpose", description="delivery-judge for <slug>",
       prompt="<вывод `get_prompt.py 7.5` (delivery-judge) + task-plan + jira-result + git status + diff>")
 ```
 
-delivery-judge — pass-through (вердикт считает субагент). Сохрани его JSON и передай
+delivery-judge — гибрид: вердикт считает субагент, а run_judge на ингесте АВТОМАТИЧЕСКИ
+применяет детерминированный пол (секреты в изменённых файлах, `INGEST_FLOOR_PHASES`) —
+LLM-«PASS» при утёкшем секрете не сохранится как passed:true. Сохрани его JSON и передай
 через `--from-output`, затем подтверди `--recheck`:
 ```bash
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py delivery <slug> --from-output verdict.json
@@ -55,7 +57,9 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/delivery_plan.py \
 **Гейт 5 — push + stacked PR.** Покажи план веток и PR (для каждого: source→target,
 заголовок, тело со ссылкой на Jira). Спроси «пушим и создаём PR?». После «да» — push в
 порядке зависимостей, затем PR через Bitbucket MCP (target = ветка-родитель или default).
-Сюда же — push/PR ветки спеки (фаза 5).
+Сюда же — push/PR ветки спеки (фаза 5). На каждый `git push` хук `evidence-enforcer`
+детерминированно проверяет сообщение HEAD-коммита: трейлер `Co-Authored-By` запрещён
+(блок → `git commit --amend`).
 
 **Гейт 6 — отчёт в Jira.** Подготовь черновик комментария в Story (что сделано, файлы,
 тесты/покрытие, ссылки на PR по задачам, статус спеки). Покажи целиком, спроси «отправить?».

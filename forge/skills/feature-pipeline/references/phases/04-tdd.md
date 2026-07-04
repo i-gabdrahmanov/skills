@@ -97,8 +97,10 @@ agent(
 agent(subagent_type="general-purpose", description="build-judge for <slug>",
       prompt="<вывод `get_prompt.py 7.3` (build-judge)>")
 ```
-build-judge — pass-through судья: его вердикт считает СУБАГЕНТ, run_judge сам ничего не
-проверяет. Поэтому **сохрани JSON-вердикт субагента в файл и передай его через `--from-output`**
+build-judge — гибрид: вердикт считает СУБАГЕНТ, а run_judge на ингесте АВТОМАТИЧЕСКИ
+применяет детерминированный пол (stubs/TODO в изменённом src/main) и AND-ит с вердиктом
+(`INGEST_FLOOR_PHASES`) — LLM-«PASS» на коде со стабами не сохранится как passed:true.
+**Сохрани JSON-вердикт субагента в файл и передай его через `--from-output`**
 (иначе вердикта на диске не будет и шаг не закроется), затем подтверди `--recheck`:
 ```bash
 # verdict.json — JSON, который вернул субагент build-judge ({"passed":..., "blocking_issues":[...]})
