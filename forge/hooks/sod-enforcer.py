@@ -104,6 +104,7 @@ STEP_ROLE = {
     "06-spec": "spec",
     "06-": "spec",
     # Lite-ветка (forgelite): плоские шаги lite-*.
+    "lite-design": "design",
     "lite-red": "test",
     "lite-green": "dev",
     "lite-verify": "test",

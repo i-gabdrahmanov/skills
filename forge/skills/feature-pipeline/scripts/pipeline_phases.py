@@ -88,7 +88,7 @@ DELIVER_STEP_PREFIX = "07-deliver-"  # 07-deliver-<taskId> — доставка 
 # Фазы, ОБЯЗАННЫЕ исполняться субагентом (не inline). Совпадает с префиксами шагов.
 # Хвост lite-* — плоские шаги lite-ветки (forgelite): RED/GREEN/verify тоже идут субагентом.
 SUBAGENT_PHASE_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
-                           "lite-red", "lite-green", "lite-verify")
+                           "lite-design", "lite-red", "lite-green", "lite-verify")
 
 # Фазы, закрытие которых требует gate-result артефакта (gates/<step_id>.json от record_gate.py):
 # «шаг закрыт, потому что детерминированный гейт РЕАЛЬНО прошёл», а не потому что субагент
@@ -105,7 +105,8 @@ def requires_gate_result(step_id) -> bool:
 # Обязательные шаги: их НЕЛЬЗЯ тихо пропустить (status=skipped) без override — иначе fallback
 # «не смог спросить → пропущу фазу» тихо выкидывает качество-гейты (Thrust 1: fallback=STOP).
 # grounding/brd/report сюда НЕ входят (grounding легитимно reuse-skip, report — пост-доставка).
-REQUIRED_STEP_PREFIXES = SUBAGENT_PHASE_PREFIXES + ("lite-design",)
+# lite-design уже в SUBAGENT_PHASE_PREFIXES (tech-design обязан идти субагентом).
+REQUIRED_STEP_PREFIXES = SUBAGENT_PHASE_PREFIXES
 
 
 def requires_no_silent_skip(step_id) -> bool:

@@ -24,11 +24,16 @@ description: >
 >   `ask_user_question` не активны одновременно.
 
 Плоский цикл (feature = ключ Jira; стейт в namespace `forgelite`, отдельно от `feature-pipeline`):
-**Jira → grounding → план → RED → GREEN → покрытие → commit → PR → отчёт**. Ничего
+**Jira → grounding → tech-design по спеке → RED → GREEN → покрытие → commit → PR → отчёт**. Ничего
 необратимого (commit, push, PR, комментарий в Jira) — без явного «да» (Gate 1–4).
 
 Шаги стейта (`lite-*`, чтобы НЕ пересекаться с фазовой машиной full-пути и масками судей):
-`lite-jira → lite-ground → lite-plan → lite-red → lite-green → lite-verify → lite-deliver → lite-report`.
+`lite-jira → lite-ground → lite-design → lite-red → lite-green → lite-verify → lite-deliver → lite-report`.
+
+> **lite ≠ «без дизайна».** Для простой задачи спека (SDD) уже существует — это **source of
+> truth**. `lite-design` строит tech-design/task-plan ПО НЕЙ (скилл `tech-design`, субагент),
+> BRD/SDD заново НЕ пишутся. Путь к спеке — обязательное решение `sources.spec`: пока оно не
+> записано, `gate-guard` блокирует запись фазы `lite-design` (fail-closed). См. §4.
 
 ---
 
@@ -46,7 +51,7 @@ description: >
 |---|---|---|---|
 | Fetch Jira + скоуп-чек | `lite-jira` | главный агент | MCP |
 | Лёгкий grounding | `lite-ground` | reuse или субагент | agent() |
-| План (Gate 1) | `lite-plan` | главный агент | — |
+| Tech-design по спеке (Gate 1) | `lite-design` | субагент (`tech-design`) | agent() |
 | TDD RED | `lite-red` | субагент-тестописатель | agent() |
 | TDD GREEN | `lite-green` | java-spring-dev (субагент) | agent() |
 | Тесты + покрытие | `lite-verify` | субагент-раннер | agent() |
@@ -57,8 +62,9 @@ description: >
 > прогон тестов не пиши inline (заблокирует `inline-phase-guard`; нет SubagentStop → молчат
 > проверки). Субагент ПОСЛЕДНИМ действием сам гоняет свой детерминированный гейт и возвращает
 > JSON с `step_id` и `status` (`completed` только при прохождении гейта). Хук `state-recorder`
-> закрывает шаг по этому статусу. Инлайн-шаги (lite-jira/lite-plan/lite-deliver/lite-report)
-> закрывает главный агент через `update.py`.
+> закрывает шаг по этому статусу. Инлайн-шаги (lite-jira/lite-deliver/lite-report) закрывает
+> главный агент через `update.py`. `lite-design` — субагентная фаза (tech-design; главный агент не
+> пишет tech-design.md/task-plan.json inline — заблокирует `inline-phase-guard`).
 
 ### 1.1. Инициализация (один раз)
 ```
@@ -122,11 +128,32 @@ prompt:
 ```
 Файл подхватывает `context-injector` (вкладывает в последующих субагентов). Reuse — закрой инлайн.
 
-## 4. План реализации → `lite-plan` (Gate 1)
-Короткий план из AC: какие файлы/слои, суть изменения (1–3 предложения), какие тесты под AC.
-> **Gate 1:** «Делаем так?» — код начинай только после «да».
+## 4. Tech-design по существующей спеке → `lite-design` (Gate 1)
 
-Закрой `lite-plan`.
+Спека (SDD) для задачи **уже существует** — это source of truth. НЕ пиши BRD/SDD заново.
+
+1. **Зафиксируй путь к спеке** (обязательное решение `sources.spec`). Интерактивно — спроси
+   пользователя «где лежит спецификация задачи?» (`ask_user_question`); headless — путь предзаписан.
+   Запиши артефакт:
+   ```
+   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set sources.spec <путь-к-спеке>
+   ```
+   Пока `sources.spec` не записан, `gate-guard` заблокирует запись фазы `lite-design` (fail-closed).
+2. **Субагентом** (`tech-design`) построй `tech-design.md` + `task-plan.json` ПО ЭТОЙ спеке
+   (вход — `sources.spec`, а не свежий `sdd.md`). Главный агент tech-design.md/task-plan.json inline
+   НЕ пишет (заблокирует `inline-phase-guard`). Гейт: `check_taskplan.py` + `check_sdd.py --sdd <sources.spec>`.
+   ```
+   subagent_type: general-purpose
+   prompt: |
+     Ты — tech-design. Прочитай СУЩЕСТВУЮЩУЮ спеку (source of truth) по пути <sources.spec> и
+     grounding-excerpt. Построй tech-design.md + task-plan.json по слоям СТРОГО по этой спеке
+     (sdd_ref якори — на её разделы). НЕ пиши BRD/SDD заново. Прогони check_taskplan.py и
+     check_sdd.py --sdd <sources.spec>; верни JSON {"step_id":"lite-design","status":"completed"}
+     только если гейты прошли.
+   ```
+> **Gate 1:** «Дизайн такой?» — к коду только после «да» (или предзаписи в headless).
+
+Субагент закрывает `lite-design` сам (SubagentStop → `state-recorder`).
 
 ## 5. TDD RED — субагент → `lite-red`
 Хук `tdd-guard` не даст писать `src/main/`, пока `lite-red` не закрыт.

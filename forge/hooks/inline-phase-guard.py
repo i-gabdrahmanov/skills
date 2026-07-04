@@ -45,7 +45,7 @@ except Exception:  # pragma: no cover
 # best-effort импорт + inline-fallback (как в update.py), чтобы переименование префикса
 # в одном месте не отключало enforcement молча.
 _SUBAGENT_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
-                      "lite-red", "lite-green", "lite-verify")
+                      "lite-design", "lite-red", "lite-green", "lite-verify")
 try:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "feature-pipeline" / "scripts"))
     import pipeline_phases as _pp
@@ -147,6 +147,9 @@ def _is_phase_work(step_id: str, tool_name: str, tool_input: dict) -> str | None
         if (norm.endswith(".md") or norm.endswith(".puml")) and ("docs/" in norm or "ground/system-analysis" in norm):
             return "запись артефактов спецификации"
     # Lite-ветка (forgelite)
+    elif step_id.startswith("lite-design"):
+        if re.search(r"(^|/)(tech-design\.md|task-plan\.json)$", norm):
+            return "запись tech-design.md / task-plan.json"
     elif step_id.startswith("lite-red"):
         if "src/test/" in norm:
             return "запись RED-тестов в src/test/"

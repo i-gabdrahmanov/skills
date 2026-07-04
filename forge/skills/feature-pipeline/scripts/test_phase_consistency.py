@@ -159,7 +159,7 @@ class TestStepIdConventions(unittest.TestCase):
         src = _src("skills/pipeline-state/scripts/update.py")
         self.assertEqual(PP.SUBAGENT_PHASE_PREFIXES,
                          ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
-                          "lite-red", "lite-green", "lite-verify"))
+                          "lite-design", "lite-red", "lite-green", "lite-verify"))
         for ph in PP.SUBAGENT_PHASE_PREFIXES:
             self.assertIn(f'"{ph}"', src, f"{ph} пропал из fallback update._check_subagent_origin")
 

@@ -35,9 +35,9 @@ from phase_sync import sync_gate_from_manifest
 # (co-located feature-pipeline). best-effort импорт + inline-fallback, чтобы переименование
 # префикса в одном месте не отключало enforcement молча.
 _SUBAGENT_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
-                      "lite-red", "lite-green", "lite-verify")
+                      "lite-design", "lite-red", "lite-green", "lite-verify")
 _GATE_RESULT_PREFIXES = ("04-test", "04-build", "05-tests", "lite-red", "lite-green", "lite-verify")
-_REQUIRED_STEP_PREFIXES = _SUBAGENT_PREFIXES + ("lite-design",)
+_REQUIRED_STEP_PREFIXES = _SUBAGENT_PREFIXES
 try:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1].parent / "feature-pipeline" / "scripts"))
     import pipeline_phases as _pp
