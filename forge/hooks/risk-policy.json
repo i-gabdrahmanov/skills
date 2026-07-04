@@ -70,6 +70,11 @@
     "approval_prefix": "gate-override"
   },
 
+  "required_decisions": {
+    "_comment": "Fail-closed решения: активная фаза (по префиксу id шага) требует записанных решений — dot-path ключей pipeline.json. Пустое значение → gate-guard блокирует ПРОДУКТИВНУЮ запись (Write/Edit) этой фазы. Интерактивно заполняет ask_user_question + config.py set; headless — предзапись ДО прогона. Универсально для обоих режимов.",
+    "lite-design": ["sources.spec"]
+  },
+
   "level_requirements": {
     "_comment": "Что должно быть выполнено, чтобы действие уровня прошло. step = completed-шаг manifest; approval = файл ground/approvals/<key>.json; evidence = ground/evidence/* >= порога. ВАЖНО: evidence требуется ТОЛЬКО на доставке (R4/R5) — на R2/R3 (запись кода/чувствительных путей) его нет, т.к. бандл собирается ПОСЛЕ билда (иначе дедлок medium/high критичности). Доставочный evidence дополнительно форсит evidence-enforcer на push/PR/report. SoD форсит sod-enforcer (не ключи политики); audit — лог-агент.",
     "R0": {"mode": "auto"},

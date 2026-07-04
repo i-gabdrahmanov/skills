@@ -47,6 +47,32 @@ def _read_json(path: Path) -> dict | None:
     return None
 
 
+_WRITE_TOOLS = ("Write", "WriteFile", "Edit", "edit", "write_file", "NotebookEdit", "notebook_edit")
+
+
+def _required_decisions_missing(root: Path) -> str | None:
+    """Первый не-записанный required-ключ для активной фазы (fail-closed решения), иначе None.
+    Карта required_decisions в risk-policy.json: префикс id шага → [dot-path ключей pipeline.json]."""
+    try:
+        policy = R.load_policy().get("required_decisions") or {}
+        if not policy:
+            return None
+        step = R.active_step_id(root)
+        if not step:
+            return None
+        for prefix, keys in policy.items():
+            if prefix.startswith("_"):
+                continue
+            if step.startswith(prefix):
+                for k in keys:
+                    if not R.config_get(root, k):
+                        return k
+                return None
+    except Exception:
+        return None
+    return None
+
+
 def _approval_valid(root: Path, key: str) -> bool:
     """approval-маркер засчитывается ТОЛЬКО с провенансом produced_by:"record_approval"
     (BLOCKER-1): рукописный/самовыписанный маркер без провенанса не снимает гейт, даже если
@@ -262,6 +288,18 @@ def main() -> int:
         # ── Phase gate: проверка последовательности фаз пайплайна ──────────
         if not check_phase_gate(tool_name, tool_input, agent_type, root):
             return 2  # блокировка уже выдана в check_phase_gate
+
+        # ── Fail-closed решения: продуктивная запись фазы блокируется, пока требуемое
+        #    решение не записано (напр. sources.spec для lite-design). Только write-инструменты,
+        #    чтобы не заблокировать config.py set / ask, которыми решение и записывается.
+        if tool_name in _WRITE_TOOLS:
+            miss = _required_decisions_missing(root)
+            if miss:
+                return _block(
+                    f"фаза требует решения '{miss}', которого нет в pipeline.json (fail-closed). "
+                    f"Запиши: config.py set {miss} <value> (интерактивно — ответь на вопрос "
+                    f"оркестратора; headless — предзапись ДО прогона), затем повтори."
+                )
 
         # R0/R1 (или ниже порога критичности фичи) — авто. Не вмешиваемся.
         if R.level_order(level) <= R.level_order(R.auto_max_risk(root)):

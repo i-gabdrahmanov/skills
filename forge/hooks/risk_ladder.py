@@ -104,6 +104,32 @@ def criticality_set(root: Path) -> bool:
     return bool((pipeline_cfg(root).get("autonomy") or {}).get("criticality"))
 
 
+def config_get(root: Path, dotpath: str):
+    """Значение по dot-path из pipeline.json (напр. 'sources.spec'); None если нет."""
+    cur = pipeline_cfg(root)
+    for part in str(dotpath).split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(part)
+    return cur
+
+
+def active_step_id(root: Path) -> str | None:
+    """id активного (in_progress) шага самого свежего манифеста активной фичи.
+    Единый резолвер для хуков (был скопирован в sod-enforcer/inline-phase-guard)."""
+    p = active_manifest(root)
+    if not p:
+        return None
+    try:
+        man = json.loads(p.read_text(encoding="utf-8"))
+        for s in man.get("steps", []):
+            if s.get("status") == "in_progress":
+                return s.get("id") or None
+    except Exception:
+        return None
+    return None
+
+
 def project_root(cwd: str) -> Path:
     try:
         out = subprocess.run(

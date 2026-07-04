@@ -203,6 +203,26 @@
       "aliases": ["критичность", "criticality"]
     },
     {
+      "id": "pipeline.mode",
+      "file": "pipeline",
+      "path": "pipeline.mode",
+      "type": "enum", "enum": ["lite", "full"], "default": "",
+      "category": "pipeline", "sensitive": false,
+      "title": "Режим пайплайна (fail-closed решение)",
+      "description": "Выбранный путь: lite (готовая Jira-подзадача, forgelite) | full (фича с нуля, feature-pipeline). Записывает router. Часть required_decisions.",
+      "aliases": ["режим", "путь", "mode", "lite/full"]
+    },
+    {
+      "id": "sources.spec",
+      "file": "pipeline",
+      "path": "sources.spec",
+      "type": "string", "default": "",
+      "category": "pipeline", "sensitive": false,
+      "title": "Путь к спецификации (source of truth)",
+      "description": "Путь к готовой спеке/SDD, по которой строится tech-design (lite+design). Source of truth — required_decisions для фазы lite-design (gate-guard блокирует запись фазы без него).",
+      "aliases": ["спека", "спецификация", "spec", "source of truth", "sdd path"]
+    },
+    {
       "id": "docs.mode",
       "file": "pipeline",
       "path": "docs.mode",

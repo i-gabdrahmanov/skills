@@ -102,6 +102,17 @@ def requires_gate_result(step_id) -> bool:
     return isinstance(step_id, str) and step_id.startswith(GATE_RESULT_PREFIXES)
 
 
+# Обязательные шаги: их НЕЛЬЗЯ тихо пропустить (status=skipped) без override — иначе fallback
+# «не смог спросить → пропущу фазу» тихо выкидывает качество-гейты (Thrust 1: fallback=STOP).
+# grounding/brd/report сюда НЕ входят (grounding легитимно reuse-skip, report — пост-доставка).
+REQUIRED_STEP_PREFIXES = SUBAGENT_PHASE_PREFIXES + ("lite-design",)
+
+
+def requires_no_silent_skip(step_id) -> bool:
+    """True — шаг обязательный, skip только через override (иначе exit 3 ESCALATE)."""
+    return isinstance(step_id, str) and step_id.startswith(REQUIRED_STEP_PREFIXES)
+
+
 def _task_id_after(step_id, prefix: str):
     """task-id из id шага по префиксу ('04-build-T1' → 'T1'); иначе None."""
     if isinstance(step_id, str) and step_id.startswith(prefix):

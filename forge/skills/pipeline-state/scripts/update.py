@@ -37,6 +37,7 @@ from phase_sync import sync_gate_from_manifest
 _SUBAGENT_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
                       "lite-red", "lite-green", "lite-verify")
 _GATE_RESULT_PREFIXES = ("04-test", "04-build", "05-tests", "lite-red", "lite-green", "lite-verify")
+_REQUIRED_STEP_PREFIXES = _SUBAGENT_PREFIXES + ("lite-design",)
 try:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1].parent / "feature-pipeline" / "scripts"))
     import pipeline_phases as _pp
@@ -44,12 +45,17 @@ try:
     _SUBAGENT_PREFIXES = _pp.SUBAGENT_PHASE_PREFIXES
     _requires_gate_result = _pp.requires_gate_result
     _GATE_RESULT_PREFIXES = _pp.GATE_RESULT_PREFIXES
+    _requires_no_silent_skip = _pp.requires_no_silent_skip
+    _REQUIRED_STEP_PREFIXES = _pp.REQUIRED_STEP_PREFIXES
 except Exception:
     def _requires_subagent(step_id) -> bool:
         return isinstance(step_id, str) and step_id.startswith(tuple(_SUBAGENT_PREFIXES))
 
     def _requires_gate_result(step_id) -> bool:
         return isinstance(step_id, str) and step_id.startswith(tuple(_GATE_RESULT_PREFIXES))
+
+    def _requires_no_silent_skip(step_id) -> bool:
+        return isinstance(step_id, str) and step_id.startswith(tuple(_REQUIRED_STEP_PREFIXES))
 
 
 VALID_STATUSES = {"pending", "in_progress", "completed", "failed", "skipped"}
@@ -397,6 +403,34 @@ def _check_failure_limit(step: dict, project: Path, skill: str, feature: str) ->
     return True
 
 
+def _check_required_skip(step: dict, project: Path, skill: str, feature: str):
+    """Обязательный шаг (REQUIRED_STEP_PREFIXES) нельзя тихо пропустить (status=skipped) — иначе
+    fallback «не смог спросить → пропущу фазу» молча выкидывает качество-гейты. Для обязательной
+    фазы пропуск = ОСТАНОВКА (Thrust 1: fallback=STOP). Escape: overrides/step-skip-<step_id>.json
+    (создание — R4 через override_judge + approval-маркер). Иначе exit 3 ESCALATE."""
+    step_id = step.get("id", "")
+    if not _requires_no_silent_skip(step_id):
+        return
+    ov = _load_override(project, skill, feature, f"step-skip-{step_id}")
+    if ov:
+        step.setdefault("override_warnings", [])
+        msg = (f"⚠️  обязательный шаг '{step_id}' пропущен по override "
+               f"(reason: {ov.get('reason', '?')})")
+        if msg not in step["override_warnings"]:
+            step["override_warnings"].append(msg)
+        return
+    sys.stderr.write(
+        "\n" + "=" * 60 + "\n"
+        f"⛔ STOP: шаг '{step_id}' — обязательный, его нельзя пропустить (skipped) молча.\n"
+        f"   Пустой ответ вопроса / «не смог спросить» для обязательной фазы = ОСТАНОВКА,\n"
+        f"   а не тихий пропуск. Доведи фазу или спроси пользователя. Если пропуск реально\n"
+        f"   согласован пользователем:\n"
+        + _override_hint(f"step-skip-{step_id}", feature, step_id, "<почему пропуск согласован>")
+        + "\n" + "=" * 60 + "\n"
+    )
+    sys.exit(3)
+
+
 def iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -456,6 +490,10 @@ def main():
         _check_subagent_origin(step, args.closed_by, project, args.skill, args.feature)
         _check_gate_result(step, project, args.skill, args.feature)
         _check_judges(step, project, args.skill, args.feature)
+
+    # Fallback=STOP: обязательный шаг нельзя тихо пропустить (skipped) без override
+    if not args.skip_judges and args.status == "skipped":
+        _check_required_skip(step, project, args.skill, args.feature)
 
     step["status"] = args.status
     if args.status == "completed":

@@ -41,8 +41,10 @@ description: >
 ## 2. Делегирование
 
 ### Выбран **lite**
-1. Выстави lite-конфиг (один общий `.gigacode`; `--project` ДО `set`; `auto_max_risk` sensitive → `--confirm`):
+1. Выстави lite-конфиг (один общий `.gigacode`; `--project` ДО `set`; `auto_max_risk` sensitive → `--confirm`).
+   **`pipeline.mode` — записать первым** (артефакт решения о пути, universal-режим fail-closed):
    ```
+   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set pipeline.mode lite
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set autonomy.auto_max_risk R2 --confirm
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set autonomy.criticality medium
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set quality.eval_enabled false
@@ -52,7 +54,10 @@ description: >
    Дальше веди задачу по нему (стейт в namespace `forgelite`).
 
 ### Выбран **full**
-1. Не переопределяй autonomy — у full свой гейт критичности (после BRD).
+1. Запиши путь и не переопределяй autonomy — у full свой гейт критичности (после BRD):
+   ```
+   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set pipeline.mode full
+   ```
 2. Прочитай и строго следуй: `read_file("<project>/.gigacode/skills/feature-pipeline/SKILL.md")`.
    Дальше веди фичу по нему (стейт в namespace `feature-pipeline`).
 

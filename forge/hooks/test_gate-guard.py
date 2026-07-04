@@ -108,5 +108,41 @@ class TGateOverride(unittest.TestCase):
                              f"--remove (восстановление enforcement) не гейтится: {r.stderr}")
 
 
+def _write_run(file_path: str, cwd: str):
+    payload = json.dumps({"hook_event_name": "PreToolUse", "cwd": cwd,
+                          "tool_name": "write_file", "tool_input": {"file_path": file_path}})
+    return subprocess.run([sys.executable, str(HOOK)], input=payload,
+                          capture_output=True, text=True, timeout=30)
+
+
+class TRequiredDecisions(unittest.TestCase):
+    """Thrust 1 fail-closed: продуктивная запись фазы блокируется без записанного решения."""
+
+    @staticmethod
+    def _mk(td: str, spec: str | None = None):
+        d = Path(td) / "ground" / "statements" / "forgelite" / "f1"
+        d.mkdir(parents=True)
+        (d / "manifest.json").write_text(
+            json.dumps({"steps": [{"id": "lite-design", "status": "in_progress"}]}),
+            encoding="utf-8")
+        cfg = {"autonomy": {"criticality": "medium", "auto_max_risk": "R2"}}
+        if spec:
+            cfg["sources"] = {"spec": spec}
+        (Path(td) / "ground" / "pipeline.json").write_text(json.dumps(cfg), encoding="utf-8")
+
+    def test_write_blocked_without_required_decision(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._mk(td)
+            r = _write_run("docs/feature-pipeline/f1/tech-design.md", td)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("sources.spec", r.stderr)
+
+    def test_write_passes_when_decision_recorded(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._mk(td, spec="docs/feature-pipeline/f1/existing-spec.md")
+            r = _write_run("docs/feature-pipeline/f1/tech-design.md", td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
