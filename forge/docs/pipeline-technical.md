@@ -205,14 +205,16 @@ sequenceDiagram
    `red-judge` (§7.2) + `run_judge.py red <slug> --recheck`.
 2. **Стабы** сигнатур (§4.2).
 3. **GREEN** — `java-spring-dev` (§4.3).
-4. `build-judge` (pass-through, §7.3): сохранить verdict.json → `run_judge.py build --from-output` → `--recheck`.
-   `check_build.py --task <taskId>`.
+4. `build-judge` (гибрид, §7.3): сохранить verdict.json → `run_judge.py build --from-output` → `--recheck`.
+   Ингест сам применяет детерминированный пол stubs (`INGEST_FLOOR_PHASES`) — LLM-PASS на стабах
+   не сохранится. `check_build.py --task <taskId>`.
 5. `reuse-judge` (§7.7, LLM + regex по git diff): `run_judge.py reuse --from-output ... --diff-base <base>` → `--recheck`.
 6. Закрыть `04-build-<taskId>` только когда **оба** судьи PASS.
 
 ### Фаза 4 — Verify
 - Тестописатель добора покрытия (§4.4), тестраннер (§4.1a).
-- **Judge:** `run_judge.py coverage <slug> --recheck` (`coverage-judge` → `check_coverage.py`, JaCoCo). Закрыть `05-tests`.
+- **Judge:** `run_judge.py coverage <slug> --recheck` (`coverage-judge` → `check_coverage.py`, JaCoCo
+  + floor целостности тестов + floor тавтологичных тестов, дефолт ВКЛ). Закрыть `05-tests`.
 
 ### Фаза 5 — Document
 - Спецадаптер (§5) правит спеку в `docs_path`.
@@ -220,7 +222,9 @@ sequenceDiagram
 - `spec-judge` (§7.4) + `run_judge.py spec <slug> --recheck`. Закрыть `06-spec`.
 
 ### Фаза 6 — Deliver (per task, stacked)
-- `delivery-judge` (pass-through, §7.5): `run_judge.py delivery --from-output` → `--recheck`.
+- `delivery-judge` (гибрид, §7.5): `run_judge.py delivery --from-output` → `--recheck`
+  (ингест сам применяет пол секретов, `INGEST_FLOOR_PHASES`). На push `evidence-enforcer`
+  дополнительно валидирует сообщение HEAD-коммита (запрет `Co-Authored-By`).
 - **Гейт 4** коммиты → **Гейт 5** push + stacked PR (target = ветка-родитель/default) → **Гейт 6** отчёт в Story.
 - `check_delivery.py` перед закрытием `07-deliver-<id>` и `07-report`. Ветки stacked по `depends_on`.
 
