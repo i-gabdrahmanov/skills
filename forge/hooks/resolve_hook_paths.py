@@ -23,6 +23,20 @@ import sys
 from pathlib import Path
 
 PLACEHOLDER = "${PROJECT_ROOT}"
+PYTHON_PLACEHOLDER = "${PYTHON}"
+
+
+def find_python_cmd() -> str:
+    """Абсолютный путь к интерпретатору, которым запущен сам resolver.
+
+    Это тот же python, что deploy-local.sh уже нашёл в PATH (python3/python/py) —
+    подставляем его абсолютным путём, чтобы хуки на рантайме не зависели от PATH
+    (на Windows часто нет python3, только python.exe/py.exe).
+    """
+    exe = sys.executable
+    if not exe:
+        return "python3"
+    return f'"{exe}"' if " " in exe else exe
 
 
 def find_project_root(cwd: str | None = None) -> str:
@@ -40,17 +54,17 @@ def find_project_root(cwd: str | None = None) -> str:
     return str(start)
 
 
-def resolve_string(value: str, project_root: str) -> str:
-    """Заменяет ${PROJECT_ROOT} в строке."""
-    return value.replace(PLACEHOLDER, project_root)
+def resolve_string(value: str, project_root: str, python_cmd: str) -> str:
+    """Заменяет ${PROJECT_ROOT} и ${PYTHON} в строке."""
+    return value.replace(PLACEHOLDER, project_root).replace(PYTHON_PLACEHOLDER, python_cmd)
 
 
-def resolve_hooks_block(hooks: dict, project_root: str) -> dict:
-    """Рекурсивно заменяет ${PROJECT_ROOT} во всех строковых значениях блока hooks."""
+def resolve_hooks_block(hooks: dict, project_root: str, python_cmd: str) -> dict:
+    """Рекурсивно заменяет ${PROJECT_ROOT}/${PYTHON} во всех строковых значениях блока hooks."""
 
     def _walk(node):
         if isinstance(node, str):
-            return resolve_string(node, project_root)
+            return resolve_string(node, project_root, python_cmd)
         if isinstance(node, dict):
             return {k: _walk(v) for k, v in node.items()}
         if isinstance(node, list):
@@ -81,7 +95,9 @@ def has_absolute_hook_paths(settings: dict) -> list[str]:
 
     def _walk(node, path=""):
         if isinstance(node, str) and path.endswith("command"):
-            m = re.search(r"python3\s+(/\S+)", node)
+            # Ищем путь к .py-хуку, а не к интерпретатору — тот может быть
+            # "python3", "python" или абсолютным путём (sys.executable, в т.ч. в кавычках).
+            m = re.search(r"(/\S+\.py)\b", node)
             if m:
                 found.append(m.group(1))
         elif isinstance(node, dict):
@@ -189,7 +205,7 @@ def main():
         )
         resolved_hooks = template_hooks
     else:
-        resolved_hooks = resolve_hooks_block(template_hooks, project_root)
+        resolved_hooks = resolve_hooks_block(template_hooks, project_root, find_python_cmd())
 
     # Читаем существующий settings.json или создаём новый
     if target_settings_path.exists():

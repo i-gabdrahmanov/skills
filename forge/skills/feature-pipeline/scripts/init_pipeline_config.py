@@ -18,6 +18,11 @@ import argparse, json, os, re, subprocess, sys, glob
 
 SCHEMA_VERSION = "feature-pipeline/config@1"
 
+# cmd.exe (куда на Windows всегда уходит shell=True в run_pending_evals.py/check_tests_red.py,
+# вне зависимости от оболочки, из которой запущен сам python) не умеет ни в shebang, ни
+# в "./" без расширения — нужен gradlew.bat.
+_GRADLEW = "gradlew.bat" if sys.platform == "win32" else "./gradlew"
+
 
 def sh(cmd, cwd):
     try:
@@ -161,15 +166,15 @@ def build_config(root):
         },
         "quality": {
             "coverage_threshold": 0.80,
-            "build_command": "./gradlew clean build" if gradle else "mvn -q clean verify",
-            "test_command": "./gradlew test jacocoTestReport" if gradle else "mvn -q test jacoco:report",
+            "build_command": f"{_GRADLEW} clean build" if gradle else "mvn -q clean verify",
+            "test_command": f"{_GRADLEW} test jacocoTestReport" if gradle else "mvn -q test jacoco:report",
             "coverage_report": "build/reports/jacoco/test/jacocoTestReport.xml" if gradle else "target/site/jacoco/jacoco.xml",
             "jacoco_configured": has_jacoco,
             "token_budget": 2000000,          # PDLC v3.5 cost circuit breaker (warn 80% / stop 120%)
             "tdd": True,                      # TDD по умолчанию: тесты (RED) → код (GREEN); см. check_tests_red.py
             "eval_enabled": True,             # Eval-Driven Development: фаза 02-eval-plan + eval-guard (resolve_phases.enabled_by)
             "eval_threshold": 0.95,           # min доля зелёных eval'ов задачи (см. build_evals_from_design.py)
-            "compile_test_command": "./gradlew compileTestJava" if gradle else "mvn -q test-compile",
+            "compile_test_command": f"{_GRADLEW} compileTestJava" if gradle else "mvn -q test-compile",
             "test_layer": "service-unit",     # по умолчанию ТОЛЬКО Mockito unit; НЕ писать JPA/@DataJpaTest/@SpringBootTest (red-judge блокирует)
         },
         "evidence": {

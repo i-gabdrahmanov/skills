@@ -24,6 +24,17 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # = <project>/.gigacode
 RESOLVER="$DIR/hooks/resolve_hook_paths.py"
+
+# --- поиск python-интерпретатора (Windows/git-bash часто без python3, только python/py) ---
+PY=()
+if command -v python3 >/dev/null 2>&1; then PY=(python3)
+elif command -v python >/dev/null 2>&1; then PY=(python)
+elif command -v py >/dev/null 2>&1; then PY=(py -3)
+else
+  echo "deploy-local.sh: не найден ни python3, ни python, ни py в PATH." >&2
+  echo "  Поставь Python 3 и убедись, что он добавлен в PATH." >&2
+  exit 1
+fi
 TEMPLATE="$DIR/hooks/settings.hooks.json"
 TARGET="$DIR/settings.json"
 
@@ -87,4 +98,4 @@ RESOLVER_ARGS=("--project" "$PROJECT_ROOT")
 [ "$DRY_RUN" -eq 1 ] && RESOLVER_ARGS+=("--dry-run")
 [ "$CHECK" -eq 1 ] && RESOLVER_ARGS+=("--check")
 
-exec python3 "$RESOLVER" "${RESOLVER_ARGS[@]}"
+exec "${PY[@]}" "$RESOLVER" "${RESOLVER_ARGS[@]}"

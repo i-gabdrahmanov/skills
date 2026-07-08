@@ -18,11 +18,39 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 PER_FILE_LIMIT = 6000  # символов на файл
+
+
+def _env_hint() -> str | None:
+    """Подсказка субагенту, если буквальные примеры из SKILL.md/phase-доков вида
+    "python3 <project>/.../script.py" или "./gradlew ..." не сработают на ЭТОЙ машине
+    (Windows без python3 в PATH — только python.exe/py.exe; cmd.exe без поддержки
+    shebang/"./" для gradlew без расширения). Доки (112+ мест) переписывать под каждую
+    платформу нецелесообразно — вместо этого выдаём готовую замену один раз здесь.
+
+    Пусто на типичной macOS/Linux/WSL-машине, где буквальные примеры и так рабочие —
+    не шумим зря в контексте субагента."""
+    lines = []
+    if not shutil.which("python3"):
+        py = shutil.which("python") or shutil.which("py")
+        if py:
+            lines.append(
+                f"- Команды вида `python3 <path>/script.py` из документации НЕ сработают "
+                f"(на этой машине нет `python3` в PATH) — используй `{Path(py).name} <path>/script.py`."
+            )
+    if sys.platform == "win32":
+        lines.append(
+            "- Команды вида `./gradlew ...` из документации НЕ сработают (Windows-shell "
+            "не исполняет shebang/`./` без расширения) — используй `gradlew.bat ...` вместо `./gradlew ...`."
+        )
+    if not lines:
+        return None
+    return "### Окружение этой машины (переопределяет буквальные примеры команд в доках)\n" + "\n".join(lines)
 
 
 def _inject_targets(root: Path) -> list[tuple[str, Path]]:
@@ -65,6 +93,9 @@ def main() -> int:
         root = _project_root(data.get("cwd", ""))
 
         chunks: list[str] = []
+        env_hint = _env_hint()
+        if env_hint:
+            chunks.append(env_hint)
         for label, p in _inject_targets(root):
             if not p.exists():
                 continue

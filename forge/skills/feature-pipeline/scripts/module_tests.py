@@ -142,7 +142,10 @@ def _module_test_cmd(module: str, build_system: str) -> list[str]:
         return ["mvn", "-q", "-pl", module.replace("-", "/"), "test",
                 "-Dmaven.test.failure.ignore=true"]
     gp = gradle_module_path(module)
-    return ["./gradlew", f"{gp}:test", "--no-daemon", "--continue"]
+    # cmd.exe (Windows) не умеет в shebang/"./"; CreateProcess без shell=True — тоже
+    # (ни shebang, ни PATHEXT для файлов без расширения). Нужен gradlew.bat.
+    gradlew = "gradlew.bat" if sys.platform == "win32" else "./gradlew"
+    return [gradlew, f"{gp}:test", "--no-daemon", "--continue"]
 
 
 def _results_dirs(root: Path, module: str, build_system: str) -> list[Path]:

@@ -23,13 +23,18 @@ SubagentStop, SessionStart, Stop. Читает hook-JSON из stdin и допи�
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import re
 import subprocess
 import sys
 from datetime import datetime, timezone
+
+try:
+    import fcntl  # POSIX
+except ImportError:
+    fcntl = None
+    import msvcrt  # Windows
 
 import os as _os
 TRUNC = int(_os.environ.get("GIGACODE_LOG_TRUNC", "4000"))  # длина payload; для анализа крупнее (env-override)
@@ -107,12 +112,20 @@ def _append(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         try:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)  # безопасный конкурентный append
+            if fcntl:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)  # безопасный конкурентный append
+            else:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
             f.write(text)
             f.flush()
         finally:
             try:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                if fcntl:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                else:
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
             except Exception:
                 pass
 
