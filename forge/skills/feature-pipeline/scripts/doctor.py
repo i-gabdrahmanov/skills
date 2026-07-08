@@ -183,9 +183,9 @@ def run_checks(project_root: Path | None = None) -> dict:
     else:
         try:
             r = subprocess.run(
-                [sys.executable, str(cfg_validate), "--project", str(project_root),
+                [sys.executable, "-X", "utf8", str(cfg_validate), "--project", str(project_root),
                  "validate", "--strict", "--json"],
-                capture_output=True, text=True, timeout=20,
+                capture_output=True, text=True, encoding="utf-8", timeout=20,
             )
             if r.returncode == 0:
                 ok("config-valid")
