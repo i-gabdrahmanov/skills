@@ -93,7 +93,7 @@ def cmd_list(args, project: Path) -> int:
         records = []
         for f in files:
             try:
-                records.append(json.loads(f.read_text()))
+                records.append(json.loads(f.read_text(encoding="utf-8")))
             except Exception:
                 records.append({"path": str(f), "error": "invalid JSON"})
         print(json.dumps(records, ensure_ascii=False, indent=2))
@@ -104,7 +104,7 @@ def cmd_list(args, project: Path) -> int:
             print(f"Активные overrides ({args.feature}):")
             for f in files:
                 try:
-                    r = json.loads(f.read_text())
+                    r = json.loads(f.read_text(encoding="utf-8"))
                     print(f"  • {r['judge']:25s} шаг={r.get('step_id','?'):20s} "
                           f"дата={r.get('override_at','?')[:10]}")
                     print(f"    причина: {r.get('reason','')[:100]}")

@@ -229,12 +229,12 @@ class TestBuildEvals(unittest.TestCase):
         """Проверка: при записи через main получается валидный JSON."""
         with tempfile.TemporaryDirectory() as tmp:
             task_plan_path = Path(tmp) / "task-plan.json"
-            with open(task_plan_path, "w") as f:
+            with open(task_plan_path, "w", encoding="utf-8") as f:
                 json.dump(SAMPLE_TASK_PLAN, f)
 
             # Создаём фиктивный coverage-скрипт
             cov_script = Path(tmp) / "check_coverage.py"
-            cov_script.write_text("#!/usr/bin/env python3\nprint('ok')\n")
+            cov_script.write_text("#!/usr/bin/env python3\nprint('ok')\n", encoding="utf-8")
             cov_script.chmod(0o755)
 
             out_path = Path(tmp) / "eval-plan.json"
@@ -254,7 +254,7 @@ class TestBuildEvals(unittest.TestCase):
                 pass
 
             self.assertTrue(out_path.exists())
-            with open(out_path) as f:
+            with open(out_path, encoding="utf-8") as f:
                 loaded = json.load(f)
             self.assertEqual(loaded["summary"]["total"], 6)
 

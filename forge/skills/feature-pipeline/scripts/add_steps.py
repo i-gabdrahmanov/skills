@@ -42,7 +42,7 @@ def _load_phase_defs(project_root: Path, feature: str) -> dict | None:
     defs_path = pp.defs_path(project_root, feature)
     if defs_path.exists():
         try:
-            return json.loads(defs_path.read_text())
+            return json.loads(defs_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return None
     return None
@@ -83,7 +83,7 @@ def _rebuild_gate(project_root: Path, manifest: dict, feature: str) -> dict:
     cur_gate = pp.gate_path(project_root, feature)
     if cur_gate.exists():
         try:
-            for p in json.loads(cur_gate.read_text()).get("phases", []):
+            for p in json.loads(cur_gate.read_text(encoding="utf-8")).get("phases", []):
                 existing_meta[p["id"]] = {"skip_allowed": p.get("skip_allowed", True)}
         except (json.JSONDecodeError, OSError):
             pass
@@ -97,7 +97,7 @@ def _rebuild_gate(project_root: Path, manifest: dict, feature: str) -> dict:
 
     out = pp.gate_dir(project_root, feature) / "gate.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(gate, ensure_ascii=False, indent=2) + "\n")
+    out.write_text(json.dumps(gate, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return gate
 
 
@@ -141,7 +141,7 @@ def _rebuild_phase_defs(project_root: Path, manifest: dict, feature: str) -> dic
     phase_defs = {"schema": "phase-defs@1", "phases": defs_list}
     out = pp.gate_dir(project_root, feature) / "phase-defs.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(phase_defs, ensure_ascii=False, indent=2) + "\n")
+    out.write_text(json.dumps(phase_defs, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return phase_defs
 
 
@@ -153,7 +153,7 @@ def add_steps(skill: str, feature: str, steps: list) -> dict:
         return {"status": "error", "error": f"Manifest not found: {manifest_path}"}
 
     try:
-        manifest = json.loads(manifest_path.read_text())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
         return {"status": "error", "error": f"Manifest повреждён ({manifest_path}): {e}"}
     existing_ids = {s["id"] for s in manifest.get("steps", [])}
@@ -178,7 +178,7 @@ def add_steps(skill: str, feature: str, steps: list) -> dict:
         manifest["last_update"] = __import__("datetime").datetime.now(
             __import__("datetime").timezone.utc
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
         # ════════════════════════════════════════════════════════════════
         # СИНХРОНИЗАЦИЯ: перестроить gate.json и phase-defs.json

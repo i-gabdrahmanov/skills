@@ -38,7 +38,7 @@ def check_grounding(project_root: str) -> dict:
     for p in excerpt_paths:
         if p.exists():
             try:
-                data = json.loads(p.read_text())
+                data = json.loads(p.read_text(encoding="utf-8"))
                 return {
                     "status": "found",
                     "path": str(p),

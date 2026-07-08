@@ -143,7 +143,7 @@ def main():
             issues.append(f"MISSING: {hooks_template_path}")
         else:
             try:
-                tmpl = json.loads(hooks_template_path.read_text())
+                tmpl = json.loads(hooks_template_path.read_text(encoding="utf-8"))
                 if not has_placeholder(tmpl.get("hooks", {})):
                     issues.append(
                         f"ETALON HAS NO {PLACEHOLDER} in hooks block: {hooks_template_path}"
@@ -153,7 +153,7 @@ def main():
 
         if target_settings_path.exists():
             try:
-                stg = json.loads(target_settings_path.read_text())
+                stg = json.loads(target_settings_path.read_text(encoding="utf-8"))
                 abs_paths = has_absolute_hook_paths(stg)
                 expected_prefix = f"{project_root}/.gigacode/hooks/"
                 foreign = [p for p in abs_paths if not p.startswith(expected_prefix)]
@@ -189,7 +189,7 @@ def main():
         )
         sys.exit(1)
 
-    template = json.loads(hooks_template_path.read_text())
+    template = json.loads(hooks_template_path.read_text(encoding="utf-8"))
     template_hooks = template.get("hooks", {})
 
     if not has_placeholder(template_hooks):
@@ -209,7 +209,7 @@ def main():
 
     # Читаем существующий settings.json или создаём новый
     if target_settings_path.exists():
-        existing = json.loads(target_settings_path.read_text())
+        existing = json.loads(target_settings_path.read_text(encoding="utf-8"))
     else:
         existing = {}
 
@@ -226,7 +226,7 @@ def main():
         print(output)
         return
 
-    target_settings_path.write_text(output)
+    target_settings_path.write_text(output, encoding="utf-8")
 
     # Считаем количество замен
     count = count_occurrences_in_hooks(template_hooks)

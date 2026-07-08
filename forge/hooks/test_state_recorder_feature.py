@@ -34,7 +34,7 @@ class ResolveActiveFeature(unittest.TestCase):
         d = self.base / feature
         d.mkdir(parents=True, exist_ok=True)
         mp = d / "manifest.json"
-        mp.write_text("{}")
+        mp.write_text("{}", encoding="utf-8")
         if mtime is not None:
             os.utime(mp, (mtime, mtime))
         return mp
@@ -54,7 +54,7 @@ class ResolveActiveFeature(unittest.TestCase):
         # archived должен игнорироваться, даже если новее
         d = self.base / "archived"
         d.mkdir(parents=True, exist_ok=True)
-        (d / "manifest.json").write_text("{}")
+        (d / "manifest.json").write_text("{}", encoding="utf-8")
         os.utime(d / "manifest.json", (now, now))
         self.assertEqual(SR._resolve_active_feature(self.root), "real")
 

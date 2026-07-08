@@ -32,14 +32,14 @@ class TestModuleDerivation(unittest.TestCase):
                 {"id": "T1", "modules": ["service-taskservice", "utils-web"]},
                 {"id": "T2", "module": "database"},
                 {"id": "T3"},
-            ]}))
+            ]}), encoding="utf-8")
             self.assertEqual(mt.modules_from_taskplan(p),
                              ["database", "service-taskservice", "utils-web"])
 
 
 class TestParseJunit(unittest.TestCase):
     def _write(self, d, name, body):
-        (d / name).write_text(body)
+        (d / name).write_text(body, encoding="utf-8")
 
     def test_parse_pass_fail_skip(self):
         with tempfile.TemporaryDirectory() as dd:
@@ -105,7 +105,7 @@ class TestSnapshotCompare(unittest.TestCase):
                               from_diff=None, build_system="gradle", timeout=60,
                               json=False, out=str(out))
             self.assertEqual(mt.cmd_snapshot(args), 0)
-            data = json.loads(out.read_text())
+            data = json.loads(out.read_text(encoding="utf-8"))
             self.assertEqual(data["tests"]["A#x"], "passed")
             self.assertEqual(data["modules"], ["service-taskservice"])
 
@@ -113,7 +113,7 @@ class TestSnapshotCompare(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             bl = Path(d) / "baseline.json"
             bl.write_text(json.dumps({"modules": ["m"], "build_system": "gradle",
-                                      "tests": {"A#x": "passed", "C#z": "failed"}}))
+                                      "tests": {"A#x": "passed", "C#z": "failed"}}), encoding="utf-8")
             # теперь A#x падает (регрессия), C#z всё ещё красный (pre-existing — не блок)
             self._patch_suite({"A#x": "failed", "C#z": "failed"})
             args = self._args(root=d, modules=None, build_system="gradle", timeout=60,
@@ -124,7 +124,7 @@ class TestSnapshotCompare(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             bl = Path(d) / "baseline.json"
             bl.write_text(json.dumps({"modules": ["m"], "build_system": "gradle",
-                                      "tests": {"A#x": "passed", "C#z": "failed"}}))
+                                      "tests": {"A#x": "passed", "C#z": "failed"}}), encoding="utf-8")
             self._patch_suite({"A#x": "passed", "C#z": "failed"})  # без регрессий
             args = self._args(root=d, modules=None, build_system="gradle", timeout=60,
                               json=False, baseline=str(bl), from_diff=None)
@@ -140,7 +140,7 @@ class TestSnapshotCompare(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             bl = Path(d) / "baseline.json"
             bl.write_text(json.dumps({"modules": ["m"], "build_system": "gradle",
-                                      "tests": {"A#x": "passed"}}))
+                                      "tests": {"A#x": "passed"}}), encoding="utf-8")
             # модуль 'm' не дал результатов — нельзя подтвердить зелёное → fail-closed
             self._patch_suite({}, no_results=["m"])
             args = self._args(root=d, modules=None, build_system="gradle", timeout=60,

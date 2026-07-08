@@ -25,7 +25,7 @@ def write_report(path: Path, covered: int, missed: int, *, include: bool = True)
           f'missed="{missed}"/></sourcefile>') if include else \
         '<sourcefile name="Other.java"><counter type="LINE" covered="5" missed="0"/></sourcefile>'
     path.write_text(
-        f'<?xml version="1.0"?><report name="t"><package name="com/foo">{sf}</package></report>')
+        f'<?xml version="1.0"?><report name="t"><package name="com/foo">{sf}</package></report>', encoding="utf-8")
 
 
 def run(*args):

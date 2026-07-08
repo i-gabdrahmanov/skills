@@ -125,7 +125,7 @@ def _append_to_md_section(md_path: Path, section_marker: str, new_rows: list[str
     if not md_path.exists():
         # Создать файл с шапкой
         content = f"# {md_path.stem}\n\n"
-        md_path.write_text(content)
+        md_path.write_text(content, encoding="utf-8")
 
     text = md_path.read_text(encoding="utf-8")
 
@@ -156,7 +156,7 @@ def _append_to_md_section(md_path: Path, section_marker: str, new_rows: list[str
         # Секции нет — добавляем в конец файла
         text += f"\n\n{section_marker}\n\n| Категория | Детали | Модуль | Примечание |\n|-----------|--------|--------|------------|\n{new_block}\n"
 
-    md_path.write_text(text)
+    md_path.write_text(text, encoding="utf-8")
     return True
 
 
@@ -431,7 +431,7 @@ def enrich(analysis_dir: str | Path, scan_dir: str | Path | None,
         excerpt_path = analysis_path / "grounding-excerpt.json"
         prev_excerpt = _read_json(excerpt_path)  # ДО пересборки — для детекта дрейфа
         excerpt = _build_excerpt(analysis_path, scan_path, feature_slug)
-        excerpt_path.write_text(json.dumps(excerpt, ensure_ascii=False, indent=2))
+        excerpt_path.write_text(json.dumps(excerpt, ensure_ascii=False, indent=2), encoding="utf-8")
         changes["excerpt_updated"] = True
         changes["excerpt_path"] = str(excerpt_path)
 

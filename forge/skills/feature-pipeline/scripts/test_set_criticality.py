@@ -66,10 +66,10 @@ class TestMain(unittest.TestCase):
             root = Path(d)
             (root / "ground").mkdir()
             pj = root / "ground" / "pipeline.json"
-            pj.write_text(json.dumps({"autonomy": {"criticality": None, "auto_max_risk": "R1"}}))
+            pj.write_text(json.dumps({"autonomy": {"criticality": None, "auto_max_risk": "R1"}}), encoding="utf-8")
             rc = self._run("high", root)
             self.assertEqual(rc, 0)
-            cfg = json.loads(pj.read_text())
+            cfg = json.loads(pj.read_text(encoding="utf-8"))
             self.assertEqual(cfg["autonomy"]["criticality"], "high")
             self.assertEqual(cfg["autonomy"]["auto_max_risk"], "R0")
 
@@ -81,7 +81,7 @@ class TestMain(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             (root / "ground").mkdir()
-            (root / "ground" / "pipeline.json").write_text("{}")
+            (root / "ground" / "pipeline.json").write_text("{}", encoding="utf-8")
             self.assertEqual(self._run("nope", root), 2)
 
 

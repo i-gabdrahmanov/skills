@@ -47,7 +47,7 @@ def run(project: Path, steps: list):
 
 def _manifest(project: Path) -> dict:
     return json.loads(
-        (project / "ground" / "statements" / SKILL / FEATURE / "manifest.json").read_text())
+        (project / "ground" / "statements" / SKILL / FEATURE / "manifest.json").read_text(encoding="utf-8"))
 
 
 def check(name: str, cond: bool, detail: str = ""):

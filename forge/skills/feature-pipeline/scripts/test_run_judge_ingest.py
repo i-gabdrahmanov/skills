@@ -37,11 +37,11 @@ class Ingest(unittest.TestCase):
 
     def test_ingest_then_recheck_passes(self):
         vf = self.proj / "verdict.json"
-        vf.write_text(json.dumps({"passed": True, "blocking_issues": [], "summary": "ok"}))
+        vf.write_text(json.dumps({"passed": True, "blocking_issues": [], "summary": "ok"}), encoding="utf-8")
         r = _run(["build", "feat", "--from-output", str(vf), "--project-root", self.proj], self.proj)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(self._verdict_path("build-judge").exists())
-        saved = json.loads(self._verdict_path("build-judge").read_text())
+        saved = json.loads(self._verdict_path("build-judge").read_text(encoding="utf-8"))
         self.assertTrue(saved["passed"])
         # recheck подтверждает
         r2 = _run(["build", "feat", "--recheck", "--project-root", self.proj], self.proj)
@@ -55,7 +55,7 @@ class Ingest(unittest.TestCase):
         r = _run(["delivery", "feat", "--from-output", "-", "--project-root", self.proj],
                  self.proj, stdin=json.dumps({"passed": False, "blocking_issues": ["stub left"]}))
         self.assertEqual(r.returncode, 1)
-        saved = json.loads(self._verdict_path("delivery-judge").read_text())
+        saved = json.loads(self._verdict_path("delivery-judge").read_text(encoding="utf-8"))
         self.assertFalse(saved["passed"])
         # errors.json накоплен
         self.assertTrue((self.proj / "ground/statements/feature-pipeline/feat/judges/errors.json").exists())
@@ -104,7 +104,7 @@ class BrdIngestFloor(unittest.TestCase):
 
     def _verdict(self):
         p = self.proj / "ground/statements/feature-pipeline/feat/judges/brd-judge.json"
-        return json.loads(p.read_text()) if p.exists() else None
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
     def _ingest_llm_pass(self):
         return _run(["brd", "feat", "--from-output", "-", "--project-root", self.proj],
@@ -170,7 +170,7 @@ class HybridIngestFloor(unittest.TestCase):
 
     def _verdict(self, judge):
         p = self.proj / "ground/statements/feature-pipeline/feat/judges" / f"{judge}.json"
-        return json.loads(p.read_text()) if p.exists() else None
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
     def _ingest(self, phase):
         return _run([phase, "feat", "--from-output", "-", "--project-root", self.proj],

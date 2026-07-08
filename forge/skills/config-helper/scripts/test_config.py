@@ -37,7 +37,7 @@ def seed_pipeline(project: Path):
         "project": {"name": "test"},
         "quality": {"coverage_threshold": 0.8, "eval_enabled": True},
         "autonomy": {"mode": "gated", "auto_max_risk": "R1"},
-    }, ensure_ascii=False, indent=2))
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def seed_risk(project: Path):
@@ -45,7 +45,7 @@ def seed_risk(project: Path):
     (project / "hooks" / "risk-policy.json").write_text(json.dumps({
         "version": 1, "default_level": "R1", "autonomy_auto_max": "R1",
         "destructive_blacklist": ["rm -rf /"], "agent_caps": {},
-    }, ensure_ascii=False, indent=2))
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main():
@@ -69,12 +69,12 @@ def main():
 
         # dry-run не пишет
         rc, out, _ = run(project, "set", "quality.coverage_threshold", "0.9", "--dry-run")
-        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         check("dry-run не меняет файл", rc == 0 and cfg["quality"]["coverage_threshold"] == 0.8, out)
 
         # реальный set + бэкап
         rc, out, _ = run(project, "set", "quality.coverage_threshold", "0.9")
-        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         res = json.loads(out)
         baks = list((project / "ground" / "config-helper" / "backups").glob("pipeline.json.*.bak"))
         check("set пишет значение", rc == 0 and cfg["quality"]["coverage_threshold"] == 0.9, out)
@@ -101,7 +101,7 @@ def main():
 
         # gates: файла нет → создаётся с дефолтами
         rc, out, _ = run(project, "set", "tdd_enforced", "false")
-        gates = json.loads((project / "ground" / "feature-gates.json").read_text())
+        gates = json.loads((project / "ground" / "feature-gates.json").read_text(encoding="utf-8"))
         check("gates создан с дефолтами", rc == 0 and "_meta" in gates and len(gates["gates"]) == 9, out)
         check("gates tdd_enforced=false", gates["gates"]["tdd_enforced"]["enabled"] is False, out)
         check("gates прочий дефолт сохранён", gates["gates"]["eval_driven_dev"]["enabled"] is True)
@@ -112,12 +112,12 @@ def main():
 
         # sensitive с confirm → пишет
         rc, out, _ = run(project, "set", "risk.autonomy_auto_max", "R2", "--confirm")
-        risk = json.loads((project / "hooks" / "risk-policy.json").read_text())
+        risk = json.loads((project / "hooks" / "risk-policy.json").read_text(encoding="utf-8"))
         check("sensitive с --confirm пишет", rc == 0 and risk["autonomy_auto_max"] == "R2", out)
 
         # phase disable
         rc, out, _ = run(project, "phase", "disable", "04-tdd")
-        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         ov = next((o for o in cfg.get("phases_override", []) if o["id"] == "04-tdd"), None)
         check("phase disable добавляет override", rc == 0 and ov and ov["enabled_by"] is False, out)
 
@@ -125,7 +125,7 @@ def main():
         rc, out, _ = run(project, "phase", "add", "05.5-security",
                          "--skill", "null", "--enabled-by", "gates.security_review",
                          "--gates", "security_approved", "--desc", "SAST + CVE")
-        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         ov = next((o for o in cfg["phases_override"] if o["id"] == "05.5-security"), None)
         check("phase add мержит поля", rc == 0 and ov and ov["skill"] is None
               and ov["enabled_by"] == "gates.security_review" and ov["gates"] == ["security_approved"], out)
@@ -144,53 +144,53 @@ def main():
 
         # живая ручка TDD пишется и читается
         rc, out, _ = run(project, "set", "quality.tdd", "false")
-        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         check("set quality.tdd false пишет в pipeline.json",
               rc == 0 and cfg["quality"]["tdd"] is False, out)
 
         # enum-ручки
         rc, out, _ = run(project, "set", "quality.module_dep_policy", "deny_new")
-        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         check("set module_dep_policy deny_new", rc == 0 and cfg["quality"]["module_dep_policy"] == "deny_new", out)
         rc, out, _ = run(project, "set", "quality.test_layer", "integration")
         check("плохой test_layer → exit 1", rc == 1, out)
 
         # list-тип: JSON-массив и CSV
         rc, out, _ = run(project, "set", "quality.coverage_exclude_globs", '["**/dto/**", "**/config/**"]')
-        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         check("list из JSON-массива", rc == 0 and cfg["quality"]["coverage_exclude_globs"] == ["**/dto/**", "**/config/**"], out)
         rc, out, _ = run(project, "set", "quality.coverage_exclude_globs", "**/entity/**,**/repo/**")
-        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         check("list из CSV", rc == 0 and cfg["quality"]["coverage_exclude_globs"] == ["**/entity/**", "**/repo/**"], out)
         rc, out, _ = run(project, "set", "quality.coverage_exclude_globs", "null")
-        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         check("list: null → None (дефолты слоя)", rc == 0 and cfg["quality"]["coverage_exclude_globs"] is None, out)
         rc, out, _ = run(project, "validate", "--json")
         check("validate ok после list/None-ручек", rc == 0 and json.loads(out)["status"] == "ok", out)
 
         # ── пин B2: set чистит маркер _incomplete (гейт арминга preflight §0.1) ──
-        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         cfg["_incomplete"] = ["project.build_system", "conventions.package_root",
                               "jira.enabled", "bitbucket.enabled",
                               "project.is_git (нужен git init для фаз 6 и pipeline-state)"]
-        (project / "ground" / "pipeline.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
+        (project / "ground" / "pipeline.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
         run(project, "set", "project.build_system", "gradle")
         run(project, "set", "conventions.package_root", "com.acme.app")
         rc, out, _ = run(project, "set", "jira.enabled", "false")
-        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         check("set снимает отвеченные поля из _incomplete (false — валидный ответ)",
               rc == 0 and cfg.get("_incomplete") == [
                   "bitbucket.enabled",
                   "project.is_git (нужен git init для фаз 6 и pipeline-state)"], str(cfg.get("_incomplete")))
         run(project, "set", "bitbucket.enabled", "false")
-        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         check("запись с пояснением в скобках не снимается чужим set",
               cfg.get("_incomplete") == ["project.is_git (нужен git init для фаз 6 и pipeline-state)"],
               str(cfg.get("_incomplete")))
         cfg["_incomplete"] = ["jira.enabled"]
-        (project / "ground" / "pipeline.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
+        (project / "ground" / "pipeline.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
         run(project, "set", "jira.enabled", "true")
-        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         check("пустой маркер снимается целиком", "_incomplete" not in cfg, str(cfg.get("_incomplete")))
 
         # risk list-add без confirm → блок
@@ -199,12 +199,12 @@ def main():
 
         # risk list-add с confirm
         rc, out, _ = run(project, "risk", "list-add", "destructive_blacklist", "DROP SCHEMA", "--confirm")
-        risk = json.loads((project / "hooks" / "risk-policy.json").read_text())
+        risk = json.loads((project / "hooks" / "risk-policy.json").read_text(encoding="utf-8"))
         check("risk list-add пишет", rc == 0 and "DROP SCHEMA" in risk["destructive_blacklist"], out)
 
         # risk cap-set
         rc, out, _ = run(project, "risk", "cap-set", "(?i)jira", "R3", "--confirm")
-        risk = json.loads((project / "hooks" / "risk-policy.json").read_text())
+        risk = json.loads((project / "hooks" / "risk-policy.json").read_text(encoding="utf-8"))
         check("risk cap-set пишет", rc == 0 and risk["agent_caps"]["(?i)jira"] == "R3", out)
 
         # ── validate (P3-15) ──
@@ -227,9 +227,9 @@ def main():
         check("validate: с jacoco_configured=true → ok", rc == 0 and json.loads(out)["status"] == "ok", out)
 
         # Рассинхрон типа: строка там, где ждём float → ошибка (ловит то, ради чего P3-15)
-        cfg = json.loads((project / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         cfg["quality"]["coverage_threshold"] = "0.8"   # строкой, а не числом
-        (project / "ground" / "pipeline.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
+        (project / "ground" / "pipeline.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
         rc, out, _ = run(project, "validate", "--json")
         v = json.loads(out)
         errs = [i for i in v["issues"] if i["severity"] == "error"]

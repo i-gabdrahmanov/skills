@@ -122,11 +122,11 @@ class TestIterationCap(unittest.TestCase):
         store_dir.mkdir(parents=True)
         (store_dir / "errors.json").write_text(json.dumps({
             "iterations": iterations, "accumulated_errors": [],
-        }))
+        }), encoding="utf-8")
         if max_iter is not None:
             (root / "ground").mkdir(exist_ok=True)
             (root / "ground" / "pipeline.json").write_text(
-                json.dumps({"quality": {"max_judge_iterations": max_iter}}))
+                json.dumps({"quality": {"max_judge_iterations": max_iter}}), encoding="utf-8")
         return root, slug
 
     def test_count_per_judge(self):

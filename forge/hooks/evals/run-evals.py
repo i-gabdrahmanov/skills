@@ -107,9 +107,9 @@ def main() -> int:
 
         # критичность не выбрана (autonomy без criticality) → R2 действие блокируется
         rnc = make_project(tmp / "nocrit")
-        cfg = json.loads((rnc / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((rnc / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         cfg["autonomy"] = {"auto_max_risk": "R1"}  # criticality НЕ задана
-        (rnc / "ground" / "pipeline.json").write_text(json.dumps(cfg))
+        (rnc / "ground" / "pipeline.json").write_text(json.dumps(cfg), encoding="utf-8")
         c, out = run_hook("gate-guard.py", {"cwd": str(rnc), "tool_name": "Bash",
                         "tool_input": {"command": "git commit -m x"}})
         check("критичность не выбрана → R2 deny", c == 2 and "критичность" in out)
@@ -117,9 +117,9 @@ def main() -> int:
         # H1: запись src/main при high-критичности во время билда (evidence ещё НЕ собран) → allow.
         # Раньше R2 требовал evidence:true → дедлок (бандл появляется только после билда).
         rhb = make_project(tmp / "highbuild")
-        cfgh = json.loads((rhb / "ground" / "pipeline.json").read_text())
+        cfgh = json.loads((rhb / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         cfgh["autonomy"] = {"criticality": "high", "auto_max_risk": "R0"}
-        (rhb / "ground" / "pipeline.json").write_text(json.dumps(cfgh))
+        (rhb / "ground" / "pipeline.json").write_text(json.dumps(cfgh), encoding="utf-8")
         (rhb / "ground" / "evidence" / "T1.json").unlink()  # evidence ещё нет на этапе билда
         c, out = run_hook("gate-guard.py", {"cwd": str(rhb), "tool_name": "Write",
                         "tool_input": {"file_path": str(rhb / "src/main/java/Foo.java"), "content": "x"}})
@@ -167,9 +167,9 @@ def main() -> int:
 
         # tdd выключен → код можно
         rtoff = tdd_project("tdd_off", "pending")
-        cfg = json.loads((rtoff / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((rtoff / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         cfg["quality"]["tdd"] = False
-        (rtoff / "ground" / "pipeline.json").write_text(json.dumps(cfg))
+        (rtoff / "ground" / "pipeline.json").write_text(json.dumps(cfg), encoding="utf-8")
         c, _ = run_hook("tdd-guard.py", {"cwd": str(rtoff), "tool_name": "Write",
                         "tool_input": {"file_path": str(rtoff / "src/main/java/Foo.java"), "content": "x"}})
         check("TDD выключен → код в src/main allow", c == 0)
@@ -180,16 +180,16 @@ def main() -> int:
                         "tool_input": {"file_path": str(rdj / "src/test/java/RepoTest.java"),
                                        "content": "@DataJpaTest class RepoTest {}"}})
         check("block_jpa_test=true + @DataJpaTest → deny", c == 2 and "DataJpaTest" in out)
-        cfg = json.loads((rdj / "ground" / "pipeline.json").read_text())
+        cfg = json.loads((rdj / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         cfg["quality"]["block_jpa_test"] = False
-        (rdj / "ground" / "pipeline.json").write_text(json.dumps(cfg))
+        (rdj / "ground" / "pipeline.json").write_text(json.dumps(cfg), encoding="utf-8")
         c, _ = run_hook("tdd-guard.py", {"cwd": str(rdj), "tool_name": "Write",
                         "tool_input": {"file_path": str(rdj / "src/test/java/RepoTest.java"),
                                        "content": "@DataJpaTest class RepoTest {}"}})
         check("block_jpa_test=false + @DataJpaTest → allow", c == 0)
         cfg["quality"]["block_jpa_test"] = True
         cfg["quality"]["test_layer"] = "mixed"
-        (rdj / "ground" / "pipeline.json").write_text(json.dumps(cfg))
+        (rdj / "ground" / "pipeline.json").write_text(json.dumps(cfg), encoding="utf-8")
         c, _ = run_hook("tdd-guard.py", {"cwd": str(rdj), "tool_name": "Write",
                         "tool_input": {"file_path": str(rdj / "src/test/java/RepoTest.java"),
                                        "content": "@DataJpaTest class RepoTest {}"}})

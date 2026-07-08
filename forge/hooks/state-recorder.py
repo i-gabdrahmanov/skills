@@ -306,7 +306,7 @@ def _update_gate_phase(root: Path, feature: str, step_id: str, status: str) -> N
                 # Все фазы завершены
                 gate["current_phase"] = ""
 
-        gate_path.write_text(json.dumps(gate, ensure_ascii=False, indent=2))
+        gate_path.write_text(json.dumps(gate, ensure_ascii=False, indent=2), encoding="utf-8")
 
     except Exception as e:
         print(f"[state-recorder] _update_gate_phase error: {e}", file=sys.stderr)

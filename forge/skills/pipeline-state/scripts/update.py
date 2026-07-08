@@ -110,7 +110,7 @@ def _load_override(project: Path, skill: str, feature: str, judge_name: str) -> 
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
 
@@ -154,7 +154,7 @@ def _check_judges(step: dict, project: Path, skill: str, feature: str):
 
         # 2. Вердикт есть, но повреждён
         try:
-            verdict = json.loads(verdict_path.read_text())
+            verdict = json.loads(verdict_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as e:
             ov = _load_override(project, skill, feature, judge_name)
             if ov:
@@ -522,7 +522,7 @@ def main():
     # Handle output
     output_data = None
     if args.output_file:
-        with open(args.output_file) as f:
+        with open(args.output_file, encoding="utf-8") as f:
             output_data = json.load(f)
     elif args.output_json:
         output_data = json.loads(args.output_json)
@@ -534,7 +534,7 @@ def main():
     if output_data is not None and args.status == "completed":
         out_file = pdir / f"{args.step_id}.json"
         tmp = out_file.with_suffix(".json.tmp")
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(output_data, f, indent=2, ensure_ascii=False)
         os.replace(tmp, out_file)
         step["output_file"] = out_file.name
@@ -573,7 +573,7 @@ def main():
     manifest["last_update"] = now
 
     tmp = manifest_path.with_suffix(".json.tmp")
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
     os.replace(tmp, manifest_path)
 

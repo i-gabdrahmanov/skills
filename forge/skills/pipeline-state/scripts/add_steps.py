@@ -39,7 +39,7 @@ except Exception:  # pragma: no cover
 def load_json_arg(value: str):
     """Accepts either inline JSON or @<filepath>."""
     if value.startswith("@"):
-        with open(value[1:]) as f:
+        with open(value[1:], encoding="utf-8") as f:
             return json.load(f)
     return json.loads(value)
 
@@ -77,7 +77,7 @@ def main():
         print("ERROR: --steps must be a non-empty JSON array", file=sys.stderr)
         sys.exit(2)
 
-    with open(manifest_path) as f:
+    with open(manifest_path, encoding="utf-8") as f:
         manifest = json.load(f)
 
     existing_ids = {s["id"] for s in manifest.get("steps", [])}
@@ -110,7 +110,7 @@ def main():
     if added:
         manifest["last_update"] = iso_now()
         tmp = manifest_path.with_suffix(".json.tmp")
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2, ensure_ascii=False)
         os.replace(tmp, manifest_path)
 
@@ -121,7 +121,7 @@ def main():
                 gate = pp.build_gate(manifest.get("steps", []), manifest)
                 out = pp.gate_dir(project, args.feature) / "gate.json"
                 out.parent.mkdir(parents=True, exist_ok=True)
-                out.write_text(json.dumps(gate, ensure_ascii=False, indent=2) + "\n")
+                out.write_text(json.dumps(gate, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
                 gate_synced = True
             except Exception as e:
                 print(f"WARNING: gate sync failed: {e}", file=sys.stderr)

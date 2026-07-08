@@ -63,7 +63,7 @@ def _ensure_phases(project_root: str, feature: str, skill: str = "feature-pipeli
     if not os.path.exists(manifest_path):
         return
     try:
-        with open(manifest_path) as f:
+        with open(manifest_path, encoding="utf-8") as f:
             manifest = json.load(f)
     except Exception:
         return
@@ -75,14 +75,14 @@ def _ensure_phases(project_root: str, feature: str, skill: str = "feature-pipeli
     # Единая реализация построения gate/defs — pipeline_phases.
     gate = pp.build_gate(steps, manifest)
     gate["feature"] = feature
-    with open(gate_path, "w") as f:
+    with open(gate_path, "w", encoding="utf-8") as f:
         json.dump(gate, f, indent=2, ensure_ascii=False)
     print(f"preflight-validate: created {gate_path} (current={gate['current_phase']})",
           file=sys.stderr)
 
     defs_path = os.path.join(phases_dir, "phase-defs.json")
     if not os.path.exists(defs_path):
-        with open(defs_path, "w") as f:
+        with open(defs_path, "w", encoding="utf-8") as f:
             json.dump(pp.build_defs(steps), f, indent=2, ensure_ascii=False)
         print(f"preflight-validate: created {defs_path}", file=sys.stderr)
 
@@ -100,7 +100,7 @@ def load_manifest(project_root: str, feature: str, skill: str = "feature-pipelin
         print(f"preflight-validate: manifest not found at {manifest_path}", file=sys.stderr)
         return None
     try:
-        with open(manifest_path, "r") as f:
+        with open(manifest_path, "r", encoding="utf-8") as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         print(f"preflight-validate: manifest нечитаем/повреждён ({manifest_path}): {e}", file=sys.stderr)
@@ -155,7 +155,7 @@ def _check_prev_step_judges(manifest: dict, project_root: str, feature: str,
                 blocking.append(f"'{judge_name}.json' не найден")
                 continue
             try:
-                with open(verdict_path) as f:
+                with open(verdict_path, encoding="utf-8") as f:
                     verdict = json.load(f)
             except (json.JSONDecodeError, OSError) as e:
                 blocking.append(f"'{judge_name}.json' повреждён: {e}")
@@ -197,7 +197,7 @@ def check_phase_subagent(manifest: dict, step_id: str) -> bool:
                 try:
                     output_file = Path(step["output_file"])
                     if output_file.exists():
-                        output = _json.loads(output_file.read_text())
+                        output = _json.loads(output_file.read_text(encoding="utf-8"))
                 except Exception:
                     output = {}
 
@@ -231,7 +231,7 @@ def _safe_read_json(path: str) -> dict | None:
     import time
     for attempt in range(3):
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, ValueError) as e:
             if attempt < 2:

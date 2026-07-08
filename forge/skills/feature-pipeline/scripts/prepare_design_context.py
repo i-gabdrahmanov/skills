@@ -94,7 +94,7 @@ def extract_modules_from_task_plan(task_plan_path: str) -> tuple[list[str], set[
     if not tp_path.exists():
         return [], set()
 
-    tp = json.loads(tp_path.read_text())
+    tp = json.loads(tp_path.read_text(encoding="utf-8"))
     modules = set()
     keywords = set()
 
@@ -263,7 +263,7 @@ def main():
         print(json.dumps({"error": f"Grounding file not found: {grounding_path}"}, ensure_ascii=False))
         sys.exit(1)
 
-    grounding = json.loads(grounding_file.read_text())
+    grounding = json.loads(grounding_file.read_text(encoding="utf-8"))
 
     # 1. Определяем релевантные модули
     relevant_modules = set()
@@ -304,7 +304,7 @@ def main():
                 break
     if _pipeline_file and _pipeline_file.exists():
         try:
-            _pcfg = json.loads(_pipeline_file.read_text())
+            _pcfg = json.loads(_pipeline_file.read_text(encoding="utf-8"))
             test_layer = _pcfg.get("quality", {}).get("test_layer", test_layer)
         except (json.JSONDecodeError, OSError):
             pass
@@ -328,7 +328,7 @@ def main():
     output = json.dumps(context, ensure_ascii=False, indent=2)
 
     if out_path:
-        Path(out_path).write_text(output)
+        Path(out_path).write_text(output, encoding="utf-8")
 
     # Выводим статистику в stderr, сам JSON в stdout (если не --out)
     stats = {

@@ -59,7 +59,7 @@ DEFAULT_TEST_CMD = GRADLE_TEST
 
 
 def _load_json(path: str | Path) -> dict:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -254,7 +254,7 @@ def main():
     else:
         out_path = task_plan_path.parent / "eval-plan.json"
 
-    with open(out_path, "w") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump(eval_plan, f, indent=2, ensure_ascii=False)
         f.write("\n")
 

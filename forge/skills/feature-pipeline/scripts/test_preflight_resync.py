@@ -53,7 +53,7 @@ class TestPreflightResync(unittest.TestCase):
         self._tmp.cleanup()
 
     def _gate(self) -> dict:
-        return json.loads((self.proj / "ground" / "phases" / self.feature / "gate.json").read_text())
+        return json.loads((self.proj / "ground" / "phases" / self.feature / "gate.json").read_text(encoding="utf-8"))
 
     def _pass_judge(self, name: str):
         jd = self.sd / "judges"
@@ -63,7 +63,7 @@ class TestPreflightResync(unittest.TestCase):
             "feature_slug": self.feature, "passed": True, "verdict": "PASS",
             "checks": [], "blocking_issues": [], "warnings": [], "summary": "ok",
             "evaluated_at": "2026-06-16T00:00:00Z",
-        }))
+        }), encoding="utf-8")
 
     def _preflight(self, step_id: str) -> int:
         return _run([PREFLIGHT, "--project", self.proj, "--feature", self.feature,
@@ -86,12 +86,12 @@ class TestPreflightResync(unittest.TestCase):
 
         # Искусственно устариваем gate: откатываем на 00-brd
         gp = self.proj / "ground" / "phases" / self.feature / "gate.json"
-        g = json.loads(gp.read_text())
+        g = json.loads(gp.read_text(encoding="utf-8"))
         g["current_phase"] = "00-brd"
         for ph in g["phases"]:
             if ph["id"] == "00-brd":
                 ph["status"] = "in_progress"
-        gp.write_text(json.dumps(g))
+        gp.write_text(json.dumps(g), encoding="utf-8")
 
         # preflight следующего легального шага должен ПРОЙТИ (самоисцеление)
         self.assertEqual(self._preflight("01-grounding"), 0,

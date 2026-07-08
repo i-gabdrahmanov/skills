@@ -171,7 +171,7 @@ def main():
     manifest["steps"] = steps
 
     tmp = manifest_path.with_suffix(".json.tmp")
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
     os.replace(tmp, manifest_path)
 

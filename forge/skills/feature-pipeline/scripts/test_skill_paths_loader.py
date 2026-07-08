@@ -36,7 +36,7 @@ class LoaderBehaviour(unittest.TestCase):
     def _write_registry(self, data: dict):
         ref = self.root / ".gigacode/skills/feature-pipeline/references"
         ref.mkdir(parents=True, exist_ok=True)
-        (ref / "skill-paths.json").write_text(json.dumps(data))
+        (ref / "skill-paths.json").write_text(json.dumps(data), encoding="utf-8")
         skill_paths._CACHE.clear()
 
     def test_registry_value_wins_over_default(self):
@@ -67,21 +67,21 @@ class LoaderBehaviour(unittest.TestCase):
 
 class NoDuplicateLocators(unittest.TestCase):
     def test_run_judge_uses_loader_not_inline(self):
-        src = (SCRIPTS / "run_judge.py").read_text()
+        src = (SCRIPTS / "run_judge.py").read_text(encoding="utf-8")
         self.assertIn("import skill_paths", src)
         # старый inline-локатор реестра не должен вернуться
         self.assertNotIn('"references" / "skill-paths.json"', src)
         self.assertNotIn('skill_paths.get(', src)
 
     def test_check_paths_delegates_locator(self):
-        src = (SCRIPTS / "check_paths.py").read_text()
+        src = (SCRIPTS / "check_paths.py").read_text(encoding="utf-8")
         self.assertIn("skill_paths.find_registry", src)
 
 
 class RegistryEntriesExist(unittest.TestCase):
     """Ключи, которые реально резолвит run_judge, должны быть в реестре репозитория."""
     def test_required_script_keys_present(self):
-        reg = json.loads((SCRIPTS / ".." / "references" / "skill-paths.json").read_text())
+        reg = json.loads((SCRIPTS / ".." / "references" / "skill-paths.json").read_text(encoding="utf-8"))
         scripts = reg["skills"]
         self.assertIn("check_taskplan", scripts["tech-design"]["scripts"])
         self.assertIn("check_sdd", scripts["tech-design"]["scripts"])
