@@ -22,6 +22,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# cmd.exe (куда на Windows всегда уходит shell=True, вне зависимости от оболочки, из
+# которой запущен сам python) не умеет ни в shebang, ни в "./" без расширения.
+_GRADLEW = "gradlew.bat" if sys.platform == "win32" else "./gradlew"
+
 
 def _load_json(p: str | Path) -> dict | None:
     try:
@@ -108,8 +112,8 @@ def main() -> int:
     if pipeline_cfg_path.exists():
         cfg = _load_json(str(pipeline_cfg_path)) or {}
 
-    build_cmd = args.build_cmd or cfg.get("quality", {}).get("build_command", "./gradlew clean build")
-    test_cmd = args.test_cmd or cfg.get("quality", {}).get("test_command", "./gradlew test")
+    build_cmd = args.build_cmd or cfg.get("quality", {}).get("build_command", f"{_GRADLEW} clean build")
+    test_cmd = args.test_cmd or cfg.get("quality", {}).get("test_command", f"{_GRADLEW} test")
 
     passed = 0
     failed = 0

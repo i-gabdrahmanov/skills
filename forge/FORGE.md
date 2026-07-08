@@ -631,7 +631,7 @@ forge/
 ├── deploy-local.sh           # in-project фиксер путей (копируется в .gigacode/)
 ├── docs/                     # документация (deployment.md, user-guide.md, troubleshooting.md, …)
 ├── hooks/                    # control-plane (~38 скриптов)
-│   ├── settings.hooks.json   # эталон блока hooks (${PROJECT_ROOT})
+│   ├── settings.hooks.json   # эталон блока hooks (${PROJECT_ROOT}, ${PYTHON})
 │   ├── resolve_hook_paths.py # подстановка путей + merge в settings.json
 │   ├── risk-policy.json      # политика рисков
 │   ├── preflight.py          # self-check готовности

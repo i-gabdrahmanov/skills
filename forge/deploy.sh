@@ -19,6 +19,13 @@ set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # корень репо Forge
 
+# --- поиск python-интерпретатора (Windows/git-bash часто без python3, только python/py) ---
+PY=()
+if command -v python3 >/dev/null 2>&1; then PY=(python3)
+elif command -v python >/dev/null 2>&1; then PY=(python)
+elif command -v py >/dev/null 2>&1; then PY=(py -3)
+fi
+
 # --- целевая папка обязательна ---
 TARGET="${1:-}"
 if [ -z "$TARGET" ]; then
@@ -86,5 +93,9 @@ bash "$GIG/deploy-local.sh"
 # 5. диагностика (advisory — не валим деплой)
 echo
 echo "== preflight =="
-python3 "$GIG/hooks/preflight.py" --project "$TARGET" || \
-  echo "  (preflight сообщил о проблемах — см. вывод выше)"
+if [ "${#PY[@]}" -eq 0 ]; then
+  echo "  (python не найден в PATH — preflight пропущен; поставь Python и добавь его в PATH)"
+else
+  "${PY[@]}" "$GIG/hooks/preflight.py" --project "$TARGET" || \
+    echo "  (preflight сообщил о проблемах — см. вывод выше)"
+fi

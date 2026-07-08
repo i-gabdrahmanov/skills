@@ -19,13 +19,18 @@
 """
 from __future__ import annotations
 
-import fcntl
 import glob
 import json
 import os
 import subprocess
 import sys
 from datetime import datetime
+
+try:
+    import fcntl  # POSIX
+except ImportError:
+    fcntl = None
+    import msvcrt  # Windows
 
 DEFAULT_BUDGET = 2_000_000          # токенов на прогон, если не задано
 FALLBACK_PER_EVENT = 1500           # оценка, если рантайм не отдаёт usage
@@ -126,7 +131,11 @@ def _tally(path: str, tokens: int, budget: int, phase: str) -> dict:
     """Один файл, один flock: прибавить расход в total и в текущую фазу."""
     with open(path, "a+", encoding="utf-8") as f:
         try:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            if fcntl:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            else:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
             f.seek(0)
             try:
                 state = json.load(f)
@@ -149,7 +158,11 @@ def _tally(path: str, tokens: int, budget: int, phase: str) -> dict:
             return state
         finally:
             try:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                if fcntl:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                else:
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
             except Exception:
                 pass
 

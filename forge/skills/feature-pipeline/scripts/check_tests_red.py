@@ -25,6 +25,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+# cmd.exe (куда на Windows всегда уходит shell=True, вне зависимости от оболочки, из
+# которой запущен сам python) не умеет ни в shebang, ни в "./" без расширения.
+_GRADLEW = "gradlew.bat" if sys.platform == "win32" else "./gradlew"
+
 
 def _load_json(p: str | Path) -> dict | None:
     try:
@@ -56,7 +60,7 @@ def _resolve_compile_test_cmd(cfg: dict, override: str | None) -> str:
     c = (cfg.get("quality") or {}).get("compile_test_command")
     if isinstance(c, str) and c.strip():
         return c.strip()
-    return "mvn -q test-compile" if _build_system(cfg) == "maven" else "./gradlew compileTestJava"
+    return "mvn -q test-compile" if _build_system(cfg) == "maven" else f"{_GRADLEW} compileTestJava"
 
 
 def _resolve_test_cmd(cfg: dict, override: str | None) -> str:
@@ -65,7 +69,7 @@ def _resolve_test_cmd(cfg: dict, override: str | None) -> str:
     t = (cfg.get("quality") or {}).get("test_command")
     if isinstance(t, str) and t.strip():
         return t.strip()
-    return "mvn -q test" if _build_system(cfg) == "maven" else "./gradlew test"
+    return "mvn -q test" if _build_system(cfg) == "maven" else f"{_GRADLEW} test"
 
 
 def _apply_test_filter(test_cmd: str, build_system: str, test_filter: str | None) -> str:

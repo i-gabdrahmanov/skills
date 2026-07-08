@@ -24,7 +24,9 @@ def _find_foreign_hook_paths(settings: dict, project_root: str) -> list[str]:
 
     def _walk(node, path=""):
         if isinstance(node, str) and path.endswith("command"):
-            m = re.search(r"python3\s+(/\S+)", node)
+            # Путь к .py-хуку, а не к интерпретатору — тот может быть "python3",
+            # "python" или абсолютным путём (sys.executable, в т.ч. в кавычках).
+            m = re.search(r"(/\S+\.py)\b", node)
             if m:
                 p = m.group(1)
                 if not p.startswith(expected_prefix):

@@ -34,12 +34,23 @@ from pathlib import Path
 
 SCHEMA_VERSION = "feature-pipeline/eval-plan@1"
 
+# Абсолютный путь к интерпретатору, которым запущен сам генератор (кроссплатформенно —
+# на Windows часто нет python3 в PATH, только python.exe/py.exe; run_pending_evals.py
+# исполняет "command" через shell=True, поэтому литеральный "python3" там ненадёжен).
+PYTHON_CMD = f'"{sys.executable}"' if sys.executable and " " in sys.executable else (sys.executable or "python3")
+
 DEFAULT_COVERAGE_THRESHOLD = 0.80
+
+# Обёртка Gradle платформенно разная: "./gradlew" — POSIX-скрипт с shebang (bash его
+# исполняет через "./"), на Windows нужен gradlew.bat — cmd.exe (куда уходит shell=True
+# в run_pending_evals.py/check_build.py вне зависимости от того, из какой оболочки
+# запущен сам python) не умеет ни в shebang, ни в "./" без расширения.
+_GRADLEW = "gradlew.bat" if sys.platform == "win32" else "./gradlew"
 
 # Команды компиляции/тестов резолвятся по build-системе из pipeline.json (Maven-корректно).
 # compile — намеренно лёгкая (только компиляция, не полный build), чтобы не дублировать test_pass.
-GRADLE_COMPILE = "./gradlew compileJava"
-GRADLE_TEST = "./gradlew test"
+GRADLE_COMPILE = f"{_GRADLEW} compileJava"
+GRADLE_TEST = f"{_GRADLEW} test"
 MAVEN_COMPILE = "mvn -q compile"
 MAVEN_TEST = "mvn -q test"
 # Дефолты для обратной совместимости (используются как fallback, если pipeline.json не задан).
@@ -140,13 +151,13 @@ def build_evals(
         # 2. Coverage eval — проверка JaCoCo покрытия
         cov_prefix = ""
         if coverage_helper:
-            cov_prefix = f"python3 {coverage_helper} --base HEAD && "
+            cov_prefix = f"{PYTHON_CMD} {coverage_helper} --base HEAD && "
         evals.append({
             "id": f"coverage-{tid.lower()}",
             "type": "coverage",
             "task_id": tid,
             "command": (
-                f"{cov_prefix}python3 {cov_script} "
+                f"{cov_prefix}{PYTHON_CMD} {cov_script} "
                 f"--base HEAD~1 "
                 f"--threshold {task_cov} "
                 f"--strict"
