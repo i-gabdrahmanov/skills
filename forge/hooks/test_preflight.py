@@ -132,5 +132,35 @@ class TestMatcherCanonical(unittest.TestCase):
         self.assertEqual(errs, [])
 
 
+class TestFindForeignHookPaths(unittest.TestCase):
+    """Регрессия: на Windows project_root — обратные слэши (Path(...).resolve()), хвост из
+    шаблона settings.hooks.json — прямые; итоговый путь в command смешанный. Раньше
+    expected_prefix строился через os.path.join() (чисто обратные слэши на Windows) и
+    никогда не совпадал с реальным смешанным форматом — свои хуки считались "чужими"."""
+
+    def test_windows_mixed_separator_own_path_not_foreign(self):
+        project_root = r"C:\Work\JavaProjects\pprb-kid"
+        cmd = (r'"C:\Program Files\Python313\python.exe" -X utf8 '
+               rf"{project_root}/.gigacode/hooks/destructive-blocker.py")
+        settings = {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"command": cmd}]}]}}
+        found = preflight._find_foreign_hook_paths(settings, project_root)
+        self.assertEqual(found, [], found)
+
+    def test_windows_foreign_path_still_flagged(self):
+        project_root = r"C:\Work\JavaProjects\pprb-kid"
+        cmd = (r'"C:\Program Files\Python313\python.exe" -X utf8 '
+               r"C:\Other\proj/.gigacode/hooks/destructive-blocker.py")
+        settings = {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"command": cmd}]}]}}
+        found = preflight._find_foreign_hook_paths(settings, project_root)
+        self.assertEqual(len(found), 1, found)
+
+    def test_posix_own_path_not_foreign(self):
+        project_root = "/home/user/proj"
+        cmd = "/usr/bin/python3 -X utf8 /home/user/proj/.gigacode/hooks/gate-guard.py"
+        settings = {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"command": cmd}]}]}}
+        found = preflight._find_foreign_hook_paths(settings, project_root)
+        self.assertEqual(found, [], found)
+
+
 if __name__ == "__main__":
     unittest.main()
