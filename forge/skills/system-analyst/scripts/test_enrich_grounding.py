@@ -46,7 +46,7 @@ class EnrichFixture(unittest.TestCase):
         (self.src / f"{name}.java").write_text(ENTITY.format(name=name), encoding="utf-8")
 
     def _excerpt(self) -> dict:
-        return json.loads((self.analysis / "grounding-excerpt.json").read_text())
+        return json.loads((self.analysis / "grounding-excerpt.json").read_text(encoding="utf-8"))
 
     def test_rescan_picks_up_new_entity(self):
         # Кода ещё нет в scan — enrich должен сам пересканировать и увидеть новую сущность.

@@ -124,7 +124,7 @@ def preflight(project_root: str) -> dict:
         errors.append("ground/pipeline.json not found — конфигурация не инициализирована")
     else:
         try:
-            cfg = json.loads(pipeline_json.read_text())
+            cfg = json.loads(pipeline_json.read_text(encoding="utf-8"))
             if cfg.get("_incomplete"):
                 errors.append(f"pipeline.json incomplete: {cfg['_incomplete']}")
         except json.JSONDecodeError as e:
@@ -138,7 +138,7 @@ def preflight(project_root: str) -> dict:
         )
     else:
         try:
-            hs = json.loads(hooks_settings.read_text())
+            hs = json.loads(hooks_settings.read_text(encoding="utf-8"))
             hooks_block = hs.get("hooks", {})
             if not hooks_block:
                 errors.append("hooks block is empty — enforcement inactive")
@@ -169,7 +169,7 @@ def preflight(project_root: str) -> dict:
     for cand in (settings_json_p, hooks_template_p):
         if cand.exists():
             try:
-                wiring_block = json.loads(cand.read_text()).get("hooks", {})
+                wiring_block = json.loads(cand.read_text(encoding="utf-8")).get("hooks", {})
                 wiring_src = cand.name
                 break
             except (json.JSONDecodeError, OSError):
@@ -195,7 +195,7 @@ def preflight(project_root: str) -> dict:
         errors.append(".gigacode/hooks/risk-policy.json not found — risk ladder выключится (fail-open)")
     else:
         try:
-            json.loads(risk_policy_p.read_text())
+            json.loads(risk_policy_p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as e:
             errors.append(f"risk-policy.json parse error: {e} — risk ladder деградирует до allow-all")
 
@@ -206,7 +206,7 @@ def preflight(project_root: str) -> dict:
 
     if settings_json.exists():
         try:
-            stg = json.loads(settings_json.read_text())
+            stg = json.loads(settings_json.read_text(encoding="utf-8"))
             hooks_block = stg.get("hooks", {})
             if not hooks_block:
                 errors.append(

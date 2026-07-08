@@ -183,7 +183,7 @@ class TestModuleDeps(unittest.TestCase):
             root = Path(d)
             (root / "ground").mkdir()
             (root / "ground" / "architecture-policy.json").write_text(
-                '{"module_deps":{"allowed_new":[["service:taskservice","service:upzservice"]]}}')
+                '{"module_deps":{"allowed_new":[["service:taskservice","service:upzservice"]]}}', encoding="utf-8")
             self.assertEqual(ca.check_module_deps(root, "HEAD", "deny_new"), [])
 
     def test_forbidden_blocks_in_policy_mode(self):
@@ -193,7 +193,7 @@ class TestModuleDeps(unittest.TestCase):
             root = Path(d)
             (root / "ground").mkdir()
             (root / "ground" / "architecture-policy.json").write_text(
-                '{"module_deps":{"forbidden":[["service:taskservice","service:upzservice"]]}}')
+                '{"module_deps":{"forbidden":[["service:taskservice","service:upzservice"]]}}', encoding="utf-8")
             v = ca.check_module_deps(root, "HEAD", "policy")
             self.assertEqual(len(v), 1)
             self.assertIn("ЗАПРЕЩЕНА", v[0]["detail"])
@@ -209,8 +209,8 @@ class TestArchGround(unittest.TestCase):
             (root / "service" / "taskservice").mkdir(parents=True)
             (root / "api" / "taskservice-api").mkdir(parents=True)
             (root / "service" / "taskservice" / "build.gradle").write_text(
-                'dependencies { implementation project(":api:taskservice-api") }')
-            (root / "api" / "taskservice-api" / "build.gradle").write_text("dependencies {}")
+                'dependencies { implementation project(":api:taskservice-api") }', encoding="utf-8")
+            (root / "api" / "taskservice-api" / "build.gradle").write_text("dependencies {}", encoding="utf-8")
             g = ca.build_module_graph(root)
             self.assertIn(["service:taskservice", "api:taskservice-api"], g["edges"])
             self.assertIn(["service", "api"], g["allowed_group_couplings"])
@@ -265,7 +265,7 @@ class TestArchGround(unittest.TestCase):
             root = Path(d)
             (root / "ground").mkdir()
             (root / "ground" / "architecture-policy.json").write_text(
-                '{"module_deps":{"allowed_new":[["service:taskservice","service:upzservice"]]}}')
+                '{"module_deps":{"allowed_new":[["service:taskservice","service:upzservice"]]}}', encoding="utf-8")
             v = ca.check_module_deps(root, "HEAD", "graph", arch_ground=self.GROUND)
             self.assertEqual(v, [])  # allow-list побеждает graph-правило
 
@@ -373,9 +373,9 @@ class TestMavenModuleGraph(unittest.TestCase):
         root = Path(d)
         (root / "service" / "upzservice").mkdir(parents=True)
         (root / "service" / "taskservice").mkdir(parents=True)
-        (root / "pom.xml").write_text(self.POM_PARENT)
-        (root / "service" / "upzservice" / "pom.xml").write_text(self.POM_UPZ)
-        (root / "service" / "taskservice" / "pom.xml").write_text(self.POM_TASK)
+        (root / "pom.xml").write_text(self.POM_PARENT, encoding="utf-8")
+        (root / "service" / "upzservice" / "pom.xml").write_text(self.POM_UPZ, encoding="utf-8")
+        (root / "service" / "taskservice" / "pom.xml").write_text(self.POM_TASK, encoding="utf-8")
         return root
 
     def test_maven_modules_resolve_map(self):
@@ -415,11 +415,11 @@ class TestMavenModuleGraph(unittest.TestCase):
             (root / "service" / "taskservice").mkdir(parents=True)
             (root / "service" / "upzservice").mkdir(parents=True)
             # Gradle-модули
-            (root / "api" / "taskservice-api" / "build.gradle").write_text("dependencies {}")
+            (root / "api" / "taskservice-api" / "build.gradle").write_text("dependencies {}", encoding="utf-8")
             (root / "service" / "taskservice" / "build.gradle").write_text(
-                'dependencies { implementation project(":api:taskservice-api") }')
+                'dependencies { implementation project(":api:taskservice-api") }', encoding="utf-8")
             # Maven-модуль рядом
-            (root / "service" / "upzservice" / "pom.xml").write_text(self.POM_UPZ)
+            (root / "service" / "upzservice" / "pom.xml").write_text(self.POM_UPZ, encoding="utf-8")
             g = ca.build_module_graph(root)
             self.assertIn(["service:taskservice", "api:taskservice-api"], g["edges"])  # Gradle ребро
             self.assertIn("service:upzservice", g["modules"])                           # Maven узел
@@ -442,7 +442,7 @@ class TestMavenModuleGraph(unittest.TestCase):
             self.skipTest("git недоступен")
         with tempfile.TemporaryDirectory() as d:
             root = self._maven_repo(d)
-            (root / "service" / "taskservice" / "pom.xml").write_text(self.POM_TASK_NO_UPZ)  # старт без зависимости
+            (root / "service" / "taskservice" / "pom.xml").write_text(self.POM_TASK_NO_UPZ, encoding="utf-8")  # старт без зависимости
 
             def git(*a):
                 subprocess.run(["git", "-C", str(root), *a], check=True, capture_output=True, text=True)
@@ -451,7 +451,7 @@ class TestMavenModuleGraph(unittest.TestCase):
             git("config", "user.name", "t")
             git("add", "-A")
             git("commit", "-qm", "init")
-            (root / "service" / "taskservice" / "pom.xml").write_text(self.POM_TASK)          # фича дописала зависимость
+            (root / "service" / "taskservice" / "pom.xml").write_text(self.POM_TASK, encoding="utf-8")          # фича дописала зависимость
 
             edges = ca._added_module_dep_edges(root, "HEAD")
             self.assertTrue(any(e["from"] == "service:taskservice" and e["to"] == "service:upzservice"

@@ -36,22 +36,22 @@ class TestExists(unittest.TestCase):
         # Создаём файлы
         self.main_java = self.root / "service" / "test" / "src" / "main" / "java" / "TestService.java"
         self.main_java.parent.mkdir(parents=True, exist_ok=True)
-        self.main_java.write_text("class TestService {}")
+        self.main_java.write_text("class TestService {}", encoding="utf-8")
 
         # Файл в build/ (должен игнорироваться)
         self.build_file = self.root / "build" / "classes" / "TestService.class"
         self.build_file.parent.mkdir(parents=True, exist_ok=True)
-        self.build_file.write_text("fake class")
+        self.build_file.write_text("fake class", encoding="utf-8")
 
         # Файл в out/ (игнорируется)
         self.out_file = self.root / "out" / "production" / "TestService.class"
         self.out_file.parent.mkdir(parents=True, exist_ok=True)
-        self.out_file.write_text("fake class")
+        self.out_file.write_text("fake class", encoding="utf-8")
 
         # Файл в .gradle/ (игнорируется)
         self.gradle_cache = self.root / ".gradle" / "cache" / "some.jar"
         self.gradle_cache.parent.mkdir(parents=True, exist_ok=True)
-        self.gradle_cache.write_text("fake jar")
+        self.gradle_cache.write_text("fake jar", encoding="utf-8")
 
     def tearDown(self):
         import shutil
@@ -103,7 +103,7 @@ class TestMain(unittest.TestCase):
         # Создаём файл-артефакт
         art = self.root / "service" / "test" / "src" / "main" / "java" / "TestService.java"
         art.parent.mkdir(parents=True, exist_ok=True)
-        art.write_text("class TestService {}")
+        art.write_text("class TestService {}", encoding="utf-8")
 
         # План задач
         self.plan = {
@@ -113,7 +113,7 @@ class TestMain(unittest.TestCase):
             ],
         }
         self.plan_path = self.root / "task-plan.json"
-        self.plan_path.write_text(json.dumps(self.plan, ensure_ascii=False))
+        self.plan_path.write_text(json.dumps(self.plan, ensure_ascii=False), encoding="utf-8")
 
     def tearDown(self):
         import shutil
@@ -137,7 +137,7 @@ class TestMain(unittest.TestCase):
         """Все артефакты есть — pass."""
         # Удаляем T2 из плана, чтобы остался только существующий артефакт
         plan = {"tasks": [{"id": "T1", "artifacts": ["service/test/src/main/java/TestService.java"]}]}
-        self.plan_path.write_text(json.dumps(plan))
+        self.plan_path.write_text(json.dumps(plan), encoding="utf-8")
         rc = self._run_main()
         self.assertEqual(rc, 0)
 
@@ -164,14 +164,14 @@ class TestMain(unittest.TestCase):
     def test_no_artifacts_in_plan(self):
         """Нет поля artifacts — pass."""
         plan = {"tasks": [{"id": "T1"}]}
-        self.plan_path.write_text(json.dumps(plan))
+        self.plan_path.write_text(json.dumps(plan), encoding="utf-8")
         rc = self._run_main()
         self.assertEqual(rc, 0)
 
     def test_empty_tasks(self):
         """Пустой список задач — pass."""
         plan = {"tasks": []}
-        self.plan_path.write_text(json.dumps(plan))
+        self.plan_path.write_text(json.dumps(plan), encoding="utf-8")
         rc = self._run_main()
         self.assertEqual(rc, 0)
 

@@ -105,7 +105,7 @@ class E2ESmoke(unittest.TestCase):
                             "--out", ep)
         self.assertEqual(rc, 0, f"build_evals: {out}{err}")
         self.assertTrue(ep.exists())
-        evp = json.loads(ep.read_text())
+        evp = json.loads(ep.read_text(encoding="utf-8"))
         self.assertEqual({e["task_id"] for e in evp["evals"]}, {"T1", "T2"})
 
         # 4. трассируемость: eval-plan + sdd замыкаются с task-plan (стык P2-11)

@@ -26,7 +26,7 @@ import argparse, json, os, sys, re
 
 def load_json(path):
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
         return None

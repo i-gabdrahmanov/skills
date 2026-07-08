@@ -141,7 +141,7 @@ def load_pipeline_config(root: Optional[Path] = None) -> dict:
     cfg_path = root / "ground" / "pipeline.json"
     try:
         if cfg_path.exists():
-            return json.loads(cfg_path.read_text())
+            return json.loads(cfg_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         pass
     return {}
@@ -271,7 +271,7 @@ def load_settings_hooks() -> dict:
     path = hooks_dir() / "settings.hooks.json"
     try:
         if path.exists():
-            return json.loads(path.read_text())
+            return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         pass
     return {"hooks": {}}

@@ -64,10 +64,10 @@ class MultiFeatureGate(unittest.TestCase):
             # реалистичный вердикт run_judge (verdict/passed/checks/summary) — schema-sanity update.py
             (jdir / f"{n}.json").write_text(json.dumps(
                 {"produced_by": "run_judge", "judge": n, "verdict": "PASS", "passed": True,
-                 "checks": [], "summary": "ok"}))
+                 "checks": [], "summary": "ok"}), encoding="utf-8")
 
     def _gate(self, feat):
-        return json.loads((self.proj / "ground/phases" / feat / "gate.json").read_text())
+        return json.loads((self.proj / "ground/phases" / feat / "gate.json").read_text(encoding="utf-8"))
 
     def _close_all(self, feat):
         odir = self.proj / "ground/statements/feature-pipeline" / feat / "_origins"
@@ -77,10 +77,10 @@ class MultiFeatureGate(unittest.TestCase):
         for sid in ALL_STEPS:
             # evidence-маркер, который пишет state-recorder на реальном SubagentStop —
             # update._check_subagent_origin требует его для subagent-фаз (а не флаг --closed-by)
-            (odir / f"{sid}.json").write_text(json.dumps({"step_id": sid}))
+            (odir / f"{sid}.json").write_text(json.dumps({"step_id": sid}), encoding="utf-8")
             # gate-result evidence (пишет record_gate.py) — нужен build/verify-шагам
             (gdir / f"{sid}.json").write_text(json.dumps(
-                {"produced_by": "record_gate", "step_id": sid, "passed": True}))
+                {"produced_by": "record_gate", "step_id": sid, "passed": True}), encoding="utf-8")
             r = _run([UPDATE, "--project", self.proj, "--skill", "feature-pipeline",
                       "--feature", feat, "--step-id", sid, "--status", "completed",
                       "--closed-by", "subagent",  # как state-recorder на SubagentStop (C3)

@@ -85,7 +85,7 @@ def _load_json(path: Path) -> dict | None:
     if not path.exists():
         return None
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return None
@@ -113,7 +113,7 @@ def _save_verdict(slug: str, judge_name: str, verdict: dict) -> Path:
     """Сохраняет вердикт судьи в ground/statements."""
     path = _find_judge_verdict(slug, judge_name)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(verdict, f, indent=2, ensure_ascii=False)
         f.write("\n")
     return path
@@ -153,7 +153,7 @@ def _save_errors(slug: str, judge_name: str, new_errors: list) -> Path:
     })
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(store, f, indent=2, ensure_ascii=False)
         f.write("\n")
     return path
@@ -533,7 +533,7 @@ def _feature_test_classes(feature_dir: Path | None, slug: str) -> dict:
         tp_path = feature_dir / "task-plan.json"
         if tp_path.exists():
             try:
-                tp = json.loads(tp_path.read_text())
+                tp = json.loads(tp_path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 tp = {}
             for task in tp.get("tasks", []):
@@ -552,7 +552,7 @@ def _feature_test_classes(feature_dir: Path | None, slug: str) -> dict:
         if stmts.is_dir():
             for outp in stmts.glob("04-test-*.json"):
                 try:
-                    data = json.loads(outp.read_text())
+                    data = json.loads(outp.read_text(encoding="utf-8"))
                 except (json.JSONDecodeError, OSError):
                     continue
                 for tf in data.get("test_files", []):
@@ -580,7 +580,7 @@ def check_red(slug: str, feature_dir: Path | None) -> dict:
     build_system = "gradle"
     if pipeline_json_path.exists():
         try:
-            with open(pipeline_json_path) as f:
+            with open(pipeline_json_path, encoding="utf-8") as f:
                 _pcfg = json.load(f)
             test_layer = _pcfg.get("quality", {}).get("test_layer", test_layer)
             _bs = _pcfg.get("project", {}).get("build_system")
@@ -780,7 +780,7 @@ def _check_forbidden_test_annotations(
         return checks, blocking, warnings
 
     try:
-        tp = json.loads(taskplan_path.read_text())
+        tp = json.loads(taskplan_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return checks, blocking, warnings
 
@@ -1003,7 +1003,7 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
     excerpt_path = SYSTEM_ANALYSIS_DIR / "grounding-excerpt.json"
     if excerpt_path.exists():
         try:
-            excerpt_data = json.loads(excerpt_path.read_text())
+            excerpt_data = json.loads(excerpt_path.read_text(encoding="utf-8"))
             excerpt_age = excerpt_data.get("updated_at", "")
             excerpt_gate = excerpt_data.get("gate_total", 0)
 
@@ -1868,7 +1868,7 @@ def main():
     if args.from_output:
         judge_name = f"{args.phase}-judge"
         try:
-            raw = sys.stdin.read() if args.from_output == "-" else Path(args.from_output).read_text()
+            raw = sys.stdin.read() if args.from_output == "-" else Path(args.from_output).read_text(encoding="utf-8")
             subagent = json.loads(raw)
         except (OSError, json.JSONDecodeError) as e:
             print(f"ERROR: не удалось прочитать --from-output: {e}", file=sys.stderr)
@@ -1988,7 +1988,7 @@ def main():
     else:
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(out_path, "w") as f:
+        with open(out_path, "w", encoding="utf-8") as f:
             json.dump(verdict, f, indent=2, ensure_ascii=False)
             f.write("\n")
 

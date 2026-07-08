@@ -52,7 +52,7 @@ def patch_manifest(manifest_path: Path, dry_run: bool = False) -> bool:
         return True
 
     tmp = manifest_path.with_suffix(".json.tmp")
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
     tmp.replace(manifest_path)
     print(f"{manifest_path}: {changed} шагов пропатчено")

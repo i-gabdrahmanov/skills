@@ -141,8 +141,8 @@ class TestCheckRedModuleDiscovery(unittest.TestCase):
 
     def _parse_modules(self, tp_path: Path, cfg_path: Path) -> list[str]:
         """Парсит модули так же, как check_red: task-plan → pipeline.json → fallback."""
-        tp = json.loads(tp_path.read_text())
-        cfg = json.loads(cfg_path.read_text())
+        tp = json.loads(tp_path.read_text(encoding="utf-8"))
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
 
         modules = []
         for task in tp.get("tasks", []):
@@ -364,7 +364,7 @@ class TestFeatureTestClasses(unittest.TestCase):
     def _fd(self, tasks):
         fd = self.tmp / "docs" / "feature-pipeline" / "feat"
         fd.mkdir(parents=True, exist_ok=True)
-        (fd / "task-plan.json").write_text(json.dumps({"title": "t", "tasks": tasks}))
+        (fd / "task-plan.json").write_text(json.dumps({"title": "t", "tasks": tasks}), encoding="utf-8")
         return fd
 
     def test_groups_by_module_and_scopes_only_test_files(self):
@@ -409,9 +409,9 @@ class TestCheckDeliveryCaseInsensitive(unittest.TestCase):
 
     def _run(self, plan, manifest):
         pf = self.tmp / "task-plan.json"
-        pf.write_text(json.dumps(plan))
+        pf.write_text(json.dumps(plan), encoding="utf-8")
         mf = self.tmp / "manifest.json"
-        mf.write_text(json.dumps(manifest))
+        mf.write_text(json.dumps(manifest), encoding="utf-8")
         return _run([SCRIPTS / "check_delivery.py", pf, "--manifest", mf, "--json"])
 
     def test_lowercase_step_matches_uppercase_task(self):

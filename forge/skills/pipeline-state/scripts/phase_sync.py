@@ -93,7 +93,7 @@ def sync_gate_from_manifest(project_root: str, feature: str, skill: str = "featu
         return None
 
     try:
-        with open(manifest_path) as f:
+        with open(manifest_path, encoding="utf-8") as f:
             manifest = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         # Fail-soft как и при отсутствии файла: не роняем вызывающий процесс (update.py),
@@ -116,7 +116,7 @@ def _regenerate_gate(project_root: str, feature: str, skill: str,
     existing_meta = {}
     if os.path.exists(read_gate):
         try:
-            with open(read_gate) as f:
+            with open(read_gate, encoding="utf-8") as f:
                 gate_data = json.load(f)
             for p in gate_data.get("phases", []):
                 existing_meta[p["id"]] = {
@@ -130,7 +130,7 @@ def _regenerate_gate(project_root: str, feature: str, skill: str,
         else os.path.join(project_root, "ground", "phases", "phase-defs.json")
     if os.path.exists(defs_path):
         try:
-            with open(defs_path) as f:
+            with open(defs_path, encoding="utf-8") as f:
                 defs_data = json.load(f)
             for p in defs_data.get("phases", []):
                 pid = p["id"]
@@ -179,7 +179,7 @@ def _regenerate_gate(project_root: str, feature: str, skill: str,
 
     os.makedirs(os.path.dirname(gate_path), exist_ok=True)
     tmp = gate_path + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(gate, f, indent=2, ensure_ascii=False)
     os.replace(tmp, gate_path)
     # phases/current читаем из готового gate (в build_gate-ветке локальных переменных нет — был NameError)

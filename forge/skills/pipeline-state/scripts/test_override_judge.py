@@ -173,7 +173,7 @@ class TestOverrideJudge(unittest.TestCase):
         self.assertEqual(rc, 0)
         path = ov_mod.override_path(self.project, self.skill, self.feature, "red-judge")
         self.assertTrue(path.exists())
-        rec = json.loads(path.read_text())
+        rec = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(rec["judge"], "red-judge")
         self.assertEqual(rec["reason"], "No DB in CI")
         self.assertEqual(rec["approved_by"], "user")

@@ -75,7 +75,7 @@ class GoldenStateCycle(unittest.TestCase):
                 "produced_by": "run_judge",
                 "judge": name, "passed": True, "verdict": "PASS",
                 "blocking_issues": [],
-            }))
+            }), encoding="utf-8")
 
     def test_full_cycle_reaches_empty_current_phase(self):
         # 1. init со статическими шагами
@@ -99,11 +99,11 @@ class GoldenStateCycle(unittest.TestCase):
         for step_id in UPDATE_ORDER:
             # evidence-маркер от SubagentStop (его пишет state-recorder) — update требует его
             # для subagent-фаз, флаг --closed-by больше не доказательство
-            (odir / f"{step_id}.json").write_text(json.dumps({"step_id": step_id}))
+            (odir / f"{step_id}.json").write_text(json.dumps({"step_id": step_id}), encoding="utf-8")
             # gate-result evidence (его пишет record_gate.py) — update требует его
             # для build/verify-шагов (GATE_RESULT_PREFIXES)
             (gdir / f"{step_id}.json").write_text(json.dumps(
-                {"produced_by": "record_gate", "step_id": step_id, "passed": True}))
+                {"produced_by": "record_gate", "step_id": step_id, "passed": True}), encoding="utf-8")
             r = _run([UPDATE, "--project", self.proj, "--skill", "feature-pipeline",
                       "--feature", SLUG, "--step-id", step_id, "--status", "completed",
                       # как state-recorder на SubagentStop — иначе subagent-фазы блокируются (C3)
@@ -113,13 +113,13 @@ class GoldenStateCycle(unittest.TestCase):
                              f"шаг {step_id} не закрылся: {r.stderr or r.stdout}")
 
         # 5. все шаги completed
-        manifest = json.loads((self._state_dir() / "manifest.json").read_text())
+        manifest = json.loads((self._state_dir() / "manifest.json").read_text(encoding="utf-8"))
         statuses = {s["id"]: s["status"] for s in manifest["steps"]}
         self.assertTrue(all(v == "completed" for v in statuses.values()),
                         f"не все шаги completed: {statuses}")
 
         # 6. фазовая машина дошла до конца (gate под фичу — C1)
-        gate = json.loads((self.proj / "ground/phases" / SLUG / "gate.json").read_text())
+        gate = json.loads((self.proj / "ground/phases" / SLUG / "gate.json").read_text(encoding="utf-8"))
         self.assertEqual(gate["current_phase"], "",
                          f"gate застрял на '{gate['current_phase']}' (P0-2?)")
         # 6a. фазы в каноническом порядке (динамические 04-tdd/07-deliver не в конце)

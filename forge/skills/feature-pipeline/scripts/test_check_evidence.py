@@ -153,7 +153,7 @@ class TestMain(unittest.TestCase):
 
     def test_corrupted_evidence_json(self):
         """Битый JSON в evidence → считается как отсутствующий."""
-        (self.root / "ground" / "evidence" / "T1.json").write_text("not json\n")
+        (self.root / "ground" / "evidence" / "T1.json").write_text("not json\n", encoding="utf-8")
         rc = self._run_main()
         self.assertEqual(rc, 2)
 

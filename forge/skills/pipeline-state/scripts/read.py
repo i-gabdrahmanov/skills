@@ -171,7 +171,7 @@ def main():
         if not out_path.exists():
             print(json.dumps({"error": f"output file missing: {out_path}"}, ensure_ascii=False), file=sys.stderr)
             sys.exit(2)
-        with open(out_path) as f:
+        with open(out_path, encoding="utf-8") as f:
             output = json.load(f)
         print(json.dumps({
             "step_id": args.excerpt_of,

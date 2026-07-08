@@ -71,7 +71,7 @@ class TestRecordGate(unittest.TestCase):
             tmp = Path(d)
             r = _record(tmp, "lite-green", "--cmd", "true")
             self.assertEqual(r.returncode, 0, r.stderr)
-            rec = json.loads(_gate_file(tmp, "lite-green").read_text())
+            rec = json.loads(_gate_file(tmp, "lite-green").read_text(encoding="utf-8"))
             self.assertTrue(rec["passed"])
             self.assertEqual(rec["produced_by"], "record_gate")
 
@@ -80,7 +80,7 @@ class TestRecordGate(unittest.TestCase):
             tmp = Path(d)
             r = _record(tmp, "lite-green", "--cmd", "false")
             self.assertEqual(r.returncode, 1)
-            self.assertFalse(json.loads(_gate_file(tmp, "lite-green").read_text())["passed"])
+            self.assertFalse(json.loads(_gate_file(tmp, "lite-green").read_text(encoding="utf-8"))["passed"])
 
     def test_red_gate_compile_ok_tests_fail_passes(self):
         with tempfile.TemporaryDirectory() as d:
@@ -88,7 +88,7 @@ class TestRecordGate(unittest.TestCase):
             r = _record(tmp, "lite-red", "--expect", "red",
                         "--compile-cmd", "true", "--cmd", "false")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertTrue(json.loads(_gate_file(tmp, "lite-red").read_text())["passed"])
+            self.assertTrue(json.loads(_gate_file(tmp, "lite-red").read_text(encoding="utf-8"))["passed"])
 
     def test_red_gate_green_tests_fail(self):
         with tempfile.TemporaryDirectory() as d:
