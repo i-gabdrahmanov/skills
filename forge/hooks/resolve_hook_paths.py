@@ -102,9 +102,12 @@ def has_absolute_hook_paths(settings: dict) -> list[str]:
 
     def _walk(node, path=""):
         if isinstance(node, str) and path.endswith("command"):
-            # Ищем путь к .py-хуку, а не к интерпретатору — тот может быть
-            # "python3", "python" или абсолютным путём (sys.executable, в т.ч. в кавычках).
-            m = re.search(r"(/\S+\.py)\b", node)
+            # Хук — последний токен команды (интерпретатор ± "-X utf8" идут перед ним).
+            # НЕ якорим на "/" в начале: project_root на Windows — обратные слэши
+            # (Path(...).resolve() → "C:\Work\..."), а хвост из шаблона — прямые
+            # ("/.gigacode/hooks/x.py"), путь целиком смешанный: "C:\Work\...
+            # /.gigacode/hooks/x.py". Якорь на "/" резал бы только хвост после первого "/".
+            m = re.search(r"(\S+\.py)\s*$", node)
             if m:
                 found.append(m.group(1))
         elif isinstance(node, dict):
