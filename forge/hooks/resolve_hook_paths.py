@@ -27,16 +27,23 @@ PYTHON_PLACEHOLDER = "${PYTHON}"
 
 
 def find_python_cmd() -> str:
-    """Абсолютный путь к интерпретатору, которым запущен сам resolver.
+    """Абсолютный путь к интерпретатору, которым запущен сам resolver, + -X utf8.
 
-    Это тот же python, что deploy-local.sh уже нашёл в PATH (python3/python/py) —
-    подставляем его абсолютным путём, чтобы хуки на рантайме не зависели от PATH
-    (на Windows часто нет python3, только python.exe/py.exe).
+    Путь — тот же python, что deploy-local.sh уже нашёл в PATH (python3/python/py),
+    подставляем абсолютным, чтобы хуки на рантайме не зависели от PATH (на Windows
+    часто нет python3, только python.exe/py.exe).
+
+    -X utf8 (= PYTHONUTF8=1, но не зависит от синтаксиса cmd.exe/sh для передачи env)
+    обязателен: хуки читают JSON-payload из stdin и печатают JSON с ensure_ascii=False
+    в stdout — без него на не-английской Windows (cp1251 и т.п.) любая кириллица/иконка
+    в payload валит хук UnicodeDecodeError/UnicodeEncodeError на КАЖДОМ вызове инструмента
+    (не только при деплое, как было с risk-policy.json).
     """
     exe = sys.executable
     if not exe:
-        return "python3"
-    return f'"{exe}"' if " " in exe else exe
+        return "python3 -X utf8"
+    quoted = f'"{exe}"' if " " in exe else exe
+    return f"{quoted} -X utf8"
 
 
 def find_project_root(cwd: str | None = None) -> str:
@@ -95,9 +102,12 @@ def has_absolute_hook_paths(settings: dict) -> list[str]:
 
     def _walk(node, path=""):
         if isinstance(node, str) and path.endswith("command"):
-            # Ищем путь к .py-хуку, а не к интерпретатору — тот может быть
-            # "python3", "python" или абсолютным путём (sys.executable, в т.ч. в кавычках).
-            m = re.search(r"(/\S+\.py)\b", node)
+            # Хук — последний токен команды (интерпретатор ± "-X utf8" идут перед ним).
+            # НЕ якорим на "/" в начале: project_root на Windows — обратные слэши
+            # (Path(...).resolve() → "C:\Work\..."), а хвост из шаблона — прямые
+            # ("/.gigacode/hooks/x.py"), путь целиком смешанный: "C:\Work\...
+            # /.gigacode/hooks/x.py". Якорь на "/" резал бы только хвост после первого "/".
+            m = re.search(r"(\S+\.py)\s*$", node)
             if m:
                 found.append(m.group(1))
         elif isinstance(node, dict):

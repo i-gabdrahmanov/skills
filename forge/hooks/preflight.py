@@ -10,7 +10,6 @@ Exit 1 — ENFORCEMENT OFF. Предупредить пользователя.
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -20,13 +19,17 @@ def _find_foreign_hook_paths(settings: dict, project_root: str) -> list[str]:
     """Ищет в блоке hooks пути, ведущие за пределы .gigacode/hooks/ текущего проекта."""
     hooks = settings.get("hooks", {})
     found = []
-    expected_prefix = os.path.join(project_root, ".gigacode", "hooks") + "/"
+    # ВАЖНО: та же склейка, что в settings.hooks.json/resolve_hook_paths.py —
+    # project_root + "/.gigacode/hooks/" прямым слэшем, НЕ os.path.join(). На Windows
+    # project_root из Path(...).resolve() — обратные слэши ("C:\Work\..."), а хвост
+    # из шаблона — прямые; итоговый путь смешанный. os.path.join() дал бы чисто
+    # обратные слэши и никогда бы не совпал с реальным префиксом в command.
+    expected_prefix = f"{project_root}/.gigacode/hooks/"
 
     def _walk(node, path=""):
         if isinstance(node, str) and path.endswith("command"):
-            # Путь к .py-хуку, а не к интерпретатору — тот может быть "python3",
-            # "python" или абсолютным путём (sys.executable, в т.ч. в кавычках).
-            m = re.search(r"(/\S+\.py)\b", node)
+            # Хук — последний токен команды (интерпретатор ± "-X utf8" — перед ним).
+            m = re.search(r"(\S+\.py)\s*$", node)
             if m:
                 p = m.group(1)
                 if not p.startswith(expected_prefix):
