@@ -243,8 +243,9 @@ def preflight(project_root: str) -> dict:
         try:
             import subprocess
             res = subprocess.run(
-                [sys.executable, str(resolver_script), "--check", "--project", project_root],
-                capture_output=True, text=True, timeout=15,
+                [sys.executable, "-X", "utf8", str(resolver_script),
+                 "--check", "--project", project_root],
+                capture_output=True, text=True, encoding="utf-8", timeout=15,
             )
             if res.returncode != 0:
                 out = res.stdout.strip()
@@ -273,8 +274,9 @@ def preflight(project_root: str) -> dict:
         try:
             import subprocess
             res = subprocess.run(
-                [sys.executable, str(doctor_script), "--project", project_root, "--json"],
-                capture_output=True, text=True, timeout=20,
+                [sys.executable, "-X", "utf8", str(doctor_script),
+                 "--project", project_root, "--json"],
+                capture_output=True, text=True, encoding="utf-8", timeout=20,
             )
             try:
                 detail = json.loads(res.stdout) if res.stdout.strip() else {}

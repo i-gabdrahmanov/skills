@@ -212,14 +212,14 @@ def _direct_update(root: Path, skill: str, feature: str, step_id: str, status: s
     if UPDATE.exists():
         try:
             r = subprocess.run(
-                [sys.executable, str(UPDATE),
+                [sys.executable, "-X", "utf8", str(UPDATE),
                  "--project", str(root), "--skill", skill, "--feature", feature,
                  "--step-id", str(step_id), "--status", status,
                  # SubagentStop → запись пришла ОТ субагента: снимает блок «фаза должна идти
                  # через agent()» в update._check_subagent_origin (бывший subagent-enforcer).
                  "--closed-by", "subagent",
                  "--output-json", json.dumps(obj, ensure_ascii=False)],
-                capture_output=True, text=True, timeout=20,
+                capture_output=True, text=True, encoding="utf-8", timeout=20,
             )
             if r.returncode == 3:
                 # ESCALATE от брейка ре-итераций (quality.max_step_reopens) — печатаем

@@ -126,9 +126,9 @@ def main() -> int:
         if not CHECK.exists():
             return _block("check_evidence.py не найден — доставка заблокирована (fail-closed).")
         r = subprocess.run(
-            [sys.executable, str(CHECK), plans[0], "--root", str(root),
+            [sys.executable, "-X", "utf8", str(CHECK), plans[0], "--root", str(root),
              "--pipeline-config", str(cfg)],
-            capture_output=True, text=True, timeout=40,
+            capture_output=True, text=True, encoding="utf-8", timeout=40,
         )
         if r.returncode == 2:
             return _block("evidence неполный:\n" + (r.stdout or r.stderr).strip())
