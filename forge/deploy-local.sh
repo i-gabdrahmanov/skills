@@ -98,4 +98,4 @@ RESOLVER_ARGS=("--project" "$PROJECT_ROOT")
 [ "$DRY_RUN" -eq 1 ] && RESOLVER_ARGS+=("--dry-run")
 [ "$CHECK" -eq 1 ] && RESOLVER_ARGS+=("--check")
 
-exec "${PY[@]}" "$RESOLVER" "${RESOLVER_ARGS[@]}"
+exec "${PY[@]}" -X utf8 "$RESOLVER" "${RESOLVER_ARGS[@]}"

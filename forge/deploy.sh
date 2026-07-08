@@ -96,6 +96,6 @@ echo "== preflight =="
 if [ "${#PY[@]}" -eq 0 ]; then
   echo "  (python не найден в PATH — preflight пропущен; поставь Python и добавь его в PATH)"
 else
-  "${PY[@]}" "$GIG/hooks/preflight.py" --project "$TARGET" || \
+  "${PY[@]}" -X utf8 "$GIG/hooks/preflight.py" --project "$TARGET" || \
     echo "  (preflight сообщил о проблемах — см. вывод выше)"
 fi
