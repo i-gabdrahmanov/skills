@@ -32,6 +32,40 @@ SKILLS_DIR = skills_dir()
 _LEVELS = ["R0", "R1", "R2", "R3", "R4", "R5"]
 
 
+# ── Нормализация git-команды ─────────────────────────────────────────────────────────
+# Глобальные опции git ПЕРЕД подкомандой (`git -C <path> push`, `git -c k=v commit`,
+# `git --git-dir=... push`) обходили детекторы `\bgit\s+(push|commit)\b` во ВСЕХ хуках
+# (delivery/evidence, SoD, force-push, классификатор рисков): `git -C . push` не совпадает
+# с `git\s+push`, поэтому доставка/коммит проходили неклассифицированными и без гейтов.
+# `git -C .` при этом функционально идентичен обычному push в текущем репо. Сворачиваем
+# ведущий кластер глобальных опций в голый `git`, чтобы детектор подкоманды снова совпадал.
+# Best-effort (как вся Bash-детекция): значения-опции в кавычках со спецсимволами не разбираем.
+_GIT_OPT_VAL = r"(?:\"[^\"]*\"|'[^']*'|\S+)"
+_GIT_GLOBAL_OPTS_RE = re.compile(
+    r"\bgit\b(?:\s+(?:"
+    r"-C\s+" + _GIT_OPT_VAL +
+    r"|-c\s+" + _GIT_OPT_VAL +
+    r"|--git-dir(?:=" + _GIT_OPT_VAL + r"|\s+" + _GIT_OPT_VAL + r")"
+    r"|--work-tree(?:=" + _GIT_OPT_VAL + r"|\s+" + _GIT_OPT_VAL + r")"
+    r"|--namespace(?:=" + _GIT_OPT_VAL + r"|\s+" + _GIT_OPT_VAL + r")"
+    r"|--exec-path(?:=" + _GIT_OPT_VAL + r")?"
+    r"|--(?:no-)?pager|--paginate|--bare|--no-replace-objects|--literal-pathspecs"
+    r"))+",
+    re.I,
+)
+
+
+def normalize_git_command(command: str) -> str:
+    """Свернуть ведущие глобальные опции git (`git -C <p> push` → `git push`).
+
+    Только для целей ДЕТЕКЦИИ — исполняется всегда исходная команда. Опции коммита/подкоманды
+    (`git commit -C HEAD`) не трогаются: сворачивается лишь кластер сразу после `git` перед
+    первой не-опцией. `..`/квотированные пути с пробелами — best-effort."""
+    if not command or "git" not in command:
+        return command or ""
+    return _GIT_GLOBAL_OPTS_RE.sub("git", command)
+
+
 def level_order(level: str) -> int:
     try:
         return _LEVELS.index(level)
@@ -183,12 +217,14 @@ def classify(tool_name: str, tool_input: dict, root: Path | None = None) -> dict
             continue
         break
 
-    # command_risk может поднять класс
+    # command_risk может поднять класс. Матчим по НОРМАЛИЗОВАННОЙ команде, иначе
+    # `git -C . push`/`git -c k=v commit` классифицировались бы как R1-default (обход R4/R2).
+    command_norm = normalize_git_command(command)
     for lvl, pats in policy.get("command_risk", {}).items():
         if lvl.startswith("_"):
             continue
         for pat in pats:
-            if command and re.search(pat, command, re.I):
+            if command_norm and re.search(pat, command_norm, re.I):
                 if level_order(lvl) > level_order(best):
                     best, reason = lvl, f"cmd~{pat}"
     return {"level": best, "reason": reason, "target": target, "command": command}

@@ -43,6 +43,14 @@ class TestMain(unittest.TestCase):
         """Команда не доставка (ls) → пропуск (0)."""
         self.assertEqual(self._run({"tool_input": {"command": "ls -la"}}), 0)
 
+    def test_git_C_push_detected_as_delivery(self):
+        """`git -C . push` — доставка: обходила детект (git\\s+push), без evidence-гейта.
+        Вне пайплайна (нет task-plan/lite-манифеста) → block (fail-closed доставки)."""
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self._run({
+                "cwd": d, "tool_input": {"command": "git -C . push origin main"},
+            }), 2)
+
 
 class TestCommitMsgFloor(unittest.TestCase):
     """Пол сообщения HEAD-коммита перед push: запрет Co-Authored-By (оба потока) и

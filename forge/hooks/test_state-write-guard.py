@@ -65,6 +65,25 @@ class TWriteVector(unittest.TestCase):
         r = _write("ground/phases/phase-defs.json")
         self.assertEqual(r.returncode, 2, r.stderr)
 
+    def test_block_evals_json(self):
+        # evals.json — кэш EDD (eval-guard читает status:passed); прямой Write со всеми passed
+        # снимал бы eval-гейт (тот же класс, что judges/gates)
+        r = _write("ground/statements/feature-pipeline/f1/evals.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_double_slash_bypass(self):
+        # ground//pipeline.json пишет в тот же файл, но обходил бы CP-regex без нормализации
+        r = _write("ground//pipeline.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_dot_segment_bypass(self):
+        r = _write("ground/./pipeline.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_dotdot_traversal_bypass(self):
+        r = _write("ground/statements/feature-pipeline/f1/../f1/manifest.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
     def test_block_edit_tool_too(self):
         r = _run("edit", {"file_path": "ground/statements/feature-pipeline/f1/manifest.json"})
         self.assertEqual(r.returncode, 2, r.stderr)
@@ -110,6 +129,14 @@ class TBashVector(unittest.TestCase):
 
     def test_block_python_write_phase_gate(self):
         r = _bash("python3 -c \"open('ground/phases/f1/gate.json','w').write('{}')\"")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_redirect_into_evals(self):
+        r = _bash("echo '{}' > ground/statements/feature-pipeline/f1/evals.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_redirect_double_slash(self):
+        r = _bash("echo '{}' > ground//pipeline.json")
         self.assertEqual(r.returncode, 2, r.stderr)
 
     def test_pass_run_judge_ingest_command(self):

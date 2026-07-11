@@ -31,7 +31,8 @@ def _run(payload: dict) -> int:
 
 
 def _make_project(tmp: Path, *, build_status: str, cache: dict | None,
-                  eval_enabled: bool = True, slug: str = "feat-x") -> None:
+                  eval_enabled: bool = True, slug: str = "feat-x",
+                  provenance: bool = True) -> None:
     (tmp / "ground").mkdir(parents=True, exist_ok=True)
     (tmp / "ground" / "pipeline.json").write_text(
         json.dumps({"quality": {"eval_enabled": eval_enabled}}), encoding="utf-8")
@@ -50,6 +51,10 @@ def _make_project(tmp: Path, *, build_status: str, cache: dict | None,
     }), encoding="utf-8")
 
     if cache is not None:
+        cache = dict(cache)
+        # Легитимный кэш несёт провенанс run_pending_evals; provenance=False моделирует подделку.
+        if provenance:
+            cache.setdefault("_meta", {})["produced_by"] = "run_pending_evals"
         (sdir / "evals.json").write_text(json.dumps(cache), encoding="utf-8")
 
 
@@ -115,6 +120,29 @@ class TestEvalGuard(unittest.TestCase):
                 "tool_name": "Write", "cwd": str(tmp),
                 "tool_input": {"file_path": str(tmp / "src/main/java/X.java")},
             }), 0)
+
+    def test_block_forged_cache_without_provenance(self):
+        # подделка: все passed, но без _meta.produced_by — eval-guard не засчитывает → блок
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _make_project(tmp, build_status="in_progress",
+                          cache={"e1": {"status": "passed"}}, provenance=False)
+            self.assertEqual(_run({
+                "tool_name": "Write", "cwd": str(tmp),
+                "tool_input": {"file_path": str(tmp / "src/main/java/X.java")},
+            }), 2)
+
+    def test_block_relative_src_main_path(self):
+        # рантайм Qwen может отдать относительный file_path — раньше `/src/main/` его не ловил
+        # и EDD молча fail-open'ил. Теперь `(?:^|/)src/main/` ловит и относительный.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _make_project(tmp, build_status="in_progress",
+                          cache={"e1": {"status": "failed"}})
+            self.assertEqual(_run({
+                "tool_name": "write_file", "cwd": str(tmp),
+                "tool_input": {"file_path": "src/main/java/X.java"},
+            }), 2)
 
 
 if __name__ == "__main__":

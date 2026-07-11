@@ -195,6 +195,9 @@ def main() -> int:
     # 2. Проверка по blocked_commands (только для Bash)
     if tool_name in ("Bash", "run_shell_command"):
         cmd = tool_input.get("command", "")
+        # `git -C <p> commit`/`git -c k=v push` обходили бы роль-блок (детект по git\s+push|commit).
+        if _R is not None:
+            cmd = _R.normalize_git_command(cmd)
         detected_cmd = _detect_command_from_bash(cmd)
         if detected_cmd:
             for pattern in policy.get("blocked_commands", []):

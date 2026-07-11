@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _project import skills_dir, resolve_skill_path
+import risk_ladder as _R
 
 SKILLS_DIR = skills_dir()
 CHECK = resolve_skill_path("feature-pipeline", "scripts", "check_evidence.py")
@@ -90,7 +91,12 @@ def main() -> int:
         if not isinstance(data, dict):
             return 0
         cmd = (data.get("tool_input") or {}).get("command")
-        if not isinstance(cmd, str) or not _DELIVER.search(cmd):
+        if not isinstance(cmd, str):
+            return 0
+        # `git -C <p> push`/`git -c k=v push` обходили детект доставки → доставка шла без
+        # evidence-гейта. Нормализуем перед матчингом (исполняется исходная команда).
+        cmd = _R.normalize_git_command(cmd)
+        if not _DELIVER.search(cmd):
             return 0
         deliver = True
         root = _project_root(data.get("cwd", ""))
@@ -105,7 +111,6 @@ def main() -> int:
         # Lite-ветка (forgelite): task-plan нет — доставку гейтим по шагам манифеста
         # (lite-green + lite-verify completed). Активный манифест резолвит risk_ladder (newest).
         try:
-            import risk_ladder as _R
             lite_status = _R.manifest_status(root)
         except Exception:
             lite_status = {}

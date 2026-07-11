@@ -51,8 +51,8 @@
       "(?i).*/(security|auth|authentication|payment|billing|pii|kyc)/.*",
       "(?i).*(secret|credential|keystore|truststore).*"
     ],
-    "R2": ["(?i).*/src/main/.*\\.(java|kt)$"],
-    "R1": ["(?i).*/src/test/.*", "(?i).*(test|spec).*\\.(java|kt|py)$"],
+    "R2": ["(?i)(?:^|/)src/main/.*\\.(java|kt)$"],
+    "R1": ["(?i)(?:^|/)src/test/.*", "(?i).*(test|spec).*\\.(java|kt|py)$"],
     "R0": ["(?i).*\\.(md|txt|adoc|rst)$", "(?i).*/docs?/.*"]
   },
 
