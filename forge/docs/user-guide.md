@@ -66,6 +66,9 @@ bash deploy.sh /path/to/target-project
 python3 <project>/.gigacode/hooks/preflight.py --project .
 ```
 - `exit 0` — харнес активен, можно работать.
+- `exit 2` — конфиг не инициализирован (`init_needed`: `ground/pipeline.json` нет/неполон). Нормально
+  сразу после деплоя — файл появится при первом запуске пайплайна. Инициализируйте конфиг и прогоните
+  `preflight` снова до `exit 0`. Это **не** ENFORCEMENT OFF.
 - `exit 1` — **ENFORCEMENT OFF**: хуки не сработают (нет блока `hooks` / `disableAllHooks` / не задеплоено).
   Не ведите пайплайн вслепую — перепроверьте деплой (§3) и запустите `preflight` снова.
 

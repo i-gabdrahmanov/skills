@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -106,6 +108,78 @@ class TestPreflight(unittest.TestCase):
             res = preflight.preflight(str(tmp))
             self.assertFalse(res["passed"])
             self.assertTrue(any("risk-policy" in e for e in res["errors"]), res["errors"])
+
+    def test_missing_pipeline_json_is_init_needed_not_error(self):
+        # Свежий деплой: pipeline.json ещё нет. Это НЕ enforcement off (не в errors),
+        # но и не passed (гейт арминга): init_needed + passed False.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _make(tmp, wired=ESSENTIAL)
+            (tmp / "ground" / "pipeline.json").unlink()
+            res = preflight.preflight(str(tmp))
+            self.assertFalse(res["passed"])
+            self.assertEqual(res["errors"], [], res)   # НЕ ошибка
+            self.assertTrue(any("pipeline.json" in m for m in res.get("init_needed", [])), res)
+
+    def test_incomplete_pipeline_json_is_init_needed(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _make(tmp, wired=ESSENTIAL)
+            (tmp / "ground" / "pipeline.json").write_text(
+                json.dumps({"_incomplete": ["criticality"]}), encoding="utf-8")
+            res = preflight.preflight(str(tmp))
+            self.assertFalse(res["passed"])
+            self.assertEqual(res["errors"], [], res)
+            self.assertTrue(any("incomplete" in m for m in res.get("init_needed", [])), res)
+
+    def test_corrupt_pipeline_json_is_hard_error(self):
+        # Битый JSON (конфиг ЕСТЬ, но не читается) — реальная ошибка, а не «не инициализирован».
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _make(tmp, wired=ESSENTIAL)
+            (tmp / "ground" / "pipeline.json").write_text("{ broken", encoding="utf-8")
+            res = preflight.preflight(str(tmp))
+            self.assertFalse(res["passed"])
+            self.assertTrue(any("pipeline.json parse error" in e for e in res["errors"]), res)
+            self.assertEqual(res.get("init_needed", []), [], res)
+
+
+class TestExitCodes(unittest.TestCase):
+    """CLI-контракт: 0=армирован, 2=не инициализирован (init_needed), 1=enforcement off."""
+
+    def _exit(self, tmp: Path) -> int:
+        return subprocess.run(
+            [sys.executable, "-X", "utf8", str(HOOKS / "preflight.py"), "--project", str(tmp)],
+            capture_output=True, text=True, encoding="utf-8").returncode
+
+    def test_exit_0_when_armed(self):
+        with tempfile.TemporaryDirectory() as d:
+            # .resolve(): __main__ резолвит --project (на macOS /var→/private/var),
+            # пути хуков в фикстуре должны совпасть с этим префиксом, иначе ложный «чужой путь».
+            tmp = Path(d).resolve()
+            _make(tmp, wired=ESSENTIAL)
+            self.assertEqual(self._exit(tmp), 0)
+
+    def test_exit_2_when_not_initialized(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            _make(tmp, wired=ESSENTIAL)
+            (tmp / "ground" / "pipeline.json").unlink()
+            self.assertEqual(self._exit(tmp), 2)
+
+    def test_exit_1_when_enforcement_off(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            _make(tmp, wired=[n for n in ESSENTIAL if n != "eval-guard.py"])
+            self.assertEqual(self._exit(tmp), 1)
+
+    def test_enforcement_off_beats_init_needed(self):
+        # Есть и enforcement-ошибка, и отсутствие конфига → exit 1 (жёсткая причина главнее).
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            _make(tmp, wired=[n for n in ESSENTIAL if n != "eval-guard.py"])
+            (tmp / "ground" / "pipeline.json").unlink()
+            self.assertEqual(self._exit(tmp), 1)
 
 
 class TestMatcherCanonical(unittest.TestCase):

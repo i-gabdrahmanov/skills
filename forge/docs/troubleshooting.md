@@ -8,7 +8,7 @@
 
 ```bash
 # 1. Харнес вообще активен? (заодно прогоняет доктор целостности пайплайна)
-python3 <project>/.gigacode/hooks/preflight.py --project .   # exit 0 = ок, exit 1 = ENFORCEMENT OFF
+python3 <project>/.gigacode/hooks/preflight.py --project .   # 0=ок, 2=не инициализирован, 1=ENFORCEMENT OFF
 
 # 2. Доктор целостности пайплайна (судьи, фазы, пути реестра)
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/doctor.py --project . --json
@@ -40,6 +40,8 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/read.py --skill featur
 ### A2. `preflight.py` → exit 1 (ENFORCEMENT OFF)
 **Действие:** не ведите пайплайн вслепую. Перепроверьте деплой (user-guide §3) → `preflight.py` снова.
 Продолжайте только после exit 0.
+**Не путайте с exit 2** (`init_needed`: `ground/pipeline.json` нет/неполон) — это не поломка
+энфорсмента, а неинициализированный конфиг. Инициализируйте его и перезапустите preflight до exit 0.
 
 ### A3. Гейты не находят скиллы (`../skills`)
 **Симптом:** хук/гейт падает, не может найти скилл-скрипт.

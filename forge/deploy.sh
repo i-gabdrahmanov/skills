@@ -96,6 +96,15 @@ echo "== preflight =="
 if [ "${#PY[@]}" -eq 0 ]; then
   echo "  (python не найден в PATH — preflight пропущен; поставь Python и добавь его в PATH)"
 else
-  "${PY[@]}" -X utf8 "$GIG/hooks/preflight.py" --project "$TARGET" || \
-    echo "  (preflight сообщил о проблемах — см. вывод выше)"
+  if "${PY[@]}" -X utf8 "$GIG/hooks/preflight.py" --project "$TARGET"; then
+    :
+  else
+    rc=$?
+    if [ "$rc" -eq 2 ]; then
+      echo "  (проект ещё не инициализирован — ground/pipeline.json появится при первом"
+      echo "   запуске пайплайна; это ожидаемо сразу после деплоя, не ошибка)"
+    else
+      echo "  (preflight сообщил о проблемах — см. вывод выше)"
+    fi
+  fi
 fi
