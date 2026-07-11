@@ -5,7 +5,10 @@ Pre-flight check для feature-pipeline.
 Вызывается самым первым при старте пайплайна.
 
 Exit 0 — харнес активен, можно продолжать.
-Exit 1 — ENFORCEMENT OFF. Предупредить пользователя.
+Exit 1 — ENFORCEMENT OFF (essential-хук не подключён / settings / risk-policy).
+         Стоп-и-предупреди: сначала deploy, потом заново.
+Exit 2 — конфиг не инициализирован (ground/pipeline.json нет/неполон). Нормальный
+         первый запуск: инициализируй конфиг и перезапусти preflight до exit 0.
 """
 from __future__ import annotations
 
@@ -112,6 +115,11 @@ MIN_PYTHON = (3, 10)
 def preflight(project_root: str) -> dict:
     errors = []
     warnings = []
+    # «Ещё не инициализирован» — отдельный класс, НЕ enforcement off. Держим вне errors,
+    # чтобы deploy сразу после раскатки не выглядел провальным, но passed остаётся False
+    # (гейт арминга: субагентов не поднимать, пока конфиг не создан). Различие errors/init
+    # маппится на exit-код: 1 = enforcement off, 2 = инициализируй и перезапусти.
+    init_needed = []
 
     # 0. Версия Python (раньше всего — иначе doctor/скрипты упадут с невнятным импорт-эррором)
     if sys.version_info[:2] < MIN_PYTHON:
@@ -121,15 +129,18 @@ def preflight(project_root: str) -> dict:
             f"(PEP604/match). Часть скриптов/хуков может падать. Обнови интерпретатор."
         )
 
-    # 1. pipeline.json
+    # 1. pipeline.json — конфиг control-plane. Отсутствие/неполнота — это «нормальный первый
+    #    запуск» (файл создаёт init_pipeline_config.py, а preflight бежит ДО него), а не поломка
+    #    энфорсмента → init_needed, а не errors. Битый JSON (не пустой, а невалидный) — уже реальная
+    #    ошибка: конфиг есть, но рантайм его не прочитает → errors.
     pipeline_json = Path(project_root) / "ground" / "pipeline.json"
     if not pipeline_json.exists():
-        errors.append("ground/pipeline.json not found — конфигурация не инициализирована")
+        init_needed.append("ground/pipeline.json not found — конфигурация не инициализирована")
     else:
         try:
             cfg = json.loads(pipeline_json.read_text(encoding="utf-8"))
             if cfg.get("_incomplete"):
-                errors.append(f"pipeline.json incomplete: {cfg['_incomplete']}")
+                init_needed.append(f"pipeline.json incomplete: {cfg['_incomplete']}")
         except json.JSONDecodeError as e:
             errors.append(f"pipeline.json parse error: {e}")
 
@@ -302,8 +313,12 @@ def preflight(project_root: str) -> dict:
         except Exception as e:
             warnings.append(f"doctor.py не выполнен: {e}")
 
-    passed = len(errors) == 0
+    # passed=True требует и отсутствия enforcement-ошибок, и инициализированного конфига —
+    # гейт арминга остаётся жёстким. Но init_needed отделён от errors для разного exit-кода.
+    passed = len(errors) == 0 and len(init_needed) == 0
     result = {"passed": passed, "errors": errors}
+    if init_needed:
+        result["init_needed"] = init_needed
     if warnings:
         result["warnings"] = warnings
     return result
@@ -327,4 +342,8 @@ if __name__ == "__main__":
             project_root = Path(sys.argv[idx + 1]).resolve()
     result = preflight(project_root)
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    sys.exit(0 if result["passed"] else 1)
+    # exit 0 — армирован; 1 — enforcement off (реальные errors, стоп-и-предупреди);
+    # 2 — только «не инициализирован» (init_needed): инициализируй конфиг и перезапусти.
+    if result["passed"]:
+        sys.exit(0)
+    sys.exit(1 if result["errors"] else 2)

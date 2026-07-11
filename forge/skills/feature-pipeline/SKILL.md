@@ -80,14 +80,14 @@ description: >
 python3 <project>/.gigacode/hooks/preflight.py --project .
 ```
 - **exit 0** — харнес активен, продолжай.
-- **exit 1** — посмотри `errors`. Различай две причины (они требуют разного):
-  - **Только** `ground/pipeline.json not found` (или `incomplete`) — это нормальный первый запуск.
-    Инициализируй конфиг (§0.1) и **обязательно перезапусти preflight** — он должен стать **exit 0**
-    до первого субагента.
-  - Ошибки про `settings.json` / `hooks block empty` / `essential hook НЕ подключён` /
-    `resolve_hook_paths` — это **ENFORCEMENT OFF**: хуки реально не срабатывают. **Остановись и
-    предупреди пользователя**, сначала `deploy.sh` + `bash .gigacode/deploy-local.sh` + `doctor.py`.
-    Дальше только после подтверждения, что харнес поднят.
+- **exit 2** — конфиг не инициализирован (в JSON — `init_needed`, а **не** `errors`:
+  `ground/pipeline.json not found`/`incomplete`). Это нормальный первый запуск.
+  Инициализируй конфиг (§0.1) и **обязательно перезапусти preflight** — он должен стать **exit 0**
+  до первого субагента.
+- **exit 1** — посмотри `errors`. Это **ENFORCEMENT OFF**: `settings.json` / `hooks block empty` /
+  `essential hook НЕ подключён` / `resolve_hook_paths` / битый `pipeline.json` — хуки реально не
+  срабатывают. **Остановись и предупреди пользователя**, сначала `deploy.sh` +
+  `bash .gigacode/deploy-local.sh` + `doctor.py`. Дальше только после подтверждения, что харнес поднят.
 
 > **ЖЁСТКИЙ ГЕЙТ АРМИНГА.** Не вызывай **ни одного `agent()`**, пока `preflight.py` не вернул
 > **exit 0**. Хуки рантайм связывает при запуске сессии; если на старте было `enforcement off`,
