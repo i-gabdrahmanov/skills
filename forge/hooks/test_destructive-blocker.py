@@ -66,6 +66,13 @@ class TBlacklistForms(unittest.TestCase):
     def test_allow_benign_push(self):
         self.assertEqual(_run("git push origin feature/x").returncode, 0)
 
+    def test_block_force_push_via_git_C(self):
+        # `git -C <path>` перед push обходил force-push-паттерн (детект по git\s+push)
+        self.assertEqual(_run("git -C . push --force origin main").returncode, 2)
+
+    def test_block_force_push_via_git_c_config(self):
+        self.assertEqual(_run("git -c user.name=x push -f origin main").returncode, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

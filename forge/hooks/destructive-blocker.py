@@ -44,6 +44,12 @@ def main() -> int:
         cmd = (data.get("tool_input") or {}).get("command")
         if not isinstance(cmd, str) or not cmd.strip():
             return 0
+        # `git -C <p> push --force`/`git -c k=v push -f` обходили force-push-паттерны
+        # (детект по `git\s+push`). Матчим по нормализованной команде (исполняется исходная).
+        try:
+            cmd = R.normalize_git_command(cmd)
+        except Exception:
+            pass
         policy = []
         try:
             policy = R.load_policy().get("destructive_blacklist", []) or []

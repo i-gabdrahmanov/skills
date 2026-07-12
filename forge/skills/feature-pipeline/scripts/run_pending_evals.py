@@ -159,6 +159,10 @@ def main() -> int:
     merged = dict(results)
     merged.update(eval_results)
     merged["_meta"] = {
+        # Провенанс: eval-guard засчитывает кэш только с produced_by:"run_pending_evals"
+        # (как judges/gates). Подделанный Write/редирект evals.json со всеми passed без этого
+        # маркера eval-guard отвергает → блок. Прямой Write сюда режет и state-write-guard.
+        "produced_by": "run_pending_evals",
         "feature": args.feature,
         "task": args.task,
         "ran_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),

@@ -238,6 +238,8 @@ def check_gate_override(command: str, root: Path) -> str | None:
 
 def _kind(tool_name: str, command: str) -> str:
     if tool_name in ("Bash", "run_shell_command"):
+        # git -C <p>/-c k=v перед подкомандой обходил бы push/commit-детект → нормализуем.
+        command = R.normalize_git_command(command)
         if re.search(r"\bgit\s+commit\b", command):
             return "commit"
         if re.search(r"\bgit\s+push\b|pull[-_ ]?request|pullrequests|\bacli\b.*\bpr\b", command, re.I):

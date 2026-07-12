@@ -19,6 +19,7 @@ fail-open: если eval-plan.json нет, eval_enabled=false, фичи/зада
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -46,13 +47,24 @@ def _block(reason: str) -> int:
 
 
 def _load_eval_results(manifest_dir: Path) -> dict:
-    """Кэш результатов eval'ов, который пишет run_pending_evals.py (имя файла — evals.json)."""
+    """Кэш результатов eval'ов, который пишет run_pending_evals.py (имя файла — evals.json).
+
+    Провенанс (BLOCKER-1 класс): засчитываем кэш ТОЛЬКО с _meta.produced_by=="run_pending_evals".
+    Подделанный evals.json со всеми status:"passed", но без этого маркера (прямой Write режет
+    state-write-guard; Bash-редирект — best-effort) → возвращаем {}, значит ни один eval не
+    passed → eval-guard блокирует запись в src/main. Легитимный кэш всегда несёт маркер."""
     path = manifest_dir / "evals.json"
     if path.exists():
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             return {}
+        meta = data.get("_meta") if isinstance(data, dict) else None
+        if not isinstance(meta, dict) or meta.get("produced_by") != "run_pending_evals":
+            print("[eval-guard] evals.json без провенанса produced_by:'run_pending_evals' — "
+                  "кэш не засчитан (прогони run_pending_evals.py заново).", file=sys.stderr)
+            return {}
+        return data
     return {}
 
 
@@ -62,9 +74,12 @@ def _has_passed(results: dict, eval_id: str) -> bool:
 
 
 def _is_src_main(target_path: str | None) -> bool:
+    # `(?:^|/)src/main/` ловит и абсолютный, и ОТНОСИТЕЛЬНЫЙ путь (рантайм Qwen может отдать
+    # relative — так делает tdd-guard). Требование ведущего слэша (`/src/main/`) молча fail-
+    # open'ило EDD-гейт на `src/main/...` от tool_input с относительным file_path.
     if not target_path:
         return False
-    return "/src/main/" in target_path.replace("\\", "/")
+    return bool(re.search(r"(?:^|/)src/main/", target_path.replace("\\", "/")))
 
 
 def _target_path(tool_name: str, tool_input: dict) -> str | None:
