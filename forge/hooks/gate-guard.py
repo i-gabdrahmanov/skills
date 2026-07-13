@@ -236,6 +236,53 @@ def check_gate_override(command: str, root: Path) -> str | None:
         return f"deny-first: ошибка проверки gate-override ({e})."
 
 
+def check_sdd_review(command: str, root: Path) -> str | None:
+    """R4-класс: доставка SDD на ветку согласования (sdd_review_push.py) требует
+    approval-маркера ground/approvals/sdd-review-<slug>.json (кладётся ТОЛЬКО после
+    явного «да» пользователя на Гейте SDD-ревью). Возвращает причину блокировки или None.
+
+    --status (ридонли-отчёт о состоянии ветки) свободен. Дефолты зашиты в код — удаление
+    секции sdd_review из risk-policy.json не выключает enforcement молча. Ошибка разбора →
+    fail-CLOSED (доставка без ясности опаснее ложного блока)."""
+    try:
+        policy = R.load_policy().get("sdd_review") or {}
+        pat = policy.get("command_pattern", r"sdd_review_push\.py")
+        if not command or not re.search(pat, command):
+            return None
+        # readonly (--status) — по РЕАЛЬНЫМ токенам-аргументам, не подстрокой (иначе
+        # `--jira-key "X --status"` ложно трактуется как readonly — тот же обход, что у --list).
+        ro_flags = policy.get("readonly_arg_flags") or ["--status"]
+        try:
+            toks = shlex.split(command)
+        except ValueError:
+            toks = command.split()
+        if any(f in toks for f in ro_flags):
+            return None
+        m = re.search(r"--feature[\s=]+[\"']?([\w.-]+)", command)
+        feat = m.group(1) if m else ""
+        prefix = policy.get("approval_prefix", "sdd-review")
+        key = f"{prefix}-{feat}" if feat else prefix
+        if feat and _approval_valid(root, key):
+            return None
+        exists_no_prov = R.approval_exists(root, key) and not _approval_valid(root, key)
+        prov_note = (
+            " Маркер есть, но БЕЗ провенанса record_approval — рукописный маркер не считается "
+            "(его мог выписать сам агент). " if exists_no_prov else " "
+        )
+        feat_note = "" if feat else " В команде нет --feature <slug> — ключ маркера не резолвится."
+        return (
+            f"доставка SDD на ветку согласования — R4-класс, нужен approval-маркер "
+            f"ground/approvals/{key}.json.{prov_note}Порядок: (1) спроси пользователя на Гейте "
+            f"SDD-ревью («коммитим SDD на ветку согласования?»); (2) ТОЛЬКО после явного «да» "
+            f"зафиксируй согласие СКРИПТОМ pipeline-state/scripts/record_approval.py --key {key} "
+            f"--approved-by user --reason \"<кто/почему>\" (он штампует провенанс; прямой Write "
+            f"в approvals/ заблокирован state-write-guard); (3) повтори команду.{feat_note} "
+            f"--status не гейтится."
+        )
+    except Exception as e:
+        return f"deny-first: ошибка проверки sdd-review ({e})."
+
+
 def _kind(tool_name: str, command: str) -> str:
     if tool_name in ("Bash", "run_shell_command"):
         # git -C <p>/-c k=v перед подкомандой обходил бы push/commit-детект → нормализуем.
@@ -284,6 +331,12 @@ def main() -> int:
         # ── R4-класс: снятие детерминированного гейта (override_judge) без approval ──
         # ДО auto-early-return: classify даёт таким командам default-R1 → иначе прошли бы авто.
         deny = check_gate_override(command, root)
+        if deny:
+            return _block(deny)
+
+        # ── R4-класс: доставка SDD на ветку согласования без approval ──
+        # Тоже ДО auto-early-return: classify даёт скрипту default-R1 → прошёл бы авто.
+        deny = check_sdd_review(command, root)
         if deny:
             return _block(deny)
 

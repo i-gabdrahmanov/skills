@@ -51,6 +51,16 @@ class TestMain(unittest.TestCase):
                 "cwd": d, "tool_input": {"command": "git -C . push origin main"},
             }), 2)
 
+    def test_sdd_review_script_not_delivery(self):
+        """sdd_review_push.py — санкционированный канал SDD-ревью: не матчится _DELIVER,
+        его гейтит gate-guard approval-маркером (deny-first), не evidence-гейт."""
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self._run({
+                "cwd": d, "tool_input": {"command":
+                    "python3 .gigacode/skills/feature-pipeline/scripts/sdd_review_push.py "
+                    "--feature STOR-7 --json"},
+            }), 0)
+
 
 class TestCommitMsgFloor(unittest.TestCase):
     """Пол сообщения HEAD-коммита перед push: запрет Co-Authored-By (оба потока) и

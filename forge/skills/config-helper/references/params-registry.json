@@ -273,6 +273,16 @@
       "aliases": ["system analysis subdir"]
     },
     {
+      "id": "docs.sdd_review",
+      "file": "pipeline",
+      "path": "docs.sdd_review",
+      "type": "enum", "enum": ["", "push", "skip"], "default": "",
+      "category": "docs", "sensitive": false,
+      "title": "Коммит SDD на ветку согласования",
+      "description": "Решение Гейта SDD-ревью (фаза 02-sdd feature-pipeline): push — коммитить sdd.md на ветку sdd-review/<slug> и пушить системным аналитикам (без PR); skip — не коммитить; пусто — спросить пользователя. Headless: предзапись ДО прогона. Ключ per-project (действует на все фичи прогона).",
+      "aliases": ["sdd review", "ревью sdd", "коммит sdd", "ветка согласования", "согласование sdd"]
+    },
+    {
       "id": "conventions.migration_tool",
       "file": "pipeline",
       "path": "conventions.migration_tool",

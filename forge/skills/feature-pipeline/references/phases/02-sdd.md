@@ -5,7 +5,7 @@
 > SKILL.md §0.6, override — SKILL.md §0.6.1. Нумерация секций ниже — историческая (§ из
 > монолитного SKILL.md), внутри брифа она самодостаточна.
 >
-> **Гейт закрытия фазы:** check_sdd_doc PASS + Гейт SDD; закрой шаг 02-sdd
+> **Гейт закрытия фазы:** check_sdd_doc PASS + Гейт SDD (+ опциональный Гейт SDD-ревью); закрой шаг 02-sdd
 
 ## 5. Фаза 2 — Спецификация (SDD) и Дизайн
 
@@ -64,12 +64,45 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py sdd <sl
 - Правки SDD → верни `sdd` на доработку (BRD не трогаем).
 - Если всплыло **новое бизнес-требование** → откат к фазе 0 (BRD).
 
-После «да» обнови `02-sdd` (только при `pass` execution-gate), передав артефакт:
+**Гейт SDD-ревью — коммит спеки на ветку согласования (после «да» по SDD, до закрытия шага).**
+Утверждённый `sdd.md` можно отдать системным аналитикам на ревью отдельной веткой (без PR).
+
+1. Проверь предзаписанное решение: `config.py get docs.sdd_review`.
+   `push` → сразу к шагу 3; `skip` → пропусти гейт; пусто → спроси (шаг 2).
+2. Спроси через `ask_user_question` (header: «Коммит SDD», 2 опции):
+   «Закоммитить утверждённый SDD на ветку согласования `sdd-review/<slug>` и запушить её
+   для ревью системными аналитиками? PR не создаётся.»
+   - «Да» — ветка + коммит ТОЛЬКО `sdd.md` + push в origin;
+   - «Нет» — sdd.md остаётся только в рабочей копии.
+   Ответ зафиксируй: `config.py set docs.sdd_review push` (или `skip`). Пустой ответ —
+   правило SKILL.md §0.7 (fallback = STOP + предзапись), гейт не пропускается молча.
+3. При «push» — зафиксируй согласие СКРИПТОМ (прямая запись в approvals/ заблокирована
+   state-write-guard):
+   ```bash
+   python3 <project>/.gigacode/skills/pipeline-state/scripts/record_approval.py \
+       --project <project> --key sdd-review-<slug> --approved-by user \
+       --reason "SDD утверждён на Гейте SDD; пользователь согласовал push ветки ревью"
+   ```
+   затем запусти санкционированный скрипт (сырые `git commit`/`git push` в фазе spec
+   блокирует sod-enforcer — НЕ пытайся делать это руками):
+   ```bash
+   python3 <project>/.gigacode/skills/feature-pipeline/scripts/sdd_review_push.py \
+       --feature <slug> --jira-key <KEY> --json
+   ```
+   Скрипт детерминированно: проверит маркер и PASS sdd-judge, соберёт коммит ТОЛЬКО из
+   `sdd.md` (сообщение составляет сам), создаст/обновит `sdd-review/<slug>` от default-ветки
+   (в `docs.mode=separate-repo` — в репо спеки), запушит в origin без force, рабочую копию
+   не тронет. Повторный запуск безопасен (идемпотентен; состояние — `--status`).
+   - exit 0 → возьми `branch` из JSON для артефактов закрытия;
+   - exit ≠ 0 → покажи stderr пользователю и спроси, как поступить.
+
+После «да» обнови `02-sdd` (только при `pass` execution-gate), передав артефакты
+(`sdd_review_branch` — только если ветка запушена):
 ```bash
 python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py \
     --skill feature-pipeline --feature <slug> \
     --step-id 02-sdd --status completed \
-    --artifacts '{"sdd": "docs/feature-pipeline/<slug>/sdd.md"}'
+    --artifacts '{"sdd": "docs/feature-pipeline/<slug>/sdd.md", "sdd_review_branch": "sdd-review/<slug>"}'
 ```
 
 ---

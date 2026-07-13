@@ -108,6 +108,70 @@ class TGateOverride(unittest.TestCase):
                              f"--remove (восстановление enforcement) не гейтится: {r.stderr}")
 
 
+class TSddReview(unittest.TestCase):
+    """Пин: доставка SDD на ветку согласования (sdd_review_push.py) — R4-класс, deny-first.
+    Без approval-маркера sdd-review-<slug> (провенанс record_approval) скрипт не запускается;
+    classify дал бы команде default-R1 — без deny-first она прошла бы авто."""
+
+    CMD = ("python3 .gigacode/skills/feature-pipeline/scripts/sdd_review_push.py "
+           "--feature f1 --jira-key STOR-1 --json")
+
+    @staticmethod
+    def _marker(td: str, key: str, payload: dict):
+        appr = Path(td) / "ground" / "approvals"
+        appr.mkdir(parents=True, exist_ok=True)
+        (appr / f"{key}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def test_without_approval_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = _run(self.CMD, td)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("sdd-review-f1.json", r.stderr)
+
+    def test_with_valid_approval_passes(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._marker(td, "sdd-review-f1",
+                         {"produced_by": "record_approval", "approved_by": "user",
+                          "reason": "ok"})
+            r = _run(self.CMD, td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_handwritten_marker_without_provenance_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._marker(td, "sdd-review-f1", {"approved_by": "user", "reason": "ok"})
+            r = _run(self.CMD, td)
+            self.assertEqual(r.returncode, 2, "рукописный маркер без провенанса не должен снимать гейт")
+            self.assertIn("провенанс", r.stderr.lower())
+
+    def test_foreign_feature_marker_does_not_unlock(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._marker(td, "sdd-review-other",
+                         {"produced_by": "record_approval", "approved_by": "user",
+                          "reason": "ok"})
+            r = _run(self.CMD, td)
+            self.assertEqual(r.returncode, 2, "маркер чужой фичи не должен снимать этот гейт")
+
+    def test_status_is_free(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = _run("python3 .gigacode/skills/feature-pipeline/scripts/sdd_review_push.py "
+                     "--feature f1 --status", td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_status_inside_arg_value_is_not_readonly(self):
+        # --status ВНУТРИ кавычённого значения другого аргумента не должен считаться ридонли
+        with tempfile.TemporaryDirectory() as td:
+            r = _run("python3 .gigacode/skills/feature-pipeline/scripts/sdd_review_push.py "
+                     "--feature f1 --jira-key \"X --status\"", td)
+            self.assertEqual(r.returncode, 2,
+                             "--status в тексте значения не снимает approval-гейт")
+
+    def test_without_feature_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = _run("python3 .gigacode/skills/feature-pipeline/scripts/sdd_review_push.py "
+                     "--json", td)
+            self.assertEqual(r.returncode, 2, "без --feature ключ маркера не резолвится → блок")
+
+
 def _write_run(file_path: str, cwd: str):
     payload = json.dumps({"hook_event_name": "PreToolUse", "cwd": cwd,
                           "tool_name": "write_file", "tool_input": {"file_path": file_path}})

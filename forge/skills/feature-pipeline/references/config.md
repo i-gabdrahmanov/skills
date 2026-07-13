@@ -141,7 +141,8 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
     "docs_path": "docs",             // in-repo: база под корнем проекта
     "repo_path": null,               // separate-repo: АБСОЛЮТНЫЙ путь к внешнему репо спеки
     "feature_subdir": "feature-pipeline",       // подпапка фич под docs-базой
-    "system_analysis_subdir": "system-analysis" // подпапка системного обзора под docs-базой
+    "system_analysis_subdir": "system-analysis",// подпапка системного обзора под docs-базой
+    "sdd_review": ""                 // Гейт SDD-ревью: push | skip | "" (спросить) — см. ниже
   },
   "jira": {
     "enabled": null,                 // TODO
@@ -254,6 +255,13 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_tautological_t
   после чего весь пайплайн (скрипты, хуки, судьи) подхватит расположение из резолвера.
 - **Legacy:** старые ключи `docs.feature_docs_path` / `docs.system_analysis_path` (полные
   относительные пути) ещё поддерживаются резолвером в in-repo режиме.
+- `docs.sdd_review` — решение **Гейта SDD-ревью** (фаза 02-sdd, бриф `phases/02-sdd.md`):
+  `push` — после утверждения SDD коммитить `sdd.md` на ветку `sdd-review/<slug>` и пушить
+  системным аналитикам (без PR; выполняет ТОЛЬКО санкционированный `sdd_review_push.py`,
+  гейченный approval-маркером); `skip` — не коммитить; пусто — спросить пользователя.
+  Headless: предзапись ДО прогона (`config.py set docs.sdd_review push`). Ключ per-project —
+  действует на все фичи прогона, как `sources.spec`. В `separate-repo` ветка создаётся
+  в репо спеки.
 
 ## Что заполнить вручную после init
 
