@@ -454,6 +454,18 @@ dual-vocabulary, контракты pipeline-state, payload-схема snake_cas
       SKILL §0.6.1 — теперь трёхшаговый: спроси → маркер → override) переписаны с
       escalate-first порядком. Пины: `TGateOverride` в `test_gate-guard.py` (без маркера →
       exit 2; с маркером → 0; чужой маркер не снимает; --list/--remove свободны).
+- [x] **Гейт SDD-ревью: легальный канал согласования SDD с системными аналитиками.**
+      Раньше вынести утверждённый sdd.md на ревью было НЕЛЬЗЯ вообще (spec-роль блокирует
+      commit/push, push=R4). Теперь по паттерну `gate_override`: policy-секция `sdd_review`
+      + `check_sdd_review` в gate-guard (до auto-early-return, fail-closed) гейтят
+      санкционированный `feature-pipeline/scripts/sdd_review_push.py` approval-маркером
+      `ground/approvals/sdd-review-<slug>.json` (только record_approval после явного «да»
+      на Гейте SDD-ревью, бриф 02-sdd.md; headless — предзапись `docs.sdd_review=push`).
+      Скрипт un-abusable по построению: git plumbing без касания worktree/HEAD, коммитит
+      ТОЛЬКО sdd.md фичи на `sdd-review/<slug>` в origin без force, требует PASS sdd-judge
+      и secret-scan, идемпотентен (`--status` — ридонли). Сырые git commit/push в spec-фазе
+      блокируются как раньше (пины в test_sod-enforcer/test_evidence-enforcer; `TSddReview`
+      в test_gate-guard; 18 тестов test_sdd_review_push.py).
 - [x] **B (найден деплой-смоуком в чистый проект): гейт арминга §0.1 был недостижим —
       `_incomplete` никто не очищал.** `config.py set` писал значения, не трогая маркер;
       `init --update` переносил detected-маркер безусловно (jira/bitbucket попадали ВСЕГДА)
