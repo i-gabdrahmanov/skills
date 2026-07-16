@@ -108,6 +108,83 @@ class TGateOverride(unittest.TestCase):
                              f"--remove (восстановление enforcement) не гейтится: {r.stderr}")
 
 
+class TRollback(unittest.TestCase):
+    """Пин: откат пайплайна (rollback.py) — R4-класс, deny-first. Уничтожает рабочие
+    результаты (код, evidence шагов) и порождает сирот в Jira/PR — без approval-маркера
+    rollback-<feature>-<to-step> (провенанс record_approval) скрипт не запускается;
+    classify дал бы команде default-R1 — без deny-first прошёл бы авто."""
+
+    CMD = ("python3 .gigacode/skills/pipeline-state/scripts/rollback.py "
+           "--skill feature-pipeline --feature f1 --to-step 02-sdd")
+
+    def _approve(self, td: str, key: str, provenance: bool = True) -> None:
+        appr = Path(td) / "ground" / "approvals"
+        appr.mkdir(parents=True, exist_ok=True)
+        body = {"approved_by": "user", "reason": "ok"}
+        if provenance:
+            body["produced_by"] = "record_approval"
+        (appr / f"{key}.json").write_text(json.dumps(body), encoding="utf-8")
+
+    def test_rollback_without_approval_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = _run(self.CMD, td)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("rollback-f1-02-sdd.json", r.stderr)
+
+    def test_rollback_with_approval_passes(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._approve(td, "rollback-f1-02-sdd")
+            r = _run(self.CMD, td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_handwritten_marker_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._approve(td, "rollback-f1-02-sdd", provenance=False)
+            r = _run(self.CMD, td)
+            self.assertEqual(r.returncode, 2, "рукописный маркер без провенанса не снимает гейт")
+            self.assertIn("провенанс", r.stderr.lower())
+
+    def test_foreign_marker_does_not_unlock(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._approve(td, "rollback-f1-04-build-T1")  # согласие на ДРУГОЙ шаг
+            r = _run(self.CMD, td)
+            self.assertEqual(r.returncode, 2, "approval другого шага не снимает этот гейт")
+
+    def test_dry_run_and_list_are_free(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = _run(f"{self.CMD} --dry-run", td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            r = _run("python3 .gigacode/skills/pipeline-state/scripts/rollback.py "
+                     "--skill feature-pipeline --feature f1 --list", td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_dry_run_inside_value_is_not_readonly(self):
+        # --dry-run внутри значения аргумента не должен трактоваться как readonly (обход)
+        with tempfile.TemporaryDirectory() as td:
+            cmd = ("python3 .gigacode/skills/pipeline-state/scripts/rollback.py "
+                   "--skill feature-pipeline --feature \"f1 --dry-run\" --to-step 02-sdd")
+            r = _run(cmd, td)
+            self.assertEqual(r.returncode, 2, "--dry-run в тексте значения не снимает гейт")
+
+    def test_missing_target_args_blocked(self):
+        # ключ маркера не резолвится без --feature/--to-step → deny с пояснением
+        with tempfile.TemporaryDirectory() as td:
+            r = _run("python3 .gigacode/skills/pipeline-state/scripts/rollback.py "
+                     "--skill feature-pipeline", td)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("не резолвится", r.stderr)
+
+    def test_to_phase_uses_same_key_scheme(self):
+        with tempfile.TemporaryDirectory() as td:
+            cmd = ("python3 .gigacode/skills/pipeline-state/scripts/rollback.py "
+                   "--skill feature-pipeline --feature f1 --to-phase 02-sdd")
+            r = _run(cmd, td)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self._approve(td, "rollback-f1-02-sdd")
+            r = _run(cmd, td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+
 class TDocReview(unittest.TestCase):
     """Пин: доставка дока (brd|sdd) на ветку задачи docs/<slug> (doc_review_push.py) —
     R4-класс, deny-first. Без approval-маркера <doc>-review-<slug> (провенанс record_approval)

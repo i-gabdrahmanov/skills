@@ -45,7 +45,7 @@ _CP_PATTERNS = [
     r"(?<![\w-])ground/pipeline\.json\b",
     r"(?<![\w-])ground/statements/[^/]+/[^/]+/manifest\.json\b",
     r"(?<![\w-])ground/statements/[^/]+/[^/]+/evals\.json\b",
-    r"(?<![\w-])ground/statements/[^/]+/[^/]+/(?:_origins|gates|overrides|judges)(?:/|\b)",
+    r"(?<![\w-])ground/statements/[^/]+/[^/]+/(?:_origins|gates|overrides|judges|journal|rollbacks)(?:/|\b)",
     r"(?<![\w-])ground/approvals(?:/|\b)",
     r"(?<![\w-])ground/phases(?:/|\b)",
 ]
@@ -56,6 +56,12 @@ _WRITE_TOKEN_RE = re.compile(
     r">>?|<>|\btee\b|\bdd\b[^|]*\bof=|\bsed\b[^|]*-i|\bcp\b|\bmv\b|\binstall\b"
     r"|\bopen\s*\([^)]*['\"][^'\"]+['\"]\s*,\s*['\"][aw]|\.write(?:_text)?\s*\(|\btruncate\b"
 )
+
+# Чекпойнт-refs (refs/forge/*) — control-plane в git: точки восстановления rollback.py.
+# `git update-ref` на них — подделка чекпойнта (перенаправить откат на выгодный коммит),
+# deny безусловно (update-ref сам и есть запись, write-токен не нужен). Легитимный писатель —
+# checkpoint.py subprocess-ом из update.py/init.py (не тул-вызов, хуками не перехватывается).
+_FORGE_REF_RE = re.compile(r"\bgit\b[^|;&]*\bupdate-ref\b[^|;&]*\brefs/forge/")
 
 
 def _norm(p: str) -> str:
@@ -109,6 +115,12 @@ def main() -> int:
             cmd = _norm(str(ti.get("command") or ""))
             if not cmd:
                 return 0
+            if _FORGE_REF_RE.search(cmd):
+                print("[state-write-guard] DENY: git update-ref на refs/forge/* запрещён — "
+                      "чекпойнт-refs пишет только checkpoint.py (из update.py/init.py). "
+                      "Ручная правка refs подделывает точку восстановления rollback.",
+                      file=sys.stderr)
+                return 2
             # схлопываем `//` и `/./` в команде (best-effort: `..` в тексте команды не резолвим),
             # чтобы редирект в `ground//pipeline.json` совпал с CP-паттерном.
             cmd_cp = re.sub(r"/\./", "/", re.sub(r"/{2,}", "/", cmd))

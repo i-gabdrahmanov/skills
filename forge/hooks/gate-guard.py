@@ -290,6 +290,61 @@ def check_doc_review(command: str, root: Path) -> str | None:
         return f"deny-first: ошибка проверки doc-review ({e})."
 
 
+def check_rollback(command: str, root: Path) -> str | None:
+    """R4-класс: откат пайплайна к шагу (rollback.py) уничтожает рабочие результаты — код,
+    evidence закрытых шагов — и порождает сирот в Jira/PR. Запуск требует approval-маркера
+    ground/approvals/rollback-<feature>-<to-step>.json (record_approval ТОЛЬКО после явного
+    «да» пользователя на план --dry-run; маркер одноразовый — rollback.py потребляет его).
+    Возвращает причину блокировки или None.
+
+    --dry-run/--list (план и история — readonly) свободны. Дефолты зашиты в код — удаление
+    секции rollback из risk-policy.json не выключает enforcement молча. Ошибка разбора →
+    fail-CLOSED (откат без ясности опаснее ложного блока)."""
+    try:
+        policy = R.load_policy().get("rollback") or {}
+        pat = policy.get("command_pattern", r"rollback\.py")
+        if not command or not re.search(pat, command):
+            return None
+        # readonly по РЕАЛЬНЫМ токенам-аргументам, не подстрокой (обход через
+        # `--feature "x --dry-run"` не должен трактоваться как readonly)
+        ro_flags = policy.get("readonly_arg_flags") or ["--dry-run", "--list"]
+        try:
+            toks = shlex.split(command)
+        except ValueError:
+            toks = command.split()
+        if any(f in toks for f in ro_flags):
+            return None
+        m = re.search(r"--feature[\s=]+[\"']?([\w.-]+)", command)
+        feat = m.group(1) if m else ""
+        mt = re.search(r"--to-(?:step|phase)[\s=]+[\"']?([\w.-]+)", command)
+        target = mt.group(1) if mt else ""
+        prefix = policy.get("approval_prefix", "rollback")
+        key = f"{prefix}-{feat}-{target}" if feat and target else f"{prefix}-<feature>-<to-step>"
+        if feat and target and _approval_valid(root, key):
+            return None
+        exists_no_prov = (feat and target and R.approval_exists(root, key)
+                          and not _approval_valid(root, key))
+        prov_note = (
+            " Маркер есть, но БЕЗ провенанса record_approval — рукописный маркер не считается "
+            "(его мог выписать сам агент). " if exists_no_prov else " "
+        )
+        args_note = "" if (feat and target) else (
+            " В команде нет --feature/--to-step — ключ маркера не резолвится."
+        )
+        return (
+            f"откат пайплайна (rollback.py) — R4-класс, нужен approval-маркер "
+            f"ground/approvals/{key}.json.{prov_note}Порядок: (1) покажи пользователю план "
+            f"отката (rollback.py ... --dry-run: какие шаги сбросятся, какой код "
+            f"восстановится, какие сироты останутся); (2) ТОЛЬКО после явного «да» зафиксируй "
+            f"согласие СКРИПТОМ pipeline-state/scripts/record_approval.py --key {key} "
+            f"--approved-by user --reason \"<кто/почему>\" (он штампует провенанс; прямой Write "
+            f"в approvals/ заблокирован state-write-guard); (3) повтори команду. Маркер "
+            f"одноразовый — потребляется откатом.{args_note} --dry-run/--list не гейтятся."
+        )
+    except Exception as e:
+        return f"deny-first: ошибка проверки rollback ({e})."
+
+
 _HISTORY_VERBS_RE = re.compile(r"\bgit\s+(?:commit|merge|rebase|cherry-pick|revert|am)\b")
 
 
@@ -450,6 +505,12 @@ def main() -> int:
         # ── R4-класс: доставка дока (brd|sdd) на ветку задачи без approval ──
         # Тоже ДО auto-early-return: classify даёт скрипту default-R1 → прошёл бы авто.
         deny = check_doc_review(command, root)
+        if deny:
+            return _block(deny)
+
+        # ── R4-класс: откат пайплайна (rollback.py) без approval ──
+        # Тоже ДО auto-early-return: classify даёт скрипту default-R1 → прошёл бы авто.
+        deny = check_rollback(command, root)
         if deny:
             return _block(deny)
 

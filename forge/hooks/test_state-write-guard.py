@@ -97,6 +97,17 @@ class TWriteVector(unittest.TestCase):
         r = _write("ground/brd-grounding/notes.md")
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_block_journal(self):
+        # журнал изменённых файлов пишет ТОЛЬКО хук file-journal — подделка Write-ом
+        # перенаправляла бы скоуп восстановления rollback.py
+        r = _write("ground/statements/feature-pipeline/f1/journal/files.jsonl")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_rollbacks_archive(self):
+        # архив evidence отката — тоже control-plane (история инвалидированных доказательств)
+        r = _write("ground/statements/feature-pipeline/f1/rollbacks/20260716-120000/gates/04-build-T1.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
 
 class TBashVector(unittest.TestCase):
     def test_block_redirect_into_manifest(self):
@@ -148,6 +159,24 @@ class TBashVector(unittest.TestCase):
 
     def test_pass_read_phase_gate(self):
         r = _bash("cat ground/phases/f1/gate.json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_block_redirect_into_journal(self):
+        r = _bash("echo '{}' >> ground/statements/feature-pipeline/f1/journal/files.jsonl")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_update_ref_forge_checkpoint(self):
+        # подделка чекпойнт-ref перенаправила бы откат кода на выгодный коммит; deny безусловно
+        r = _bash("git update-ref refs/forge/checkpoints/feat/02-sdd deadbeef")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_update_ref_forge_with_flags(self):
+        r = _bash("git -C . update-ref refs/forge/checkpoints/feat/02-sdd deadbeef")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_pass_update_ref_other_namespace(self):
+        # refs вне forge-namespace — не наша забота (их сторожат другие хуки/политика)
+        r = _bash("git update-ref refs/heads/tmp deadbeef")
         self.assertEqual(r.returncode, 0, r.stderr)
 
 

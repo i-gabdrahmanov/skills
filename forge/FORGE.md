@@ -78,6 +78,7 @@ task-plan для full), `state-recorder`/`risk_ladder` (newest-manifest across s
 | `inline-phase-guard.py` | PreToolUse Bash/Write/Edit | actor-guard: главный агент не производит артефакты/код/билд subagent-фазы inline (по `agent_type`) | exit 2 |
 | `cost-breaker.py` | Pre/Post/Stop/SubagentStop/UserPromptSubmit | token budget: warn ≥80% (**стоп 120% временно отключён — токены безлимитны**); учёт по фазам + финализация на Stop | нет (warn-only) |
 | `prompt-guard.py` | UserPromptSubmit + PostToolUse(read/fetch) | детект prompt-injection → additionalContext | нет |
+| `file-journal.py` | PostToolUse Write/Edit/Bash | безусловный журнал изменённых файлов активной фичи (`journal/files.jsonl`, привязка к step_id) — скоуп восстановления кода для `rollback.py` | нет |
 | `state-recorder.py` | SubagentStop | авто-запись шага в pipeline-state по `step_id` | нет |
 | `context-injector.py` | SubagentStart | инъекция grounding-excerpt/conventions | нет |
 | `phase-gate.py` | Stop | блок завершения с висящим `in_progress` | block |

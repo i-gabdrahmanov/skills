@@ -636,6 +636,19 @@ def main():
     elif args.status != "failed" and "error" in step:
         del step["error"]
 
+    # Git-чекпойнт worktree на закрытии шага — точка восстановления кода для rollback.py
+    # (служебный ref, ветки/HEAD/индекс не трогаются). Fail-soft: без git закрытие шага
+    # не падает, но rollback откажется трогать код без чекпойнта. Блок ДО сериализации,
+    # чтобы step["checkpoint"] ушёл в манифест одной записью.
+    if args.status == "completed" and prev_status != "completed":
+        try:
+            from checkpoint import create_checkpoint
+            _ckpt_sha = create_checkpoint(project, args.feature, args.step_id)
+            if _ckpt_sha:
+                step["checkpoint"] = _ckpt_sha[:12]
+        except Exception as e:
+            print(f"WARNING: checkpoint failed: {e}", file=sys.stderr)
+
     manifest["last_update"] = now
 
     tmp = manifest_path.with_suffix(".json.tmp")

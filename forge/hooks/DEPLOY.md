@@ -30,6 +30,7 @@ risk ladder R0–R5, evidence bundle, cost circuit breaker, security-хуки. �
 | `inline-phase-guard.py` | PreToolUse Write/Edit/Bash | actor-guard: ГЛАВНЫЙ агент (пустой `agent_type`) не производит артефакты/код subagent-фазы inline | exit 2 |
 | `cost-breaker.py` | Pre/Post/Stop/SubagentStop/UserPromptSubmit | token budget warn ≥80% (стоп 120% **временно отключён — токены безлимитны**) | нет (warn-only) |
 | `prompt-guard.py` | UserPromptSubmit + PostToolUse(read/fetch) | детект prompt-injection → additionalContext | нет |
+| `file-journal.py` | PostToolUse Write/Edit/Bash | безусловный журнал изменённых файлов активной фичи (`journal/files.jsonl`) — скоуп восстановления кода для `rollback.py` | нет |
 | `state-recorder.py` | SubagentStop | авто-запись шага в pipeline-state по `step_id` | нет |
 | `context-injector.py` | SubagentStart | инъекция grounding-excerpt/conventions | нет |
 | `phase-gate.py` | Stop | блок завершения с висящим `in_progress` | block |

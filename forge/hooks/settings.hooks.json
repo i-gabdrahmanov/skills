@@ -32,6 +32,9 @@
       {"matcher": "^(read_file|web_fetch|run_shell_command|Read|ReadFile|Fetch|WebFetch|Bash)$", "hooks": [
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/prompt-guard.py", "name": "prompt-guard"}
       ]},
+      {"matcher": "^(write_file|edit|notebook_edit|Write|Edit|WriteFile|NotebookEdit|run_shell_command|Bash)$", "hooks": [
+        {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/file-journal.py", "name": "file-journal"}
+      ]},
       {"matcher": "*", "hooks": [
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/cost-breaker.py", "name": "cost-breaker"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/log-agent.py", "name": "agent-logger"}
