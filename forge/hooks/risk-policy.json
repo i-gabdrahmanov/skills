@@ -70,11 +70,16 @@
     "approval_prefix": "gate-override"
   },
 
-  "sdd_review": {
-    "_comment": "Доставка SDD на ветку согласования (sdd_review_push.py, фаза 02-sdd feature-pipeline) — R4-класс, deny-first. Запуск требует approval-маркера ground/approvals/sdd-review-<slug>.json (record_approval ТОЛЬКО после явного «да» пользователя на Гейте SDD-ревью). --status (ридонли-отчёт) свободен. Скрипт сам ограничен по построению: коммитит ТОЛЬКО sdd.md фичи на sdd-review/<slug>, push без force, worktree не трогает; сырые git commit/push в фазе spec по-прежнему блокирует sod-enforcer без исключений.",
-    "command_pattern": "sdd_review_push\\.py",
-    "readonly_arg_flags": ["--status"],
-    "approval_prefix": "sdd-review"
+  "doc_review": {
+    "_comment": "Доставка дока (brd|sdd) на ветку задачи docs/<slug> на согласование аналитикам (doc_review_push.py, Гейт доставки фаз 00-brd/02-sdd feature-pipeline; у каждой Jira-задачи своя ветка, общая для её BRD и SDD, база — default-ветка) — R4-класс, deny-first. Запуск требует approval-маркера ground/approvals/<doc>-review-<slug>.json (record_approval ТОЛЬКО после явного «да» пользователя на Гейте доставки; после пуша — ПАУЗА: update.py не закроет шаг фазы без маркера утверждения <doc>-approved-<slug>). --status (ридонли-отчёт) свободен. Паттерн покрывает и легаси sdd_review_push.py (деплой не удаляет убранные файлы). Скрипт сам ограничен по построению: коммитит ТОЛЬКО <doc>.md фичи на docs/<slug> в origin, push без force, worktree/локальные ветки не трогает; сырые git commit/push в доко-фазах по-прежнему блокирует sod-enforcer без исключений.",
+    "command_pattern": "(?:doc|sdd)_review_push\\.py",
+    "readonly_arg_flags": ["--status"]
+  },
+
+  "branch_protection": {
+    "_comment": "Интеграционная ветка фичи feature/<slug> (slug активной фичи feature-pipeline) собирается ТОЛЬКО мерджем PR сабветок задач (feature/<jira-key-подзадачи> | feature/<slug>-<taskId>): прямые commit/merge/rebase/cherry-pick/revert НА ней и любой push В неё gate-guard блокирует deny-first (включая push --all/--mirror и bare push с неё). Создание ветки — санкционированный story_branch_push.py (пушит default-tip на новое имя, коммитов не создаёт, существующую ветку не двигает). Скоуп по skills: forgelite не входит — там feature/<KEY> сама является веткой задачи. Дефолты зашиты в код gate-guard.",
+    "branch_template": "feature/{slug}",
+    "skills": ["feature-pipeline"]
   },
 
   "required_decisions": {

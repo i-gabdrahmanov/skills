@@ -456,16 +456,74 @@ dual-vocabulary, контракты pipeline-state, payload-схема snake_cas
       exit 2; с маркером → 0; чужой маркер не снимает; --list/--remove свободны).
 - [x] **Гейт SDD-ревью: легальный канал согласования SDD с системными аналитиками.**
       Раньше вынести утверждённый sdd.md на ревью было НЕЛЬЗЯ вообще (spec-роль блокирует
-      commit/push, push=R4). Теперь по паттерну `gate_override`: policy-секция `sdd_review`
-      + `check_sdd_review` в gate-guard (до auto-early-return, fail-closed) гейтят
-      санкционированный `feature-pipeline/scripts/sdd_review_push.py` approval-маркером
-      `ground/approvals/sdd-review-<slug>.json` (только record_approval после явного «да»
-      на Гейте SDD-ревью, бриф 02-sdd.md; headless — предзапись `docs.sdd_review=push`).
-      Скрипт un-abusable по построению: git plumbing без касания worktree/HEAD, коммитит
-      ТОЛЬКО sdd.md фичи на `sdd-review/<slug>` в origin без force, требует PASS sdd-judge
-      и secret-scan, идемпотентен (`--status` — ридонли). Сырые git commit/push в spec-фазе
-      блокируются как раньше (пины в test_sod-enforcer/test_evidence-enforcer; `TSddReview`
-      в test_gate-guard; 18 тестов test_sdd_review_push.py).
+      commit/push, push=R4). Первая версия (sdd_review_push.py, ветка `sdd-review/<slug>`)
+      переработана в Гейт доставки доков — см. запись ниже.
+- [x] **Гейт доставки доков (BRD+SDD): «нужен мердж и пуш?» ДО утверждения, с enforced
+      ПАУЗОЙ; у каждой Jira-задачи — СВОЯ ветка доков.** Схема пользователя: перед
+      согласованием brd/sdd спрашиваем «нужен ли мердж и пуш?»; «да» → коммитим док на
+      ветку задачи `docs/<slug>` (slug почти всегда Jira-ключ; ветка общая для BRD и SDD
+      задачи: brd.md приезжает в фазе 00, sdd.md — в фазе 02; база — default-ветка), пушим
+      аналитикам и берём паузу до итогов ревью; «нет» → сразу гейт утверждения. Реализация:
+      (1) `sdd_review_push.py` → обобщённый `doc_review_push.py` (`--doc brd|sdd`): git
+      plumbing, коммитит ТОЛЬКО `<doc>.md` фичи ПОВЕРХ remote-tip ветки `docs/<slug>`
+      (нет ветки — создаёт от default-ветки origin/HEAD → main|master; правки аналитиков
+      на ветке не теряются) и пушит `sha:refs/heads/docs/<slug>` без force — локальные
+      ветки/worktree/HEAD не трогаются вообще; требует approval-маркер `<doc>-review-<slug>`
+      (провенанс record_approval), PASS `<doc>-judge` и secret-scan; идемпотентен;
+      `--status` — ридонли; в separate-repo — ветка задачи в репо спеки (22 теста
+      test_doc_review_push.py).
+      (2) gate-guard: `check_sdd_review` → `check_doc_review` (policy-секция `doc_review`,
+      deny-first до auto-early-return, fail-closed); паттерн покрывает и легаси
+      `sdd_review_push.py` — деплой не удаляет убранные файлы, старый скрипт в целевых
+      `.gigacode` остаётся под гейтом (`TDocReview` в test_gate-guard).
+      (3) ПАУЗА enforced ниже брифа: update.py `_check_doc_approval` — закрыть
+      `00-brd`/`02-sdd` (completed) нельзя без маркера утверждения
+      `<doc>-approved-<slug>` (провенанс record_approval + совпадающий key; escape —
+      `overrides/doc-approved-<step_id>.json` через override_judge). Это закрывает и
+      «вопросов система не задаёт НИКАКИХ»: молча проскочить утверждение BRD/SDD теперь
+      детерминированно невозможно, а после мерджа на согласование пайплайн не может
+      продолжиться без возврата пользователя с итогами ревью (тесты 12–18 test_update.py).
+      (4) Конфиг: `docs.brd_review` (новый) + `docs.sdd_review` — значения `push|skip`,
+      headless-предзапись; брифы 00-brd/02-sdd переписаны под порядок «судья PASS →
+      Гейт доставки (ветка задачи? → пауза) → Гейт утверждения (record_approval) →
+      закрытие шага».
+- [x] **Интеграционная ветка фичи `feature/<slug>`: прямые коммиты ЗАПРЕЩЕНЫ — только
+      PR-мерджи сабветок задач.** Схема пользователя: в ветку feature не коммитится
+      ничего, коммиты — только в сабветки. Реализация:
+      (1) gate-guard `check_branch_protection` (policy-секция `branch_protection`,
+      deny-first до auto-early-return, fail-closed, дефолты в коде): для активной фичи
+      feature-pipeline блокируются history-команды (commit/merge/rebase/cherry-pick/
+      revert/am) при HEAD на `feature/<slug>` и ЛЮБОЙ push в неё — все формы refspec
+      (`br`, `src:br`, `src:refs/heads/br`, `:br` delete, `+br` force), `--all/--mirror`
+      и bare `git push` с неё; `git -C` не обходит (репо резолвится из исходной команды).
+      forgelite вне скоупа — там `feature/<KEY>` сама ветка задачи (9 тестов
+      TBranchProtection).
+      (2) Санкционированное создание — `story_branch_push.py`: пушит default-tip origin
+      на `refs/heads/feature/<slug>`; коммитов не создаёт, force нет, существующую ветку
+      НИКОГДА не двигает (идемпотентен), локальные ref/worktree не трогает; по построению
+      не может опубликовать новый код → без approval-маркера (8 тестов).
+      (3) Stacked-доставка перецелена: корневые сабветки PR'ятся в `feature/<slug>`
+      (delivery_plan.py: `target=story_branch`, поле `story_branch` в плане), в default
+      уходит один финальный PR `feature/<slug>` → main «мержить последним»; брифы
+      07-deliver.md + stacked-pr-delivery.md переписаны (создание ветки — на Гейте 5).
+- [x] **RED-гейт стал ПО-ТЕСТОВЫМ: 1 red + N green больше не «успех».** Баг прогона:
+      судья засчитал RED, когда из новых тестов падал ОДИН, а остальные были зелёные —
+      оба детерминированных гейта (`record_gate --expect red` и `check_tests_red.py`)
+      мерили «красноту» exit-кодом раннера (один упавший тест валит весь прогон), а
+      check_tests_red вдобавок грепал stdout (пустой вывод = «RED»). Зелёный новый тест —
+      вакуумный: проходит БЕЗ реализации и ничего не проверяет. Фикс:
+      (1) общий `pipeline-state/scripts/junit_report.py` — детерминированный разбор
+      JUnit XML текущего прогона (Gradle test-results / Maven surefire+failsafe,
+      фильтр по mtime — залежавшиеся отчёты прошлых прогонов не засчитываются);
+      (2) оба гейта теперь требуют: отчёты есть (fail-closed — exit-код без JUnit-отчётов
+      не доказательство; для не-JUnit стека — override gate-result), выполнился ≥1 тест,
+      зелёных НОЛЬ; в reason — список зелёных тестов поимённо; эвристика `_has_red_tests`
+      по stdout удалена;
+      (3) брифы (forgelite §5 + subagent-prompts.md, 04-tdd.md) требуют скоупить
+      RED-прогон на новые тест-классы (Gradle `--tests` / Maven `-Dtest` /
+      `--test-filter` у check_tests_red) — иначе зелёные СТАРЫЕ тесты провалят гейт.
+      Пины: test_gate_result (1 red + 2 green → FAIL; stale-отчёты не считаются; без
+      отчётов → FAIL), test_check_tests_red (то же end-to-end).
 - [x] **B (найден деплой-смоуком в чистый проект): гейт арминга §0.1 был недостижим —
       `_incomplete` никто не очищал.** `config.py set` писал значения, не трогая маркер;
       `init --update` переносил detected-маркер безусловно (jira/bitbucket попадали ВСЕГДА)

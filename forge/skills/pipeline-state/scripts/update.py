@@ -266,6 +266,71 @@ def _check_subagent_origin(step: dict, closed_by: str, project: Path, skill: str
     )
 
 
+# Доко-фазы, закрытие которых требует человеческого утверждения дока (Гейт 1 / Гейт SDD).
+# Префикс id шага → имя дока. Ключ маркера: <doc>-approved-<feature>.
+_DOC_APPROVAL_STEPS = (("00-brd", "brd"), ("02-sdd", "sdd"))
+
+
+def _approval_marker_valid(project: Path, key: str) -> bool:
+    """Маркер ground/approvals/<key>.json засчитывается ТОЛЬКО с провенансом record_approval
+    и совпадающим key внутри (переименованный чужой маркер не считается)."""
+    path = project / "ground" / "approvals" / f"{key}.json"
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    return isinstance(d, dict) and d.get("produced_by") == "record_approval" \
+        and d.get("key") == key
+
+
+def _check_doc_approval(step: dict, project: Path, skill: str, feature: str):
+    """Гарантия «BRD/SDD утверждён человеком» — на EVIDENCE, не на словах модели.
+
+    Закрыть 00-brd/02-sdd можно только при маркере <doc>-approved-<feature> (record_approval
+    после явного «да» пользователя). Это же — enforcement ПАУЗЫ Гейта доставки: если док
+    замерджен на согласование аналитикам (doc_review_push, маркер <doc>-review-<feature>),
+    шаг не закрывается, пока пользователь не вернулся с итогами ревью и не сказал «утверждаем»
+    — молча продолжить пайплайн после мерджа нельзя. На прогонах модель не задавала вопросов
+    вообще — теперь без утверждения фаза не закрывается детерминированно.
+    Escape-hatch: overrides/doc-approved-<step_id>.json (создание — R4 через override_judge)."""
+    step_id = step.get("id", "")
+    doc = next((d for p, d in _DOC_APPROVAL_STEPS if step_id.startswith(p)), None)
+    if doc is None:
+        return
+    key = f"{doc}-approved-{feature}"
+    if _approval_marker_valid(project, key):
+        return
+    ov = _load_override(project, skill, feature, f"doc-approved-{step_id}")
+    if ov:
+        step.setdefault("override_warnings", [])
+        msg = (f"⚠️  шаг '{step_id}' закрыт без утверждения {doc}.md — пропущено вручную. "
+               f"Причина: {ov.get('reason', '?')}")
+        if msg not in step["override_warnings"]:
+            step["override_warnings"].append(msg)
+        print(f"  {msg}", file=sys.stderr)
+        return
+    record_script = Path(__file__).resolve().parent / "record_approval.py"
+    pause_note = ""
+    if _approval_marker_valid(project, f"{doc}-review-{feature}"):
+        pause_note = (
+            f"\n   ⏸ ПАУЗА: {doc}.md вынесен на согласование аналитикам "
+            f"(маркер {doc}-review-{feature}). Дождись итогов ревью — заверши ход и не "
+            f"продолжай пайплайн; правки аналитиков = ре-итерация фазы."
+        )
+    raise RuntimeError(
+        f"Шаг {step_id} нельзя закрыть: {doc}.md не утверждён пользователем "
+        f"(нет валидного маркера ground/approvals/{key}.json).{pause_note}\n"
+        f"   Порядок: (1) спроси пользователя («утверждаем {doc.upper()}?» / после ревью — "
+        f"«аналитики согласовали, утверждаем?»); (2) ТОЛЬКО после явного «да»:\n"
+        f"   python3 {record_script} --project {project} --key {key} "
+        f"--approved-by user --reason \"<кто/почему>\"\n"
+        f"   (3) повтори update.py. Молча закрывать доко-фазу нельзя. Если утверждение "
+        f"объективно неприменимо:\n"
+        + _override_hint(f"doc-approved-{step_id}", feature, step_id,
+                         "<почему без утверждения>")
+    )
+
+
 def _gate_result_path(project: Path, skill: str, feature: str, step_id: str) -> Path:
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(step_id)).strip("-") or "x"
     return project / "ground" / "statements" / skill / feature / "gates" / f"{safe}.json"
@@ -491,6 +556,7 @@ def main():
         _check_subagent_origin(step, args.closed_by, project, args.skill, args.feature)
         _check_gate_result(step, project, args.skill, args.feature)
         _check_judges(step, project, args.skill, args.feature)
+        _check_doc_approval(step, project, args.skill, args.feature)
 
     # Fallback=STOP: обязательный шаг нельзя тихо пропустить (skipped) без override
     if not args.skip_judges and args.status == "skipped":

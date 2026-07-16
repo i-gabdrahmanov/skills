@@ -7,14 +7,13 @@
 
 Проверяет:
     1. _extract_tasks: фильтрация задач с main-слоем
-    2. _has_red_tests: детект RED/GREEN из вывода тестов
+    2. ПО-ТЕСТОВЫЙ RED-вердикт (JUnit XML): все red → pass; 1 red + N green → fail
+       (пин бага прогона: судья засчитывал это успехом); нет отчётов → fail
     3. main(): нет задач с main → pass
     4. main(): compile fail → fail
-    5. main(): compile ok + tests pass → fail (GREEN)
-    6. main(): compile ok + tests fail → pass (RED)
-    7. --json вывод
-    8. --task фильтр
-    9. _run_cmd: базовый запуск
+    5. --json вывод
+    6. --task фильтр
+    7. _run_cmd: базовый запуск
 """
 from __future__ import annotations
 
@@ -82,34 +81,73 @@ class TestExtractTasks(unittest.TestCase):
         self.assertEqual(len(tasks), 1)
 
 
-class TestHasRedTests(unittest.TestCase):
-    """Тесты _has_red_tests — анализ вывода тестов."""
+def _junit_xml(cases: list[tuple[str, str]]) -> str:
+    items = "".join(
+        f'<testcase classname="com.x.FooTest" name="{n}">'
+        + ('<failure message="boom"/>' if s == "red" else "") + "</testcase>"
+        for n, s in cases)
+    return (f'<?xml version="1.0"?>'
+            f'<testsuite name="FooTest" tests="{len(cases)}">{items}</testsuite>')
 
-    def test_fail_in_output(self):
-        """FAILED в выводе → RED."""
-        red, _ = ctr._has_red_tests("Tests run: 5, Failures: 1, FAILED")
-        self.assertTrue(red)
 
-    def test_failures_in_output(self):
-        """failures в выводе → RED."""
-        red, _ = ctr._has_red_tests("Tests run: 5, failures: 2")
-        self.assertTrue(red)
+class TestPerTestRed(unittest.TestCase):
+    """ПО-ТЕСТОВЫЙ RED-вердикт (JUnit XML текущего прогона) — end-to-end через main()."""
 
-    def test_passed_only(self):
-        """passed без FAILED → GREEN."""
-        red, reason = ctr._has_red_tests("BUILD SUCCESSFUL\nTests passed: 10")
-        self.assertFalse(red)
-        self.assertIn("GREEN", reason)
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        plan = {"tasks": [{"id": "T1", "layers": ["main"],
+                           "artifacts": ["src/main/java/Foo.java"]}]}
+        self.plan_path = self.root / "task-plan.json"
+        self.plan_path.write_text(json.dumps(plan), encoding="utf-8")
 
-    def test_empty_output(self):
-        """Пустой вывод → считаем RED."""
-        red, _ = ctr._has_red_tests("")
-        self.assertTrue(red)
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.root, ignore_errors=True)
 
-    def test_gradle_build_fail(self):
-        """BUILD FAILED → RED."""
-        red, _ = ctr._has_red_tests("BUILD FAILED\nThere were failing tests")
-        self.assertTrue(red)
+    def _runner(self, cases: list[tuple[str, str]], exit_code: int = 1) -> str:
+        """«Тест-раннер»: пишет JUnit XML и выходит с exit_code (как gradle test)."""
+        (self.root / "report.xml").write_text(_junit_xml(cases), encoding="utf-8")
+        runner = self.root / "runner.py"
+        runner.write_text(
+            "import pathlib, shutil, sys\n"
+            "d = pathlib.Path('build/test-results/test'); d.mkdir(parents=True, exist_ok=True)\n"
+            "shutil.copy('report.xml', d / 'TEST-com.x.FooTest.xml')\n"
+            f"sys.exit({exit_code})\n", encoding="utf-8")
+        return f'"{sys.executable}" runner.py'
+
+    def _main(self, test_cmd: str, compile_cmd: str = "true") -> int:
+        sys.argv = ["check_tests_red.py", str(self.plan_path), "--root", str(self.root),
+                    "--compile-cmd", compile_cmd, "--test-cmd", test_cmd]
+        try:
+            return ctr.main()
+        except SystemExit as e:
+            return e.code or 0
+
+    def test_all_red_passes(self):
+        rc = self._main(self._runner([("t1", "red"), ("t2", "red")]))
+        self.assertEqual(rc, 0)
+
+    def test_one_red_rest_green_fails(self):
+        # ПИН бага прогона: 1 red валит раннер (exit!=0) → раньше «RED пройден»,
+        # хотя остальные новые тесты зелёные (вакуумные)
+        rc = self._main(self._runner([("t1", "red"), ("t2", "green"), ("t3", "green")]))
+        self.assertEqual(rc, 2, "1 red + 2 green — НЕ успех RED")
+
+    def test_all_green_fails(self):
+        rc = self._main(self._runner([("t1", "green")], exit_code=0))
+        self.assertEqual(rc, 2)
+
+    def test_no_reports_fails(self):
+        rc = self._main("false")
+        self.assertEqual(rc, 2, "exit!=0 без JUnit-отчётов — не доказательство RED")
+
+    def test_zero_executed_fails(self):
+        rc = self._main(self._runner([]))
+        self.assertEqual(rc, 2)
+
+    def test_compile_fail_fails(self):
+        rc = self._main(self._runner([("t1", "red")]), compile_cmd="false")
+        self.assertEqual(rc, 2)
 
 
 class TestRunCmd(unittest.TestCase):

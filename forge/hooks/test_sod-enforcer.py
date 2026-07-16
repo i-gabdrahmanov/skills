@@ -75,18 +75,20 @@ class TestSod(unittest.TestCase):
             self.assertEqual(_run(tmp, {"tool_name": "Write",
                 "tool_input": {"file_path": str(tmp / "src/main/java/X.java")}}), 2)
 
-    def test_spec_role_blocks_raw_git_but_passes_sdd_review_script(self):
-        # Гейт SDD-ревью: sdd_review_push.py — санкционированный канал (его гейтит
-        # gate-guard approval-маркером); сырые git commit/push в spec-фазе — по-прежнему блок.
+    def test_spec_role_blocks_raw_git_but_passes_doc_review_script(self):
+        # Гейт доставки доков: doc_review_push.py — санкционированный канал (его гейтит
+        # gate-guard approval-маркером); сырые git commit/push в spec-фазе — по-прежнему блок,
+        # включая попытку руками замерджить/запушить default-ветку.
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d); _make(tmp, "02-sdd")
             self.assertEqual(_run(tmp, {"tool_name": "Bash",
                 "tool_input": {"command": "git commit -m x"}}), 2)
             self.assertEqual(_run(tmp, {"tool_name": "Bash",
-                "tool_input": {"command": "git push origin sdd-review/feat"}}), 2)
+                "tool_input": {"command": "git push origin main"}}), 2)
             self.assertEqual(_run(tmp, {"tool_name": "Bash",
                 "tool_input": {"command": "python3 .gigacode/skills/feature-pipeline/scripts/"
-                                          "sdd_review_push.py --feature feat --json"}}), 0)
+                                          "doc_review_push.py --doc sdd --feature feat "
+                                          "--json"}}), 0)
 
 
 if __name__ == "__main__":

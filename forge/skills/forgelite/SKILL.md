@@ -178,11 +178,15 @@ prompt:
 1. Тесты только в src/test/, стиль соседних (JUnit5/Mockito, given/when/then).
 2. Каждый пункт AC — отдельным тестом + edge cases (null/пусто/граница). Без @Disabled.
 3. Тесты ДОЛЖНЫ компилироваться и ПАДАТЬ. Никакого production-кода/заглушек в src/main/.
-4. ПОСЛЕДНИМ действием прогони RED-гейт ЧЕРЕЗ РАННЕР (он пишет evidence — без него шаг не закроется):
-   Gradle: python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-red --expect red --compile-cmd "./gradlew compileTestJava" --cmd "./gradlew test"
-   Maven:  тот же вызов с --compile-cmd "mvn -q test-compile" --cmd "mvn -q test"
-   exit 0 = RED корректен (компиляция прошла, тесты падают). Если раннер FAILED «компиляция упала» —
-   это НЕ RED (чини сигнатуры/импорты); «тесты прошли» — это GREEN (не годится).
+4. ПОСЛЕДНИМ действием прогони RED-гейт ЧЕРЕЗ РАННЕР (он пишет evidence — без него шаг не закроется).
+   Гейт ПО-ТЕСТОВЫЙ (JUnit XML прогона): должны выполниться ТОЛЬКО твои новые тесты и ВСЕ упасть —
+   один red + остальные green = FAIL (зелёный новый тест вакуумен: проходит без реализации).
+   Поэтому скоупь --cmd на СВОИ тест-классы:
+   Gradle: python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-red --expect red --compile-cmd "./gradlew compileTestJava" --cmd "./gradlew test --tests 'FooTest' --tests 'BarTest'"
+   Maven:  тот же вызов с --compile-cmd "mvn -q test-compile" --cmd "mvn -q test -Dtest=FooTest,BarTest"
+   exit 0 = RED корректен (компиляция прошла, ВСЕ тесты прогона падают). Если раннер FAILED
+   «компиляция упала» — это НЕ RED (чини сигнатуры/импорты); «тесты прошли» — это GREEN
+   (не годится); «RED не чистый: N зелёных» — вакуумные тесты, перепиши их падающими.
 Верни JSON: {"step_id":"lite-red","status":"completed|failed","tests_written":["..."],"compile_ok":true,"tests_failed":true}
 status:"completed" ТОЛЬКО если compile_ok=true И tests_failed=true.
 ```

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """check_tests_red.py — gate проверки, что для задачи есть RED-тесты (PDLC v3.5, §7 шаг 4).
 
-RED-тест = unit-тест, который:
-- Компилируется (compileTestJava проходит)
-- Падает (test fail, exit code != 0)
-- Реально выполняется (не "no tests found")
+RED-состояние = ПО-ТЕСТОВО (JUnit XML текущего прогона, junit_report):
+- Тесты компилируются (compileTestJava проходит)
+- Выполнился ≥1 тест И ВСЕ выполненные тесты падают. Exit-кода раннера недостаточно:
+  один красный тест валит весь прогон, и N зелёных ВАКУУМНЫХ тестов (проходят без
+  реализации) раньше проходили гейт как «RED». Поэтому прогон обязан быть заскоуплен
+  на новые тест-классы (--test-filter → Gradle --tests / Maven -Dtest).
 
 Это «ворота TDD»: проверяет, что в проекте есть тесты для task-артефактов,
 и что они именно RED (падают), а не GREEN (проходят). Только при pass можно
@@ -14,16 +16,23 @@ Usage:
     check_tests_red.py <task-plan.json> --root . [--pipeline-config pipeline.json]
         [--task <id>] [--test-filter <glob>] [--compile-cmd <cmd>] [--test-cmd <cmd>] [--json]
 Exit: 0 = pass (есть RED-тесты / нет задач с main-слоем)
-      2 = fail (тесты не компилируются / проходят / не написаны)
+      2 = fail (тесты не компилируются / есть зелёные / не написаны / нет JUnit-отчётов)
 """
 from __future__ import annotations
 
 import argparse
 import json
-import re
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+# junit_report co-located в pipeline-state (общий с record_gate) — тот же паттерн, что
+# импорт judges_registry в pipeline_phases
+_PSTATE_SCRIPTS = Path(__file__).resolve().parents[2] / "pipeline-state" / "scripts"
+if str(_PSTATE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_PSTATE_SCRIPTS))
+import junit_report
 
 # cmd.exe (куда на Windows всегда уходит shell=True, вне зависимости от оболочки, из
 # которой запущен сам python) не умеет ни в shebang, ни в "./" без расширения.
@@ -80,27 +89,6 @@ def _apply_test_filter(test_cmd: str, build_system: str, test_filter: str | None
         # surefire: не падать в модулях без совпадений
         return f'{test_cmd} -Dtest="*{test_filter}*" -Dsurefire.failIfNoSpecifiedTests=false'
     return f'{test_cmd} --tests "*{test_filter}*"'
-
-
-def _has_red_tests(output: str) -> tuple[bool, str]:
-    """RED-детект по ВЫВОДУ тестов — build-system-агностично (не только exit-код).
-
-    RED = есть провалившиеся тесты / сборка упала / вывод пуст (нет доказательства GREEN).
-    GREEN = тесты прошли без провалов. Ловит и Gradle ('BUILD FAILED'), и Maven surefire
-    ('Failures: N'), где exit-коды/формат отличаются.
-    """
-    low = (output or "").lower()
-    if not low.strip():
-        return True, "пустой вывод — нет доказательства GREEN, считаем RED"
-    # явный ноль провалов (Maven surefire success) / успешная сборка Gradle
-    zero_fail = re.search(r"failures?:\s*0\b", low) and re.search(r"errors?:\s*0\b", low)
-    if (zero_fail or "build successful" in low) and not ("build failed" in low or "tests failed" in low):
-        return False, "тесты прошли без провалов (GREEN)"
-    if any(m in low for m in ("failed", "failure", "build failed", "failing test", "<<< failure")):
-        return True, "вывод содержит признаки провала тестов (RED)"
-    if "passed" in low:
-        return False, "тесты прошли (GREEN)"
-    return True, "неоднозначный вывод — консервативно RED"
 
 
 def _extract_tasks(plan: dict, task_filter: str | None = None) -> list[dict]:
@@ -163,42 +151,39 @@ def main() -> int:
         )
     else:
         # Шаг 2: запуск тестов (только если compile OK)
+        started = time.time()
         rc_test, test_out = _run_cmd(full_test_cmd, str(root))
-        # RED-состояние определяем по exit-коду И по выводу (build-system-агностично):
-        # на Maven exit-код/формат отличаются от Gradle.
-        red_by_output, red_reason = _has_red_tests(test_out)
-        test_failed = (rc_test != 0) or red_by_output
-        result["test_failed"] = test_failed
 
-        # Шаг 3: проверка, что тесты действительно выполнялись (не "no tests found")
-        tests_ran = True
-        no_tests_patterns = ["no tests found", "no test(s) found", "0 tests found", "0 test(s) found"]
-        for pat in no_tests_patterns:
-            if pat in test_out.lower():
-                tests_ran = False
-                break
-        result["tests_ran"] = tests_ran
+        # Шаг 3: ПО-ТЕСТОВЫЙ вердикт по JUnit XML текущего прогона (-2s — гранулярность
+        # mtime). Exit-код/грепы вывода недостаточны: 1 red + N green проходил как «RED»,
+        # а зелёные новые тесты — вакуумные (проходят без реализации).
+        t = junit_report.summarize(root, since=started - 2)
+        executed = len(t["red"]) + len(t["green"])
+        result["tests_ran"] = executed > 0
+        result["tests_total"] = executed
+        result["tests_red"] = len(t["red"])
+        result["tests_green"] = len(t["green"])
+        if t["green"]:
+            result["green_tests"] = t["green"][:10]
+        result["test_failed"] = executed > 0 and not t["green"]
 
-        # Вердикт (только после успешной компиляции)
-        if not tests_ran:
-            result.update(
-                status="fail",
-                verdict="fail: no tests executed",
-                reason=f"no tests matched filter '{test_filter}'. "
-                       f"RED-тесты должны запускаться и падать.",
-            )
-        elif test_failed:
+        hint = ("Gradle: --tests 'FooTest'; Maven: -Dtest=FooTest "
+                f"(сюда — через --test-filter, сейчас '{test_filter}')")
+        red_fail = junit_report.red_reason(t, hint_scope=hint)
+        if red_fail is None:
             result.update(
                 status="pass",
-                verdict="pass: RED (compile OK + tests fail)",
-                reason=f"тесты компилируются и падают (rc={rc_test}; {red_reason}) — корректное RED-состояние.",
+                verdict="pass: RED (compile OK + все тесты прогона падают)",
+                reason=f"компиляция OK; {len(t['red'])}/{executed} выполненных тестов "
+                       f"красные, зелёных нет (rc={rc_test}) — корректное RED-состояние.",
             )
         else:
             result.update(
                 status="fail",
-                verdict="fail: GREEN (tests pass)",
-                reason="тесты проходят, но должны быть RED. "
-                       "Проверь, что тесты тестируют ещё нереализованный код.",
+                verdict=("fail: no tests executed" if executed == 0 and t["reports"]
+                         else "fail: GREEN tests present" if t["green"]
+                         else "fail: no junit reports"),
+                reason=red_fail,
             )
 
     verdict = result.get("verdict", result.get("status", "fail"))
