@@ -12,11 +12,14 @@
 Полная механика веток и stacked-PR —
 [`references/stacked-pr-delivery.md`](references/stacked-pr-delivery.md). Кратко:
 
-- Каждая задача → своя ветка `feature/<jira-key>` (или `feature/<slug>-<taskId>` без Jira).
-  Ветки **stacked**: ветка задачи ответвляется от ветки той, от которой она зависит
-  (`depends_on`); корневые — от default-ветки.
-- Коммит каждой задачи — только её файлы; сообщение в стиле проекта (`git log`),
-  с ключом Jira, **без** `Co-Authored-By`.
+- **Интеграционная ветка фичи `feature/<slug>`** — коммитить в неё ЗАПРЕЩЕНО (enforced:
+  gate-guard блокирует commit/merge/push в неё); она собирается ТОЛЬКО мерджем PR сабветок
+  задач, а создаёт её `story_branch_push.py` (Гейт 5, идемпотентно, от default-tip).
+- Каждая задача → своя **сабветка** `feature/<jira-key>` (или `feature/<slug>-<taskId>`
+  без Jira). Сабветки **stacked**: ветка задачи ответвляется от ветки той, от которой она
+  зависит (`depends_on`); корневые — от default-tip, их PR таргетят `feature/<slug>`.
+- Коммит каждой задачи — только её файлы и только в её сабветку; сообщение в стиле
+  проекта (`git log`), с ключом Jira, **без** `Co-Authored-By`.
 
 **Judge-gate deliver: delivery-judge (перед Гейтом 4, до коммитов).**
 Запусти delivery-judge перед тем, как показывать план коммитов. Он проверяет готовность
@@ -55,11 +58,13 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/delivery_plan.py \
 `create` — с нуля. Действуй строго по плану.
 
 **Гейт 5 — push + stacked PR.** Покажи план веток и PR (для каждого: source→target,
-заголовок, тело со ссылкой на Jira). Спроси «пушим и создаём PR?». После «да» — push в
-порядке зависимостей, затем PR через Bitbucket MCP (target = ветка-родитель или default).
-Сюда же — push/PR ветки спеки (фаза 5). На каждый `git push` хук `evidence-enforcer`
-детерминированно проверяет сообщение HEAD-коммита: трейлер `Co-Authored-By` запрещён
-(блок → `git commit --amend`).
+заголовок, тело со ссылкой на Jira). Спроси «пушим и создаём PR?». После «да» — сначала
+заведи интеграционную ветку (`story_branch_push.py --feature <slug>`, идемпотентно),
+затем push сабветок в порядке зависимостей, затем PR через Bitbucket MCP (target =
+сабветка-родитель, для корневых — `feature/<slug>`; последним — PR `feature/<slug>` →
+default, «мержить после всех»). Сюда же — push/PR ветки спеки (фаза 5). На каждый
+`git push` хук `evidence-enforcer` детерминированно проверяет сообщение HEAD-коммита:
+трейлер `Co-Authored-By` запрещён (блок → `git commit --amend`).
 
 **Гейт 6 — отчёт в Jira.** Подготовь черновик комментария в Story (что сделано, файлы,
 тесты/покрытие, ссылки на PR по задачам, статус спеки). Покажи целиком, спроси «отправить?».

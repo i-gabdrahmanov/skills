@@ -65,6 +65,15 @@ class MultiFeatureGate(unittest.TestCase):
             (jdir / f"{n}.json").write_text(json.dumps(
                 {"produced_by": "run_judge", "judge": n, "verdict": "PASS", "passed": True,
                  "checks": [], "summary": "ok"}), encoding="utf-8")
+        # маркеры утверждения доков (их пишет record_approval после «да» пользователя) —
+        # update._check_doc_approval не закроет 00-brd/02-sdd без них
+        appr = self.proj / "ground/approvals"
+        appr.mkdir(parents=True, exist_ok=True)
+        for doc in ("brd", "sdd"):
+            key = f"{doc}-approved-{feat}"
+            (appr / f"{key}.json").write_text(json.dumps(
+                {"produced_by": "record_approval", "key": key, "approved_by": "user",
+                 "reason": "test"}), encoding="utf-8")
 
     def _gate(self, feat):
         return json.loads((self.proj / "ground/phases" / feat / "gate.json").read_text(encoding="utf-8"))

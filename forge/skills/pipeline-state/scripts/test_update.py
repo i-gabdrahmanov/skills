@@ -5,7 +5,10 @@
 _origins/<id>.json от SubagentStop). Любая регрессия здесь молча открыла бы гейты.
 
 Фиксируем: exit 3 (нет манифеста), exit 2 (нет шага), блок по отсутствию/FAIL/подделке
-вердикта, разблок валидным вердиктом и override, блок/разблок subagent-origin, --skip-judges.
+вердикта, разблок валидным вердиктом и override, блок/разблок subagent-origin, --skip-judges,
+и doc-approval: доко-фазы (00-brd/02-sdd) не закрываются без маркера утверждения
+<doc>-approved-<feature> (record_approval) — это же enforcement паузы после мерджа
+на согласование (doc_review_push).
 
 Запуск: python3 test_update.py
 """
@@ -56,6 +59,16 @@ def _origin(d: Path, step_id: str):
     (d / "_origins" / f"{step_id}.json").write_text("{}", encoding="utf-8")
 
 
+def _approval(project: Path, key: str, *, fake=False, inner_key: str | None = None):
+    """Пишет approval-маркер ground/approvals/<key>.json. fake=True → без провенанса."""
+    appr = project / "ground" / "approvals"
+    appr.mkdir(parents=True, exist_ok=True)
+    body = {"key": inner_key or key, "approved_by": "user", "reason": "test"}
+    if not fake:
+        body["produced_by"] = "record_approval"
+    (appr / f"{key}.json").write_text(json.dumps(body), encoding="utf-8")
+
+
 def run(project: Path, step_id: str, *extra, skill="feature-pipeline", feature="demo"):
     r = subprocess.run(
         [sys.executable, str(SCRIPT), "--project", str(project), "--skill", skill,
@@ -93,11 +106,12 @@ def main() -> int:
         rc, out = run(Path(td), "00-brd")
         check("нет вердикта → блок", rc != 0 and "brd-judge" in out, f"rc={rc} {out}")
 
-    # 4. Валидный passing-вердикт → закрытие (exit 0). 00-brd — не subagent-фаза.
+    # 4. Валидный passing-вердикт + утверждение → закрытие (exit 0). 00-brd — не subagent-фаза.
     with tempfile.TemporaryDirectory() as td:
         d = _write_manifest(Path(td), [{"id": "00-brd", "status": "pending",
                                         "required_judges": ["brd-judge"]}])
         _verdict(d, "brd-judge", True)
+        _approval(Path(td), "brd-approved-demo")
         rc, out = run(Path(td), "00-brd")
         check("валидный вердикт → exit 0", rc == 0 and '"new_status": "completed"' in out, out)
 
@@ -123,6 +137,7 @@ def main() -> int:
                                         "required_judges": ["brd-judge"]}])
         _verdict(d, "brd-judge", False)
         _override(d, "brd-judge")
+        _approval(Path(td), "brd-approved-demo")
         rc, out = run(Path(td), "00-brd")
         check("FAIL + override → exit 0", rc == 0, out)
 
@@ -132,26 +147,86 @@ def main() -> int:
         rc, out = run(Path(td), "02-sdd")
         check("02-sdd без origin → блок", rc != 0 and "субагент" in out, out)
 
-    # 9. subagent-фаза с origin-маркером → закрытие
+    # 9. subagent-фаза с origin-маркером (+ утверждение SDD) → закрытие
     with tempfile.TemporaryDirectory() as td:
         d = _write_manifest(Path(td), [{"id": "02-sdd", "status": "pending"}])
         _origin(d, "02-sdd")
+        _approval(Path(td), "sdd-approved-demo")
         rc, out = run(Path(td), "02-sdd")
         check("02-sdd c origin → exit 0", rc == 0, out)
 
-    # 10. subagent-origin override снимает блок
+    # 10. subagent-origin override снимает блок (утверждение SDD всё равно нужно)
     with tempfile.TemporaryDirectory() as td:
         d = _write_manifest(Path(td), [{"id": "02-sdd", "status": "pending"}])
         _override(d, "subagent-origin")
+        _approval(Path(td), "sdd-approved-demo")
         rc, out = run(Path(td), "02-sdd")
         check("02-sdd override origin → exit 0", rc == 0, out)
 
-    # 11. --skip-judges обходит оба гейта
+    # 11. --skip-judges обходит все гейты закрытия
     with tempfile.TemporaryDirectory() as td:
         _write_manifest(Path(td), [{"id": "02-sdd", "status": "pending",
                                     "required_judges": ["sdd-judge"]}])
         rc, out = run(Path(td), "02-sdd", "--skip-judges")
         check("--skip-judges → exit 0", rc == 0, out)
+
+    # ── doc-approval: доко-фаза не закрывается без утверждения дока ──────────
+
+    # 12. 00-brd: судья PASS, но утверждения нет → блок с подсказкой record_approval
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_manifest(Path(td), [{"id": "00-brd", "status": "pending",
+                                        "required_judges": ["brd-judge"]}])
+        _verdict(d, "brd-judge", True)
+        rc, out = run(Path(td), "00-brd")
+        check("00-brd без утверждения → блок",
+              rc != 0 and "brd-approved-demo" in out and "record_approval" in out,
+              f"rc={rc} {out}")
+
+    # 13. рукописный маркер утверждения (без провенанса) → блок
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_manifest(Path(td), [{"id": "00-brd", "status": "pending"}])
+        _approval(Path(td), "brd-approved-demo", fake=True)
+        rc, out = run(Path(td), "00-brd")
+        check("подделка утверждения → блок", rc != 0, out)
+
+    # 14. переименованный чужой маркер (key внутри не совпадает) → блок
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_manifest(Path(td), [{"id": "00-brd", "status": "pending"}])
+        _approval(Path(td), "brd-approved-demo", inner_key="brd-approved-other")
+        rc, out = run(Path(td), "00-brd")
+        check("чужой key в маркере → блок", rc != 0, out)
+
+    # 15. ПАУЗА: док замерджен на согласование (review-маркер), утверждения нет → блок
+    #     с явным указанием паузы (нельзя молча продолжить после мерджа)
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_manifest(Path(td), [{"id": "02-sdd", "status": "pending"}])
+        _origin(d, "02-sdd")
+        _approval(Path(td), "sdd-review-demo")
+        rc, out = run(Path(td), "02-sdd")
+        check("после мерджа без утверждения → блок с паузой",
+              rc != 0 and "ПАУЗА" in out and "sdd-approved-demo" in out, f"rc={rc} {out}")
+
+    # 16. утверждение после ревью → закрытие
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_manifest(Path(td), [{"id": "02-sdd", "status": "pending"}])
+        _origin(d, "02-sdd")
+        _approval(Path(td), "sdd-review-demo")
+        _approval(Path(td), "sdd-approved-demo")
+        rc, out = run(Path(td), "02-sdd")
+        check("утверждение после ревью → exit 0", rc == 0, out)
+
+    # 17. override doc-approved-<step> снимает блок (деградация)
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_manifest(Path(td), [{"id": "00-brd", "status": "pending"}])
+        _override(d, "doc-approved-00-brd")
+        rc, out = run(Path(td), "00-brd")
+        check("override doc-approved → exit 0", rc == 0, out)
+
+    # 18. не-доко-фаза утверждения не требует (04-build с гейтом и origin)
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_manifest(Path(td), [{"id": "01-grounding", "status": "pending"}])
+        rc, out = run(Path(td), "01-grounding")
+        check("01-grounding без утверждения → exit 0", rc == 0, out)
 
     print(f"\n{PASSED} passed, {FAILED} failed")
     return 1 if FAILED else 0

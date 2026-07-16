@@ -273,14 +273,24 @@
       "aliases": ["system analysis subdir"]
     },
     {
+      "id": "docs.brd_review",
+      "file": "pipeline",
+      "path": "docs.brd_review",
+      "type": "enum", "enum": ["", "push", "skip"], "default": "",
+      "category": "docs", "sensitive": false,
+      "title": "Доставка BRD на ветку задачи",
+      "description": "Решение Гейта доставки BRD (фаза 00-brd feature-pipeline, ДО утверждения): push — закоммитить brd.md на ветку задачи docs/<slug> (своя ветка у каждой Jira-задачи, общая для её BRD и SDD; база — default-ветка) и запушить аналитикам (без PR; после пуша пайплайн берёт ПАУЗУ до итогов ревью — шаг не закрывается без утверждения); skip — не пушить, сразу гейт утверждения; пусто — спросить пользователя. Headless: предзапись ДО прогона. Ключ per-project (действует на все фичи прогона).",
+      "aliases": ["brd review", "ревью brd", "мердж brd", "согласование brd", "коммит brd", "ветка задачи brd"]
+    },
+    {
       "id": "docs.sdd_review",
       "file": "pipeline",
       "path": "docs.sdd_review",
       "type": "enum", "enum": ["", "push", "skip"], "default": "",
       "category": "docs", "sensitive": false,
-      "title": "Коммит SDD на ветку согласования",
-      "description": "Решение Гейта SDD-ревью (фаза 02-sdd feature-pipeline): push — коммитить sdd.md на ветку sdd-review/<slug> и пушить системным аналитикам (без PR); skip — не коммитить; пусто — спросить пользователя. Headless: предзапись ДО прогона. Ключ per-project (действует на все фичи прогона).",
-      "aliases": ["sdd review", "ревью sdd", "коммит sdd", "ветка согласования", "согласование sdd"]
+      "title": "Доставка SDD на ветку задачи",
+      "description": "Решение Гейта доставки SDD (фаза 02-sdd feature-pipeline, ДО утверждения): push — закоммитить sdd.md на ветку задачи docs/<slug> (та же ветка, где brd.md этой задачи; база — default-ветка) и запушить системным аналитикам (без PR; после пуша пайплайн берёт ПАУЗУ до итогов ревью — шаг не закрывается без утверждения); skip — не пушить, сразу гейт утверждения; пусто — спросить пользователя. Headless: предзапись ДО прогона. Ключ per-project (действует на все фичи прогона).",
+      "aliases": ["sdd review", "ревью sdd", "мердж sdd", "коммит sdd", "согласование sdd", "ветка задачи sdd"]
     },
     {
       "id": "conventions.migration_tool",

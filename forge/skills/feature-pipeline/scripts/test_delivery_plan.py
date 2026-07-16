@@ -97,9 +97,13 @@ class TestActions(unittest.TestCase):
 
 
 class TestTargetBranch(unittest.TestCase):
-    def test_root_task_targets_default(self):
+    def test_root_task_targets_story_branch(self):
+        # корневые PR целятся в интеграционную ветку фичи, НЕ в default:
+        # в default уходит один финальный PR feature/<slug> → main
         p = _plan()
-        self.assertEqual(p["tasks"][0]["target"], "main")
+        self.assertEqual(p["tasks"][0]["target"], "feature/bulk-export")
+        self.assertEqual(p["story_branch"], "feature/bulk-export")
+        self.assertEqual(p["default_branch"], "main")
 
     def test_dependent_targets_parent_branch(self):
         p = _plan(jira={"tasks": {"T1": "STOR-201", "T2": "STOR-202"}})

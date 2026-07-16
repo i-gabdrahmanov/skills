@@ -125,6 +125,9 @@ def build_plan(plan: dict, manifest: dict, cfg: dict, jira_result: dict, root: P
     slug = plan.get("feature_slug") or manifest.get("context", {}).get("feature", "feature")
     branch_prefix = (cfg.get("delivery") or {}).get("branch_prefix", "feature/")
     default_branch = _default_branch(cfg, root)
+    # Интеграционная ветка фичи: цель PR корневых задач (сама она — только PR-мерджи,
+    # прямые коммиты блокирует gate-guard; создаёт story_branch_push.py)
+    story_branch = f"{branch_prefix}{slug}"
 
     step_status = {(s.get("id") or "").lower(): s.get("status")
                    for s in manifest.get("steps", [])}
@@ -134,7 +137,7 @@ def build_plan(plan: dict, manifest: dict, cfg: dict, jira_result: dict, root: P
     for tid in order:
         branch = branch_of[tid]
         deps = [d for d in (by_tid[tid].get("depends_on") or []) if d in by_tid]
-        target = branch_of[deps[0]] if deps else default_branch
+        target = branch_of[deps[0]] if deps else story_branch
 
         delivered = step_status.get(f"{prefix}{tid}".lower()) == "completed"
         local = branch in local_branches
@@ -159,6 +162,7 @@ def build_plan(plan: dict, manifest: dict, cfg: dict, jira_result: dict, root: P
     return {
         "feature_slug": slug,
         "default_branch": default_branch,
+        "story_branch": story_branch,
         "remote_checked": remote_checked,
         "tasks": rows,
         "summary": {

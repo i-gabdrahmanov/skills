@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -236,17 +237,19 @@ def check_gate_override(command: str, root: Path) -> str | None:
         return f"deny-first: ошибка проверки gate-override ({e})."
 
 
-def check_sdd_review(command: str, root: Path) -> str | None:
-    """R4-класс: доставка SDD на ветку согласования (sdd_review_push.py) требует
-    approval-маркера ground/approvals/sdd-review-<slug>.json (кладётся ТОЛЬКО после
-    явного «да» пользователя на Гейте SDD-ревью). Возвращает причину блокировки или None.
+def check_doc_review(command: str, root: Path) -> str | None:
+    """R4-класс: доставка дока (brd|sdd) на ветку задачи docs/<slug> (doc_review_push.py, Гейт
+    доставки фаз 00-brd/02-sdd) требует approval-маркера ground/approvals/<doc>-review-<slug>.json
+    (кладётся ТОЛЬКО после явного «да» пользователя). Возвращает причину блокировки или None.
 
-    --status (ридонли-отчёт о состоянии ветки) свободен. Дефолты зашиты в код — удаление
-    секции sdd_review из risk-policy.json не выключает enforcement молча. Ошибка разбора →
-    fail-CLOSED (доставка без ясности опаснее ложного блока)."""
+    Паттерн покрывает и легаси sdd_review_push.py (деплой не удаляет убранные из source файлы —
+    старый скрипт в .gigacode обязан остаться под гейтом; для него doc=sdd).
+    --status (ридонли-отчёт) свободен. Дефолты зашиты в код — удаление секции doc_review из
+    risk-policy.json не выключает enforcement молча. Ошибка разбора → fail-CLOSED
+    (доставка без ясности опаснее ложного блока)."""
     try:
-        policy = R.load_policy().get("sdd_review") or {}
-        pat = policy.get("command_pattern", r"sdd_review_push\.py")
+        policy = R.load_policy().get("doc_review") or {}
+        pat = policy.get("command_pattern", r"(?:doc|sdd)_review_push\.py")
         if not command or not re.search(pat, command):
             return None
         # readonly (--status) — по РЕАЛЬНЫМ токенам-аргументам, не подстрокой (иначе
@@ -260,27 +263,137 @@ def check_sdd_review(command: str, root: Path) -> str | None:
             return None
         m = re.search(r"--feature[\s=]+[\"']?([\w.-]+)", command)
         feat = m.group(1) if m else ""
-        prefix = policy.get("approval_prefix", "sdd-review")
-        key = f"{prefix}-{feat}" if feat else prefix
-        if feat and _approval_valid(root, key):
+        md = re.search(r"--doc[\s=]+[\"']?(\w+)", command)
+        doc = md.group(1) if md else ("sdd" if "sdd_review_push" in command else "")
+        key = f"{doc}-review-{feat}" if doc and feat else "<doc>-review-<slug>"
+        if doc and feat and _approval_valid(root, key):
             return None
-        exists_no_prov = R.approval_exists(root, key) and not _approval_valid(root, key)
+        exists_no_prov = (doc and feat and R.approval_exists(root, key)
+                          and not _approval_valid(root, key))
         prov_note = (
             " Маркер есть, но БЕЗ провенанса record_approval — рукописный маркер не считается "
             "(его мог выписать сам агент). " if exists_no_prov else " "
         )
-        feat_note = "" if feat else " В команде нет --feature <slug> — ключ маркера не резолвится."
+        args_note = "" if (doc and feat) else (
+            " В команде нет --doc/--feature — ключ маркера не резолвится."
+        )
         return (
-            f"доставка SDD на ветку согласования — R4-класс, нужен approval-маркер "
+            f"доставка дока на ветку задачи — R4-класс, нужен approval-маркер "
             f"ground/approvals/{key}.json.{prov_note}Порядок: (1) спроси пользователя на Гейте "
-            f"SDD-ревью («коммитим SDD на ветку согласования?»); (2) ТОЛЬКО после явного «да» "
+            f"доставки («нужен мердж и пуш {doc or '<doc>'}.md?»); (2) ТОЛЬКО после явного «да» "
             f"зафиксируй согласие СКРИПТОМ pipeline-state/scripts/record_approval.py --key {key} "
             f"--approved-by user --reason \"<кто/почему>\" (он штампует провенанс; прямой Write "
-            f"в approvals/ заблокирован state-write-guard); (3) повтори команду.{feat_note} "
+            f"в approvals/ заблокирован state-write-guard); (3) повтори команду.{args_note} "
             f"--status не гейтится."
         )
     except Exception as e:
-        return f"deny-first: ошибка проверки sdd-review ({e})."
+        return f"deny-first: ошибка проверки doc-review ({e})."
+
+
+_HISTORY_VERBS_RE = re.compile(r"\bgit\s+(?:commit|merge|rebase|cherry-pick|revert|am)\b")
+
+
+def _git_repo_of(command: str, cwd: str, root: Path) -> Path:
+    """Репозиторий команды: `git -C <path>` из ИСХОДНОЙ команды (normalize его сворачивает),
+    иначе cwd хука, иначе корень проекта."""
+    base = Path(cwd) if cwd else root
+    m = re.search(r"\bgit\s+(?:-c\s+\S+\s+)*-C[\s=]+[\"']?([^\s\"']+)", command)
+    if m:
+        p = Path(m.group(1))
+        return p if p.is_absolute() else base / p
+    return base
+
+
+def _current_branch(repo: Path) -> str | None:
+    """Текущая ветка репо (None — detached HEAD / не git / git недоступен)."""
+    try:
+        r = subprocess.run(["git", "-C", str(repo), "symbolic-ref", "--quiet", "--short", "HEAD"],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=10)
+        out = r.stdout.strip()
+        return out if r.returncode == 0 and out else None
+    except Exception:
+        return None
+
+
+def _push_dst_branches(norm_cmd: str) -> tuple[list[str], bool]:
+    """dst-ветки из refspecs `git push` + флаг «refspecs заданы явно».
+    Формы: `push origin br`, `src:br`, `src:refs/heads/br`, `:br` (delete), `+br` (force)."""
+    try:
+        toks = shlex.split(norm_cmd)
+    except ValueError:
+        toks = norm_cmd.split()
+    try:
+        gi = toks.index("git")
+        pi = toks.index("push", gi + 1)
+    except ValueError:
+        return [], False
+    args, skip = [], False
+    for t in toks[pi + 1:]:
+        if skip:
+            skip = False
+            continue
+        if t in ("-o", "--push-option", "--receive-pack", "--exec", "--repo"):
+            skip = True
+            continue
+        if t.startswith("-"):
+            continue
+        args.append(t)
+    refspecs = args[1:]  # args[0] — remote
+    dsts = []
+    for rs in refspecs:
+        rs = rs.lstrip("+")
+        dst = rs.split(":", 1)[1] if ":" in rs else rs
+        dst = dst.strip()
+        if dst.startswith("refs/heads/"):
+            dst = dst[len("refs/heads/"):]
+        if dst:
+            dsts.append(dst)
+    return dsts, bool(refspecs)
+
+
+def check_branch_protection(command: str, cwd: str, root: Path) -> str | None:
+    """Интеграционная ветка фичи feature/<slug> собирается ТОЛЬКО мерджем PR сабветок задач:
+    прямые history-команды (commit/merge/rebase/cherry-pick/revert/am) НА ней и любой push
+    В неё запрещены. Создаёт ветку санкционированный story_branch_push.py (от default-tip,
+    без коммитов). Скоуп — активная фича feature-pipeline: у forgelite ветка feature/<KEY>
+    сама является веткой задачи, там прямые коммиты легальны. Дефолты зашиты в код —
+    удаление секции branch_protection из risk-policy.json не выключает enforcement молча.
+    Ошибка разбора → fail-CLOSED (история интеграционной ветки дороже ложного блока)."""
+    if not command or "git" not in command:
+        return None
+    try:
+        mp = R.active_manifest(root)
+        if not mp:
+            return None
+        policy = R.load_policy().get("branch_protection") or {}
+        skills = policy.get("skills") or ["feature-pipeline"]
+        if mp.parent.parent.name not in skills:
+            return None
+        slug = mp.parent.name
+        protected = str(policy.get("branch_template") or "feature/{slug}").format(slug=slug)
+        norm = R.normalize_git_command(command)
+        is_history = bool(_HISTORY_VERBS_RE.search(norm))
+        is_push = bool(re.search(r"\bgit\s+push\b", norm))
+        if not (is_history or is_push):
+            return None
+        hint = (f"Ветка фичи '{protected}' — интеграционная: она обновляется ТОЛЬКО мерджем "
+                f"PR сабветок задач (feature/<jira-key-подзадачи> | feature/{slug}-<taskId>), "
+                f"а создаёт её story_branch_push.py от default-tip. Работай в сабветке задачи.")
+        repo = _git_repo_of(command, cwd, root)
+        if is_history and _current_branch(repo) == protected:
+            return f"прямой коммит/мердж в ветку фичи '{protected}' запрещён. {hint}"
+        if is_push:
+            dsts, explicit = _push_dst_branches(norm)
+            if any(d == protected for d in dsts):
+                return f"push в ветку фичи '{protected}' запрещён. {hint}"
+            if re.search(r"\bgit\s+push\b[^|;&]*\s--(?:all|mirror)\b", norm):
+                return f"git push --all/--mirror задел бы ветку фичи '{protected}'. {hint}"
+            if not explicit and _current_branch(repo) == protected:
+                return f"push текущей ветки '{protected}' запрещён. {hint}"
+        return None
+    except Exception as e:
+        return f"deny-first: ошибка проверки branch-protection ({e})."
 
 
 def _kind(tool_name: str, command: str) -> str:
@@ -334,9 +447,16 @@ def main() -> int:
         if deny:
             return _block(deny)
 
-        # ── R4-класс: доставка SDD на ветку согласования без approval ──
+        # ── R4-класс: доставка дока (brd|sdd) на ветку задачи без approval ──
         # Тоже ДО auto-early-return: classify даёт скрипту default-R1 → прошёл бы авто.
-        deny = check_sdd_review(command, root)
+        deny = check_doc_review(command, root)
+        if deny:
+            return _block(deny)
+
+        # ── Интеграционная ветка фичи: прямые commit/merge/push в feature/<slug>
+        #    запрещены — она собирается только PR-мерджами сабветок задач. ДО
+        #    auto-early-return: на низкой критичности commit прошёл бы авто.
+        deny = check_branch_protection(command, data.get("cwd", ""), root)
         if deny:
             return _block(deny)
 

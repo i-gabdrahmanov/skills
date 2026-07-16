@@ -48,6 +48,15 @@ class TestPreflightResync(unittest.TestCase):
         r = _run([INIT, "--project", self.proj, "--skill", "feature-pipeline",
                   "--feature", self.feature, "--steps", json.dumps(BASE_STEPS), "--force"])
         self.assertEqual(r.returncode, 0, r.stderr)
+        # маркеры утверждения доков (их пишет record_approval после «да» пользователя) —
+        # update._check_doc_approval не закроет 00-brd/02-sdd без них
+        appr = self.proj / "ground" / "approvals"
+        appr.mkdir(parents=True, exist_ok=True)
+        for doc in ("brd", "sdd"):
+            key = f"{doc}-approved-{self.feature}"
+            (appr / f"{key}.json").write_text(json.dumps(
+                {"produced_by": "record_approval", "key": key, "approved_by": "user",
+                 "reason": "test"}), encoding="utf-8")
 
     def tearDown(self):
         self._tmp.cleanup()

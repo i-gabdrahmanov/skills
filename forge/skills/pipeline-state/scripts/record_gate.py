@@ -11,9 +11,15 @@ Usage:
     record_gate.py --project <root> --skill <skill> --feature <slug> --step-id lite-green \
         --cmd "./gradlew build"
 
-    # RED-гейт TDD: компиляция проходит, тесты падают
+    # RED-гейт TDD: компиляция проходит, ВСЕ тесты прогона падают (по-тестово, JUnit XML)
     record_gate.py --project <root> --skill <skill> --feature <slug> --step-id lite-red \
-        --expect red --compile-cmd "./gradlew compileTestJava" --cmd "./gradlew test"
+        --expect red --compile-cmd "./gradlew compileTestJava" \
+        --cmd "./gradlew test --tests 'FooTest'"
+
+RED-гейт ПО-ТЕСТОВЫЙ: exit-кода раннера недостаточно (один красный тест валит весь прогон,
+и N зелёных вакуумных тестов проходили как «RED»). Разбираются JUnit XML-отчёты текущего
+прогона (junit_report): нужны ≥1 выполненный тест и НОЛЬ зелёных — поэтому команду тестов
+скоупь на новые тест-классы (--tests / -Dtest).
 
 Exit: 0 — гейт пройден (артефакт passed:true); 1 — не пройден (артефакт passed:false).
 """
@@ -25,9 +31,11 @@ import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import junit_report
 from _util import repo_root
 
 PRODUCED_BY = "record_gate"
@@ -92,12 +100,27 @@ def main() -> int:
             record["reason"] = "компиляция тестов упала — это не RED, чини сигнатуры/импорты"
             record["output_tail"] = compile_tail
         else:
+            started = time.time()
             test_rc, test_tail = _run(args.cmd, project, args.timeout)
             record["exit_code"] = test_rc
-            record["passed"] = test_rc != 0
-            if test_rc == 0:
-                record["reason"] = "тесты прошли — это GREEN, RED-гейт не выполнен"
             record["output_tail"] = test_tail
+            # ПО-ТЕСТОВЫЙ вердикт по JUnit XML текущего прогона (-2s — гранулярность mtime):
+            # exit-код недостаточен — 1 red + N green проходил как «RED».
+            t = junit_report.summarize(project, since=started - 2)
+            record["tests_total"] = len(t["red"]) + len(t["green"])
+            record["tests_red"] = len(t["red"])
+            record["tests_green"] = len(t["green"])
+            if t["green"]:
+                record["green_tests"] = t["green"][:10]
+            if test_rc == 0:
+                record["passed"] = False
+                record["reason"] = "тесты прошли — это GREEN, RED-гейт не выполнен"
+            else:
+                reason = junit_report.red_reason(
+                    t, hint_scope="Gradle: --tests 'FooTest'; Maven: -Dtest=FooTest")
+                record["passed"] = reason is None
+                if reason:
+                    record["reason"] = reason
     else:
         rc, tail = _run(args.cmd, project, args.timeout)
         record["exit_code"] = rc

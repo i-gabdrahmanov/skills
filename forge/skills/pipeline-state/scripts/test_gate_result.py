@@ -9,9 +9,11 @@ Build/verify-шаги (04-test/04-build/05-tests, lite-red/green/verify) зак�
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -65,6 +67,29 @@ def _gate_file(tmp: Path, step_id: str) -> Path:
     return tmp / "ground" / "statements" / SKILL / FEATURE / "gates" / f"{step_id}.json"
 
 
+def _junit_xml(cases: list[tuple[str, str]]) -> str:
+    """JUnit XML: cases = [(имя, 'red'|'green'), ...]."""
+    items = "".join(
+        f'<testcase classname="com.x.FooTest" name="{n}">'
+        + ('<failure message="boom"/>' if s == "red" else "") + "</testcase>"
+        for n, s in cases)
+    return (f'<?xml version="1.0"?>'
+            f'<testsuite name="FooTest" tests="{len(cases)}">{items}</testsuite>')
+
+
+def _mk_test_runner(tmp: Path, cases: list[tuple[str, str]], exit_code: int = 1) -> str:
+    """Команда-«тест-раннер»: пишет JUnit XML текущего прогона и выходит с exit_code —
+    как gradle test (отчёт в build/test-results независимо от исхода)."""
+    (tmp / "report.xml").write_text(_junit_xml(cases), encoding="utf-8")
+    runner = tmp / "runner.py"
+    runner.write_text(
+        "import pathlib, shutil, sys\n"
+        "d = pathlib.Path('build/test-results/test'); d.mkdir(parents=True, exist_ok=True)\n"
+        "shutil.copy('report.xml', d / 'TEST-com.x.FooTest.xml')\n"
+        f"sys.exit({exit_code})\n", encoding="utf-8")
+    return f'"{sys.executable}" runner.py'
+
+
 class TestRecordGate(unittest.TestCase):
     def test_success_gate_passed(self):
         with tempfile.TemporaryDirectory() as d:
@@ -82,19 +107,70 @@ class TestRecordGate(unittest.TestCase):
             self.assertEqual(r.returncode, 1)
             self.assertFalse(json.loads(_gate_file(tmp, "lite-green").read_text(encoding="utf-8"))["passed"])
 
-    def test_red_gate_compile_ok_tests_fail_passes(self):
+    def test_red_gate_all_tests_red_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cmd = _mk_test_runner(tmp, [("t1", "red"), ("t2", "red"), ("t3", "red")])
+            r = _record(tmp, "lite-red", "--expect", "red",
+                        "--compile-cmd", "true", "--cmd", cmd)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rec = json.loads(_gate_file(tmp, "lite-red").read_text(encoding="utf-8"))
+            self.assertTrue(rec["passed"])
+            self.assertEqual(rec["tests_red"], 3)
+            self.assertEqual(rec["tests_green"], 0)
+
+    def test_red_gate_one_red_rest_green_fails(self):
+        # ПИН бага прогона: один красный тест валит раннер (exit!=0) → раньше «RED пройден»,
+        # хотя остальные новые тесты зелёные (вакуумные — проходят без реализации)
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cmd = _mk_test_runner(tmp, [("t1", "red"), ("t2", "green"), ("t3", "green")])
+            r = _record(tmp, "lite-red", "--expect", "red",
+                        "--compile-cmd", "true", "--cmd", cmd)
+            self.assertEqual(r.returncode, 1, "1 red + 2 green — НЕ успех RED")
+            rec = json.loads(_gate_file(tmp, "lite-red").read_text(encoding="utf-8"))
+            self.assertFalse(rec["passed"])
+            self.assertEqual(rec["tests_green"], 2)
+            self.assertIn("ЗЕЛЁНЫЕ", rec["reason"])
+            self.assertIn("com.x.FooTest.t2", "".join(rec["green_tests"]))
+
+    def test_red_gate_no_junit_reports_fails(self):
+        # exit!=0 без JUnit-отчётов — не доказательство RED (fail-closed)
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             r = _record(tmp, "lite-red", "--expect", "red",
                         "--compile-cmd", "true", "--cmd", "false")
-            self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertTrue(json.loads(_gate_file(tmp, "lite-red").read_text(encoding="utf-8"))["passed"])
+            self.assertEqual(r.returncode, 1)
+            rec = json.loads(_gate_file(tmp, "lite-red").read_text(encoding="utf-8"))
+            self.assertIn("JUnit", rec["reason"])
+
+    def test_red_gate_stale_reports_not_counted(self):
+        # отчёты ПРОШЛОГО прогона (старый mtime) не засчитываются за текущий
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            rep = tmp / "build" / "test-results" / "test" / "TEST-com.x.FooTest.xml"
+            rep.parent.mkdir(parents=True)
+            rep.write_text(_junit_xml([("t1", "red")]), encoding="utf-8")
+            old = time.time() - 3600
+            os.utime(rep, (old, old))
+            r = _record(tmp, "lite-red", "--expect", "red",
+                        "--compile-cmd", "true", "--cmd", "false")
+            self.assertEqual(r.returncode, 1, "залежавшийся отчёт не доказывает RED")
+
+    def test_red_gate_zero_executed_tests_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cmd = _mk_test_runner(tmp, [])
+            r = _record(tmp, "lite-red", "--expect", "red",
+                        "--compile-cmd", "true", "--cmd", cmd)
+            self.assertEqual(r.returncode, 1, "0 выполненных тестов — не RED")
 
     def test_red_gate_green_tests_fail(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
+            cmd = _mk_test_runner(tmp, [("t1", "green")], exit_code=0)
             r = _record(tmp, "lite-red", "--expect", "red",
-                        "--compile-cmd", "true", "--cmd", "true")
+                        "--compile-cmd", "true", "--cmd", cmd)
             self.assertEqual(r.returncode, 1)
 
     def test_red_gate_compile_broken_fails(self):
