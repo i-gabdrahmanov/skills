@@ -151,7 +151,6 @@ def main():
         "02-design":    [("tech-design", "tech-design.md"), ("task-plan", "task-plan.json")],
         "02-eval-plan": [("eval-plan", "eval-plan.json")],
         "03-jira":      [("jira-result", "jira-tasks-result.json")],
-        "07-deliver-":  [("pr-info", "pr-info.json")],
     }
     fdir = feature_docs_dir(project) / args.feature
     for step in steps:

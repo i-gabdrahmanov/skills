@@ -259,9 +259,6 @@ def _update_gate_phase(root: Path, feature: str, step_id: str, status: str) -> N
             "04-": "04-tdd",
             "05-": "05-verify",
             "06-": "06-document",
-            "07-deliver-": "07-deliver",
-            "07-report": "07-report",
-            "07-": "07-deliver",
         }
 
         # Определяем фазу по step_id

@@ -27,15 +27,13 @@ STATIC = [
     {"id": "03-jira", "depends_on": []},
     {"id": "05-tests", "depends_on": []},
     {"id": "06-spec", "depends_on": []},
-    {"id": "07-report", "depends_on": []},
 ]
 DYN = [
     {"id": "04-test-T1", "depends_on": []},
     {"id": "04-build-T1", "depends_on": []},
-    {"id": "07-deliver-T1", "depends_on": []},
 ]
 JUDGES = ["brd-judge", "design-judge", "eval-judge", "coverage-judge", "spec-judge",
-          "red-judge", "build-judge", "reuse-judge", "delivery-judge"]
+          "red-judge", "build-judge", "reuse-judge"]
 ALL_STEPS = [s["id"] for s in STATIC] + [s["id"] for s in DYN]
 
 

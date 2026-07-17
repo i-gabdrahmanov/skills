@@ -213,18 +213,9 @@ def build_config(root):
             "project_key": None,              # TODO: напр. "KIDPPRB"
             "auto_discovered": False,         # будет заполнен скриптом jira_discover.py
         },
-        "bitbucket": {
-            "enabled": None,                  # TODO
-            "workspace": None,                # TODO
-            "repo_slug": None,                # TODO
-        },
-        "delivery": {
-            "pr_strategy": "stacked",         # stacked | split | single
-            "branch_prefix": "feature/",
-        },
         "autonomy": {
-            "mode": "gated",                  # gated | autopilot-to-pr | until-commit
-            "gates": ["brd", "design", "jira", "commit", "pr", "report"],
+            "mode": "gated",
+            "gates": ["brd", "design", "jira"],
             "level": "L2",                    # PDLC v3.5 L0–L5 (лестница автономии)
             "criticality": None,              # low|medium|high — ВЫБРАТЬ на «Гейте критичности» после BRD
             "auto_max_risk": "R1",            # порог авто-прохода; НЕ править руками — set_criticality.py
@@ -238,9 +229,8 @@ def build_config(root):
     if not group:
         incomplete.append("conventions.package_root")
     if not is_git:
-        incomplete.append("project.is_git (нужен git init для фаз 6 и pipeline-state)")
-    for k in ("jira.enabled", "bitbucket.enabled"):
-        incomplete.append(k)
+        incomplete.append("project.is_git (нужен git для чекпойнтов rollback и pipeline-state)")
+    incomplete.append("jira.enabled")
     cfg["_incomplete"] = incomplete
     return cfg
 

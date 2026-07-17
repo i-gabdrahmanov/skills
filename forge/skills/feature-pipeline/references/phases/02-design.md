@@ -87,9 +87,8 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py design 
 - Если на гейте всплыло **новое бизнес-требование** → откат к фазе 0 (BRD).
 
 После «да»: добавь в манифест шаги `02-eval-plan` (Eval-Driven),
-`04-test-<taskId>` (RED, при `quality.tdd:true`),
-`04-build-<taskId>` (depends_on `04-test-<taskId>` и `02-eval-plan`) и
-`07-deliver-<taskId>` по `task-plan.tasks` скриптом
+`04-test-<taskId>` (RED, при `quality.tdd:true`) и
+`04-build-<taskId>` (depends_on `04-test-<taskId>` и `02-eval-plan`) по `task-plan.tasks` скриптом
 `<project>/.gigacode/skills/feature-pipeline/scripts/add_steps.py --skill feature-pipeline
 --feature <slug> --steps '<...>'`
 (идемпотентно, манифест руками не правь). **Используй именно версию из
@@ -99,8 +98,8 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py design 
 обновляет лишь при его наличии — для новой фичи этого недостаточно.**
 
 > **🚨 Сохраняй регистр task-id из task-plan в id шагов.** Если задача в `task-plan.json` —
-> `T1`, то шаги должны быть `04-test-T1`, `04-build-T1`, `07-deliver-T1` (а не `...-t1`).
-> Иначе гейты (`check_delivery.py` и др.) не сопоставят шаг с задачей. Деттерминированные
+> `T1`, то шаги должны быть `04-test-T1`, `04-build-T1` (а не `...-t1`).
+> Иначе гейты не сопоставят шаг с задачей. Детерминированные
 > гейты сопоставляют суффикс регистронезависимо как страховку, но не полагайся на это —
 > пиши id ровно как task-id.
 

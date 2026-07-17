@@ -394,39 +394,6 @@ class TestFeatureTestClasses(unittest.TestCase):
         self.assertIn("*RootTest", res[None])
 
 
-# ---------------------------------------------------------------------------
-# P5: case-insensitive сопоставление task-id в check_delivery
-# ---------------------------------------------------------------------------
-
-class TestCheckDeliveryCaseInsensitive(unittest.TestCase):
-
-    def setUp(self):
-        self._t = tempfile.TemporaryDirectory()
-        self.tmp = Path(self._t.name)
-
-    def tearDown(self):
-        self._t.cleanup()
-
-    def _run(self, plan, manifest):
-        pf = self.tmp / "task-plan.json"
-        pf.write_text(json.dumps(plan), encoding="utf-8")
-        mf = self.tmp / "manifest.json"
-        mf.write_text(json.dumps(manifest), encoding="utf-8")
-        return _run([SCRIPTS / "check_delivery.py", pf, "--manifest", mf, "--json"])
-
-    def test_lowercase_step_matches_uppercase_task(self):
-        """Шаг 07-deliver-t1 (lowercase) сопоставляется задаче T1 → PASS."""
-        r = self._run({"tasks": [{"id": "T1"}]},
-                      {"steps": [{"id": "07-deliver-t1", "status": "completed"}]})
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_missing_step_still_fails(self):
-        """Нет deliver-шага вовсе → FAIL (фикс не ослабляет гейт)."""
-        r = self._run({"tasks": [{"id": "T1"}]},
-                      {"steps": [{"id": "04-build-T1", "status": "completed"}]})
-        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
-
-
 def _run(cmd: list):
     import subprocess
     return subprocess.run([sys.executable, *map(str, cmd)], capture_output=True, text=True)

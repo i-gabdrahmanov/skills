@@ -17,11 +17,11 @@ import pipeline_phases as pp
 
 class TestIsContainerStep(unittest.TestCase):
     def test_main_phase_ids_are_containers(self):
-        for pid in ("04-tdd", "05-verify", "06-document", "07-deliver", "00-brd"):
+        for pid in ("04-tdd", "05-verify", "06-document", "00-brd"):
             self.assertTrue(pp.is_container_step(pid), pid)
 
     def test_dynamic_steps_are_not_containers(self):
-        for sid in ("04-test-T1", "04-build-T1", "07-deliver-T1", "02-sdd-foo"):
+        for sid in ("04-test-T1", "04-build-T1", "02-sdd-foo"):
             self.assertFalse(pp.is_container_step(sid), sid)
 
 

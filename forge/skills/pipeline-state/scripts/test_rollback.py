@@ -49,7 +49,7 @@ def _steps() -> list[dict]:
         {"id": "04-test-T1", "status": "completed", "depends_on": ["02-design"]},
         {"id": "04-build-T1", "status": "completed", "depends_on": ["04-test-T1"],
          "failures": 1},
-        {"id": "07-report", "status": "pending", "depends_on": []},
+        {"id": "06-spec", "status": "pending", "depends_on": []},
     ]
 
 
@@ -148,7 +148,7 @@ class TStateSurgery(unittest.TestCase):
         self.assertIsNone(_step(self.tmp, "04-test-T1"))
         self.assertIsNone(_step(self.tmp, "04-build-T1"))
         # container/main-шаги остаются
-        self.assertIsNotNone(_step(self.tmp, "07-report"))
+        self.assertIsNotNone(_step(self.tmp, "06-spec"))
         hist = _manifest(self.tmp)["rollback_history"][0]
         self.assertEqual({s["id"] for s in hist["dynamic_removed"]},
                          {"04-test-T1", "04-build-T1"})

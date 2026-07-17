@@ -57,10 +57,8 @@
   },
 
   "command_risk": {
-    "_comment": "Риск по shell-команде (если путь не дал класс выше).",
-    "R2": ["\\bgit\\s+commit\\b"],
-    "R3": ["\\bacli\\b.*\\bcreate\\b", "\\bjira\\b.*\\bcreate\\b", "rest/api/\\d+/issue\\b"],
-    "R4": ["\\bgit\\s+push\\b", "\\bpull[-_ ]?request\\b", "\\bpullrequests\\b", "\\bacli\\b.*\\bpr\\b"]
+    "_comment": "Риск по shell-команде (если путь не дал класс выше). git commit/push/PR НЕ классифицируются: доставку делает пользователь сам (промптом или руками), пайплайн git-команды не гейтит.",
+    "R3": ["\\bacli\\b.*\\bcreate\\b", "\\bjira\\b.*\\bcreate\\b", "rest/api/\\d+/issue\\b"]
   },
 
   "gate_override": {
@@ -77,31 +75,19 @@
     "approval_prefix": "rollback"
   },
 
-  "doc_review": {
-    "_comment": "Доставка дока (brd|sdd) на ветку задачи docs/<slug> на согласование аналитикам (doc_review_push.py, Гейт доставки фаз 00-brd/02-sdd feature-pipeline; у каждой Jira-задачи своя ветка, общая для её BRD и SDD, база — default-ветка) — R4-класс, deny-first. Запуск требует approval-маркера ground/approvals/<doc>-review-<slug>.json (record_approval ТОЛЬКО после явного «да» пользователя на Гейте доставки; после пуша — ПАУЗА: update.py не закроет шаг фазы без маркера утверждения <doc>-approved-<slug>). --status (ридонли-отчёт) свободен. Паттерн покрывает и легаси sdd_review_push.py (деплой не удаляет убранные файлы). Скрипт сам ограничен по построению: коммитит ТОЛЬКО <doc>.md фичи на docs/<slug> в origin, push без force, worktree/локальные ветки не трогает; сырые git commit/push в доко-фазах по-прежнему блокирует sod-enforcer без исключений.",
-    "command_pattern": "(?:doc|sdd)_review_push\\.py",
-    "readonly_arg_flags": ["--status"]
-  },
-
-  "branch_protection": {
-    "_comment": "Интеграционная ветка фичи feature/<slug> (slug активной фичи feature-pipeline) собирается ТОЛЬКО мерджем PR сабветок задач (feature/<jira-key-подзадачи> | feature/<slug>-<taskId>): прямые commit/merge/rebase/cherry-pick/revert НА ней и любой push В неё gate-guard блокирует deny-first (включая push --all/--mirror и bare push с неё). Создание ветки — санкционированный story_branch_push.py (пушит default-tip на новое имя, коммитов не создаёт, существующую ветку не двигает). Скоуп по skills: forgelite не входит — там feature/<KEY> сама является веткой задачи. Дефолты зашиты в код gate-guard.",
-    "branch_template": "feature/{slug}",
-    "skills": ["feature-pipeline"]
-  },
-
   "required_decisions": {
     "_comment": "Fail-closed решения: активная фаза (по префиксу id шага) требует записанных решений — dot-path ключей pipeline.json. Пустое значение → gate-guard блокирует ПРОДУКТИВНУЮ запись (Write/Edit) этой фазы. Интерактивно заполняет ask_user_question + config.py set; headless — предзапись ДО прогона. Универсально для обоих режимов.",
     "lite-design": ["sources.spec"]
   },
 
   "level_requirements": {
-    "_comment": "Что должно быть выполнено, чтобы действие уровня прошло. step = completed-шаг manifest; approval = файл ground/approvals/<key>.json; evidence = ground/evidence/* >= порога. ВАЖНО: evidence требуется ТОЛЬКО на доставке (R4/R5) — на R2/R3 (запись кода/чувствительных путей) его нет, т.к. бандл собирается ПОСЛЕ билда (иначе дедлок medium/high критичности). Доставочный evidence дополнительно форсит evidence-enforcer на push/PR/report. SoD форсит sod-enforcer (не ключи политики); audit — лог-агент.",
+    "_comment": "Что должно быть выполнено, чтобы действие уровня прошло. step = completed-шаг manifest; approval = файл ground/approvals/<key>.json. Доставки (commit/push/PR) в пайплайне нет — её делает пользователь сам, поэтому evidence-требований и commit/push_needs больше нет. SoD форсит sod-enforcer (не ключи политики); audit — лог-агент.",
     "R0": {"mode": "auto"},
     "R1": {"mode": "auto_log"},
-    "R2": {"mode": "require", "steps": ["02-design"], "commit_needs": ["05-tests"], "push_needs": ["05-tests", "06-spec"]},
+    "R2": {"mode": "require", "steps": ["02-design"]},
     "R3": {"mode": "require", "steps": ["02-design"], "approval": "security-review"},
-    "R4": {"mode": "require", "approval": "human-approval", "evidence": true},
-    "R5": {"mode": "require", "approval": "change-advisory", "evidence": true}
+    "R4": {"mode": "require", "approval": "human-approval"},
+    "R5": {"mode": "require", "approval": "change-advisory"}
   },
 
   "agent_caps": {

@@ -63,9 +63,9 @@ def main():
         check("get coverage = 0.8", rc == 0 and json.loads(out)["value"] == 0.8, out)
 
         # get дефолт (нет в файле)
-        rc, out, _ = run(project, "get", "delivery.branch_prefix")
+        rc, out, _ = run(project, "get", "docs.feature_subdir")
         d = json.loads(out)
-        check("get дефолт source=default", rc == 0 and d["source"] == "default" and d["value"] == "feature/", out)
+        check("get дефолт source=default", rc == 0 and d["source"] == "default" and d["value"] == "feature-pipeline", out)
 
         # dry-run не пишет
         rc, out, _ = run(project, "set", "quality.coverage_threshold", "0.9", "--dry-run")
@@ -102,7 +102,7 @@ def main():
         # gates: файла нет → создаётся с дефолтами
         rc, out, _ = run(project, "set", "tdd_enforced", "false")
         gates = json.loads((project / "ground" / "feature-gates.json").read_text(encoding="utf-8"))
-        check("gates создан с дефолтами", rc == 0 and "_meta" in gates and len(gates["gates"]) == 9, out)
+        check("gates создан с дефолтами", rc == 0 and "_meta" in gates and len(gates["gates"]) == 7, out)
         check("gates tdd_enforced=false", gates["gates"]["tdd_enforced"]["enabled"] is False, out)
         check("gates прочий дефолт сохранён", gates["gates"]["eval_driven_dev"]["enabled"] is True)
 
@@ -171,8 +171,8 @@ def main():
         # ── пин B2: set чистит маркер _incomplete (гейт арминга preflight §0.1) ──
         cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         cfg["_incomplete"] = ["project.build_system", "conventions.package_root",
-                              "jira.enabled", "bitbucket.enabled",
-                              "project.is_git (нужен git init для фаз 6 и pipeline-state)"]
+                              "jira.enabled", "quality.tdd",
+                              "project.is_git (нужен git init для чекпойнтов rollback и pipeline-state)"]
         (project / "ground" / "pipeline.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
         run(project, "set", "project.build_system", "gradle")
         run(project, "set", "conventions.package_root", "com.acme.app")
@@ -180,12 +180,12 @@ def main():
         cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         check("set снимает отвеченные поля из _incomplete (false — валидный ответ)",
               rc == 0 and cfg.get("_incomplete") == [
-                  "bitbucket.enabled",
-                  "project.is_git (нужен git init для фаз 6 и pipeline-state)"], str(cfg.get("_incomplete")))
-        run(project, "set", "bitbucket.enabled", "false")
+                  "quality.tdd",
+                  "project.is_git (нужен git init для чекпойнтов rollback и pipeline-state)"], str(cfg.get("_incomplete")))
+        run(project, "set", "quality.tdd", "false")
         cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         check("запись с пояснением в скобках не снимается чужим set",
-              cfg.get("_incomplete") == ["project.is_git (нужен git init для фаз 6 и pipeline-state)"],
+              cfg.get("_incomplete") == ["project.is_git (нужен git init для чекпойнтов rollback и pipeline-state)"],
               str(cfg.get("_incomplete")))
         cfg["_incomplete"] = ["jira.enabled"]
         (project / "ground" / "pipeline.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -1,15 +1,16 @@
 ---
 name: feature-pipeline
 description: >
-  End-to-end рабочий процесс для реализации НОВОЙ ФИЧИ от бизнес-анализа до pull request
-  в Bitbucket: собрать BRD (интервью или из идеи/Jira), спроектировать решение, завести
-  задачи в Jira, написать код по слоям, довести тесты до покрытия, обновить спецификацию,
-  и аккуратно создать stacked-PR по задачам с отчётом в Jira. Это «старший брат»
+  End-to-end рабочий процесс для реализации НОВОЙ ФИЧИ от бизнес-анализа до
+  верифицированного артефакта: собрать BRD (интервью или из идеи/Jira), спроектировать
+  решение, завести задачи в Jira, написать код по слоям (TDD), довести тесты до покрытия,
+  обновить спецификацию. Коммиты, push, PR и отчёты в Jira пайплайн НЕ делает — их
+  выполняет пользователь сам (промптом или руками) после завершения. Это «старший брат»
   minor-defect-fix: тот — для минорного дефекта, этот — для фичи с нуля. Используй когда
-  пользователь говорит "сделай фичу X", "проведи фичу от анализа до PR", "запусти feature
-  pipeline", "реализуй фичу end-to-end", или описывает идею продукта и хочет довести её
-  до кода и PR. Скилл автономен между гейтами, но никогда не делает необратимое (создание
-  задач, коммит, push, PR, отчёт в Jira) без явного подтверждения.
+  пользователь говорит "сделай фичу X", "запусти feature pipeline", "реализуй фичу
+  end-to-end", или описывает идею продукта и хочет довести её до готового кода. Скилл
+  автономен между гейтами, но никогда не делает необратимое (создание задач в Jira)
+  без явного подтверждения.
 ---
 
 # Feature Pipeline
@@ -20,7 +21,8 @@ description: >
 > Не используй `~/.gigacode/...` — читай из конфига.
 
 Скилл ведёт фичу по циклу: **идея/Jira → BRD → контекст системы → SDD (спецификация) →
-тех-дизайн → задачи в Jira → код → тесты → спека → stacked-PR → отчёт**.
+тех-дизайн → задачи в Jira → код → тесты → спека**. На этом пайплайн заканчивается:
+коммиты/push/PR/отчёты делает пользователь сам, когда сочтёт артефакт готовым.
 
 ## ⚠️ ЖЕЛЕЗОБЕТОННОЕ ПРАВИЛО: СУБАГЕНТЫ ОБЯЗАТЕЛЬНЫ
 
@@ -96,8 +98,8 @@ python3 <project>/.gigacode/hooks/preflight.py --project .
 > (шторм override на прогоне №3). Сначала PASS — потом субагенты.
 
 - Текущая директория — корень репо кода (Java/Spring, Gradle/Maven).
-- Подключены MCP **Atlassian (Jira)** и **Bitbucket** — для фаз 2.5 и 6. Если их нет,
-  пайплайн всё равно идёт в режиме «без Jira / до коммита» (см. гейты).
+- Подключён MCP **Atlassian (Jira)** — для фазы 2.5 (и чтения входного issue). Если его
+  нет, пайплайн идёт в режиме «без Jira».
 - Доступен скилл **`pipeline-state`** — без него нельзя резюмировать после обрыва (§0.5).
 - Вложенные скиллы фаз: `brd-interview`/`business-requirements`, `system-analyst`,
   `tech-design`, `jira-task-writer`, `java-spring-dev`.
@@ -148,14 +150,14 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/resolve_phases.py \
    ```
    Скрипт авто-детектит build-систему, модули, пакет, версии, инструмент миграций и кладёт
    незаполняемое в `_incomplete`.
-3. **Пройди по `_incomplete`** — спроси у пользователя ровно эти поля (Jira-ключ, Bitbucket
-   workspace/repo, инструмент миграций, нужен ли `git init`) и впиши в файл.
+3. **Пройди по `_incomplete`** — спроси у пользователя ровно эти поля (Jira-ключ,
+   инструмент миграций, нужен ли `git init`) и впиши в файл.
 4. Дальше бери из конфига: `docs.*` (расположение артефактов, см. ниже),
-   `quality.coverage_threshold`, `conventions.migration_tool`, `delivery.pr_strategy`,
+   `quality.coverage_threshold`, `conventions.migration_tool`,
    `project.default_branch`, `autonomy.*`. Не хардкодь эти значения в шагах — читай из конфига.
 
-Если `project.is_git=false`, а пользователь хочет дойти до PR — предложи `git init` до фазы 6
-(иначе ветки/stacked-PR и ключ `pipeline-state` не работают).
+Если `project.is_git=false` — предложи `git init` (иначе не работают git-чекпойнты
+rollback и журнал файлов).
 
 5. **Перезапусти preflight — гейт арминга.** Как только `_incomplete` пуст, **повторно** прогони
    `python3 <project>/.gigacode/hooks/preflight.py --project .` и убедись в **exit 0**. Это
@@ -261,12 +263,11 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
 | `04-build-<taskId>` | TDD GREEN: код зеленит тесты задачи | `04-test-<taskId>`, `02-eval-plan` |
 | `05-tests` | Полный прогон + coverage | все `04-build-*` |
 | `06-spec` | Spec updated | `05-tests` |
-| `07-deliver-<taskId>` | Ветка+коммит+stacked PR задачи | `05-tests`, `06-spec` |
-| `07-report` | Отчёт в Story | все `07-deliver-*` |
 
-`04-test-*`, `04-build-*` и `07-deliver-*` добавляются после фазы 2 через
+`04-test-*` и `04-build-*` добавляются после фазы 2 через
 `feature-pipeline/scripts/add_steps.py` (см. бриф `references/phases/02-design.md`),
 когда известна разбивка задач. (При `quality.tdd: false` шаг `04-test-*` опускается.)
+`06-spec` — финальный шаг: доставку (commit/push/PR/отчёт) делает пользователь сам.
 
 > `--context` поля `feature` (slug/Jira-ключ) и `iteration` — по ним хук `agent-logger`
 > группирует живые логи в `ground/ai-logs/<feature>/iter-NN/`.
@@ -280,7 +281,7 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
 
 ### 0.6 Правило ре-итерации (режим исправления после judge FAIL)
 
-Если любой judge (brd/eval/red/build/reuse/spec/delivery) вернул FAIL — **НЕ прави артефакты inline**
+Если любой judge (brd/eval/red/build/reuse/spec) вернул FAIL — **НЕ прави артефакты inline**
 в основном агенте. Используй **perpetual error store**:
 
 **Файл:** `ground/statements/feature-pipeline/<slug>/judges/errors.json`
@@ -339,7 +340,7 @@ R4, `gate-guard` требует approval-маркер `gate-override-step-reopen
 Иногда судья падает по причине, которую **нельзя устранить правкой артефактов**: нет тестовой
 БД в окружении, внешний сервис недоступен, acceptance намеренно ослаблен по согласованию.
 Тогда пользователь может разрешить пропуск гейта. Это работает для **любого** судьи на
-**любом уровне** (brd/eval/red/build/reuse/coverage/spec/delivery).
+**любом уровне** (brd/eval/red/build/reuse/coverage/spec).
 
 **Когда применять:** только после исчерпания 3 ре-итераций (§0.6) и **только с явного
 согласия пользователя**. Не предлагай override на первом FAIL — сначала чини.
@@ -388,7 +389,7 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/override_judge.py --ju
 X и всё после → pending, evidence в архив, код — на git-чекпойнт предыдущего шага по скоупу
 журнала изменённых файлов). Откат — **R4-гейт**: сначала `--dry-run`, покажи план, дождись
 явного «да», зафиксируй `record_approval --key rollback-<slug>-<X>`, потом откат; дальше —
-обычный resume (§0.5). Jira-задачи и запушенные ветки/PR откат НЕ трогает — печатает сирот.
+обычный resume (§0.5). Jira-задачи откат НЕ трогает — печатает сирот.
 Полный порядок и ограничения: `references/rollback.md`.
 
 ## 1. Архитектура: кто что делает
@@ -403,9 +404,8 @@ X и всё после → pending, evidence в архив, код — на git-
 | 2 Design (вход — `sdd.md`) | `tech-design` | вложенный скилл/субагент | **Гейт 2** |
 | 2.5 Jira | `jira-task-writer` | субагент general-purpose (контракт §4.5) | **Гейт 3** |
 | 3 Build (per task) | `java-spring-dev` + changeset | вложенный скилл | — |
-| 4 Verify | тестописатель + тестраннер | субагенты general-purpose | — |
-| 5 Document | спецадаптер | субагент general-purpose | — |
-| 6 Deliver (per task, stacked) | главный агент | Bitbucket/Jira MCP | **Гейты 4-6** |
+| 4 Verify | `test-writer` (тестописатель) + тестраннер | субагенты general-purpose | — |
+| 5 Document | спецадаптер | субагент general-purpose | — (финал пайплайна) |
 
 **Вложенный скилл vs субагент:** скилл загружается в контекст главного агента (тесная
 интеракция, может задать вопрос); субагент работает изолированно и возвращает JSON
@@ -432,15 +432,14 @@ X и всё после → pending, evidence в архив, код — на git-
 > (большой единый контекст чаще ловит обрыв стрима). Если `agent` реально недоступен в рантайме —
 > выполни inline, но ЯВНО отметь это в логе/ответе как деградацию.
 
-**Два типа гейтов.** «Гейт 1-6» — точки подтверждения пользователем (необратимое не
+**Два типа гейтов.** «Гейт 1-3» — точки подтверждения пользователем (необратимое не
 делается без «да»). Отдельно у каждой фазы есть **детерминированный execution-gate**
 (Python), который проверяет, что фаза реально отработала, ДО закрытия её шага в
 pipeline-state: sdd→`check_sdd_doc.py`, design→`check_taskplan.py`+`check_sdd.py`, eval-plan→`build_evals_from_design.py`
 (сама генерация, без gate — ошибка только если скрипт упал),
 jira→`check_jira.py`, build→`check_build.py` (с дополнительным
 **хуком `eval-guard`**, который проверяет прохождение eval'ов в рантайме),
-tests→`check_coverage.py`, document→`enrich_grounding.py` (инкрементально),
-deliver→`check_delivery.py`. Шаг не
+tests→`check_coverage.py`, document→`enrich_grounding.py` (инкрементально). Шаг не
 закрывается, пока execution-gate не вернул `pass` (exit 0) — это ловит молчаливый
 недосчёт/провал (как `verify_coverage.py` в grounding).
 
@@ -492,8 +491,7 @@ deliver→`check_delivery.py`. Шаг не
 | 03-jira | `references/phases/03-jira.md` | Гейт 3 + check_jira |
 | 04-tdd | `references/phases/04-tdd.md` | red/build/reuse-judge + record_gate per-task |
 | 05-verify | `references/phases/05-verify.md` | coverage+regression+arch + record_gate |
-| 06-document | `references/phases/06-document.md` | spec-judge + enrich_grounding |
-| 07-deliver | `references/phases/07-deliver.md` | Гейты 4-6 + delivery-judge |
+| 06-document | `references/phases/06-document.md` | spec-judge + enrich_grounding (финал) |
 
 ---
 
@@ -503,8 +501,6 @@ deliver→`check_delivery.py`. Шаг не
 |---|---|---|
 | Прочитать Jira issue (вход) | 2 | `*jira*get*issue*`, `*atlassian*issue*` |
 | Создать Story/Sub-task | 2.5 | `*create*issue*` (через `jira-task-writer`) |
-| Добавить комментарий | 6 | `*jira*add*comment*` |
-| Создать PR | 6 | `*bitbucket*create*pull*request*` |
 
 Точные имена зависят от сервера — **не угадывай**, проверь список доступных инструментов.
 
@@ -517,8 +513,7 @@ deliver→`check_delivery.py`. Шаг не
   потом пометь шаг `failed` (`update.py --status failed --error ...`), **остановись и спроси** пользователя
   (что делать: снизить порог, помочь руками, отложить задачу). Не обходи гейт правкой порога молча.
 - покрытие недостижимо без инфраструктуры — зафиксируй как ограничение, не выдумывай фейковые тесты.
-- **никогда** `git push --force` / `git reset --hard` / правка манифеста руками, чтобы «протолкнуть».
-- частичная доставка допустима только явно с пользователем (какие задачи доставляем, какие — нет).
+- **никогда** `git reset --hard` / правка манифеста руками, чтобы «протолкнуть».
 
 **Гигиена контекста (против обрывов стрима).** Главный контекст не должен пухнуть:
 - тяжёлый вывод (gradle/JaCoCo/сканы) — в **субагентах**, не в главном; передавай контракт, не историю.
@@ -583,22 +578,27 @@ headless `-p` или форк не рендерит диалог) — повто
 
 ## Что НЕ делать
 
-- Не проскакивать гейты «молча» — создание задач, коммит, push, PR, отчёт требуют «да».
+- Не проскакивать гейты «молча» — создание задач в Jira требует «да».
+- **Не коммитить, не пушить, не создавать PR и не постить отчёты** — доставку делает
+  пользователь сам (промптом или руками) после завершения пайплайна.
 - Не вести несколько фич одним прогоном — один прогон = одна фича.
 - Не передавать субагентам всю историю — только контракт фазы.
 - Не писать спеку в репо кода и код в репо спеки (спецадаптер работает в `docs_path`).
-- Не использовать `git push --force`, `git reset --hard` для обхода проблемы.
+- Не использовать `git reset --hard` для обхода проблемы.
 - Не запускать `system-analyst` на каждом прогоне — переиспользуй обзор.
 - Не раздувать код сверх `task-plan` (лишние слои, абстракции, логирование).
-- Не создавать Jira-задачи до Гейта 3 и не пушить до Гейта 5.
+- Не создавать Jira-задачи до Гейта 3.
 
 ---
 
 ## Ссылки
 
-- `references/{contracts.md,subagent-prompts.md,evidence-bundle.md,stacked-pr-delivery.md,migrations.md,config.md}` — дизайн, контракты и референсы пайплайна.
+- `references/{contracts.md,subagent-prompts.md,migrations.md,config.md}` — дизайн, контракты и референсы пайплайна.
 - `references/subagent-prompts.md` — промпты тестописателя, тестраннера, спецадаптера и судей.
   Достаём по одной секции через `scripts/get_prompt.py <§>` (не читаем файл целиком).
-- `references/stacked-pr-delivery.md` — механика веток и stacked-PR (фаза 6).
+- Тестописатель (контракты §4.1 RED / §4.4 GREEN) читает скилл
+  `read_file("<project>/.gigacode/skills/test-writer/SKILL.md")` — правила RED/GREEN и конвенции
+  тестовой базы (кэш `scan/test-conventions.json` собирает его `analyze_tests.py --if-missing`
+  при первом запуске; путь — `skills.test-writer.scripts.analyze_tests` в skill-paths.json).
 - `references/migrations.md` — Liquibase changeset и случай отсутствия миграций.
-- `../minor-defect-fix/references/` — общие jira/bitbucket/coverage воркфлоу.
+- `../minor-defect-fix/references/` — общие jira/coverage воркфлоу.

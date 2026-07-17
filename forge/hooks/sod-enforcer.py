@@ -3,7 +3,8 @@
 
 Блокирует действия, не соответствующие роли текущей фазы пайплайна, на основе ROLE_POLICY.
 Если активна фаза тестов (04-test), а цель — src/main/ — BLOCK. Если активна фаза дизайна, а
-команда — git push/commit/build — BLOCK.
+команда — build — BLOCK. Git-команды (commit/push) хук НЕ гейтит: доставку делает пользователь
+сам (промптом или руками), пайплайн заканчивается верифицированным артефактом.
 
 **Роль определяется по АКТИВНОМУ шагу манифеста** (in_progress), а не по tool_input: на Write/Edit
 в tool_input нет ни role, ни prompt субагента (все субагенты — general-purpose), поэтому прежняя
@@ -41,7 +42,7 @@ ROLE_POLICY = {
     "test": {
         "allowed_paths": ["src/test/"],
         "blocked_paths": ["src/main/"],
-        "blocked_commands": [r"\bgit\s+push\b", r"\bgit\s+commit\b"],
+        "blocked_commands": [],
         "blocked_content_patterns": [
             r"(?i)throw\s+new\s+(UnsupportedOperationException|RuntimeException)\s*\(\s*\"(not\s+implemented|stub)",
         ],
@@ -50,8 +51,6 @@ ROLE_POLICY = {
         "allowed_paths": ["docs/", "ground/"],
         "blocked_paths": ["src/"],
         "blocked_commands": [
-            r"\bgit\s+push\b",
-            r"\bgit\s+commit\b",
             BUILD_CMD_RE,
         ],
         "blocked_content_patterns": [],
@@ -60,8 +59,6 @@ ROLE_POLICY = {
         "allowed_paths": [],  # все пути
         "blocked_paths": [],  # нет ограничений по путям
         "blocked_commands": [
-            r"\bgit\s+push\b",
-            r"\bgit\s+commit\b",
             BUILD_CMD_RE,
             r"\bjira\b.*\bcreate\b",
             r"\bacli\b.*\bcreate\b",
@@ -72,7 +69,6 @@ ROLE_POLICY = {
         "allowed_paths": [],  # все пути
         "blocked_paths": [],
         "blocked_commands": [
-            r"\bgit\s+push\b",
             r"\bjira\b.*\bcreate\b",
         ],
         "blocked_content_patterns": [],
@@ -82,15 +78,13 @@ ROLE_POLICY = {
         "blocked_paths": ["src/"],
         "blocked_commands": [
             BUILD_CMD_RE,
-            r"\bgit\s+push\b",
-            r"\bgit\s+commit\b",
         ],
         "blocked_content_patterns": [],
     },
 }
 
 # Префикс id шага → роль фазы. Длинный префикс выигрывает. Фазы без ограничений SoD
-# (00-brd / 01-grounding / 07-deliver) сюда не входят → роль None → fail-open.
+# (00-brd / 01-grounding) сюда не входят → роль None → fail-open.
 STEP_ROLE = {
     "02-sdd": "spec",
     "02-eval-plan": "design",
@@ -152,11 +146,7 @@ def _target_path(tool_name: str, tool_input: dict) -> str:
 
 
 def _detect_command_from_bash(command: str) -> str | None:
-    """Извлекает команду уровня git/gradle/jira из shell-команды."""
-    if re.search(r"\bgit\s+push\b", command):
-        return "git push"
-    if re.search(r"\bgit\s+commit\b", command):
-        return "git commit"
+    """Извлекает команду уровня gradle/jira из shell-команды (git не гейтим)."""
     if re.search(BUILD_CMD_RE, command):
         return "build"
     if re.search(r"\bjira\b", command):
@@ -195,9 +185,6 @@ def main() -> int:
     # 2. Проверка по blocked_commands (только для Bash)
     if tool_name in ("Bash", "run_shell_command"):
         cmd = tool_input.get("command", "")
-        # `git -C <p> commit`/`git -c k=v push` обходили бы роль-блок (детект по git\s+push|commit).
-        if _R is not None:
-            cmd = _R.normalize_git_command(cmd)
         detected_cmd = _detect_command_from_bash(cmd)
         if detected_cmd:
             for pattern in policy.get("blocked_commands", []):

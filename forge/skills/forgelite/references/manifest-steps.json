@@ -4,7 +4,5 @@
   {"id": "lite-design",  "title": "Tech-design по существующей спеке (source of truth)", "depends_on": ["lite-jira", "lite-ground"]},
   {"id": "lite-red",     "title": "TDD RED: тесты компилируются и падают",              "depends_on": ["lite-design"]},
   {"id": "lite-green",   "title": "TDD GREEN: код зеленит тесты",                       "depends_on": ["lite-red"]},
-  {"id": "lite-verify",  "title": "Полный прогон + покрытие >= 80%",                    "depends_on": ["lite-green"]},
-  {"id": "lite-deliver", "title": "Ветка + commit + push + PR (Gate 2/3)",             "depends_on": ["lite-verify"]},
-  {"id": "lite-report",  "title": "Отчёт-комментарий в Jira (Gate 4)",                 "depends_on": ["lite-deliver"]}
+  {"id": "lite-verify",  "title": "Полный прогон + покрытие >= 80%",                    "depends_on": ["lite-green"]}
 ]

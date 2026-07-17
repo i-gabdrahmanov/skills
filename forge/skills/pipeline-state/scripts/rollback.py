@@ -7,10 +7,9 @@
 код восстанавливается на git-чекпойнт последнего ОСТАЮЩЕГОСЯ completed-шага
 (fallback-цепочка назад до 00-baseline), точечным `git restore --source=<ref>` по скоупу
 журнала file-journal (ручные правки человека вне пайплайна не затираются). Динамические
-шаги (04-test-*/04-build-*/07-deliver-*) при откате фазы дизайна удаляются из манифеста
-(add_steps.py пересоздаст по новому task-plan). Jira-задачи и запушенные ветки/PR НЕ
-трогаются — печатается список сирот и черновик комментария в Story (политика
-stacked-pr-delivery: уборку решает человек).
+шаги (04-test-*/04-build-*) при откате фазы дизайна удаляются из манифеста
+(add_steps.py пересоздаст по новому task-plan). Jira-задачи НЕ трогаются — печатается
+список сирот и черновик комментария в Story (уборку решает человек).
 
 Откат — R4-класс (уничтожает рабочие результаты): gate-guard пропускает запуск только при
 approval-маркере ground/approvals/rollback-<feature>-<to-step>.json (record_approval после
@@ -42,11 +41,11 @@ from phase_sync import sync_gate_from_manifest
 import checkpoint
 
 # Динамические шаги / фазы — единый источник pipeline_phases (best-effort, как в update.py).
-_DYNAMIC_PREFIXES = ("04-test-", "04-build-", "07-deliver-")
+_DYNAMIC_PREFIXES = ("04-test-", "04-build-")
 try:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1].parent / "feature-pipeline" / "scripts"))
     import pipeline_phases as _pp
-    _DYNAMIC_PREFIXES = (_pp.TEST_STEP_PREFIX, _pp.BUILD_STEP_PREFIX, _pp.DELIVER_STEP_PREFIX)
+    _DYNAMIC_PREFIXES = (_pp.TEST_STEP_PREFIX, _pp.BUILD_STEP_PREFIX)
     _guess_phase = _pp.guess_phase
 except Exception:
     _pp = None
@@ -56,7 +55,6 @@ except Exception:
             "00-": "00-brd", "01-": "01-grounding", "02-sdd": "02-sdd",
             "02-eval-plan": "02-eval-plan", "02-": "02-design", "03-": "03-jira",
             "04-": "04-tdd", "05-": "05-verify", "06-": "06-document",
-            "07-deliver-": "07-deliver", "07-report": "07-report", "07-": "07-deliver",
         }
         for prefix, phase in sorted(prefix_phase.items(), key=lambda x: -len(x[0])):
             if isinstance(step_id, str) and step_id.startswith(prefix):
@@ -298,8 +296,8 @@ def archive_evidence(project: Path, skill: str, feature: str, reset_steps: list[
 
 def orphan_report(project: Path, reset_steps: list[dict], feature: str,
                   to_step: str) -> list[str]:
-    """Сироты глубокого отката: Jira-задачи / ветки / PR. Только сообщения — НИЧЕГО не
-    удаляем и не постим (политика stacked-pr-delivery: решает человек)."""
+    """Сироты глубокого отката: Jira-задачи. Только сообщения — НИЧЕГО не
+    удаляем и не постим (решает человек)."""
     lines: list[str] = []
     story_key = None
     for step in reset_steps:
@@ -319,15 +317,6 @@ def orphan_report(project: Path, reset_steps: list[dict], feature: str,
                 lines.append("⚠️  Шаг 03-jira откатывается: созданные Story/сабтаски "
                              "становятся сиротами (jira-tasks-result.json не прочитан) — "
                              "проверь Jira руками.")
-        elif sid.startswith("07-deliver-"):
-            pr = _read_json_relaxed(project, arts.get("pr-info"))
-            if pr:
-                lines.append(f"⚠️  СИРОТЫ доставки {sid}: ветка {pr.get('branch', '?')}, "
-                             f"PR {pr.get('pr_url') or pr.get('url') or '?'} — запушены, "
-                             f"НЕ удаляю. Закрой PR/ветку руками, если не нужны.")
-            else:
-                lines.append(f"⚠️  Шаг {sid} откатывается: запушенные ветки/PR становятся "
-                             f"сиротами — проверь удалённый репозиторий руками.")
     if story_key:
         lines.append(
             f"   Черновик комментария в Story {story_key} (постить или нет — решаешь ты):\n"

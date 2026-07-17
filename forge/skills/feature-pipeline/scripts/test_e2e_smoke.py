@@ -2,13 +2,13 @@
 """test_e2e_smoke.py — сквозной smoke крошечной фичи через РЕАЛЬНЫЕ детерминированные гейты (P3-14).
 
 Самая дешёвая страховка от регрессий «на стыках фаз»: один связный фикстур (pipeline.json +
-task-plan + sdd + сгенерённый eval-plan + продакшн/тест .java + evidence) прогоняется через
+task-plan + sdd + сгенерённый eval-plan + продакшн/тест .java) прогоняется через
 настоящие CLI-гейты. Ловит рассинхрон контрактов между скриптами (формат eval-plan, который ждёт
-traceability; evidence, который ждёт check_evidence; и т.п.) — то, что golden-cycle (статусы шагов)
-не проверяет, т.к. он подкладывает вердикты руками.
+traceability, и т.п.) — то, что golden-cycle (статусы шагов) не проверяет, т.к. он подкладывает
+вердикты руками.
 
 Цепочка: check_taskplan → check_sdd → build_evals → check_traceability → check_architecture →
-check_secrets → check_tautological_tests → build_evidence → check_evidence → delivery_plan.
+check_tautological_tests. (Доставки/evidence в пайплайне больше нет — коммитит пользователь.)
 """
 from __future__ import annotations
 
@@ -124,50 +124,10 @@ class E2ESmoke(unittest.TestCase):
                             "--changed", java, "--pipeline-config", self.pcfg, "--json")
         self.assertEqual(rc, 0, f"check_architecture: {out}{err}")
 
-        # 6. секреты — чисто
-        rc, out, err = _run(S / "check_secrets.py", "--root", self.proj, "--changed", java, "--json")
-        self.assertEqual(rc, 0, f"check_secrets: {out}{err}")
-
-        # 7. тавтологии — тест с реальным ассертом проходит
+        # 6. тавтологии — тест с реальным ассертом проходит
         rc, out, err = _run(S / "check_tautological_tests.py", "--root", self.proj,
                             "--changed", "src/test/java/ru/demo/app/service/FooServiceTest.java", "--json")
         self.assertEqual(rc, 0, f"check_tautological_tests: {out}{err}")
-
-        # 8. evidence: build → check (стык P0-3). Сеем выходы шагов с зелёными гейтами.
-        sd = self.proj / "ground" / "statements" / "feature-pipeline" / self.feat
-        _w(sd / "04-build-T1.json", json.dumps({"status": "pass", "gate": "pass"}))
-        _w(sd / "05-tests.json", json.dumps({"tests": 1, "coverage": 0.85, "gate": "pass"}))
-        for tid in ("T1", "T2"):
-            _w(sd / f"04-build-{tid}.json", json.dumps({"status": "pass", "gate": "pass"}))
-            rc, out, err = _run(S / "build_evidence.py", self.tp, "--task", tid,
-                                "--root", self.proj, "--feature", self.feat)
-            self.assertEqual(rc, 0, f"build_evidence {tid}: {out}{err}")
-        rc, out, err = _run(S / "check_evidence.py", self.tp, "--root", self.proj,
-                            "--pipeline-config", self.pcfg, "--json")
-        self.assertEqual(rc, 0, f"check_evidence: {out}{err}")
-
-        # 9. идемпотентный план доставки на чистом репо → всё 'create'
-        manifest = sd / "manifest.json"
-        _w(manifest, json.dumps({"context": {"feature": self.feat}, "steps": []}))
-        rc, out, err = _run(S / "delivery_plan.py", self.tp, "--manifest", manifest,
-                            "--root", self.proj, "--no-remote", "--json")
-        self.assertEqual(rc, 0, f"delivery_plan: {out}{err}")
-        dp = json.loads(out)
-        self.assertEqual(dp["summary"]["by_action"]["create"], 2)
-
-    def test_degraded_gate_blocks_delivery_e2e(self):
-        """P0-3 сквозняком: skipped coverage-гейт → degraded в evidence → check_evidence FAIL."""
-        sd = self.proj / "ground" / "statements" / "feature-pipeline" / self.feat
-        _w(sd / "05-tests.json", json.dumps({"tests": 1, "coverage": 0.85, "gate": "skipped"}))
-        _w(sd / "04-build-T1.json", json.dumps({"status": "pass", "gate": "pass"}))
-        rc, out, err = _run(S / "build_evidence.py", self.tp, "--task", "T1",
-                            "--root", self.proj, "--feature", self.feat, "--json")
-        self.assertEqual(rc, 0)
-        bundle = json.loads(out)
-        self.assertIn("coverage", bundle["degraded_gates"])
-        rc, _, _ = _run(S / "check_evidence.py", self.tp, "--root", self.proj,
-                        "--task", "T1", "--pipeline-config", self.pcfg)
-        self.assertEqual(rc, 2, "degraded coverage-гейт обязан заблокировать доставку")
 
 
 if __name__ == "__main__":

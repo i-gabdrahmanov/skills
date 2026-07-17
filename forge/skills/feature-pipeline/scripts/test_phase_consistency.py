@@ -136,7 +136,7 @@ class TestStepIdConventions(unittest.TestCase):
     def test_requires_subagent(self):
         for sid in ("02-sdd", "02-design-x", "04-test-T1", "04-build-T1", "05-tests", "06-spec"):
             self.assertTrue(PP.requires_subagent(sid), sid)
-        for sid in ("00-brd", "01-grounding", "03-jira", "07-deliver-T1", "07-report", None):
+        for sid in ("00-brd", "01-grounding", "03-jira", None):
             self.assertFalse(PP.requires_subagent(sid), sid)
 
     def test_preflight_uses_pp_requires_subagent(self):

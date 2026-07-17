@@ -178,7 +178,7 @@ def check_phase_subagent(manifest: dict, step_id: str) -> bool:
     """Проверяет, что фазы Design/Build/Verify/Document делались через субагента."""
     # Соглашение «какие фазы требуют субагента» — единое, из pipeline_phases.
     if not pp.requires_subagent(step_id):
-        # Шаг не требует субагента (00-brd, 01-grounding, 03-jira, 07-deliver) — пропускаем
+        # Шаг не требует субагента (00-brd, 01-grounding, 03-jira) — пропускаем
         return True
 
     # Ищем шаг в manifest
@@ -256,7 +256,7 @@ def _check_gate_phase(project_root: str, step_id: str, feature: str = "pipeline"
     Правила:
     - Точное совпадение step_id или его фазы с current_phase — разрешено.
     - Префиксное совпадение (например, "04-test-T1" в фазе "04-tdd") — разрешено.
-    - Если current_phase пустая (все фазы завершены) — БЛОКИРУЕМ всё (кроме 07-report).
+    - Если current_phase пустая (все фазы завершены) — БЛОКИРУЕМ всё.
     - Повторный проход той же фазы (она уже completed) — разрешаем, но
       ТОЛЬКО если шаг относится к этой же фазе (не байпас через неё).
     - Во всех остальных случаях — БЛОКИРУЕМ (фаза пропущена).
@@ -277,9 +277,6 @@ def _check_gate_phase(project_root: str, step_id: str, feature: str = "pipeline"
 
     # Все фазы завершены
     if current_phase == "":
-        # Разрешаем только шаги фазы 07-report (финальный отчёт)
-        if expected_phase == "07-report":
-            return True
         print(
             f"preflight-validate: FAIL — все фазы завершены (current_phase=''), "
             f"шаг '{step_id}' (фаза '{expected_phase}') не может быть начат.",

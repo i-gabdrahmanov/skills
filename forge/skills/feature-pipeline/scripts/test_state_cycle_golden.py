@@ -34,20 +34,17 @@ STATIC_STEPS = [
     {"id": "03-jira", "depends_on": ["02-design"]},
     {"id": "05-tests", "depends_on": []},
     {"id": "06-spec", "depends_on": ["05-tests"]},
-    {"id": "07-report", "depends_on": []},
 ]
 DYNAMIC_STEPS = [
     {"id": "04-test-T1", "depends_on": ["02-design"]},
     {"id": "04-build-T1", "depends_on": ["04-test-T1", "02-eval-plan"]},
-    {"id": "07-deliver-T1", "depends_on": ["05-tests", "06-spec"]},
 ]
 # Вердикты, имена которых совпадают с required_judges всех шагов выше.
 JUDGE_VERDICTS = ["brd-judge", "design-judge", "eval-judge", "coverage-judge", "spec-judge",
-                  "red-judge", "build-judge", "reuse-judge", "delivery-judge"]
+                  "red-judge", "build-judge", "reuse-judge"]
 
 UPDATE_ORDER = ["00-brd", "01-grounding", "02-design", "02-eval-plan", "03-jira",
-                "04-test-T1", "04-build-T1", "05-tests", "06-spec",
-                "07-deliver-T1", "07-report"]
+                "04-test-T1", "04-build-T1", "05-tests", "06-spec"]
 
 
 def _run(args, cwd):
@@ -131,9 +128,9 @@ class GoldenStateCycle(unittest.TestCase):
         gate = json.loads((self.proj / "ground/phases" / SLUG / "gate.json").read_text(encoding="utf-8"))
         self.assertEqual(gate["current_phase"], "",
                          f"gate застрял на '{gate['current_phase']}' (P0-2?)")
-        # 6a. фазы в каноническом порядке (динамические 04-tdd/07-deliver не в конце)
+        # 6a. фазы в каноническом порядке (динамическая 04-tdd не в конце)
         main_order = ["00-brd", "01-grounding", "02-design", "02-eval-plan", "03-jira",
-                      "04-tdd", "05-verify", "06-document", "07-deliver", "07-report"]
+                      "04-tdd", "05-verify", "06-document"]
         ids = [p["id"] for p in gate["phases"]]
         self.assertEqual(ids, [m for m in main_order if m in ids],
                          f"фазы не в каноническом порядке: {ids}")

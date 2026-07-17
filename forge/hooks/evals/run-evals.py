@@ -79,27 +79,19 @@ def main() -> int:
                         "tool_input": {"file_path": str(r / "src/test/java/FooTest.java"), "content": "x"}})
         check("R1 правка теста → allow", c == 0)
 
+        # Доставка — на пользователе: git commit/push пайплайн не гейтит.
         rp = make_project(tmp / "pend", tests_status="pending")
         c, _ = run_hook("gate-guard.py", {"cwd": str(rp), "tool_name": "Bash",
                         "tool_input": {"command": "git commit -m x"}})
-        check("R2 commit без 05-tests → deny", c == 2)
-
-        c, _ = run_hook("gate-guard.py", {"cwd": str(r), "tool_name": "Bash",
-                        "tool_input": {"command": "git commit -m x"}})
-        check("R2 commit при tests+evidence → allow", c == 0)
+        check("git commit не гейтится (доставка на пользователе) → allow", c == 0)
 
         c, _ = run_hook("gate-guard.py", {"cwd": str(r), "tool_name": "Bash",
                         "tool_input": {"command": "git push origin HEAD"}})
-        check("R4 push без approval → deny", c == 2)
+        check("git push не гейтится (доставка на пользователе) → allow", c == 0)
 
-        ra = make_project(tmp / "appr", with_approval=True)
-        c, _ = run_hook("gate-guard.py", {"cwd": str(ra), "tool_name": "Bash",
-                        "tool_input": {"command": "git push origin HEAD"}})
-        check("R4 push при approval+evidence → allow", c == 0)
-
-        c, _ = run_hook("gate-guard.py", {"cwd": str(r), "tool_name": "Bash", "agent_type": "test-runner",
-                        "tool_input": {"command": "git commit -m x"}})
-        check("separation of duties: тест-роль commit → deny", c == 2)
+        c, _ = run_hook("gate-guard.py", {"cwd": str(r), "tool_name": "Write", "agent_type": "test-runner",
+                        "tool_input": {"file_path": str(r / "src/main/java/Foo.java"), "content": "x"}})
+        check("separation of duties: тест-роль пишет src/main → deny", c == 2)
 
         c, _ = run_hook("gate-guard.py", {"cwd": str(r), "tool_name": "Bash",
                         "tool_input": {"command": "ls -la"}})
@@ -110,8 +102,8 @@ def main() -> int:
         cfg = json.loads((rnc / "ground" / "pipeline.json").read_text(encoding="utf-8"))
         cfg["autonomy"] = {"auto_max_risk": "R1"}  # criticality НЕ задана
         (rnc / "ground" / "pipeline.json").write_text(json.dumps(cfg), encoding="utf-8")
-        c, out = run_hook("gate-guard.py", {"cwd": str(rnc), "tool_name": "Bash",
-                        "tool_input": {"command": "git commit -m x"}})
+        c, out = run_hook("gate-guard.py", {"cwd": str(rnc), "tool_name": "Write",
+                        "tool_input": {"file_path": str(rnc / "src/main/java/Foo.java"), "content": "x"}})
         check("критичность не выбрана → R2 deny", c == 2 and "критичность" in out)
 
         # H1: запись src/main при high-критичности во время билда (evidence ещё НЕ собран) → allow.

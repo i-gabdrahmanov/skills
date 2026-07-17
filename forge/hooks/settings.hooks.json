@@ -8,7 +8,6 @@
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/pii-boundary.py", "name": "pii-boundary"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/state-write-guard.py", "name": "state-write-guard"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/cost-breaker.py", "name": "cost-breaker"},
-        {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/evidence-enforcer.py", "name": "evidence-enforcer"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/sod-enforcer.py", "name": "sod-enforcer"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/inline-phase-guard.py", "name": "inline-phase-guard"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/gate-guard.py", "name": "gate-guard"},

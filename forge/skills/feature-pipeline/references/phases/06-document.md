@@ -58,4 +58,8 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py \
     --skill feature-pipeline --feature <slug> --step-id 06-spec --status completed
 ```
 
+**Это финальная фаза пайплайна.** Покажи пользователю итог: что изменено (файлы),
+тесты/покрытие, обновлённая спека. Коммиты, push, PR и отчёты в Jira пайплайн НЕ делает —
+их пользователь выполняет сам (промптом или руками), когда сочтёт артефакт готовым.
+
 ---

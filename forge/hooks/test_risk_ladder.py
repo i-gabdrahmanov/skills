@@ -52,14 +52,14 @@ class TestNormalizeGit(unittest.TestCase):
         # -C у самой подкоммандой commit (reuse message) НЕ трогаем — сворачиваем лишь ведущий кластер
         self.assertEqual(mod.normalize_git_command("git commit -C HEAD"), "git commit -C HEAD")
 
-    def test_classify_git_C_push_is_R4(self):
-        # command_risk R4 (`git\s+push`) должен сработать по нормализованной команде
+    def test_classify_git_push_not_escalated(self):
+        # Доставка — на пользователе: git push/commit больше не классифицируются рисковыми
         info = mod.classify("run_shell_command", {"command": "git -C . push origin main"}, ".")
-        self.assertEqual(info["level"], "R4")
+        self.assertEqual(info["level"], "R1")
 
-    def test_classify_git_c_commit_is_R2(self):
+    def test_classify_git_commit_not_escalated(self):
         info = mod.classify("run_shell_command", {"command": "git -c a=b commit -m x"}, ".")
-        self.assertEqual(info["level"], "R2")
+        self.assertEqual(info["level"], "R1")
 
 
 class TestPolicyLoaded(unittest.TestCase):

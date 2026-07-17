@@ -75,7 +75,7 @@
 | `coverage_threshold` | порог покрытия изменённых файлов; дефолт **0.80** |
 | `migrations[].changeset` | путь к Liquibase changeset (НЕ Flyway `V__*.sql`) |
 | `migrations[].task_id` | задача, в рамках которой пишется changeset |
-| `tasks[].id` | короткий стабильный ID (`T1`, `T2`…); используется в `pipeline-state` как `04-build-<id>` и в `07-deliver-<id>` |
+| `tasks[].id` | короткий стабильный ID (`T1`, `T2`…); используется в `pipeline-state` как `04-build-<id>` |
 | `tasks[].modules` | модули, затрагиваемые задачей (**массив** — задача бывает кросс-модульной: напр. сущность в `service-X` + DTO в `utils-web`). Допустима строка `tasks[].module` как одно-модульное сокращение |
 | `tasks[].layers` | из словаря: `migration`, `entity`, `repository`, `dto`, `mapper`, `service`, `controller`, `scheduler`. Только реально затрагиваемые |
 | `tasks[].artifacts` | для multi-module — пути **от корня репо** (напр. `service/dbservice/src/main/java/...`, `utils/web/src/main/java/...`); для одного модуля допустимо относительно его `src/main/java` (или `src/main/resources` для миграций) |

@@ -72,7 +72,7 @@ def run_checks(project_root: Path | None = None) -> dict:
         ok("judge-name-producible")
 
     # 2. Каждый pass-through судья поддержан ingest (--from-output); детерминированные — фазой
-    #    (build/delivery — ingest; остальные — собственная фаза). Проверяем, что фаза есть.
+    #    (build — ingest; остальные — собственная фаза). Проверяем, что фаза есть.
     judge_phases = {j[:-len("-judge")] for judges in pp.REQUIRED_JUDGES_MASK.values() for j in judges}
     missing_phase = [p for p in judge_phases if p not in rj.PHASE_MAP]
     if missing_phase:
@@ -94,7 +94,7 @@ def run_checks(project_root: Path | None = None) -> dict:
         ok("phase-constants-consistent")
 
     # 4. Канонический порядок фаз в build_gate
-    sample = [{"id": "00-brd"}, {"id": "07-report"}, {"id": "04-build-T1"},
+    sample = [{"id": "00-brd"}, {"id": "06-spec"}, {"id": "04-build-T1"},
               {"id": "02-design"}, {"id": "05-tests"}]
     ids = [ph["id"] for ph in pp.build_gate(sample)["phases"]]
     expected = [m for m in pp.MAIN_PHASES if m in ids]

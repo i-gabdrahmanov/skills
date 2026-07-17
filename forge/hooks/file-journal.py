@@ -71,9 +71,6 @@ _PREFIX_PHASE = {
     "04-": "04-tdd",
     "05-": "05-verify",
     "06-": "06-document",
-    "07-deliver-": "07-deliver",
-    "07-report": "07-report",
-    "07-": "07-deliver",
 }
 
 _SHELL_SEPARATORS = {"&&", "||", ";", "|", "&"}

@@ -33,13 +33,11 @@ _LEVELS = ["R0", "R1", "R2", "R3", "R4", "R5"]
 
 
 # ── Нормализация git-команды ─────────────────────────────────────────────────────────
-# Глобальные опции git ПЕРЕД подкомандой (`git -C <path> push`, `git -c k=v commit`,
-# `git --git-dir=... push`) обходили детекторы `\bgit\s+(push|commit)\b` во ВСЕХ хуках
-# (delivery/evidence, SoD, force-push, классификатор рисков): `git -C . push` не совпадает
-# с `git\s+push`, поэтому доставка/коммит проходили неклассифицированными и без гейтов.
-# `git -C .` при этом функционально идентичен обычному push в текущем репо. Сворачиваем
-# ведущий кластер глобальных опций в голый `git`, чтобы детектор подкоманды снова совпадал.
-# Best-effort (как вся Bash-детекция): значения-опции в кавычках со спецсимволами не разбираем.
+# Глобальные опции git ПЕРЕД подкомандой (`git -C <path> push --force`, `git --git-dir=...
+# reset --hard origin/main`) обходили детекторы destructive-blocker (force-push, reset --hard):
+# `git -C . push --force` не совпадает с `git\s+push`. Сворачиваем ведущий кластер глобальных
+# опций в голый `git`, чтобы детектор подкоманды снова совпадал. Best-effort (как вся
+# Bash-детекция): значения-опции в кавычках со спецсимволами не разбираем.
 _GIT_OPT_VAL = r"(?:\"[^\"]*\"|'[^']*'|\S+)"
 _GIT_GLOBAL_OPTS_RE = re.compile(
     r"\bgit\b(?:\s+(?:"
@@ -110,7 +108,7 @@ def pipeline_cfg(root: Path) -> dict:
         return {}
 
 
-# Потолок авто-прохода. Доставка (R4 push/PR, R5) и чувствительные пути НИКОГДА не проходят
+# Потолок авто-прохода. R4/R5 (снятие гейтов, откат, чувствительные пути) НИКОГДА не проходят
 # авто, даже если pipeline.json выставит auto_max_risk=R4/R5 (защита от прямой правки конфига —
 # см. BLOCKER-1: пусть state-write-guard и блокирует Write в pipeline.json, кламп — второй слой).
 _AUTO_MAX_CEILING = "R3"
@@ -310,7 +308,8 @@ def evidence_ok(root: Path, threshold: float = 0.95) -> tuple[bool, str]:
 
 def check_requirement(level: str, req: dict, root: Path, kind: str,
                       agent_type: str | None = None) -> tuple[bool, str]:
-    """kind: 'commit' | 'push' | 'jira' | 'write' | 'other'. Вернуть (allowed, reason)."""
+    """kind: 'jira' | 'write' | 'other' (git commit/push не гейтим — доставку делает
+    пользователь сам). Вернуть (allowed, reason)."""
     mode = req.get("mode", "require")
     if mode in ("auto", "auto_log"):
         return True, f"{level} {mode}"
@@ -321,14 +320,6 @@ def check_requirement(level: str, req: dict, root: Path, kind: str,
     for sid in req.get("steps", []):
         if status.get(sid) != "completed":
             return False, f"{level}: шаг {sid} не completed (={status.get(sid)})"
-    if kind == "commit":
-        for sid in req.get("commit_needs", []):
-            if status.get(sid) != "completed":
-                return False, f"{level}: перед commit нужен {sid} (={status.get(sid)})"
-    if kind == "push":
-        for sid in req.get("push_needs", []):
-            if status.get(sid) != "completed":
-                return False, f"{level}: перед push/PR нужен {sid} (={status.get(sid)})"
 
     # approval marker
     appr = req.get("approval")
