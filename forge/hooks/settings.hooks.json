@@ -8,7 +8,6 @@
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/pii-boundary.py", "name": "pii-boundary"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/state-write-guard.py", "name": "state-write-guard"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/cost-breaker.py", "name": "cost-breaker"},
-        {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/evidence-enforcer.py", "name": "evidence-enforcer"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/sod-enforcer.py", "name": "sod-enforcer"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/inline-phase-guard.py", "name": "inline-phase-guard"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/gate-guard.py", "name": "gate-guard"},
@@ -31,6 +30,9 @@
     "PostToolUse": [
       {"matcher": "^(read_file|web_fetch|run_shell_command|Read|ReadFile|Fetch|WebFetch|Bash)$", "hooks": [
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/prompt-guard.py", "name": "prompt-guard"}
+      ]},
+      {"matcher": "^(write_file|edit|notebook_edit|Write|Edit|WriteFile|NotebookEdit|run_shell_command|Bash)$", "hooks": [
+        {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/file-journal.py", "name": "file-journal"}
       ]},
       {"matcher": "*", "hooks": [
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/cost-breaker.py", "name": "cost-breaker"},

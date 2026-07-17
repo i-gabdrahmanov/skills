@@ -29,15 +29,13 @@ try:
 except Exception:  # pragma: no cover — fallback при отдельном деплое
     pp = None
     MAIN_PHASES = ["00-brd", "01-grounding", "02-sdd", "02-design", "02-eval-plan",
-                   "03-jira", "04-tdd", "05-verify", "06-document",
-                   "07-deliver", "07-report"]
+                   "03-jira", "04-tdd", "05-verify", "06-document"]
     PREFIX_PHASE = {
         "02-sdd": "02-sdd",
         "02-eval-plan": "02-eval-plan",
         "00-": "00-brd", "01-": "01-grounding", "02-": "02-design",
         "03-": "03-jira", "04-": "04-tdd", "05-": "05-verify",
-        "06-": "06-document", "07-deliver-": "07-deliver",
-        "07-report": "07-report", "07-": "07-deliver",
+        "06-": "06-document",
     }
 
     def _guess_phase(step_id: str) -> str:
@@ -49,7 +47,7 @@ except Exception:  # pragma: no cover — fallback при отдельном д�
 
 
 def _is_container_step(step_id: str) -> bool:
-    """Main-phase шаги (04-tdd, 05-verify, 06-doc, 07-deliver) — контейнеры,
+    """Main-phase шаги (04-tdd, 05-verify, 06-doc) — контейнеры,
     их статус не отражает реальную завершённость динамических шагов фазы.
     ЕДИНОЕ определение — pipeline_phases.is_container_step (fallback при отдельном деплое)."""
     if pp is not None:

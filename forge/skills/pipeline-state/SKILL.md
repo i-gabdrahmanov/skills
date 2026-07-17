@@ -283,6 +283,8 @@ python <project>/.gigacode/skills/pipeline-state/scripts/read.py \
 | `scripts/update.py` | Обновить статус шага и сохранить JSON-выход. При блокировке судьёй/проверкой subagent-origin печатает путь разблокировки через `override_judge.py` |
 | `scripts/read.py` | Прочитать state, выдать summary или выжимку шага |
 | `scripts/override_judge.py` | Ручной пропуск гейта судьи (`--judge … --feature … --reason …`) — единственный путь закрыть шаг, заблокированный отсутствующим/проваленным вердиктом `required_judges`. **Создание override — R4**: `gate-guard` пропустит команду только при approval-маркере `ground/approvals/gate-override-<judge>.json`, фиксируемом после ЯВНОГО «да» пользователя (молча — exit 2); `--list`/`--remove` свободны |
+| `scripts/checkpoint.py` | Git-чекпойнты worktree на границах шагов (`refs/forge/checkpoints/<feature>/<step-id>`; ветки/HEAD/индекс не трогаются). Пишутся автоматически: `update.py` на закрытии шага, `init.py` — baseline. Точки восстановления для `rollback.py` |
+| `scripts/rollback.py` | Откат к шагу X («X переделывается»): X и всё после → `pending`, evidence — в архив `rollbacks/<ts>/` (повторное закрытие по старым доказательствам блокируется), код — точечный `git restore` на чекпойнт по скоупу журнала `file-journal`. **Запуск — R4**: approval-маркер `rollback-<feature>-<to-step>` (одноразовый, потребляется откатом); `--dry-run`/`--list` свободны. См. `feature-pipeline/references/rollback.md` |
 
 См. `scripts/<name>.py --help` для деталей.
 

@@ -147,6 +147,12 @@ description: "Write FAILING tests (TDD red) for task <id>"
 subagent_type: general-purpose
 
 prompt:
+Сначала прочитай и строго следуй: read_file("<project>/.gigacode/skills/test-writer/SKILL.md")
+(режим RED). Конвенции тестовой базы (первый вызов сканирует, дальше кэш):
+python3 <project>/.gigacode/skills/test-writer/scripts/analyze_tests.py --root <project> --if-missing
+Затем прочитай docs/system-analysis/scan/test-conventions.json и 1-2 эталонных теста из
+exemplars — пиши в их стиле.
+
 TDD, фаза RED. Реализации ещё НЕТ — твоя задача написать тесты, которые её специфицируют:
 они должны КОМПИЛИРОВАТЬСЯ и ПАДАТЬ (не проходить), пока код не написан.
 
@@ -221,10 +227,11 @@ prompt:
 
 Лимит итераций тестописатель↔тестраннер — **3**. Не зелёное на третьей — стоп.
 
-### Pre-commit (тот же тестраннер)
+### Pre-commit (тот же тестраннер) — финальный полный прогон
 После зелёных тестов — полный прогон: `./gradlew clean build` + линтеры (spotless/
 checkstyle, если есть — на падении форматирования предложи `spotlessApply`, не запускай
-молча) + JaCoCo. Детали — `../minor-defect-fix/references/coverage.md`.
+молча) + JaCoCo. Детали — `../minor-defect-fix/references/coverage.md`. Сам коммит
+пайплайн НЕ делает — коммитит пользователь после завершения пайплайна.
 
 ---
 
@@ -289,6 +296,11 @@ description: "Cover gaps for feature <slug>"
 subagent_type: general-purpose
 
 prompt:
+Сначала прочитай и строго следуй: read_file("<project>/.gigacode/skills/test-writer/SKILL.md")
+(режим GREEN). Конвенции тестовой базы (первый вызов сканирует, дальше кэш):
+python3 <project>/.gigacode/skills/test-writer/scripts/analyze_tests.py --root <project> --if-missing
+Стиль — по docs/system-analysis/scan/test-conventions.json и эталонам из exemplars.
+
 Прочитай check_coverage.py отчёт (LOW/MISSING файлы).
 Допиши тесты только под непокрытое. Не переписывай зелёные тесты.
 **Только Mockito unit-тесты** (`@ExtendWith(MockitoExtension.class)`); JPA/Spring-context
@@ -361,7 +373,8 @@ prompt:
 
 ## 5. Спецадаптер
 
-Зови после pre-commit, до коммита кода. Работает в репо спеки (`docs_path`), не в коде.
+Зови после pre-commit. Работает в репо спеки (`docs_path`), не в коде. Ничего не
+коммитит — обновлённые файлы остаются в рабочей копии, коммитит пользователь сам.
 
 ```
 description: "Update spec for feature <slug>"
@@ -388,15 +401,16 @@ structure.md). **НЕ редактируй `*/sdd.md`, `*/brd.md`, `*/tech-desig
 из diff в документы — спека описывает поведение словами, а не листингами.
 
 Алгоритм:
-1. Перейди в <docs_path>. Ветка `feature/<slug>` (создай от default, если нет).
+1. Перейди в <docs_path>.
 2. Обнови ТОЛЬКО разделы system-analysis, описывающие изменённое поведение. Новые эндпойнты →
    добавь в system-analysis/api.md; новые сущности → domain.md. Стиль документа сохраняй,
    код из diff не копируй — формулируй поведение.
 3. Не выдумывай разделы — если части нет, зафиксируй в отчёте.
-4. Один коммит в стиле спец-репо. НЕ пушь (push/PR решает главный агент на Гейте 5).
+4. НИЧЕГО не коммить и не пушь — изменения остаются в рабочей копии
+   (коммитит пользователь сам после пайплайна).
 
 Верни JSON (`files_changed` НЕ должен содержать `sdd.md`/`brd.md`/`tech-design.md`):
-{"no_changes":false,"branch":"feature/<slug>","commit_sha":"...","default_branch":"main",
+{"no_changes":false,
  "files_changed":["system-analysis/api.md","system-analysis/domain.md"],"summary":"...","uncovered_in_spec":[]}
 ```
 
@@ -678,86 +692,6 @@ prompt:
 
 ---
 
-### 7.5 delivery-judge — проверка готовности к доставке (фаза 6, перед коммитом)
-
-Зови перед Гейтом 4 (коммиты). Проверяет, что всё готово к созданию PR и отчёту в Jira.
-
-```
-description: "Verify delivery readiness for feature <slug>"
-subagent_type: general-purpose
-
-prompt:
-Проверь готовность фичи к доставке: код, Jira, коммиты, PR, секреты, техдолг.
-
-Контекст:
-- Фича (slug): <slug>
-- task-plan.json: <путь>
-- jira-tasks-result.json: <путь> (если есть, иначе Jira skipped)
-- git status: <вывод git status>
-- git log (последние коммиты): <git log -5>
-- Ветки: <git branch>
-- Изменённые файлы: <git diff --name-only>
-- Все production-файлы задачи: <cat каждого изменённого production-файла>
-
-Алгоритм:
-1. Проверь **консистентность Jira** (если Jira enabled):
-   a. У каждой задачи из task-plan есть jira-ключ в jira-tasks-result.json?
-   b. Каждый коммит содержит Jira-ключ в сообщении?
-2. Проверь **build-статус** (кросс-проверка с build-judge):
-   a. Все build-шаги реально completed (нет stubs, нет мёртвого кода)?
-   b. Все eval'ы пройдены (evaluated_at не null)?
-3. Проверь **безопасность**:
-   a. Есть ли hardcoded пароли, токены, URL стейджинга?
-      (grep: password, secret, token, .env, jdbc:postgresql://localhost — но не в тестах)
-   b. Есть ли .env файлы в diff?
-4. Проверь **техдолг**:
-   a. Есть ли TODO / FIXME / HACK / XXX в production-коде?
-   b. Если есть — они явно documented в blocking_issues как warnings?
-5. Проверь **git-гигиену**:
-   a. git status чист? (нет незакоммиченных изменений кроме ожидаемых)
-   b. Ветки соответствуют stacked-модели? (каждая от родительской по depends_on)
-   c. Сообщения коммитов в стиле проекта: с Jira-ключом, без Co-Authored-By.
-6. Проверь **готовность PR**:
-   a. Для каждой задачи: source branch, target branch, title, body.
-   b. Body содержит ссылку на Jira и список изменённых файлов.
-
-Критерии FAIL:
-- Stubs/missing implementation (делегировано build-judge, но delivery-judge перепроверяет)
-- Найдены секреты/credentials в коде
-- git status показывает неожиданные изменения
-- TODO/FIXME без явного разрешения
-- Jira не консистентна (если Jira enabled)
-- Сообщения коммитов без Jira-ключа
-
-Верни JSON:
-{
-  "step_id": "delivery-judge-<slug>",
-  "verdict": "PASS" | "WARN" | "FAIL",
-  "passed": true | false,
-  "checks": [
-    {"name": "No secrets in code", "status": "PASS", "detail": "No hardcoded credentials found", "severity": "error"},
-    {"name": "Jira consistency", "status": "FAIL", "detail": "Jira skipped but tasks have no keys", "severity": "error"},
-    {"name": "Git status", "status": "PASS", "detail": "Working tree clean", "severity": "error"},
-    {"name": "No stubs", "status": "FAIL", "detail": "UnsupportedOperationException in 2 methods", "severity": "error"}
-  ],
-  "blocking_issues": [
-    "getEmptyTasksWithEmployee() — throw UnsupportedOperationException",
-    "closeEmptyTasksWithEmployee() — throw UnsupportedOperationException"
-  ],
-  "warnings": [
-    "EmptyTaskCloserScheduler not deleted (tech-design §3 marks for deletion)",
-    "Jira integration skipped — no link between code and tasks"
-  ],
-  "commit_plan": [
-    {"task": "task-1", "files": ["database/.../TaskUpzRepository.java"], "message": "KIDPPRB-8639: add findAllEmptyTasksWithEmployee query"},
-    {"task": "task-3", "files": [".../OverdueTaskServiceImpl.java"], "message": "KIDPPRB-8639: implement closeEmptyTasksWithEmployee"}
-  ],
-  "summary": "2/4 checks passed. 2 blocking issues."
-}
-```
-
----
-
 ### 7.6 brd-judge — проверка БТ на язык бизнеса (фаза 0, после BRD)
 
 Зови сразу после того, как создан `brd.md`, **до Гейта 1**. Проверяет, что БТ написаны как
@@ -907,5 +841,4 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py reuse <
 | 3 — GREEN (после кода) | build-judge | Код написан, тесты зелёные | Шаг `04-build-<taskId>` не закрывается |
 | 3 — GREEN (после build-judge) | reuse-judge | Код написан, build-judge PASS | Шаг `04-build-<taskId>` не закрывается |
 | 5 (после spec) | spec-judge | Спецадаптер завершён | Шаг `06-spec` не закрывается |
-| 6 (перед коммитом) | delivery-judge | Все build-шаги completed | Гейт 4 (коммиты) не открывается |
 ```

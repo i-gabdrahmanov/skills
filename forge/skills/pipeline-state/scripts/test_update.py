@@ -8,7 +8,7 @@ _origins/<id>.json от SubagentStop). Любая регрессия здесь 
 вердикта, разблок валидным вердиктом и override, блок/разблок subagent-origin, --skip-judges,
 и doc-approval: доко-фазы (00-brd/02-sdd) не закрываются без маркера утверждения
 <doc>-approved-<feature> (record_approval) — это же enforcement паузы после мерджа
-на согласование (doc_review_push).
+на согласование.
 
 Запуск: python3 test_update.py
 """
@@ -196,24 +196,21 @@ def main() -> int:
         rc, out = run(Path(td), "00-brd")
         check("чужой key в маркере → блок", rc != 0, out)
 
-    # 15. ПАУЗА: док замерджен на согласование (review-маркер), утверждения нет → блок
-    #     с явным указанием паузы (нельзя молча продолжить после мерджа)
+    # 15. SDD без утверждения → блок с указанием нужного маркера
     with tempfile.TemporaryDirectory() as td:
         d = _write_manifest(Path(td), [{"id": "02-sdd", "status": "pending"}])
         _origin(d, "02-sdd")
-        _approval(Path(td), "sdd-review-demo")
         rc, out = run(Path(td), "02-sdd")
-        check("после мерджа без утверждения → блок с паузой",
-              rc != 0 and "ПАУЗА" in out and "sdd-approved-demo" in out, f"rc={rc} {out}")
+        check("SDD без утверждения → блок",
+              rc != 0 and "sdd-approved-demo" in out, f"rc={rc} {out}")
 
-    # 16. утверждение после ревью → закрытие
+    # 16. утверждение → закрытие
     with tempfile.TemporaryDirectory() as td:
         d = _write_manifest(Path(td), [{"id": "02-sdd", "status": "pending"}])
         _origin(d, "02-sdd")
-        _approval(Path(td), "sdd-review-demo")
         _approval(Path(td), "sdd-approved-demo")
         rc, out = run(Path(td), "02-sdd")
-        check("утверждение после ревью → exit 0", rc == 0, out)
+        check("утверждение → exit 0", rc == 0, out)
 
     # 17. override doc-approved-<step> снимает блок (деградация)
     with tempfile.TemporaryDirectory() as td:

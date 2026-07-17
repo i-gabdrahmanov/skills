@@ -35,7 +35,7 @@ def _make_manifest(tmp: Path) -> None:
             {"id": "lite-design", "status": "in_progress", "required_judges": []},
             {"id": "lite-green", "status": "in_progress", "required_judges": []},
             {"id": "lite-red", "status": "in_progress", "required_judges": []},
-            {"id": "lite-report", "status": "in_progress", "required_judges": []},
+            {"id": "lite-ground", "status": "in_progress", "required_judges": []},
         ],
     }), encoding="utf-8")
 
@@ -223,7 +223,7 @@ class TestGateResultCheck(unittest.TestCase):
     def test_non_gate_step_not_affected(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d); _make_manifest(tmp)
-            r = _close(tmp, "lite-report")
+            r = _close(tmp, "lite-ground")
             self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_lite_design_without_artifact_blocked(self):

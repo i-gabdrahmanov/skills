@@ -9,8 +9,7 @@
     "04-test-*": ["red-judge"],
     "04-build-*": ["build-judge", "reuse-judge"],
     "05-tests": ["coverage-judge"],
-    "06-spec": ["spec-judge"],
-    "07-deliver-*": ["delivery-judge"]
+    "06-spec": ["spec-judge"]
   },
   "judges": {
     "brd-judge":      {"phase": "brd",      "kind": "hybrid",        "contract": "subagent-prompts.md §7.6"},
@@ -21,7 +20,6 @@
     "build-judge":    {"phase": "build",    "kind": "hybrid",        "contract": "subagent-prompts.md §7.3"},
     "reuse-judge":    {"phase": "reuse",    "kind": "hybrid",        "contract": "subagent-prompts.md §7.7"},
     "coverage-judge": {"phase": "coverage", "kind": "deterministic", "contract": "check_coverage.py"},
-    "spec-judge":     {"phase": "spec",     "kind": "deterministic", "contract": "subagent-prompts.md §7.4"},
-    "delivery-judge": {"phase": "delivery", "kind": "hybrid",        "contract": "subagent-prompts.md §7.5"}
+    "spec-judge":     {"phase": "spec",     "kind": "deterministic", "contract": "subagent-prompts.md §7.4"}
   }
 }

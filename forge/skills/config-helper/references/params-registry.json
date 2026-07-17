@@ -163,16 +163,6 @@
       "aliases": ["трассируемость", "traceability", "матрица трассировки", "sdd_ref", "traceability_check"]
     },
     {
-      "id": "quality.secret_scan",
-      "file": "pipeline",
-      "path": "quality.secret_scan",
-      "type": "bool", "default": true,
-      "category": "quality", "sensitive": false,
-      "title": "Secret-scan (вкл. по умолчанию)",
-      "description": "Детерминированный поиск хардкод-кредов check_secrets.py в фазе verify (по умолчанию ON). На доставке secret-scan форсится всегда (delivery-judge), независимо от флага",
-      "aliases": ["секреты", "secret scan", "поиск секретов", "secrets", "secret_scan"]
-    },
-    {
       "id": "autonomy.mode",
       "file": "pipeline",
       "path": "autonomy.mode",
@@ -273,26 +263,6 @@
       "aliases": ["system analysis subdir"]
     },
     {
-      "id": "docs.brd_review",
-      "file": "pipeline",
-      "path": "docs.brd_review",
-      "type": "enum", "enum": ["", "push", "skip"], "default": "",
-      "category": "docs", "sensitive": false,
-      "title": "Доставка BRD на ветку задачи",
-      "description": "Решение Гейта доставки BRD (фаза 00-brd feature-pipeline, ДО утверждения): push — закоммитить brd.md на ветку задачи docs/<slug> (своя ветка у каждой Jira-задачи, общая для её BRD и SDD; база — default-ветка) и запушить аналитикам (без PR; после пуша пайплайн берёт ПАУЗУ до итогов ревью — шаг не закрывается без утверждения); skip — не пушить, сразу гейт утверждения; пусто — спросить пользователя. Headless: предзапись ДО прогона. Ключ per-project (действует на все фичи прогона).",
-      "aliases": ["brd review", "ревью brd", "мердж brd", "согласование brd", "коммит brd", "ветка задачи brd"]
-    },
-    {
-      "id": "docs.sdd_review",
-      "file": "pipeline",
-      "path": "docs.sdd_review",
-      "type": "enum", "enum": ["", "push", "skip"], "default": "",
-      "category": "docs", "sensitive": false,
-      "title": "Доставка SDD на ветку задачи",
-      "description": "Решение Гейта доставки SDD (фаза 02-sdd feature-pipeline, ДО утверждения): push — закоммитить sdd.md на ветку задачи docs/<slug> (та же ветка, где brd.md этой задачи; база — default-ветка) и запушить системным аналитикам (без PR; после пуша пайплайн берёт ПАУЗУ до итогов ревью — шаг не закрывается без утверждения); skip — не пушить, сразу гейт утверждения; пусто — спросить пользователя. Headless: предзапись ДО прогона. Ключ per-project (действует на все фичи прогона).",
-      "aliases": ["sdd review", "ревью sdd", "мердж sdd", "коммит sdd", "согласование sdd", "ветка задачи sdd"]
-    },
-    {
       "id": "conventions.migration_tool",
       "file": "pipeline",
       "path": "conventions.migration_tool",
@@ -362,56 +332,6 @@
       "description": "Название типа задачи для Sub-task",
       "aliases": ["subtask type"]
     },
-    {
-      "id": "bitbucket.enabled",
-      "file": "pipeline",
-      "path": "bitbucket.enabled",
-      "type": "bool", "default": null,
-      "category": "bitbucket", "sensitive": false,
-      "title": "Bitbucket включён",
-      "description": "Создавать ли PR в Bitbucket в фазе доставки",
-      "aliases": ["bitbucket", "битбакет", "pr"]
-    },
-    {
-      "id": "bitbucket.workspace",
-      "file": "pipeline",
-      "path": "bitbucket.workspace",
-      "type": "string", "default": null,
-      "category": "bitbucket", "sensitive": false,
-      "title": "Workspace Bitbucket",
-      "description": "Bitbucket workspace",
-      "aliases": ["workspace"]
-    },
-    {
-      "id": "bitbucket.repo_slug",
-      "file": "pipeline",
-      "path": "bitbucket.repo_slug",
-      "type": "string", "default": null,
-      "category": "bitbucket", "sensitive": false,
-      "title": "Repo slug Bitbucket",
-      "description": "Bitbucket repo slug",
-      "aliases": ["repo slug"]
-    },
-    {
-      "id": "delivery.pr_strategy",
-      "file": "pipeline",
-      "path": "delivery.pr_strategy",
-      "type": "enum", "enum": ["stacked", "single"], "default": "stacked",
-      "category": "delivery", "sensitive": false,
-      "title": "Стратегия PR",
-      "description": "stacked — стек PR по задачам; single — один PR на фичу",
-      "aliases": ["pr strategy", "стратегия pr"]
-    },
-    {
-      "id": "delivery.branch_prefix",
-      "file": "pipeline",
-      "path": "delivery.branch_prefix",
-      "type": "string", "default": "feature/",
-      "category": "delivery", "sensitive": false,
-      "title": "Префикс веток",
-      "description": "Префикс имён feature-веток",
-      "aliases": ["branch prefix", "префикс веток"]
-    },
 
     {
       "id": "eval_driven_dev",
@@ -454,16 +374,6 @@
       "aliases": ["parallel build", "параллельная сборка"]
     },
     {
-      "id": "evidence_bundle",
-      "file": "gates",
-      "path": "gates.evidence_bundle.enabled",
-      "type": "bool", "default": true,
-      "category": "gates", "sensitive": false,
-      "title": "Гейт: evidence bundle",
-      "description": "Требует сбор evidence перед доставкой",
-      "aliases": ["evidence", "эвиденс"]
-    },
-    {
       "id": "background_consolidation",
       "file": "gates",
       "path": "gates.background_consolidation.enabled",
@@ -492,16 +402,6 @@
       "title": "Гейт: валидация зависимостей модулей",
       "description": "Проверяет DAG зависимостей модулей",
       "aliases": ["module deps", "зависимости модулей"]
-    },
-    {
-      "id": "single_feature_branch",
-      "file": "gates",
-      "path": "gates.single_feature_branch.enabled",
-      "type": "bool", "default": false,
-      "category": "gates", "sensitive": false,
-      "title": "Гейт: одна feature-ветка",
-      "description": "Ограничивает работу одной feature-веткой",
-      "aliases": ["single branch", "одна ветка"]
     },
 
     {

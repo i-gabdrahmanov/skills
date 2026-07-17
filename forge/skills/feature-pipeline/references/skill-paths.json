@@ -125,6 +125,14 @@
       "skill_md": ".gigacode/skills/java-spring-dev/SKILL.md"
     },
 
+    "test-writer": {
+      "dir": ".gigacode/skills/test-writer",
+      "skill_md": ".gigacode/skills/test-writer/SKILL.md",
+      "scripts": {
+        "analyze_tests": ".gigacode/skills/test-writer/scripts/analyze_tests.py"
+      }
+    },
+
     "brd-interview": {
       "dir": ".gigacode/skills/brd-interview",
       "skill_md": ".gigacode/skills/brd-interview/SKILL.md"

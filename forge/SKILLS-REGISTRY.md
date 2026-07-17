@@ -13,14 +13,15 @@
 | Skill | Owner | Validity | Scope | Evals |
 |---|---|---|---|---|
 | router | @team | 2026-12 | точка входа: выбор режима full/lite, делегация на общий control-plane | — (вход не форсится рантаймом; смягчения — preflight, check_scope) |
-| feature-pipeline | @team | 2026-12 | Java/Spring фичи end-to-end (режим full) | gate-скрипты + hooks/evals |
-| forgelite | @team | 2026-12 | исполнение подготовленной подзадачи Jira (режим lite: grounding→tech-design по спеке→RED→GREEN→PR) | check_scope.py + record_gate (RED/GREEN) + check_coverage.py |
+| feature-pipeline | @team | 2026-12 | Java/Spring фичи end-to-end до верифицированного артефакта (режим full; доставка — на пользователе) | gate-скрипты + hooks/evals |
+| forgelite | @team | 2026-12 | исполнение подготовленной подзадачи Jira (режим lite: grounding→tech-design по спеке→RED→GREEN→verify; доставка — на пользователе) | check_scope.py + record_gate (RED/GREEN) + check_coverage.py |
 | pipeline-state | @team | 2026-12 | оркестраторы >3 субагентов | косвенно через evals |
 | project-grounder | @team | 2026-12 | фаза grounding | verify_coverage.py |
 | system-analyst | @team | 2026-12 | скан Java/Spring сервиса | verify_coverage.py |
 | sdd | @team | 2026-12 | BRD → спецификация (sdd.md) | check_sdd_doc.py |
 | tech-design | @team | 2026-12 | SDD → план + слои | check_taskplan.py, check_sdd.py |
 | java-spring-dev | @team | 2026-12 | генерация Java-кода | check_build.py |
+| test-writer | @team | 2026-12 | тестописатель RED/GREEN (feature-pipeline §4.1/§4.4, forgelite lite-red); кэш конвенций тестовой базы scan/test-conventions.json | test_analyze_tests.py + check_tests_red.py / check_tautological_tests.py |
 | jira-task-writer | @team | 2026-12 | создание задач Jira | check_jira.py |
 | minor-defect-fix | @team | 2026-12 | минорный дефект из Jira | check_coverage.py |
 | defect-analyzer | @team | 2026-12 | анализ дефекта | — |
@@ -43,7 +44,6 @@
 | pii-boundary | @team | 2026-12 | граница PII при записи | run-evals.py |
 | prompt-guard | @team | 2026-12 | детект prompt-injection | run-evals.py |
 | cost-breaker | @team | 2026-12 | token budget: учёт + warn ≥80% (circuit-breaker/стоп 120% временно отключён — токены безлимитны) | run-evals.py |
-| evidence-enforcer | @team | 2026-12 | полнота evidence перед доставкой | косвенно |
 | state-recorder / context-injector / phase-gate / log-agent | @team | 2026-12 | state/context/stop/audit | run-evals.py |
 
 > При изменении любого скилла/хука — обнови строку (validity, evals). Реестр ревьюится на каждой

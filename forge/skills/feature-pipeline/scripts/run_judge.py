@@ -17,7 +17,6 @@ Phases:
     red        — проверка RED-тестов (только если есть файл вердикта от субагента)
     build      — проверка build-артефактов
     spec       — проверка spec-документов
-    delivery   — проверка готовности к доставке (перед коммитом)
     coverage   — проверка JaCoCo-покрытия (закрывает шаг 05-tests)
     regression — тесты затронутых модулей не регрессировали vs baseline (module_tests compare)
     design     — check_taskplan + check_sdd (закрывает шаг 02-design)
@@ -1041,80 +1040,6 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
     return _make_verdict("spec-judge", slug, passed, checks, blocking_issues, warnings, summary)
 
 
-def _delivery_floor() -> tuple:
-    """Детерминированный пол delivery-judge: ловит секреты в изменённых файлах.
-
-    Правила поиска — ЕДИНЫЙ источник `check_secrets.scan_text` (тот же сканер, что standalone-гейт
-    P2-12), чтобы regex не двоился. best-effort импорт (co-located), inline-fallback на простой паттерн.
-    """
-    checks, blocking, warnings = [], [], []
-    files = _changed_src_files(main_only=False)
-    try:
-        import check_secrets as _cs
-        scan = _cs.scan_text
-    except Exception:
-        _fallback = re.compile(
-            r"(?:password|passwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|token)\s*[=:]\s*"
-            r"['\"][^'\"\n]{6,}['\"]|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----", re.I)
-
-        def scan(path, text):
-            return [{"file": path, "line": i, "kind": "secret", "detail": ln.strip()[:80]}
-                    for i, ln in enumerate(text.splitlines(), 1) if _fallback.search(ln)]
-
-    secrets = []
-    for p in files:
-        try:
-            txt = p.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for hit in scan(p.name, txt):
-            secrets.append(f"{hit['file']}: {hit['detail']}")
-    if secrets:
-        checks.append({"name": "Нет секретов (детерминированно)", "status": "FAIL",
-                       "detail": "; ".join(secrets[:5]), "severity": "error"})
-        blocking.extend(f"возможный секрет в коде: {s}" for s in secrets[:5])
-    else:
-        checks.append({"name": "Нет секретов (детерминированно)", "status": "PASS",
-                       "detail": f"{len(files)} изменённых файлов", "severity": "error"})
-    return checks, blocking, warnings
-
-
-def check_delivery(slug: str, feature_dir: Path | None) -> dict:
-    """delivery-judge — гибрид: вердикт LLM-субагента + детерминированный пол (секреты).
-
-    Секреты блокируют доставку даже если LLM-вердикт отсутствует/невалиден."""
-    floor_checks, floor_block, floor_warn = _delivery_floor()
-    verdict = _load_json(_find_judge_verdict(slug, "delivery-judge"))
-
-    if not verdict:
-        return _make_verdict(
-            "delivery-judge", slug, False,
-            floor_checks + [{"name": "Delivery-judge verdict from subagent", "status": "FAIL",
-                             "detail": "Вердикт delivery-judge не найден. Запусти субагента.",
-                             "severity": "error"}],
-            floor_block + ["delivery-judge вердикт отсутствует — доставка не проверена"],
-            floor_warn, "DELIVERY-judge не запущен: вердикт не найден"
-        )
-
-    ok, verr = validate_verdict(verdict)
-    if not ok:
-        return _make_verdict(
-            "delivery-judge", slug, False,
-            floor_checks + [{"name": "Вердикт delivery-judge валиден", "status": "FAIL",
-                             "detail": "; ".join(verr), "severity": "error"}],
-            floor_block + [f"вердикт delivery-judge невалиден: {'; '.join(verr)}"],
-            floor_warn, "DELIVERY-judge: невалидный вердикт субагента (fail-closed)"
-        )
-
-    checks = list(verdict.get("checks", [])) + floor_checks
-    blocking = list(verdict.get("blocking_issues", [])) + floor_block
-    warnings = list(verdict.get("warnings", [])) + floor_warn
-    passed = bool(verdict.get("passed", False)) and not floor_block
-    summary = (verdict.get("summary", "DELIVERY-judge: см. вердикт субагента")
-               + f" | пол: {'OK' if not floor_block else str(len(floor_block)) + ' blocking'}")
-    return _make_verdict("delivery-judge", slug, passed, checks, blocking, warnings, summary)
-
-
 def check_sdd_doc(slug: str, feature_dir: Path | None) -> dict:
     """Запускает sdd/scripts/check_sdd_doc.py (gate документа SDD) и собирает вердикт sdd-judge.
 
@@ -1779,7 +1704,6 @@ PHASE_MAP = {
     "red": check_red,
     "build": check_build,
     "spec": check_spec,
-    "delivery": check_delivery,
     "design": check_design,
     "coverage": check_coverage,
     "regression": check_regression,
@@ -1790,13 +1714,12 @@ PHASE_MAP = {
 # passed:true и update.py закрывал шаг, ни разу не выполнив детерминированные проверки
 # (--recheck не обязателен и мог не запускаться). Две семантики слоя:
 #   "standalone"   — check_* не знает про LLM-вердикт (brd/eval) → AND-им явно;
-#   "merges_saved" — check_* САМ читает СОХРАНЁННЫЙ вердикт и применяет пол (build: stubs,
-#                    delivery: секреты) → его результат уже финальный (сохранять ДО пересчёта).
+#   "merges_saved" — check_* САМ читает СОХРАНЁННЫЙ вердикт и применяет пол (build: stubs)
+#                    → его результат уже финальный (сохранять ДО пересчёта).
 INGEST_FLOOR_PHASES = {
     "brd": "standalone",
     "eval": "standalone",
     "build": "merges_saved",
-    "delivery": "merges_saved",
 }
 
 
@@ -1828,7 +1751,7 @@ def main():
     parser.add_argument("--from-output", default=None,
                         help="Файл с JSON-вердиктом субагента (или '-' для stdin) — "
                              "сохранить как judges/<phase>-judge.json. Для pass-through "
-                             "судей (build, delivery), которые считает не run_judge, а субагент.")
+                             "судей (build), которые считает не run_judge, а субагент.")
     parser.add_argument("--out", default=None,
                         help="Куда писать вердикт (по умолчанию ground/statements/.../judges/)")
 
@@ -1862,7 +1785,7 @@ def main():
         print(f"WARN: slug={args.slug}, ищу в {FEATURE_DOCS_DIR}", file=sys.stderr)
         # Продолжаем — некоторые проверки могут работать без папки фичи
 
-    # --from-output: ingest вердикта субагента (pass-through судьи build/delivery).
+    # --from-output: ingest вердикта субагента (pass-through судья build).
     # run_judge сам их не считает — он только сохраняет валидированный вердикт в judges/,
     # чтобы update.py смог закрыть шаг, а --recheck — подтвердить.
     if args.from_output:
@@ -1889,8 +1812,8 @@ def main():
             subagent.get("warnings", []),
             subagent.get("summary", f"{judge_name}: вердикт принят от субагента"),
         )
-        # Сохраняем LLM-вердикт ДО пересчёта пола: гибридные check_* (build/delivery)
-        # читают сохранённый вердикт с диска и мержат его с полом сами.
+        # Сохраняем LLM-вердикт ДО пересчёта пола: гибридный check_build
+        # читает сохранённый вердикт с диска и мержит его с полом сам.
         out_path = _save_verdict(args.slug, judge_name, verdict)
         # Детерминированный пол на ингесте (INGEST_FLOOR_PHASES): LLM-вердикт сам по себе
         # шаг не закрывает — пересчитываем детерминированный слой.
@@ -1928,9 +1851,9 @@ def main():
     # --recheck: перепроверяем реально (для eval/spec/red с детерминированными проверками)
     if args.recheck:
         # Для детерминированных и гибридных фаз — полная проверка заново (не кэш).
-        # build/delivery — гибрид: check_* загружает сохранённый LLM-вердикт и применяет
-        # детерминированный пол (stubs/секреты), поэтому recheck обязан их пересчитывать.
-        if args.phase in ("brd", "reuse", "eval", "spec", "red", "coverage", "regression", "build", "delivery"):
+        # build — гибрид: check_build загружает сохранённый LLM-вердикт и применяет
+        # детерминированный пол (stubs), поэтому recheck обязан его пересчитывать.
+        if args.phase in ("brd", "reuse", "eval", "spec", "red", "coverage", "regression", "build"):
             try:
                 verdict = PHASE_MAP[args.phase](args.slug, feature_dir)
             except Exception as e:
@@ -1959,7 +1882,7 @@ def main():
                 sys.exit(3)
             sys.exit(0 if verdict["passed"] else 1)
 
-        # Для build/delivery — проверяем, что вердикт уже есть и passed=true
+        # Для остальных фаз — проверяем, что вердикт уже есть и passed=true
         verdict_path = _find_judge_verdict(args.slug, f"{args.phase}-judge")
         verdict = _load_json(verdict_path)
         if not verdict:

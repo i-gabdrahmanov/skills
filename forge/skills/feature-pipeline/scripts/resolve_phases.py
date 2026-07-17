@@ -126,7 +126,6 @@ DEFAULT_PHASES = [
     {"id": "04-tdd",          "skill": "java-spring-dev",       "enabled_by": "quality.tdd",      "skip_if": None,           "gates": None,           "description": "TDD RED→GREEN per task"},
     {"id": "05-verify",       "skill": None,                    "enabled_by": None,              "skip_if": None,           "gates": None,           "description": "Full test run + coverage"},
     {"id": "06-document",     "skill": None,                    "enabled_by": None,              "skip_if": None,           "gates": None,           "description": "Spec updated"},
-    {"id": "07-deliver",      "skill": None,                    "enabled_by": None,              "skip_if": None,           "gates": ["commit","pr","report"], "description": "Stacked PR delivery"},
 ]
 # Бриф фазы (оркестрационная инструкция) — читается оркестратором ПЕРЕД фазой.
 # Путь относительно каталога скилла feature-pipeline; переопределяем через phases_override.

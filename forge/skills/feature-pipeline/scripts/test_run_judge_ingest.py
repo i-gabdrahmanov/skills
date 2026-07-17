@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""C3: run_judge --from-output сохраняет вердикт pass-through судей (build/delivery).
+"""C3: run_judge --from-output сохраняет вердикт pass-through судьи build.
 
-Раньше build/delivery вердикты только читались, но их никто не писал → шаги
-04-build/07-deliver не закрывались. Теперь субагентский вердикт сохраняется через
+Раньше build-вердикты только читались, но их никто не писал → шаги
+04-build не закрывались. Теперь субагентский вердикт сохраняется через
 --from-output, и --recheck его подтверждает.
 """
 from __future__ import annotations
@@ -48,14 +48,14 @@ class Ingest(unittest.TestCase):
         self.assertEqual(r2.returncode, 0, r2.stderr)
 
     def test_recheck_without_ingest_fails(self):
-        r = _run(["delivery", "feat", "--recheck", "--project-root", self.proj], self.proj)
-        self.assertNotEqual(r.returncode, 0, "delivery --recheck без вердикта должен падать")
+        r = _run(["build", "feat", "--recheck", "--project-root", self.proj], self.proj)
+        self.assertNotEqual(r.returncode, 0, "build --recheck без вердикта должен падать")
 
     def test_failing_verdict_ingest_fails(self):
-        r = _run(["delivery", "feat", "--from-output", "-", "--project-root", self.proj],
+        r = _run(["build", "feat", "--from-output", "-", "--project-root", self.proj],
                  self.proj, stdin=json.dumps({"passed": False, "blocking_issues": ["stub left"]}))
         self.assertEqual(r.returncode, 1)
-        saved = json.loads(self._verdict_path("delivery-judge").read_text(encoding="utf-8"))
+        saved = json.loads(self._verdict_path("build-judge").read_text(encoding="utf-8"))
         self.assertFalse(saved["passed"])
         # errors.json накоплен
         self.assertTrue((self.proj / "ground/statements/feature-pipeline/feat/judges/errors.json").exists())
@@ -149,8 +149,8 @@ class BrdIngestFloor(unittest.TestCase):
 
 
 class HybridIngestFloor(unittest.TestCase):
-    """build/delivery — гибриды merges_saved: на ингесте LLM-вердикт сохраняется, затем
-    check_build/check_delivery читают его и применяют детерминированный пол (stubs/секреты).
+    """build — гибрид merges_saved: на ингесте LLM-вердикт сохраняется, затем
+    check_build читает его и применяет детерминированный пол (stubs).
     Раньше пол применялся только на необязательном --recheck."""
 
     def setUp(self):
@@ -189,13 +189,6 @@ class HybridIngestFloor(unittest.TestCase):
         r = self._ingest("build")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertTrue(self._verdict("build-judge")["passed"])
-
-    def test_delivery_llm_pass_with_secret_fails(self):
-        self.src.write_text(
-            'class App { String password = "P@ssw0rd12345"; }\n', encoding="utf-8")
-        r = self._ingest("delivery")
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertFalse(self._verdict("delivery-judge")["passed"])
 
     def test_eval_llm_pass_without_plan_fails(self):
         # standalone-пол eval: LLM-PASS без eval-plan.json не сохраняется как passed:true

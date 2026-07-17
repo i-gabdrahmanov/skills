@@ -21,7 +21,9 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 
 ## Архитектура (фазы feature-pipeline)
 
-`идея/Jira → BRD → grounding → SDD → tech-design → Jira → build → verify → document → deliver`.
+`идея/Jira → BRD → grounding → SDD → tech-design → Jira → build → verify → document`.
+Доставки в пайплайне нет: commit/push/PR/отчёт делает пользователь сам (промптом или руками)
+после завершения — пайплайн отдаёт верифицированный артефакт.
 Гейты: точки подтверждения пользователем + детерминированные execution-gate'ы (Python) на каждую фазу.
 Состояние — `pipeline-state` (manifest), резюмируемо. Подробности — `skills/feature-pipeline/SKILL.md`.
 
@@ -34,12 +36,12 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 пользователя, каким путём вести работу, и делегирует на общий control-plane (один `.gigacode`,
 одни хуки):
 
-- **full** → `feature-pipeline` — фича с нуля (BRD→…→deliver), вокабуляр шагов `04-test-<id>`/
-  `04-build-<id>`/`07-deliver-<id>`, стейт в namespace `feature-pipeline`.
+- **full** → `feature-pipeline` — фича с нуля (BRD→…→document), вокабуляр шагов `04-test-<id>`/
+  `04-build-<id>`, стейт в namespace `feature-pipeline`.
 - **lite** → `forgelite` (`skills/forgelite/SKILL.md`) — исполнение УЖЕ ПОДГОТОВЛЕННОЙ подзадачи
-  Jira: grounding → tech-design по СУЩЕСТВУЮЩЕЙ спеке → TDD RED→GREEN → покрытие → PR → отчёт.
+  Jira: grounding → tech-design по СУЩЕСТВУЮЩЕЙ спеке → TDD RED→GREEN → покрытие.
   Плоские шаги `lite-*`
-  (`lite-jira/lite-ground/lite-design/lite-red/lite-green/lite-verify/lite-deliver/lite-report`),
+  (`lite-jira/lite-ground/lite-design/lite-red/lite-green/lite-verify`),
   стейт в namespace `forgelite`. Без BRD и без написания SDD с нуля, без постановки задач;
   `lite-design` строит tech-design + task-plan по готовой спеке (`sources.spec`, source of truth,
   форсится `required_decisions`). Гейты RED/GREEN — прямыми gradle/maven-командами субагента,
@@ -51,8 +53,7 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 активный skill/feature по САМОМУ СВЕЖЕМУ манифесту в `ground/statements/*/*/` (не по фикс-namespace).
 `tdd-guard` (блок `src/main` до RED: `04-test-<id>` ИЛИ `lite-red`), `sod-enforcer`
 (`STEP_ROLE` c `lite-*`), `inline-phase-guard`/`pipeline_phases.SUBAGENT_PHASE_PREFIXES`
-(+`lite-red/green/verify`), `evidence-enforcer` (доставка по `lite-green`+`lite-verify` либо по
-task-plan для full), `state-recorder`/`risk_ladder` (newest-manifest across skills). Lite-ids
+(+`lite-red/green/verify`), `state-recorder`/`risk_ladder` (newest-manifest across skills). Lite-ids
 намеренно НЕ пересекаются с масками `judges-registry` и с `PREFIX_PHASE` full-пути → lite не тянет
 судей и фазовые артефакты full. `eval-guard` для lite сам fail-open (нет `04-build-<id>` +
 `eval_enabled=false`). Инвариант «каждая subagent-фаза покрыта хуком» пинится
@@ -74,10 +75,10 @@ task-plan для full), `state-recorder`/`risk_ladder` (newest-manifest across s
 | `fork-syntax-guard.py` | PreToolUse `run_shell_command` | инструктивный блок синтаксиса, который режет нативный сейфти форка (`$(...)`, backticks, `find -exec`, `ls -R`) — вместо молчаливого deny объясняет замену (Glob/Grep/Read) | exit 2 |
 | `pii-boundary.py` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
 | `state-write-guard.py` | PreToolUse Write/Edit/Bash | запрет прямой записи моделью в control-plane-файлы (`manifest.json`, `_origins`, `gates`, `overrides`, `judges`, `approvals`, `pipeline.json`, `ground/phases/`) — мутация только через санкц. скрипты | exit 2 |
-| `evidence-enforcer.py` | PreToolUse `run_shell_command` | блок доставки без полного evidence bundle + пол сообщения HEAD-коммита на push (запрет `Co-Authored-By`; для forgelite — обязательный ключ Jira) | exit 2 |
 | `inline-phase-guard.py` | PreToolUse Bash/Write/Edit | actor-guard: главный агент не производит артефакты/код/билд subagent-фазы inline (по `agent_type`) | exit 2 |
 | `cost-breaker.py` | Pre/Post/Stop/SubagentStop/UserPromptSubmit | token budget: warn ≥80% (**стоп 120% временно отключён — токены безлимитны**); учёт по фазам + финализация на Stop | нет (warn-only) |
 | `prompt-guard.py` | UserPromptSubmit + PostToolUse(read/fetch) | детект prompt-injection → additionalContext | нет |
+| `file-journal.py` | PostToolUse Write/Edit/Bash | безусловный журнал изменённых файлов активной фичи (`journal/files.jsonl`, привязка к step_id) — скоуп восстановления кода для `rollback.py` | нет |
 | `state-recorder.py` | SubagentStop | авто-запись шага в pipeline-state по `step_id` | нет |
 | `context-injector.py` | SubagentStart | инъекция grounding-excerpt/conventions | нет |
 | `phase-gate.py` | Stop | блок завершения с висящим `in_progress` | block |
@@ -90,7 +91,7 @@ task-plan для full), `state-recorder`/`risk_ladder` (newest-manifest across s
 
 | Скилл | Назначение | Evals |
 |---|---|---|
-| `feature-pipeline` | Оркестратор: ведёт фичу по фазам от BRD до PR | gate-скрипты + evals |
+| `feature-pipeline` | Оркестратор: ведёт фичу по фазам от BRD до верифицированного артефакта (доставка — на пользователе) | gate-скрипты + evals |
 | `pipeline-state` | Состояние многошаговых пайплайнов с субагентами | косвенно через evals |
 | `project-grounder` | Фаза 1 (grounding): переиспользует обзор или зовёт `system-analyst` | `verify_coverage.py` |
 | `system-analyst` | Скан Java/Spring сервиса (модули, API, Kafka, БД) | `verify_coverage.py` |
@@ -111,12 +112,14 @@ task-plan для full), `state-recorder`/`risk_ladder` (newest-manifest across s
 ## Журнал решений (почему так)
 
 - **Enforcement в рантайме, не в тексте.** SKILL.md модель может проигнорировать → гейты/политики
-  форсятся хуками (gate-guard/risk-ladder, evidence-enforcer, cost-breaker, phase-gate, security).
+  форсятся хуками (gate-guard/risk-ladder, cost-breaker, phase-gate, security).
 - **Risk ladder R0–R5, deny-first** (`risk-policy.json`) — policy-as-code, рисковое fail-closed.
 - **Выбор критичности фичи форсится** — после BRD SKILL спрашивает критичность (low/medium/high →
   `autonomy.auto_max_risk` R2/R1/R0 в `pipeline.json`); `gate-guard` блокирует любое R2+ действие, пока
   `autonomy.criticality` не задана. На прошлых прогонах выбор пропускался — теперь нельзя.
-- **Evidence bundle** перед доставкой (completeness ≥ `evidence.threshold`).
+- **Доставка — на пользователе** (2026-07-17): commit/push/PR/отчёт пайплайн не делает и не гейтит;
+  фазы 07-deliver/07-report/lite-deliver/lite-report и evidence-bundle-обвязка удалены —
+  больше половины токенов уходило на обход граничных случаев доставочной обвязки.
 - **Pipeline-state намеспейсится ПО ФИЧЕ**: `ground/statements/feature-pipeline/<feature>/` (был один
   `pipeline/` на все фичи → вытесняли друг друга). Фичи сосуществуют, резюм точечный.
   `--feature <slug>` во всех вызовах init/read/update/add_steps/build_evidence.
@@ -149,11 +152,10 @@ task-plan для full), `state-recorder`/`risk_ladder` (newest-manifest across s
 3. `pii-boundary` — PII scope (перехват редиректов `>`/`tee`/`dd of=` в файл)
 4. `state-write-guard` — запрет прямой записи в control-plane state (редирект/`python -c open()`)
 5. `cost-breaker` — token budget
-6. `evidence-enforcer` — полнота пакета
-7. `sod-enforcer` — separation of duties (роль фазы: design/spec/jira не коммитят/пушат/билдят)
-8. `inline-phase-guard` — actor: главный агент не билдит/тестит inline в subagent-фазе
-9. `gate-guard` — risk ladder
-10. `log-agent` — аудит (последний, неблокирующий)
+6. `sod-enforcer` — separation of duties (роль фазы: design/spec/jira не билдят; git не гейтится)
+7. `inline-phase-guard` — actor: главный агент не билдит/тестит inline в subagent-фазе
+8. `gate-guard` — risk ladder
+9. `log-agent` — аудит (последний, неблокирующий)
 
 **PreToolUse `(Write|Edit)` — sequential:**
 1. `pii-boundary` — PII scope

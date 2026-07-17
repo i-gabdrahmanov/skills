@@ -51,17 +51,20 @@ class TestSod(unittest.TestCase):
             self.assertEqual(_run(tmp, {"tool_name": "Write",
                 "tool_input": {"file_path": str(tmp / "src/main/java/X.java")}}), 0)
 
-    def test_design_role_blocks_push(self):
+    def test_design_role_blocks_build_cmd(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d); _make(tmp, "02-design")
             self.assertEqual(_run(tmp, {"tool_name": "Bash",
-                "tool_input": {"command": "git push origin main"}}), 2)
+                "tool_input": {"command": "./gradlew build"}}), 2)
 
-    def test_test_role_blocks_commit(self):
+    def test_git_commit_push_not_gated(self):
+        # Доставка — на пользователе: git commit/push роли не гейтят ни в одной фазе.
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d); _make(tmp, "04-test-T1")
             self.assertEqual(_run(tmp, {"tool_name": "Bash",
-                "tool_input": {"command": "git commit -m x"}}), 2)
+                "tool_input": {"command": "git commit -m x"}}), 0)
+            self.assertEqual(_run(tmp, {"tool_name": "Bash",
+                "tool_input": {"command": "git push origin main"}}), 0)
 
     def test_no_active_step_failopen(self):
         with tempfile.TemporaryDirectory() as d:
@@ -75,20 +78,16 @@ class TestSod(unittest.TestCase):
             self.assertEqual(_run(tmp, {"tool_name": "Write",
                 "tool_input": {"file_path": str(tmp / "src/main/java/X.java")}}), 2)
 
-    def test_spec_role_blocks_raw_git_but_passes_doc_review_script(self):
-        # Гейт доставки доков: doc_review_push.py — санкционированный канал (его гейтит
-        # gate-guard approval-маркером); сырые git commit/push в spec-фазе — по-прежнему блок,
-        # включая попытку руками замерджить/запушить default-ветку.
+    def test_spec_role_blocks_build_but_not_git(self):
+        # spec-фаза не билдит, но git-команды свободны (доставка — на пользователе).
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d); _make(tmp, "02-sdd")
             self.assertEqual(_run(tmp, {"tool_name": "Bash",
-                "tool_input": {"command": "git commit -m x"}}), 2)
+                "tool_input": {"command": "./gradlew build"}}), 2)
             self.assertEqual(_run(tmp, {"tool_name": "Bash",
-                "tool_input": {"command": "git push origin main"}}), 2)
+                "tool_input": {"command": "git commit -m x"}}), 0)
             self.assertEqual(_run(tmp, {"tool_name": "Bash",
-                "tool_input": {"command": "python3 .gigacode/skills/feature-pipeline/scripts/"
-                                          "doc_review_push.py --doc sdd --feature feat "
-                                          "--json"}}), 0)
+                "tool_input": {"command": "git push origin main"}}), 0)
 
 
 if __name__ == "__main__":

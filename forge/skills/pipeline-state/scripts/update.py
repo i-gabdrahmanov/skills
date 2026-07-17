@@ -287,10 +287,7 @@ def _check_doc_approval(step: dict, project: Path, skill: str, feature: str):
     """Гарантия «BRD/SDD утверждён человеком» — на EVIDENCE, не на словах модели.
 
     Закрыть 00-brd/02-sdd можно только при маркере <doc>-approved-<feature> (record_approval
-    после явного «да» пользователя). Это же — enforcement ПАУЗЫ Гейта доставки: если док
-    замерджен на согласование аналитикам (doc_review_push, маркер <doc>-review-<feature>),
-    шаг не закрывается, пока пользователь не вернулся с итогами ревью и не сказал «утверждаем»
-    — молча продолжить пайплайн после мерджа нельзя. На прогонах модель не задавала вопросов
+    после явного «да» пользователя). На прогонах модель не задавала вопросов
     вообще — теперь без утверждения фаза не закрывается детерминированно.
     Escape-hatch: overrides/doc-approved-<step_id>.json (создание — R4 через override_judge)."""
     step_id = step.get("id", "")
@@ -310,18 +307,11 @@ def _check_doc_approval(step: dict, project: Path, skill: str, feature: str):
         print(f"  {msg}", file=sys.stderr)
         return
     record_script = Path(__file__).resolve().parent / "record_approval.py"
-    pause_note = ""
-    if _approval_marker_valid(project, f"{doc}-review-{feature}"):
-        pause_note = (
-            f"\n   ⏸ ПАУЗА: {doc}.md вынесен на согласование аналитикам "
-            f"(маркер {doc}-review-{feature}). Дождись итогов ревью — заверши ход и не "
-            f"продолжай пайплайн; правки аналитиков = ре-итерация фазы."
-        )
     raise RuntimeError(
         f"Шаг {step_id} нельзя закрыть: {doc}.md не утверждён пользователем "
-        f"(нет валидного маркера ground/approvals/{key}.json).{pause_note}\n"
-        f"   Порядок: (1) спроси пользователя («утверждаем {doc.upper()}?» / после ревью — "
-        f"«аналитики согласовали, утверждаем?»); (2) ТОЛЬКО после явного «да»:\n"
+        f"(нет валидного маркера ground/approvals/{key}.json).\n"
+        f"   Порядок: (1) спроси пользователя («утверждаем {doc.upper()}?»); "
+        f"(2) ТОЛЬКО после явного «да»:\n"
         f"   python3 {record_script} --project {project} --key {key} "
         f"--approved-by user --reason \"<кто/почему>\"\n"
         f"   (3) повтори update.py. Молча закрывать доко-фазу нельзя. Если утверждение "
@@ -635,6 +625,19 @@ def main():
         step["error"] = args.error
     elif args.status != "failed" and "error" in step:
         del step["error"]
+
+    # Git-чекпойнт worktree на закрытии шага — точка восстановления кода для rollback.py
+    # (служебный ref, ветки/HEAD/индекс не трогаются). Fail-soft: без git закрытие шага
+    # не падает, но rollback откажется трогать код без чекпойнта. Блок ДО сериализации,
+    # чтобы step["checkpoint"] ушёл в манифест одной записью.
+    if args.status == "completed" and prev_status != "completed":
+        try:
+            from checkpoint import create_checkpoint
+            _ckpt_sha = create_checkpoint(project, args.feature, args.step_id)
+            if _ckpt_sha:
+                step["checkpoint"] = _ckpt_sha[:12]
+        except Exception as e:
+            print(f"WARNING: checkpoint failed: {e}", file=sys.stderr)
 
     manifest["last_update"] = now
 

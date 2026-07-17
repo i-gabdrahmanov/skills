@@ -63,6 +63,10 @@ description: "TDD RED tests for <JIRA-KEY>"
 subagent_type: general-purpose
 
 prompt:
+Сначала прочитай и строго следуй: read_file("<project>/.gigacode/skills/test-writer/SKILL.md")
+(режим RED). Конвенции тестовой базы (первый вызов сканирует, дальше кэш):
+python3 <project>/.gigacode/skills/test-writer/scripts/analyze_tests.py --root <toplevel> --if-missing
+Стиль — по docs/system-analysis/scan/test-conventions.json и эталонам из exemplars.
 Напиши падающие unit-тесты (TDD RED) по acceptance criteria. НЕ трогай src/main/.
 Корень репо: <toplevel>. Сборка: <gradle|maven>.
 Задача: <summary> / AC: <acceptance criteria>. Grounding: <классы/соседние тесты>.

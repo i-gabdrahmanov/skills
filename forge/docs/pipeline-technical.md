@@ -179,7 +179,9 @@ sequenceDiagram
 - Субагент `sdd` (контракт §4.0a `subagent-prompts.md`) → строгая спецификация `sdd.md`
   (вход: `brd.md` + `grounding-excerpt.json`). НЕ читать `sdd/SKILL.md` в контекст оркестратора.
 - **Judge:** `run_judge.py sdd <slug>` (`sdd-judge`).
-- **Гейт SDD** — утверждение спецификации (правки → возврат `sdd`; новое бизнес-требование → откат к BRD).
+- **Гейт SDD** — утверждение спецификации (правки → возврат `sdd`; новое бизнес-требование → откат к BRD
+  через `pipeline-state/scripts/rollback.py --to-step 00-brd`: R4-гейт `--dry-run` → «да» → `record_approval`
+  → откат; см. `feature-pipeline/references/rollback.md`).
 
 ### Фаза 2 — Design (вход — утверждённый `sdd.md`)
 - `preflight-validate.py` (exit 1 = предыдущий шаг сделан inline → СТОП).

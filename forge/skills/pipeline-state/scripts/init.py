@@ -96,6 +96,14 @@ def main():
         archive_target = archive_dir / f"{args.feature}-{ts}"
         pdir.rename(archive_target)
         print(f"Archived previous state to {archive_target}", file=sys.stderr)
+        # Уборка: чекпойнт-refs прежнего прогона фичи больше не резолвятся из манифеста
+        try:
+            from checkpoint import delete_checkpoints
+            n = delete_checkpoints(project, args.feature)
+            if n:
+                print(f"Deleted {n} stale checkpoint ref(s) for '{args.feature}'", file=sys.stderr)
+        except Exception as e:
+            print(f"WARNING: checkpoint cleanup failed: {e}", file=sys.stderr)
 
     pdir.mkdir(parents=True, exist_ok=True)
 
@@ -143,7 +151,6 @@ def main():
         "02-design":    [("tech-design", "tech-design.md"), ("task-plan", "task-plan.json")],
         "02-eval-plan": [("eval-plan", "eval-plan.json")],
         "03-jira":      [("jira-result", "jira-tasks-result.json")],
-        "07-deliver-":  [("pr-info", "pr-info.json")],
     }
     fdir = feature_docs_dir(project) / args.feature
     for step in steps:
@@ -174,6 +181,14 @@ def main():
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
     os.replace(tmp, manifest_path)
+
+    # Baseline-чекпойнт worktree — точка восстановления для отката к самым ранним шагам
+    # (rollback.py: fallback-цепочка кончается на 00-baseline). Fail-soft.
+    try:
+        from checkpoint import create_checkpoint
+        create_checkpoint(project, args.feature, "00-baseline")
+    except Exception as e:
+        print(f"WARNING: baseline checkpoint failed: {e}", file=sys.stderr)
 
     print(json.dumps({
         "status": "initialized",

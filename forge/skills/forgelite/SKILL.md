@@ -3,13 +3,14 @@ name: forgelite
 description: >
   Лёгкая ветка forge для исполнения УЖЕ ПОДГОТОВЛЕННОЙ подзадачи из Jira (есть описание и
   acceptance criteria) для Java/Spring: grounding → tech-design по СУЩЕСТВУЮЩЕЙ спеке (source of
-  truth) → TDD RED→GREEN → покрытие → ветка/commit/PR → отчёт в Jira. Без BRD и без написания
-  SDD с нуля, без постановки задач — только исполнение готового тикета (tech-design строится по
-  уже готовой спеке, а не пишется заново). Обычно вызывается роутером (skills/router), когда пользователь
-  выбрал путь «готовая задача»; работает и автономно. Триггеры: «выполни задачу из jira»,
-  «сделай KIDPPRB-1234», «прогони готовый subtask до PR». Отличие от feature-pipeline —
-  тот с нуля (BRD→PR); от minor-defect-fix — тот баг + спека в отдельном репо. Никогда не
-  коммитит, не пушит, не создаёт PR и не пишет в Jira без явного «да».
+  truth) → TDD RED→GREEN → покрытие. Без BRD и без написания SDD с нуля, без постановки
+  задач — только исполнение готового тикета (tech-design строится по уже готовой спеке, а не
+  пишется заново). Коммиты/push/PR/отчёты в Jira пайплайн НЕ делает — их выполняет
+  пользователь сам (промптом или руками) после завершения. Обычно вызывается роутером
+  (skills/router), когда пользователь выбрал путь «готовая задача»; работает и автономно.
+  Триггеры: «выполни задачу из jira», «сделай KIDPPRB-1234», «прогони готовый subtask».
+  Отличие от feature-pipeline — тот с нуля (BRD→код); от minor-defect-fix — тот баг + спека
+  в отдельном репо.
 ---
 
 # Forgelite — lite-ветка: исполнение готовой задачи Jira
@@ -25,11 +26,11 @@ description: >
 >   `ask_user_question` не активны одновременно.
 
 Плоский цикл (feature = ключ Jira; стейт в namespace `forgelite`, отдельно от `feature-pipeline`):
-**Jira → grounding → tech-design по спеке → RED → GREEN → покрытие → commit → PR → отчёт**. Ничего
-необратимого (commit, push, PR, комментарий в Jira) — без явного «да» (Gate 1–4).
+**Jira → grounding → tech-design по спеке → RED → GREEN → покрытие**. На этом пайплайн
+заканчивается: commit/push/PR/отчёт в Jira делает пользователь сам (промптом или руками).
 
 Шаги стейта (`lite-*`, чтобы НЕ пересекаться с фазовой машиной full-пути и масками судей):
-`lite-jira → lite-ground → lite-design → lite-red → lite-green → lite-verify → lite-deliver → lite-report`.
+`lite-jira → lite-ground → lite-design → lite-red → lite-green → lite-verify`.
 
 > **lite ≠ «без дизайна».** Для простой задачи спека (SDD) уже существует — это **source of
 > truth**. `lite-design` строит tech-design/task-plan ПО НЕЙ (скилл `tech-design`, субагент),
@@ -40,7 +41,7 @@ description: >
 
 ## 0. Предусловия
 
-- Java/Spring (gradle или maven). MCP **Atlassian (Jira)** и **Bitbucket** подключены (иначе стоп).
+- Java/Spring (gradle или maven). MCP **Atlassian (Jira)** подключён (иначе стоп).
 - cwd = корень репо кода (`<toplevel>`). Харнес развёрнут; preflight должен быть зелёным.
 - Если тебя вызвал роутер — критичность/конфиг уже выставлены (`autonomy.auto_max_risk=R2`,
   `quality.eval_enabled=false`). Если запускаешься автономно — проверь, что они выставлены (см. §1.1).
@@ -55,15 +56,13 @@ description: >
 | Tech-design по спеке (Gate 1) | `lite-design` | субагент (`tech-design`) | agent() |
 | TDD RED | `lite-red` | субагент-тестописатель | agent() |
 | TDD GREEN | `lite-green` | java-spring-dev (субагент) | agent() |
-| Тесты + покрытие | `lite-verify` | субагент-раннер | agent() |
-| commit/push/PR (Gate 2/3) | `lite-deliver` | главный агент | git + Bitbucket MCP |
-| Отчёт в Jira (Gate 4) | `lite-report` | главный агент | Jira MCP |
+| Тесты + покрытие (финал) | `lite-verify` | субагент-раннер | agent() |
 
 > **Субагент = ЯВНЫЙ вызов `agent(subagent_type="general-purpose", ...)`.** RED-тесты / GREEN-код /
 > прогон тестов не пиши inline (заблокирует `inline-phase-guard`; нет SubagentStop → молчат
 > проверки). Субагент ПОСЛЕДНИМ действием сам гоняет свой детерминированный гейт и возвращает
 > JSON с `step_id` и `status` (`completed` только при прохождении гейта). Хук `state-recorder`
-> закрывает шаг по этому статусу. Инлайн-шаги (lite-jira/lite-deliver/lite-report) закрывает
+> закрывает шаг по этому статусу. Инлайн-шаг (lite-jira) закрывает
 > главный агент через `update.py`. `lite-design` — субагентная фаза (tech-design; главный агент не
 > пишет tech-design.md/task-plan.json inline — заблокирует `inline-phase-guard`).
 
@@ -171,6 +170,10 @@ prompt:
 description: "TDD RED tests for <JIRA-KEY>"
 subagent_type: general-purpose
 prompt:
+Сначала прочитай и строго следуй: read_file("<project>/.gigacode/skills/test-writer/SKILL.md")
+(режим RED). Конвенции тестовой базы (первый вызов сканирует, дальше кэш):
+python3 <project>/.gigacode/skills/test-writer/scripts/analyze_tests.py --root <toplevel> --if-missing
+Стиль — по docs/system-analysis/scan/test-conventions.json и эталонам из exemplars.
 Напиши падающие unit-тесты (TDD RED) по acceptance criteria. НЕ трогай src/main/.
 Корень репо: <toplevel>. Сборка: <gradle|maven>.
 Задача: <summary> / AC: <acceptance criteria>. Grounding: <классы/соседние тесты>.
@@ -237,34 +240,9 @@ status:"completed" ТОЛЬКО если тесты зелёные И coverage_g
 Лимит итераций GREEN↔verify форсится детерминированно (`quality.max_step_reopens`, дефолт 3) —
 на исчерпании `update.py` вернёт exit 3 (ESCALATE): СТОП, покажи пользователю и спроси.
 
-## 8. Deliver: ветка + commit + push + PR → `lite-deliver` (Gate 2/3)
-`evidence-enforcer`/`gate-guard` не дадут `git push` до закрытия `lite-green`+`lite-verify`.
-
-### 8.1. Коммит (Gate 2)
-Стиль коммитов: `git log -30 --pretty=format:%s`. Сообщение: по стилю, «почему», с ключом Jira,
-**без** `Co-Authored-By`. Это enforced: на `git push` хук `evidence-enforcer` детерминированно
-проверяет HEAD-коммит (Co-Authored-By → блок; нет ключа Jira → блок) — чинить `git commit --amend`.
-> **Gate 2:** «Коммитим с этим сообщением? (да / правки)».
-`git add` только нужное. Ветка `feature/<JIRA-KEY>` (от default-ветки).
-
-### 8.2. Push + PR (Gate 3)
-> **Gate 3:** «Пушим и создаём PR в Bitbucket? (да / только push / нет)».
-```
-git push -u origin feature/<JIRA-KEY>
-```
-PR через Bitbucket MCP: title = первая строка коммита; description = будущий отчёт (§9) + ссылка
-на задачу; target = default-ветка. Запомни PR URL и short-sha. Закрой `lite-deliver`.
-
-## 9. Отчёт в Jira → `lite-report` (Gate 4)
-Черновик комментария (Markdown):
-```markdown
-**Что сделано:** суть реализации по AC.
-**Изменённые файлы:** `path/File.java` — суть …
-**Тесты:** добавлены `FooTest#…`; покрытие изменённых файлов NN% (порог 80%).
-**Код:** ветка `feature/<JIRA-KEY>`; PR <url>; коммит <short sha>.
-```
-> **Gate 4:** «Отправить комментарий в Jira? (да / отредактировать / не отправлять)».
-После «да» — MCP `*jira*add*comment*`. Закрой `lite-report`.
+**`lite-verify` — финальный шаг пайплайна.** Покажи пользователю итог: что изменено
+(файлы), тесты, покрытие. Коммит, push, PR и комментарий в Jira пайплайн НЕ делает —
+их пользователь выполняет сам (промптом или руками), когда сочтёт артефакт готовым.
 
 ---
 
@@ -272,14 +250,12 @@ PR через Bitbucket MCP: title = первая строка коммита; d
 | Действие | Паттерн инструмента |
 |---|---|
 | Jira issue | `*jira*get*issue*`, `*atlassian*issue*` |
-| Комментарий | `*jira*add*comment*` |
-| PR | `*bitbucket*create*pull*request*` |
 Не угадывай — бери первый подходящий из доступных.
 
 ## Что НЕ делать
-- Необратимое (commit/push/PR/Jira) — только после «да» (Gate 2–4).
+- Не коммить, не пушь, не создавай PR и не пиши в Jira — доставку делает пользователь сам.
 - RED/GREEN/прогон — только субагентом (иначе `inline-phase-guard`).
-- Не обходи через `git push --force`/`reset --hard`/`checkout .`.
+- Не обходи через `reset --hard`/`checkout .`.
 - Не пиши BRD и не пиши SDD с нуля, не ставь задачи в Jira (это full-путь feature-pipeline).
   Tech-design (`lite-design`) строй ТОЛЬКО по существующей спеке (`sources.spec`), а не заново.
   Спеку в отдельном репо не бери (это minor-defect-fix).

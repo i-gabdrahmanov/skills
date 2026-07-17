@@ -131,8 +131,7 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
     "eval_threshold": 0.95,          // Порог прохождения eval'ов по умолчанию
     "architecture_check": false,     // вкл. ArchUnit-lite гейт слоёв в verify (check_architecture.py)
     "tautology_check": false,        // вкл. детектор пустых/тавтологичных тестов (check_tautological_tests.py)
-    "traceability_check": false,     // вкл. сквозной judge трассируемости (check_traceability.py)
-    "secret_scan": true              // secret-scan в verify (ON по умолчанию); на доставке форсится всегда
+    "traceability_check": false      // вкл. сквозной judge трассируемости (check_traceability.py)
   },
   "docs": {                          // ГДЕ живут документные артефакты (brd/sdd/tech-design/
                                      // task-plan, system-analysis/grounding). Резолвится ЕДИНО
@@ -141,9 +140,7 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
     "docs_path": "docs",             // in-repo: база под корнем проекта
     "repo_path": null,               // separate-repo: АБСОЛЮТНЫЙ путь к внешнему репо спеки
     "feature_subdir": "feature-pipeline",       // подпапка фич под docs-базой
-    "system_analysis_subdir": "system-analysis",// подпапка системного обзора под docs-базой
-    "brd_review": "",                // Гейт доставки BRD: push | skip | "" (спросить) — см. ниже
-    "sdd_review": ""                 // Гейт доставки SDD: push | skip | "" (спросить) — см. ниже
+    "system_analysis_subdir": "system-analysis" // подпапка системного обзора под docs-базой
   },
   "jira": {
     "enabled": null,                 // TODO
@@ -151,9 +148,7 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
     "issue_type_story": "Story",
     "issue_type_subtask": "Sub-task"
   },
-  "bitbucket": { "enabled": null, "workspace": null, "repo_slug": null },
-  "delivery": { "pr_strategy": "stacked", "branch_prefix": "feature/" },
-  "autonomy": { "mode": "gated", "gates": ["brd","design","jira","commit","pr","report"] }
+  "autonomy": { "mode": "gated", "gates": ["brd","design","jira"] }
 }
 ```
 
@@ -179,19 +174,7 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.p
 # exit 2 → есть нарушения слоёв (error); --strict делает warning тоже блокирующими.
 ```
 
-## Security: secret-scan (ON по умолчанию) + CVE (опц.)
-
-**Secret-scan** (`check_secrets.py`, `quality.secret_scan: true` по умолчанию) — детерминированный
-поиск хардкод-кредов в изменённых файлах: присваивания `password/secret/api_key/token`, AWS AKIA,
-PEM private key, JWT, Slack/GitHub/Google токены, jdbc-URL с паролем. Плейсхолдеры (`${...}`,
-`changeme`, env-ссылки) отфильтрованы → низкий false-positive. ЕДИНЫЙ источник правил — его же
-импортирует delivery-judge (`run_judge._delivery_floor`), где secret-scan **форсится всегда**,
-независимо от флага (доставка с секретом блокируется). В verify гоняется при `secret_scan: true`:
-
-```bash
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_secrets.py \
-    --root <project> --base <branch-base> [--json]   # exit 2 → найден потенциальный секрет
-```
+## Security: CVE (опц.)
 
 **CVE-скан зависимостей** — требует БД уязвимостей (OWASP dependency-check / `gradle
 dependencyCheckAnalyze` / `mvn org.owasp:dependency-check`), поэтому self-contained-скрипта нет:
@@ -256,26 +239,14 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_tautological_t
   после чего весь пайплайн (скрипты, хуки, судьи) подхватит расположение из резолвера.
 - **Legacy:** старые ключи `docs.feature_docs_path` / `docs.system_analysis_path` (полные
   относительные пути) ещё поддерживаются резолвером в in-repo режиме.
-- `docs.brd_review` / `docs.sdd_review` — решения **Гейтов доставки** BRD/SDD (фазы 00-brd /
-  02-sdd, брифы `phases/00-brd.md` / `phases/02-sdd.md`; гейт стоит ДО утверждения дока):
-  `push` — закоммитить `brd.md`/`sdd.md` на **ветку задачи `docs/<slug>`** (у каждой
-  Jira-задачи своя ветка, общая для её BRD и SDD; база — default-ветка) и запушить
-  аналитикам (без PR; выполняет ТОЛЬКО санкционированный `doc_review_push.py`, гейченный
-  approval-маркером `<doc>-review-<slug>`); после пуша пайплайн берёт **ПАУЗУ** до итогов
-  ревью — update.py не закроет шаг без маркера утверждения `<doc>-approved-<slug>`.
-  `skip` — не пушить, сразу гейт утверждения; пусто — спросить пользователя. Headless:
-  предзапись ДО прогона (`config.py set docs.sdd_review push`). Ключи per-project —
-  действуют на все фичи прогона, как `sources.spec`. В `separate-repo` ветка задачи
-  создаётся в репо спеки.
 
 ## Что заполнить вручную после init
 
 Поля из `_incomplete` — их скрипт знать не может:
 - `jira.enabled` / `jira.project_key` — есть ли Jira и ключ проекта.
-- `bitbucket.enabled` / `workspace` / `repo_slug` — куда создавать PR.
 - `conventions.migration_tool` — если в проекте Liquibase ещё не подключён, но он целевой,
   поставь `liquibase` и заведи baseline changelog (см. `migrations.md`).
-- `project.is_git=false` → сделай `git init` (иначе не работают ветки/PR и ключ pipeline-state).
+- `project.is_git=false` → сделай `git init` (иначе не работают чекпойнты rollback и pipeline-state).
 
 ## Обратная совместимость
 

@@ -31,15 +31,13 @@ PREFIX_PHASE = {
     "04-": "04-tdd",
     "05-": "05-verify",
     "06-": "06-document",
-    "07-deliver-": "07-deliver",
-    "07-report": "07-report",
-    "07-": "07-deliver",
 }
 
 # Главные фазы в КАНОНИЧЕСКОМ порядке (по нему сортируется gate, а не по появлению шагов).
+# Доставки (07-deliver/07-report) в пайплайне нет: commit/push/PR/отчёт делает пользователь
+# сам (промптом или руками), пайплайн заканчивается верифицированным артефактом.
 MAIN_PHASES = ["00-brd", "01-grounding", "02-sdd", "02-design", "02-eval-plan",
-               "03-jira", "04-tdd", "05-verify", "06-document",
-               "07-deliver", "07-report"]
+               "03-jira", "04-tdd", "05-verify", "06-document"]
 
 # Маска судей по id шага. ЕДИНЫЙ источник — references/judges-registry.json (pipeline-state),
 # читается через judges_registry. Раньше маска дублировалась здесь, в init.py и
@@ -83,7 +81,6 @@ def is_container_step(step_id: str) -> bool:
 #    enforcement тихо отвалится.
 BUILD_STEP_PREFIX = "04-build-"      # 04-build-<taskId> — GREEN-фаза задачи (пишет src/main)
 TEST_STEP_PREFIX = "04-test-"        # 04-test-<taskId>  — RED-фаза задачи (пишет src/test)
-DELIVER_STEP_PREFIX = "07-deliver-"  # 07-deliver-<taskId> — доставка задачи (PR/commit)
 
 # Фазы, ОБЯЗАННЫЕ исполняться субагентом (не inline). Совпадает с префиксами шагов.
 # Хвост lite-* — плоские шаги lite-ветки (forgelite): RED/GREEN/verify тоже идут субагентом.
@@ -106,7 +103,7 @@ def requires_gate_result(step_id) -> bool:
 
 # Обязательные шаги: их НЕЛЬЗЯ тихо пропустить (status=skipped) без override — иначе fallback
 # «не смог спросить → пропущу фазу» тихо выкидывает качество-гейты (Thrust 1: fallback=STOP).
-# grounding/brd/report сюда НЕ входят (grounding легитимно reuse-skip, report — пост-доставка).
+# grounding/brd сюда НЕ входят (grounding легитимно reuse-skip).
 # lite-design уже в SUBAGENT_PHASE_PREFIXES (tech-design обязан идти субагентом).
 REQUIRED_STEP_PREFIXES = SUBAGENT_PHASE_PREFIXES
 
@@ -131,11 +128,6 @@ def build_task_id(step_id):
 def test_task_id(step_id):
     """task-id из RED-test-шага ('04-test-T1' → 'T1'), иначе None."""
     return _task_id_after(step_id, TEST_STEP_PREFIX)
-
-
-def deliver_task_id(step_id):
-    """task-id из delivery-шага ('07-deliver-T1' → 'T1'), иначе None."""
-    return _task_id_after(step_id, DELIVER_STEP_PREFIX)
 
 
 def is_build_step(step_id) -> bool:
@@ -177,8 +169,6 @@ def allowed_skills(phase_id: str) -> list:
         "04-tdd":       ["java-spring-dev", "bugfix-developer", "minor-defect-fix", "Explore"],
         "05-verify":    ["Explore"],
         "06-document":  ["general-purpose", "Explore"],
-        "07-deliver":   ["Explore"],
-        "07-report":    ["Explore"],
     }.get(phase_id, [])
 
 

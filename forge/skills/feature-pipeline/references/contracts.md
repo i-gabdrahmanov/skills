@@ -46,7 +46,6 @@
 | 3 | build-judge | 3 — GREEN (после кода) | Нет stubs? Нет мёртвого кода? Код = tech-design? | Шаг `04-build-<taskId>` |
 | 3b | reuse-judge | 3 — GREEN (после build-judge) | Нет велосипедов? Не дублирует доступные библиотеки/util? | Шаг `04-build-<taskId>` |
 | 4 | spec-judge | 5 (после Document) | Docs полны? Ground актуален? Нет мусора? | Шаг `06-spec` |
-| 5 | delivery-judge | 6 (перед коммитом) | Jira консистентна? Нет секретов? git status чист? | Гейт 4 (коммиты) |
 
 ## 4. Формат вердикта
 
@@ -92,8 +91,7 @@ ground/statements/feature-pipeline/<slug>/
 │   ├── red-judge.json
 │   ├── build-judge.json
 │   ├── reuse-judge.json
-│   ├── spec-judge.json
-│   └── delivery-judge.json
+│   └── spec-judge.json
 ```
 
 ## 6. Порядок интеграции в пайплайн
@@ -108,8 +106,8 @@ ground/statements/feature-pipeline/<slug>/
 3. **build-judge**: после реализации + зелёных тестов, перед закрытием `04-build-<taskId>`
 3b. **reuse-judge**: после build-judge (PASS), перед закрытием `04-build-<taskId>` —
     гибрид: `run_judge.py reuse` (regex велосипедов по git diff) + LLM по каталогу `scan/reuse.json`
-4. **spec-judge**: после спецадаптера + enrich_grounding, перед закрытием `06-spec`
-5. **delivery-judge**: перед Гейтом 4 (до показа плана коммитов)
+4. **spec-judge**: после спецадаптера + enrich_grounding, перед закрытием `06-spec` —
+   это финальный судья пайплайна (доставку делает пользователь сам)
 
 ## 7. Критерии FAIL по каждому судье
 
@@ -153,11 +151,3 @@ ground/statements/feature-pipeline/<slug>/
 - brd.md, tech-design.md или task-plan.json отсутствуют
 - manifest.json в ground отсутствует
 - enrich_grounding не запускался
-
-### 7.5 delivery-judge
-- Stubs/missing implementation
-- Найдены секреты/credentials в коде
-- git status показывает неожиданные изменения
-- TODO/FIXME без явного разрешения
-- Jira не консистентна (если Jira enabled)
-- Сообщения коммитов без Jira-ключа
