@@ -244,14 +244,14 @@ sequenceDiagram
 | `destructive-blocker` | PreToolUse Bash | чёрный список (`rm -rf /`, force-push, DROP) | exit 2 |
 | `pii-boundary` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
 | `evidence-enforcer` | PreToolUse Bash | блок доставки без полного evidence bundle | exit 2 |
-| `cost-breaker` | Pre/Post/Stop/UserPromptSubmit | token budget: warn ≥80% (стоп 120% **временно отключён — токены безлимитны**) | нет (warn-only) |
+| `budget-meter` | Post/SubagentStop/Stop | информационный учёт токен-бюджета по фазам + сводка на Stop. **Не блокирует и не предупреждает** | — |
 | `prompt-guard` | UserPromptSubmit + PostToolUse | детект prompt-injection → additionalContext | — |
 | `state-recorder` | SubagentStop | авто-запись шага по `step_id` | — |
 | `context-injector` | SubagentStart | инъекция grounding-excerpt/conventions | — |
 | `phase-gate` | Stop | блок завершения с висящим `in_progress` | block |
 | `log-agent` | все | append-only JSONL аудит | — |
 
-**Порядок (sequential) PreToolUse Bash:** destructive-blocker → cost-breaker → evidence-enforcer →
+**Порядок (sequential) PreToolUse Bash:** destructive-blocker → evidence-enforcer →
 inline-phase-guard → gate-guard → log-agent. **Write/Edit:** pii-boundary → tdd-guard → eval-guard →
 sod-enforcer → inline-phase-guard → gate-guard → log-agent. Логгер всегда последний и неблокирующий.
 

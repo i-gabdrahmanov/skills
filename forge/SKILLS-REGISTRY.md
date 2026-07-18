@@ -43,7 +43,7 @@
 | sod-enforcer / inline-phase-guard | @team | 2026-12 | separation of duties / блок inline-работы в subagent-фазах | run-evals.py |
 | pii-boundary | @team | 2026-12 | граница PII при записи | run-evals.py |
 | prompt-guard | @team | 2026-12 | детект prompt-injection | run-evals.py |
-| cost-breaker | @team | 2026-12 | token budget: учёт + warn ≥80% (circuit-breaker/стоп 120% временно отключён — токены безлимитны) | run-evals.py |
+| budget-meter | @team | 2026-12 | информационный учёт токен-бюджета по фазам + сводка на Stop (circuit-breaker удалён — не блокирует и не предупреждает) | run-evals.py |
 | state-recorder / context-injector / phase-gate / log-agent | @team | 2026-12 | state/context/stop/audit | run-evals.py |
 
 > При изменении любого скилла/хука — обнови строку (validity, evals). Реестр ревьюится на каждой

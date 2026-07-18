@@ -233,22 +233,24 @@ def main() -> int:
         c, out = run_hook("context-injector.py", {"cwd": str(rci2), "agent_type": "general-purpose", "agent_id": "x"})
         check("context-injector: нет файлов → нет инъекции", c == 0 and out.strip() == "")
 
-        # ── cost-breaker ──
+        # ── budget-meter (информационный учёт, без блокировок/warn) ──
         rc = make_project(tmp / "cost")
         bud = rc / "ground" / "ai-logs" / "feature-pipeline" / "iter-p1"
         bud.mkdir(parents=True, exist_ok=True)
         (bud / "budget.json").write_text(json.dumps({"total_spent": 1300, "total_events": 5}), encoding="utf-8")
-        c, out = run_hook("cost-breaker.py", {"cwd": str(rc), "hook_event_name": "PreToolUse",
+        c, out = run_hook("budget-meter.py", {"cwd": str(rc), "hook_event_name": "PreToolUse",
                         "tool_name": "Bash", "tool_input": {"command": "x"}})
-        check("cost ≥120% PreToolUse → exit 0 (unlimited, без блокировки)", c == 0)
-        c, out = run_hook("cost-breaker.py", {"cwd": str(rc), "hook_event_name": "Stop",
+        check("budget-meter: PreToolUse → exit 0, ничего не выводит (не breaker)",
+              c == 0 and out.strip() == "")
+        c, out = run_hook("budget-meter.py", {"cwd": str(rc), "hook_event_name": "PostToolUse",
+                        "tool_name": "Bash", "usage": {"total_tokens": 200}})
+        check("budget-meter: PostToolUse → tally прибавляет расход",
+              c == 0 and json.loads((bud / "budget.json").read_text(encoding="utf-8"))["total_spent"] == 1500)
+        c, out = run_hook("budget-meter.py", {"cwd": str(rc), "hook_event_name": "Stop",
                         "stop_hook_active": False})
-        check("cost ≥120% Stop → exit 0, финализирует единый budget.json",
-              c == 0 and "finalized_at" in json.loads((bud / "budget.json").read_text(encoding="utf-8")))
-        (bud / "budget.json").write_text(json.dumps({"total_spent": 850, "total_events": 5}), encoding="utf-8")
-        c, out = run_hook("cost-breaker.py", {"cwd": str(rc), "hook_event_name": "PreToolUse",
-                        "tool_name": "Bash", "tool_input": {"command": "x"}})
-        check("cost 85% → warn в hookSpecificOutput", c == 0 and has_addctx(out))
+        check("budget-meter: Stop → exit 0, финализирует единый budget.json + сводка",
+              c == 0 and has_addctx(out)
+              and "finalized_at" in json.loads((bud / "budget.json").read_text(encoding="utf-8")))
 
         # ── phase-gate ──
         rg = tmp / "phase"

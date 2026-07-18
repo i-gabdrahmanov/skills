@@ -11,6 +11,10 @@ settings.hooks.json — прямые ("/.gigacode/hooks/x.py"); итоговый
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -22,6 +26,10 @@ spec.loader.exec_module(rhp)
 
 def _settings_with_command(cmd: str) -> dict:
     return {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"command": cmd, "name": "x"}]}]}}
+
+
+def _forge_cmd(root: str, script: str) -> str:
+    return f"/usr/bin/python3 -X utf8 {root}/.gigacode/hooks/{script}"
 
 
 class TestFindPythonCmd(unittest.TestCase):
@@ -83,6 +91,149 @@ class TestResolveHooksBlock(unittest.TestCase):
         self.assertEqual(cmd, "/usr/bin/python3 -X utf8 /proj/.gigacode/hooks/x.py")
         self.assertNotIn("${PYTHON}", cmd)
         self.assertNotIn("${PROJECT_ROOT}", cmd)
+
+
+class TestStripForgeHooks(unittest.TestCase):
+    """--remove (деинсталляция): снимаем ТОЛЬКО forge-хуки, чужое не трогаем.
+
+    Контракт снятия живёт здесь же, где постановка — иначе два владельца блока hooks
+    разъедутся, и uninstall оставит в settings.json хуки на удалённые файлы (рантайм тогда
+    падает на КАЖДОМ вызове инструмента).
+    """
+    ROOT = "/home/user/proj"
+
+    def _settings(self):
+        return {
+            "$version": 3,
+            "permissions": {"allow": ["Bash(ls:*)"]},
+            "mcpServers": {"atlassian": {"command": "mcp-atlassian"}},
+            "hooks": {
+                "PreToolUse": [{"matcher": "^Bash$", "hooks": [
+                    {"command": _forge_cmd(self.ROOT, "gate-guard.py"), "name": "gate-guard"},
+                    {"command": "python3 /opt/corp/audit.py", "name": "corp-audit"},
+                ]}],
+                "Stop": [{"hooks": [
+                    {"command": _forge_cmd(self.ROOT, "phase-gate.py"), "name": "phase-gate"},
+                ]}],
+            },
+        }
+
+    def test_removes_forge_keeps_operator_hook(self):
+        out, removed, stale, kept = rhp.strip_forge_hooks(self._settings(), self.ROOT)
+        self.assertEqual(sorted(removed), ["gate-guard", "phase-gate"])
+        self.assertEqual(stale, [])
+        self.assertEqual(kept, ["corp-audit"])
+        # хук оператора остался, forge-хуки ушли
+        entries = out["hooks"]["PreToolUse"][0]["hooks"]
+        self.assertEqual([e["name"] for e in entries], ["corp-audit"])
+
+    def test_empty_groups_and_events_collapse(self):
+        # Stop содержал только forge-хук → событие исчезает целиком, а не остаётся пустым
+        out, _, _, _ = rhp.strip_forge_hooks(self._settings(), self.ROOT)
+        self.assertNotIn("Stop", out["hooks"])
+
+    def test_other_sections_preserved(self):
+        out, _, _, _ = rhp.strip_forge_hooks(self._settings(), self.ROOT)
+        self.assertEqual(out["permissions"], {"allow": ["Bash(ls:*)"]})
+        self.assertIn("mcpServers", out)
+        self.assertEqual(out["$version"], 3)
+
+    def test_hooks_key_dropped_when_only_forge(self):
+        s = {"$version": 3, "hooks": {"Stop": [{"hooks": [
+            {"command": _forge_cmd(self.ROOT, "phase-gate.py"), "name": "phase-gate"}]}]}}
+        out, removed, _, _ = rhp.strip_forge_hooks(s, self.ROOT)
+        self.assertNotIn("hooks", out)       # пустой блок — мусор, ключа быть не должно
+        self.assertEqual(removed, ["phase-gate"])
+        self.assertEqual(out["$version"], 3)
+
+    def test_stale_path_after_project_move_still_removed(self):
+        """Проект переехал → в settings.json путь старого места. Такие хуки тоже снимаем:
+        иначе останутся записи на несуществующие файлы (регрессия «0 hook entries» наоборот)."""
+        s = _settings_with_command(_forge_cmd("/old/location", "gate-guard.py"))
+        out, removed, stale, kept = rhp.strip_forge_hooks(s, self.ROOT)
+        self.assertEqual(removed, [])
+        self.assertEqual(stale, ["x"])
+        self.assertEqual(kept, [])
+        self.assertNotIn("hooks", out)
+
+    def test_windows_mixed_separator_removed(self):
+        root = r"C:\Work\proj"
+        cmd = rf'"C:\Program Files\Python313\python.exe" -X utf8 {root}/.gigacode/hooks/gate-guard.py'
+        out, removed, stale, _ = rhp.strip_forge_hooks(_settings_with_command(cmd), root)
+        self.assertEqual(removed, ["x"], f"stale={stale}")
+        self.assertNotIn("hooks", out)
+
+    def test_no_hooks_block_is_noop(self):
+        s = {"$version": 3, "permissions": {}}
+        out, removed, stale, kept = rhp.strip_forge_hooks(s, self.ROOT)
+        self.assertEqual((removed, stale, kept), ([], [], []))
+        self.assertEqual(out, s)
+
+    def test_idempotent(self):
+        once, _, _, _ = rhp.strip_forge_hooks(self._settings(), self.ROOT)
+        twice, removed, stale, _ = rhp.strip_forge_hooks(once, self.ROOT)
+        self.assertEqual(once, twice)
+        self.assertEqual((removed, stale), ([], []))
+
+
+class TestRemoveCli(unittest.TestCase):
+    """--remove через CLI: пишет файл, --dry-run не пишет."""
+
+    def _run(self, project: Path, *extra):
+        return subprocess.run(
+            [sys.executable, str(HOOKS / "resolve_hook_paths.py"),
+             "--project", str(project), "--remove", *extra],
+            capture_output=True, text=True, timeout=30)
+
+    def test_writes_and_dry_run_does_not(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td)
+            gig = proj / ".gigacode"
+            gig.mkdir()
+            settings = gig / "settings.json"
+            # project_root резолвится (.resolve()) — на macOS /var → /private/var,
+            # поэтому путь в команде строим из того же резолва, что и сам скрипт.
+            root = str(proj.resolve())
+            settings.write_text(json.dumps({
+                "$version": 3,
+                "permissions": {"allow": ["Bash(ls:*)"]},
+                "hooks": {"Stop": [{"hooks": [
+                    {"command": _forge_cmd(root, "phase-gate.py"), "name": "phase-gate"}]}]},
+            }), encoding="utf-8")
+            before = settings.read_text(encoding="utf-8")
+
+            r = self._run(proj, "--dry-run")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(settings.read_text(encoding="utf-8"), before, "--dry-run не должен писать")
+            self.assertTrue(json.loads(r.stdout)["dry_run"])
+
+            r = self._run(proj)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            out = json.loads(r.stdout)
+            self.assertEqual(out["removed_entries"], 1)
+            self.assertTrue(out["hooks_key_removed"])
+            written = json.loads(settings.read_text(encoding="utf-8"))
+            self.assertNotIn("hooks", written)
+            self.assertIn("permissions", written, "чужие секции обязаны пережить снятие")
+
+    def test_missing_settings_is_noop(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td)
+            (proj / ".gigacode").mkdir()
+            r = self._run(proj)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(json.loads(r.stdout)["removed_entries"], 0)
+
+    def test_broken_settings_fails_closed(self):
+        """Нечитаемый settings.json не переписываем — иначе снесём конфиг оператора."""
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td)
+            gig = proj / ".gigacode"
+            gig.mkdir()
+            (gig / "settings.json").write_text("{ broken json", encoding="utf-8")
+            r = self._run(proj)
+            self.assertEqual(r.returncode, 1)
+            self.assertEqual((gig / "settings.json").read_text(encoding="utf-8"), "{ broken json")
 
 
 if __name__ == "__main__":

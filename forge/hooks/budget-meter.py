@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
-"""cost-breaker.py — token/cost circuit breaker (PDLC v3.5, стр. 156/194).
+"""budget-meter.py — информационный учёт токен-бюджета (без блокировок).
 
-Один скрипт на три события (по hook_event_name). Весь учёт — в ОДНОМ файле
-<run-dir>/budget.json: общий расход + разбивка по фазам (наглядно видно, какая
-фаза сколько потратила). Никаких budget-phases.json / budget-final.json.
-  • PostToolUse / SubagentStop — TALLY: прибавить расход в total и в текущую фазу
-    (фаза из ground/phases/gate.json), один файл под flock.
-  • PreToolUse                 — ENFORCE: выводит warn при ≥80% (без блокировки).
-  • Stop                       — FINALIZE: проставляет finalized_at в budget.json
-    и отдаёт сводку по фазам в контекст. Не блокирует.
+Никакого circuit-breaker: хук НИКОГДА не блокирует и не предупреждает —
+только считает расход и складывает в ОДИН файл <run-dir>/budget.json
+(общий расход + разбивка по фазам, наглядно видно, какая фаза сколько потратила).
+  • PostToolUse / SubagentStop / PostToolUseFailure — TALLY: прибавить расход
+    в total и в текущую фазу (фаза из ground/.../gate.json), один файл под flock.
+  • Stop — FINALIZE: проставить finalized_at в budget.json и отдать сводку
+    по фазам в контекст (info).
 
-Бюджет безлимитный: блокировка (exit 2 / decision:block) отключена.
-Расход берём из payload (`usage.total_tokens`/`tokens`/`usage.{input,output}_tokens`),
-если рантайм их даёт; иначе оценка: фиксированная стоимость за событие (FALLBACK_PER_EVENT).
-Бюджет — из pipeline.json (`quality.token_budget`), дефолт DEFAULT_BUDGET.
-Состояние и итог — единый <run-dir>/budget.json рядом с логом (та же группировка,
-что в log-agent).
+Бюджет — чисто справочная величина (сравнение расхода с ориентиром в сводке),
+никаких порогов и стопов. Расход берём из payload
+(`usage.total_tokens`/`tokens`/`usage.{input,output}_tokens`), если рантайм их
+даёт; иначе оценка: фиксированная стоимость за событие (FALLBACK_PER_EVENT).
+Ориентир бюджета — из pipeline.json (`quality.token_budget`), дефолт DEFAULT_BUDGET.
 """
 from __future__ import annotations
 
@@ -32,9 +30,8 @@ except ImportError:
     fcntl = None
     import msvcrt  # Windows
 
-DEFAULT_BUDGET = 2_000_000          # токенов на прогон, если не задано
+DEFAULT_BUDGET = 2_000_000          # токенов-ориентир на прогон, если не задано
 FALLBACK_PER_EVENT = 1500           # оценка, если рантайм не отдаёт usage
-WARN_RATIO = 0.80                   # только info, без блокировки
 
 
 def _project_root(cwd: str):
@@ -182,7 +179,7 @@ def _finalize(root: str, data: dict):
     print(json.dumps({
         "hookSpecificOutput": {
             "additionalContext": (
-                f"📊 Бюджет прогона → {path}. "
+                f"📊 Бюджет прогона (справочно) → {path}. "
                 f"Всего: {state.get('total_spent', 0)} токенов "
                 f"({state.get('total_events', 0)} событий). "
                 f"По фазам:\n" + "\n".join(
@@ -202,28 +199,15 @@ def main() -> int:
             return 0
         ev = data.get("hook_event_name", "")
         root = _project_root(data.get("cwd", ""))
-        budget = _budget(root)
-        path = _bpath(root, data)
 
         if ev in ("PostToolUse", "SubagentStop", "PostToolUseFailure"):
-            _tally(path, _tokens(data), budget, _current_phase(root))
+            _tally(_bpath(root, data), _tokens(data), _budget(root), _current_phase(root))
             return 0
-
-        # ENFORCE — только info, без блокировки
-        spent = int(_read_state(path).get("total_spent", 0))
-        ratio = spent / budget if budget else 0.0
 
         if ev == "Stop":
             _finalize(root, data)
             return 0
 
-        if ev in ("PreToolUse", "UserPromptSubmit"):
-            if ratio >= WARN_RATIO:
-                print(json.dumps({"hookSpecificOutput": {"additionalContext":
-                    f"ℹ️ cost-breaker: израсходовано {ratio:.0%} токен-бюджета "
-                    f"({spent}/{budget}). Без блокировки (бюджет безлимитный)."}},
-                    ensure_ascii=False))
-            return 0
         return 0
     except Exception:
         return 0

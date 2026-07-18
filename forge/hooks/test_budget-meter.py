@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Smoke test for hooks/cost-breaker.py.
+"""Smoke test for hooks/budget-meter.py.
 
-Раньше здесь был авто-стаб с `import cost-breaker as mod` — это SyntaxError (дефис в имени), поэтому
-тест НИКОГДА не запускался (как и весь набор test_*.py хуков). Теперь: модуль грузится через
-importlib (ловит регрессии синтаксиса/импорта) и проверяется fail-open на пустом stdin (общий
-контракт хуков — не ронять инструмент на не-JSON входе). Поведенческое покрытие — hooks/evals/run-evals.py.
+Модуль грузится через importlib (ловит регрессии синтаксиса/импорта) и проверяется fail-open
+на пустом stdin (общий контракт хуков — не ронять инструмент на не-JSON входе). Поведенческое
+покрытие — hooks/evals/run-evals.py.
 """
 from __future__ import annotations
 
@@ -14,7 +13,7 @@ import sys
 import unittest
 from pathlib import Path
 
-HOOK = Path(__file__).resolve().parent / "cost-breaker.py"
+HOOK = Path(__file__).resolve().parent / "budget-meter.py"
 
 
 class T(unittest.TestCase):
