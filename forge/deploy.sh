@@ -83,6 +83,16 @@ for d in FORGE.md SKILLS-REGISTRY.md; do
 done
 echo "  ✓ deploy-local.sh и доки на месте"
 
+# 3b. слэш-команда /forge — короткая точка входа в feature-pipeline.
+# Кладём в .gigacode/commands/ — рядом с hooks/ и skills/, откуда GigaCode-рантайм
+# (перелицованный Qwen с базовым каталогом .gigacode) читает свой конфиг: settings.json,
+# skills/, commands/. Единый .gigacode-корень, как и остальной задеплоенный харнес.
+if [ -f "$SRC/commands/forge.toml" ]; then
+  mkdir -p "$GIG/commands"
+  cp "$SRC/commands/forge.toml" "$GIG/commands/forge.toml"
+  echo "  ✓ слэш-команда /forge → $GIG/commands/forge.toml"
+fi
+
 # исполняемость
 chmod +x "$GIG/hooks/"*.py "$GIG/hooks/"*.sh "$GIG/deploy-local.sh" 2>/dev/null || true
 
