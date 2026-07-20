@@ -7,7 +7,6 @@
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/fork-syntax-guard.py", "name": "fork-syntax-guard"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/pii-boundary.py", "name": "pii-boundary"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/state-write-guard.py", "name": "state-write-guard"},
-        {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/cost-breaker.py", "name": "cost-breaker"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/sod-enforcer.py", "name": "sod-enforcer"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/inline-phase-guard.py", "name": "inline-phase-guard"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/gate-guard.py", "name": "gate-guard"},
@@ -35,7 +34,7 @@
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/file-journal.py", "name": "file-journal"}
       ]},
       {"matcher": "*", "hooks": [
-        {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/cost-breaker.py", "name": "cost-breaker"},
+        {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/budget-meter.py", "name": "budget-meter"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/log-agent.py", "name": "agent-logger"}
       ]}
     ],
@@ -47,7 +46,6 @@
     "UserPromptSubmit": [
       {"hooks": [
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/prompt-guard.py", "name": "prompt-guard"},
-        {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/cost-breaker.py", "name": "cost-breaker"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/log-agent.py", "name": "agent-logger"}
       ]}
     ],
@@ -60,7 +58,7 @@
     "SubagentStop": [
       {"matcher": "*", "hooks": [
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/state-recorder.py", "name": "state-recorder"},
-        {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/cost-breaker.py", "name": "cost-breaker"},
+        {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/budget-meter.py", "name": "budget-meter"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/log-agent.py", "name": "agent-logger"}
       ]}
     ],
@@ -71,7 +69,7 @@
     ],
     "Stop": [
       {"sequential": true, "hooks": [
-        {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/cost-breaker.py", "name": "cost-breaker"},
+        {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/budget-meter.py", "name": "budget-meter"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/phase-gate.py", "name": "phase-gate"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/log-agent.py", "name": "agent-logger"}
       ]}

@@ -144,32 +144,46 @@ def hook_script_path(command) -> str | None:
     return m.group(1) if m else None
 
 
-def is_forge_hook_command(command, project_root: str) -> bool:
-    """Зовёт ли command хук ЭТОГО проекта (<project_root>/.gigacode/hooks/*.py).
+_GIGACODE_HOOK_RE = re.compile(r"(?:^|/)\.gigacode/hooks/[^/]+\.py$")
 
-    Хук, указывающий на .gigacode ДРУГОГО проекта, своим не считается — снимать чужое
-    мы не вправе (та же семантика "foreign", что в has_absolute_hook_paths)."""
+
+def is_forge_hook_command(command, project_root: str) -> bool:
+    """Зовёт ли command хук ЭТОГО проекта (<project_root>/.gigacode/hooks/*.py)."""
     script = hook_script_path(command)
     if not script:
         return False
     return _norm(script).startswith(_norm(f"{project_root}/.gigacode/hooks/"))
 
 
-def strip_forge_hooks(settings: dict, project_root: str) -> tuple[dict, list, list]:
-    """Снимает из блока hooks ТОЛЬКО forge-owned записи этого проекта.
+def is_gigacode_hook_command(command) -> bool:
+    """Зовёт ли command ЛЮБОЙ хук из .gigacode/hooks/ — не важно, по какому префиксу.
 
-    Возвращает (новые settings, removed, kept_foreign) — списки имён/команд. Записи,
-    добавленные оператором вручную (свой хук, хук другого проекта), остаются: деинсталляция
-    Forge не должна молча уносить чужой enforcement. Опустевшие группы матчеров и события
-    схлопываются; если forge-хуки были единственными — ключ "hooks" удаляется целиком
-    (пустой блок рантайм читает как "0 hook entries" — это тот же результат, но мусором в
-    конфиге).
+    Нужно для снятия: путь в settings.json устаревает, если проект переехал/переклонирован
+    (ровно тот случай, который чинит deploy-local.sh). Строгая сверка с префиксом такие записи
+    не признала бы своими, и деинсталляция оставила бы в конфиге хуки на несуществующие файлы —
+    рантайм падал бы на КАЖДОМ вызове инструмента. Хук вне .gigacode/hooks/ (свой скрипт
+    оператора) под правило не попадает.
+    """
+    script = hook_script_path(command)
+    return bool(script and _GIGACODE_HOOK_RE.search(_norm(script)))
+
+
+def strip_forge_hooks(settings: dict, project_root: str) -> tuple[dict, list, list, list]:
+    """Снимает из блока hooks записи, зовущие .gigacode/hooks/ (forge-owned).
+
+    Возвращает (новые settings, removed, removed_stale, kept_foreign) — списки имён.
+    `removed_stale` — записи с путём мимо текущего project_root (проект переезжал): их тоже
+    снимаем, см. is_gigacode_hook_command. Хуки оператора вне .gigacode/hooks/ остаются:
+    деинсталляция Forge не должна молча уносить чужой enforcement. Опустевшие группы матчеров
+    и события схлопываются; если forge-хуки были единственными — ключ "hooks" удаляется
+    целиком (пустой блок рантайм читает так же, но это мусор в конфиге).
     """
     hooks = settings.get("hooks")
     if not isinstance(hooks, dict):
-        return settings, [], []
+        return settings, [], [], []
 
     removed: list = []
+    removed_stale: list = []
     kept_foreign: list = []
     new_hooks: dict = {}
 
@@ -185,11 +199,16 @@ def strip_forge_hooks(settings: dict, project_root: str) -> tuple[dict, list, li
             kept_entries = []
             for entry in group["hooks"]:
                 cmd = entry.get("command") if isinstance(entry, dict) else None
-                if is_forge_hook_command(cmd, project_root):
-                    removed.append(entry.get("name") or hook_script_path(cmd))
+                label = (entry.get("name") if isinstance(entry, dict) else None) \
+                    or hook_script_path(cmd)
+                if is_gigacode_hook_command(cmd):
+                    if is_forge_hook_command(cmd, project_root):
+                        removed.append(label)
+                    else:
+                        removed_stale.append(label)
                     continue
                 if hook_script_path(cmd):
-                    kept_foreign.append(entry.get("name") or hook_script_path(cmd))
+                    kept_foreign.append(label)
                 kept_entries.append(entry)
             if kept_entries:
                 new_group = dict(group)
@@ -203,11 +222,16 @@ def strip_forge_hooks(settings: dict, project_root: str) -> tuple[dict, list, li
         result["hooks"] = new_hooks
     else:
         result.pop("hooks", None)
-    return result, removed, kept_foreign
+    return result, removed, removed_stale, kept_foreign
 
 
 def run_remove(target_settings_path: Path, project_root: str, dry_run: bool) -> int:
-    """--remove: снять forge-хуки из settings.json. Идемпотентно (повторный запуск — no-op)."""
+    """--remove: снять forge-хуки из settings.json. Идемпотентно (повторный запуск — no-op).
+
+    В отличие от resolve-режима, --dry-run печатает СВОДКУ (что снимется, что останется), а не
+    итоговый файл целиком: этот вывод читает человек, решающий «сносить ли», и сотня строк
+    чужого конфига ему в этом не помогает.
+    """
     if not target_settings_path.exists():
         print(json.dumps({"passed": True, "removed_entries": 0,
                           "note": f"settings.json не найден — снимать нечего: {target_settings_path}"},
@@ -221,26 +245,24 @@ def run_remove(target_settings_path: Path, project_root: str, dry_run: bool) -> 
                          ensure_ascii=False, indent=2))
         return 1
 
-    updated, removed, kept_foreign = strip_forge_hooks(existing, project_root)
-    output = json.dumps(updated, ensure_ascii=False, indent=2)
+    updated, removed, removed_stale, kept_foreign = strip_forge_hooks(existing, project_root)
+    summary = {
+        "passed": True,
+        "dry_run": dry_run,
+        "project_root": project_root,
+        "target": str(target_settings_path),
+        "removed_entries": len(removed) + len(removed_stale),
+        "removed": removed,
+        "removed_stale_paths": removed_stale,   # пути мимо project_root (проект переезжал)
+        "foreign_hooks_kept": kept_foreign,
+        "hooks_key_removed": "hooks" not in updated,
+        "other_sections_preserved": [k for k in updated if k != "hooks"],
+    }
 
-    if dry_run:
-        print(output)
-        return 0
-
-    target_settings_path.write_text(output, encoding="utf-8")
-    print(json.dumps(
-        {
-            "passed": True,
-            "project_root": project_root,
-            "target": str(target_settings_path),
-            "removed_entries": len(removed),
-            "removed": removed,
-            "foreign_hooks_kept": kept_foreign,
-            "hooks_key_removed": "hooks" not in updated,
-            "other_sections_preserved": [k for k in updated if k != "hooks"],
-        },
-        ensure_ascii=False, indent=2))
+    if not dry_run:
+        target_settings_path.write_text(json.dumps(updated, ensure_ascii=False, indent=2),
+                                        encoding="utf-8")
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 
 

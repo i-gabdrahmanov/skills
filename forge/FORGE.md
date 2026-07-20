@@ -16,6 +16,8 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 - `skills/` — пайплайн-скиллы: вход `router` → `feature-pipeline` (full) или `forgelite` (lite) + фазовые (см. «Router + режимы full/lite»).
 - `deploy.sh` — установщик: разворачивает Forge в указанный проект одной командой
   (co-location hooks+skills + доки, мерж hooks-блока с бэкапом).
+- `uninstall.sh` — деинсталлятор (зеркало `deploy.sh`, те же аргументы): снимает блок hooks и
+  удаляет обвязку; `ground/` и конфиг оператора остаются (`--purge-state` сносит и их).
 - `deploy-local.sh` — in-project фиксер путей в `settings.json` (живёт в `<project>/.gigacode/`).
 - `hooks/preflight.py` — диагностика готовности ДО прогона.
 
@@ -76,7 +78,7 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 | `pii-boundary.py` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
 | `state-write-guard.py` | PreToolUse Write/Edit/Bash | запрет прямой записи моделью в control-plane-файлы (`manifest.json`, `_origins`, `gates`, `overrides`, `judges`, `approvals`, `pipeline.json`, `ground/phases/`) — мутация только через санкц. скрипты | exit 2 |
 | `inline-phase-guard.py` | PreToolUse Bash/Write/Edit | actor-guard: главный агент не производит артефакты/код/билд subagent-фазы inline (по `agent_type`) | exit 2 |
-| `cost-breaker.py` | Pre/Post/Stop/SubagentStop/UserPromptSubmit | token budget: warn ≥80% (**стоп 120% временно отключён — токены безлимитны**); учёт по фазам + финализация на Stop | нет (warn-only) |
+| `budget-meter.py` | Post/SubagentStop/Stop | информационный учёт токен-бюджета: tally по фазам + финализация/сводка на Stop. **Не блокирует и не предупреждает** (никакого circuit-breaker) | нет |
 | `prompt-guard.py` | UserPromptSubmit + PostToolUse(read/fetch) | детект prompt-injection → additionalContext | нет |
 | `file-journal.py` | PostToolUse Write/Edit/Bash | безусловный журнал изменённых файлов активной фичи (`journal/files.jsonl`, привязка к step_id) — скоуп восстановления кода для `rollback.py` | нет |
 | `state-recorder.py` | SubagentStop | авто-запись шага в pipeline-state по `step_id` | нет |
@@ -112,7 +114,7 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 ## Журнал решений (почему так)
 
 - **Enforcement в рантайме, не в тексте.** SKILL.md модель может проигнорировать → гейты/политики
-  форсятся хуками (gate-guard/risk-ladder, cost-breaker, phase-gate, security).
+  форсятся хуками (gate-guard/risk-ladder, phase-gate, security). Токен-бюджет — только учёт (`budget-meter`), не гейт.
 - **Risk ladder R0–R5, deny-first** (`risk-policy.json`) — policy-as-code, рисковое fail-closed.
 - **Выбор критичности фичи форсится** — после BRD SKILL спрашивает критичность (low/medium/high →
   `autonomy.auto_max_risk` R2/R1/R0 в `pipeline.json`); `gate-guard` блокирует любое R2+ действие, пока
@@ -151,11 +153,10 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 2. `fork-syntax-guard` — инструктивный блок синтаксиса, который режет форк (`$(...)`, backticks, `find -exec`, `ls -R`)
 3. `pii-boundary` — PII scope (перехват редиректов `>`/`tee`/`dd of=` в файл)
 4. `state-write-guard` — запрет прямой записи в control-plane state (редирект/`python -c open()`)
-5. `cost-breaker` — token budget
-6. `sod-enforcer` — separation of duties (роль фазы: design/spec/jira не билдят; git не гейтится)
-7. `inline-phase-guard` — actor: главный агент не билдит/тестит inline в subagent-фазе
-8. `gate-guard` — risk ladder
-9. `log-agent` — аудит (последний, неблокирующий)
+5. `sod-enforcer` — separation of duties (роль фазы: design/spec/jira не билдят; git не гейтится)
+6. `inline-phase-guard` — actor: главный агент не билдит/тестит inline в subagent-фазе
+7. `gate-guard` — risk ladder
+8. `log-agent` — аудит (последний, неблокирующий)
 
 **PreToolUse `(Write|Edit)` — sequential:**
 1. `pii-boundary` — PII scope
@@ -201,6 +202,12 @@ bash deploy.sh /path/to/target-project
 (merge блока `hooks` + бэкап старого, `permissions`/`mcpServers` сохраняются), (3) прогоняет
 `preflight.py`. Повторный деплой идемпотентен; settings уходит в вечный `.bak` + таймстемпы.
 Починить пути после переезда проекта — `bash <project>/.gigacode/deploy-local.sh`.
+
+Снять обвязку — `bash uninstall.sh /path/to/target-project` (те же аргументы, что у деплоя;
+`--dry-run` — план, `--purge-state` — снести ещё и `ground/` с git-чекпойнтами). Снимает блок
+hooks ПЕРЕД удалением файлов: обратный порядок оставил бы конфиг с хуками на удалённые скрипты,
+и рантайм падал бы на каждом вызове. `ground/`, `permissions`/`mcpServers`, чужие хуки и бэкапы
+переживают снятие. Детали — [docs/deployment.md](docs/deployment.md).
 
 > ⚠️ **Не копируй скиллы и хуки вручную по отдельности.** Если скиллы на проектном уровне,
 > а блок `hooks` в `settings.json` не влит → `[HOOK_REGISTRY] 0 hook entries`, весь control-plane
@@ -262,9 +269,10 @@ Verify — пайплайн НЕ дошёл до Document/Deliver.
   только чтобы тест поднялся без `UpzClient`; ранее сама добавила второй `notifyEvent`, сломала
   существующий тест (ждал 1 вызов) и стала править тест под новое поведение, а не усомнилась в нём.
   Нет судьи «прод-код/ослабление существующего теста ради GREEN».
-- 🔴 **`cost-breaker` оторван от реальности и без хард-стопа.** `budget.json`: `spent 843K / 2M`
-  (42%, warn≥80% молчал), реально — 51.8M входных токенов (расхождение ~60×); хард-стоп 120%
-  отключён. Бюджет не тормоз → отсюда 1.5-часовой прогон.
+- ⚪ **Токен-бюджет — только учёт, не тормоз (решено).** Бывший `cost-breaker` заменён на
+  информационный `budget-meter`: circuit-breaker (стоп/warn) удалён полностью. Учёт по-прежнему
+  расходится с реальностью (прогон #3: `budget.json` 843K/2M ≈ 42% против реальных 51.8M входных
+  токенов, ~60×), но на него никто не полагается как на ограничитель — это осознанно справочная метрика.
 - 🟠 **Гейт критичности форсит вопрос, но не следствие.** `auto_max_risk` хардкожен `R1`
   (`init_pipeline_config.py:223`), деривации `low→R2/high→R0` нет ни в коде, ни в тесте. Модель
   отредактировала только `criticality` (для medium совпало) — при low/high autonomy была бы неверной.
@@ -359,8 +367,9 @@ Verify — пайплайн НЕ дошёл до Document/Deliver.
 - [x] **Судья «GREEN любой ценой»** (C2): floor `_test_integrity_floor` в `check_coverage` (фаза Verify)
       блокирует ослабление СУЩЕСТВУЮЩИХ тестов (`--diff-filter=M`): добавленный `@Disabled`/`@Ignore`,
       рост `times(N)→times(M)`; WARN на нетто-потерю assert/verify. Тесты: `test_run_judge_guards.py`.
-- [ ] **`cost-breaker`** (C3): по решению владельца — **бюджет остаётся «только для инфо»** (хард-стоп
-      выключен). Не чинили специально; учёт токенов расходится с реальностью (~60×) — не доверять как тормозу.
+- [x] **`budget-meter`** (C3, бывший `cost-breaker`): по решению владельца circuit-breaker удалён
+      полностью — **бюджет только справочный**. Учёт токенов расходится с реальностью (~60×), поэтому
+      как тормоз он и не задуман; хук лишь считает расход по фазам и печатает сводку на Stop.
 - [x] **Деривация `auto_max_risk` из criticality** (H4): `set_criticality.py` атомарно пишет оба поля
       (`low→R2/medium→R1/high→R0`); гейт критичности в SKILL.md зовёт его, а не сырой Edit. Тесты:
       `test_set_criticality.py`.
@@ -654,9 +663,10 @@ dual-vocabulary, контракты pipeline-state, payload-схема snake_cas
   2026-07-04). При апгрейде рантайма/правке `settings.hooks.json` сверять матчеры с канон-именами
   (`test_matcher_canonical_names.py` / `preflight._check_matchers_canonical`). Subagent-события
   срабатывают для тула `agent`.
-- **`cost-breaker` сейчас НЕ тормоз** (прогон #3): его `budget.json` показал 42% (`spent 843K/2M`),
-  тогда как реальная сессия сожгла 51.8M входных токенов (расхождение ~60×), а хард-стоп 120% отключён.
-  Не полагаться на текущий бюджет как на ограничитель стоимости, пока учёт не сверен (см. роадмап C3).
+- **Токен-бюджет НЕ тормоз by design** (`budget-meter`, бывший `cost-breaker`): circuit-breaker
+  удалён, хук только считает расход. Прогон #3: `budget.json` показал 42% (`spent 843K/2M`), тогда как
+  реальная сессия сожгла 51.8M входных токенов (расхождение ~60×). Не полагаться на бюджет как на
+  ограничитель стоимости — это справочная метрика.
 - **Payload-схема хуков подтверждена по стоковому qwen-code 0.19.3** (верификация 2026-07-03):
   вход хука строится `createBaseInput` → `stdin.write(JSON.stringify(input))` со snake_case-ключами
   (`hook_event_name`/`session_id`/`cwd`/`tool_name`) — ровно то, что читают наши парсеры. В стоке

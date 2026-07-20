@@ -41,7 +41,7 @@
 | Правка существующих тестов под сломанный код, «частичный зелёный = успех» | уже закрыто: integrity/tautology floors + record_gate evidence; + пофазный overlay WS4 (deny Edit src/test в GREEN) |
 | user-level `~/.qwen|~/.gigacode/settings.json` подключает устаревший харнес | preflight-проверка shadowing (WS2.3) + sandbox запрещает запись туда |
 | Роутер-вход не форсится (нет события «скилл выбран») | операторская обёртка (D) — фазы гонит driver, а не модель |
-| cost-breaker не тормозит (60× расхождение) | слой D: лимиты на вызов в driver (timeout, max-requests) |
+| токен-бюджет не тормоз (breaker удалён, `budget-meter` только считает; 60× расхождение) | слой D: лимиты на вызов в driver (timeout, max-requests) |
 
 ## Открытый архитектурный факт
 
