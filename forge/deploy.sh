@@ -66,6 +66,26 @@ copy_tree "$SRC/hooks" "$GIG/hooks"
 copy_tree "$SRC/skills" "$GIG/skills"
 echo "  ✓ скопированы hooks/ и skills/ (co-located, без __pycache__/.DS_Store/локального config.json)"
 
+# 1b. prune: copy_tree — это tar-overlay, он НАКЛАДЫВАЕТ файлы поверх таргета и НЕ удаляет
+# те, что исчезли из исходника. Удалённый хук (напр. cost-breaker.py → budget-meter.py)
+# оставался сиротой в .gigacode/hooks/, а settings.hooks.json прошлого деплоя продолжал его
+# регистрировать → рантайм на сбросе искал несуществующий хук. Подчищаем хук-скрипты, которых
+# больше нет в исходнике: «удалён хук — значит его нет нигде». Скоуп — только top-level *.py/*.sh
+# (сами хуки; их и регистрирует settings.hooks.json). Подкаталоги (evals/, tests/) не трогаем.
+pruned=0
+for f in "$GIG/hooks/"*.py "$GIG/hooks/"*.sh; do
+  [ -e "$f" ] || continue                       # нет совпадений по маске — пропускаем
+  base="$(basename "$f")"
+  if [ ! -e "$SRC/hooks/$base" ]; then
+    rm -f "$f"
+    echo "  ✗ удалён хук-сирота (нет в исходнике): hooks/$base"
+    pruned=$((pruned + 1))
+  fi
+done
+if [ "$pruned" -gt 0 ]; then
+  echo "  ✓ подчищено хуков-сирот: $pruned"
+fi
+
 # Пустой config.json на месте (skill-paths.json/doctor требуют файл; маппинг проект→спека
 # оператор заполняет на первом запуске). Существующий конфиг таргета НЕ перетираем.
 MDF_CFG="$GIG/skills/minor-defect-fix/config.json"
