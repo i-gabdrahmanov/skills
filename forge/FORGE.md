@@ -134,10 +134,13 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
   - **Слово `forge`** — синонимы в `description` скилла `feature-pipeline` («forge», «запусти forge»,
     «прогони forge», «forge <фича>»). Активация идёт по описанию, деплоится вместе со скиллом, контекст
     не пухнет. Аргумент после `forge` (ключ Jira/описание) — вход BRD-фазы.
-  - **Команда `/forge`** — `commands/forge.toml` (минимальный prompt-делегат в feature-pipeline, `{{args}}`
-    прокидывает хвост; БЕЗ старого `!{cat all skills}` — раздувания контекста нет). `deploy.sh` (шаг 3b)
-    кладёт её в `<target>/.gigacode/commands/forge.toml` — рядом с `hooks/` и `skills/`, в единый
-    `.gigacode`-корень, откуда GigaCode-рантайм читает конфиг (settings.json, skills/, commands/).
+  - **Команда `/forge`** — `commands/forge.md` (Markdown+frontmatter — актуальный формат qwen-code;
+    минимальный prompt-делегат в feature-pipeline, `{{args}}` прокидывает хвост; БЕЗ старого
+    `!{cat all skills}` — раздувания контекста нет). `deploy.sh` (шаг 3b) кладёт её в
+    `<target>/.gigacode/commands/forge.md` — рядом с `hooks/` и `skills/`, в единый `.gigacode`-корень,
+    откуда GigaCode-рантайм читает конфиг (settings.json, skills/, commands/). TOML-команды qwen-code
+    депрекейтнул: при `*.toml` в `commands/` рантайм показывает окно миграции на КАЖДОМ старте —
+    поэтому формат сразу Markdown, а deploy/uninstall снимают устаревший `forge.toml`, если он остался.
   Про удаление 2026-06-04 (не повторять снос): из трёх прежних причин реальным дефектом был только
   `!{cat all skills}` (вливал тела ВСЕХ скиллов на старте → обрывы стрима) — он снят минимальным дизайном.
   «дублировали скилл» — оценочное (нам нужна короткая точка входа), «не деплоились» — просто не были

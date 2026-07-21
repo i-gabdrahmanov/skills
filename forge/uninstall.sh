@@ -213,6 +213,10 @@ remove_forge_owned() {  # $1=src-эталон  $2=dst-в-проекте  $3=labe
 
 remove_forge_owned "$SRC/skills"   "$GIG/skills"   "skills"
 remove_forge_owned "$SRC/hooks"    "$GIG/hooks"    "hooks"
+# legacy: прошлые деплои клали forge.toml (ныне forge.md). В $SRC его больше нет, поэтому
+# remove_forge_owned счёл бы его «операторским» и оставил, а qwen-code от TOML-команды
+# показывает окно миграции на каждом старте. Снимаем по имени ДО сметания commands/.
+remove_path "$GIG/commands/forge.toml" "commands/forge.toml (устаревший формат)"
 [ -d "$SRC/commands" ] && remove_forge_owned "$SRC/commands" "$GIG/commands" "commands"
 remove_path "$GIG/deploy-local.sh"  "deploy-local.sh"
 remove_path "$GIG/FORGE.md"         "FORGE.md"

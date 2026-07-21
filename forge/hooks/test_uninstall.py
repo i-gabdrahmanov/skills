@@ -113,9 +113,9 @@ class DeployUninstallRoundTrip(unittest.TestCase):
         (my_skill / "SKILL.md").write_text("мой скилл", encoding="utf-8")
         my_hook = self.gig / "hooks" / "my-custom-hook.py"
         my_hook.write_text("# мой хук\n", encoding="utf-8")
-        my_cmd = self.gig / "commands" / "my-cmd.toml"
+        my_cmd = self.gig / "commands" / "my-cmd.md"
         my_cmd.parent.mkdir(parents=True, exist_ok=True)
-        my_cmd.write_text("# моя команда\n", encoding="utf-8")
+        my_cmd.write_text("---\ndescription: моя команда\n---\nтело\n", encoding="utf-8")
 
         r = self._sh(UNINSTALL, str(self.proj))
         self.assertEqual(r.returncode, 0, f"{r.stdout}{r.stderr}")
@@ -130,9 +130,20 @@ class DeployUninstallRoundTrip(unittest.TestCase):
         # а форж-своё — снято
         self.assertFalse((self.gig / "skills" / "feature-pipeline").exists(), "форж-скилл должен быть снят")
         self.assertFalse((self.gig / "hooks" / "gate-guard.py").exists(), "форж-хук должен быть снят")
-        self.assertFalse((self.gig / "commands" / "forge.toml").exists(), "форж-команда должна быть снята")
+        self.assertFalse((self.gig / "commands" / "forge.md").exists(), "форж-команда должна быть снята")
         # и в settings.json не осталось хуков на удалённые форж-файлы
         self.assertNotIn(".gigacode/hooks", self.settings.read_text(encoding="utf-8"))
+
+    def test_uninstall_removes_legacy_toml_command(self):
+        """qwen-code депрекейтнул TOML-команды: при наличии forge.toml рантайм показывает
+        окно миграции на каждом старте. Прошлый деплой клал forge.toml — uninstall обязан
+        снять его по имени (в $SRC его уже нет, remove_forge_owned счёл бы «операторским»)."""
+        legacy = self.gig / "commands" / "forge.toml"
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text('description = "x"\nprompt = "y"\n', encoding="utf-8")
+        r = self._sh(UNINSTALL, str(self.proj))
+        self.assertEqual(r.returncode, 0, f"{r.stdout}{r.stderr}")
+        self.assertFalse(legacy.exists(), "устаревший forge.toml должен быть снят")
 
     def test_uninstall_is_idempotent(self):
         self.assertEqual(self._sh(UNINSTALL, str(self.proj)).returncode, 0)

@@ -107,10 +107,14 @@ echo "  ✓ deploy-local.sh и доки на месте"
 # Кладём в .gigacode/commands/ — рядом с hooks/ и skills/, откуда GigaCode-рантайм
 # (перелицованный Qwen с базовым каталогом .gigacode) читает свой конфиг: settings.json,
 # skills/, commands/. Единый .gigacode-корень, как и остальной задеплоенный харнес.
-if [ -f "$SRC/commands/forge.toml" ]; then
+# Формат — Markdown+frontmatter: qwen-code ДЕПРЕКЕЙТНУЛ TOML-команды и при наличии *.toml
+# в commands/ показывает окно миграции на КАЖДОМ старте. Прошлые деплои клали forge.toml —
+# снимаем его, иначе нотификация не гаснет даже после перехода на .md.
+if [ -f "$SRC/commands/forge.md" ]; then
   mkdir -p "$GIG/commands"
-  cp "$SRC/commands/forge.toml" "$GIG/commands/forge.toml"
-  echo "  ✓ слэш-команда /forge → $GIG/commands/forge.toml"
+  cp "$SRC/commands/forge.md" "$GIG/commands/forge.md"
+  rm -f "$GIG/commands/forge.toml"
+  echo "  ✓ слэш-команда /forge → $GIG/commands/forge.md (устаревший forge.toml снят, если был)"
 fi
 
 # исполняемость
