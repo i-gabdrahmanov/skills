@@ -104,6 +104,36 @@ class DeployUninstallRoundTrip(unittest.TestCase):
         self.assertTrue((self.gig / "minor-defect-fix-config.json.bak").exists(),
                         "конфиг оператора должен быть отставлен в сторону, а не унесён вместе со skills/")
 
+    def test_uninstall_keeps_operator_own_skills_and_hooks(self):
+        """Регрессия (реальный инцидент): uninstall делал rm -rf .gigacode/skills целиком и
+        уносил самописные скиллы оператора, co-located с форж-скиллами. Снимать можно только
+        форж-своё; чужое рядом — не наше, каталог убираем лишь когда опустел."""
+        my_skill = self.gig / "skills" / "my-custom-skill"
+        my_skill.mkdir(parents=True)
+        (my_skill / "SKILL.md").write_text("мой скилл", encoding="utf-8")
+        my_hook = self.gig / "hooks" / "my-custom-hook.py"
+        my_hook.write_text("# мой хук\n", encoding="utf-8")
+        my_cmd = self.gig / "commands" / "my-cmd.toml"
+        my_cmd.parent.mkdir(parents=True, exist_ok=True)
+        my_cmd.write_text("# моя команда\n", encoding="utf-8")
+
+        r = self._sh(UNINSTALL, str(self.proj))
+        self.assertEqual(r.returncode, 0, f"{r.stdout}{r.stderr}")
+
+        # операторское — на месте (главная проверка инцидента)
+        self.assertTrue((my_skill / "SKILL.md").exists(), "самописный скилл оператора снесён — недопустимо")
+        self.assertTrue(my_hook.exists(), "самописный хук оператора снесён")
+        self.assertTrue(my_cmd.exists(), "самописная команда оператора снесена")
+        # каталоги сохранены, раз в них осталось чужое
+        self.assertTrue((self.gig / "skills").is_dir())
+        self.assertTrue((self.gig / "hooks").is_dir())
+        # а форж-своё — снято
+        self.assertFalse((self.gig / "skills" / "feature-pipeline").exists(), "форж-скилл должен быть снят")
+        self.assertFalse((self.gig / "hooks" / "gate-guard.py").exists(), "форж-хук должен быть снят")
+        self.assertFalse((self.gig / "commands" / "forge.toml").exists(), "форж-команда должна быть снята")
+        # и в settings.json не осталось хуков на удалённые форж-файлы
+        self.assertNotIn(".gigacode/hooks", self.settings.read_text(encoding="utf-8"))
+
     def test_uninstall_is_idempotent(self):
         self.assertEqual(self._sh(UNINSTALL, str(self.proj)).returncode, 0)
         r = self._sh(UNINSTALL, str(self.proj))

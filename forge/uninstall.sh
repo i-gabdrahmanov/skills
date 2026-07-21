@@ -9,7 +9,9 @@
 # Что делает (порядок важен — см. ниже):
 #   1. Снимает блок hooks из <target>/.gigacode/settings.json (с бэкапом, как deploy-local.sh).
 #   2. Отставляет в сторону локальный конфиг оператора (minor-defect-fix/config.json).
-#   3. Удаляет то, что положил deploy.sh: hooks/, skills/, deploy-local.sh, доки.
+#   3. Удаляет ТОЧЕЧНО то, что положил deploy.sh (перечень из исходного репо), внутри
+#      co-located skills/ hooks/ commands/ + deploy-local.sh и доки. Самописные скиллы/хуки
+#      оператора рядом — НЕ трогает; опустевший каталог убирает только rmdir'ом.
 #   4. --purge-state: дополнительно сносит рабочие данные (ground/ + git-refs чекпойнтов).
 #
 # Порядок «сначала settings.json, потом файлы» — не косметика: если снести hooks/ первым и
@@ -17,6 +19,8 @@
 # вызов инструмента будет падать. Снятый блок при любом обрыве оставляет проект рабочим.
 #
 # Что НЕ трогает (по умолчанию):
+#   - самописные скиллы/хуки/команды оператора в .gigacode/{skills,hooks,commands}/ —
+#     всё, чего нет в исходном репо Forge, остаётся на месте.
 #   - ground/            — рабочие данные пайплайна (BRD/SDD/манифесты/логи). Только --purge-state.
 #   - settings.json      — остальные секции (permissions, mcpServers, $version) не наши.
 #   - *.bak              — бэкапы, в т.ч. первозданный settings.json.bak (до установки Forge).
@@ -160,8 +164,8 @@ if [ -f "$MDF_CFG" ]; then
   fi
 fi
 
-# ── 3. удалить то, что положил deploy.sh ─────────────────────────────────────
-remove_path() {  # $1=path  $2=человекочитаемое имя
+# ── 3. удалить то, что положил deploy.sh — ТОЧЕЧНО, не всю папку ──────────────
+remove_path() {  # $1=path  $2=человекочитаемое имя (одиночные форж-файлы)
   [ -e "$1" ] || return 0
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "  [dry-run] удалить: $2"
@@ -171,8 +175,45 @@ remove_path() {  # $1=path  $2=человекочитаемое имя
   fi
 }
 
-remove_path "$GIG/hooks"            "hooks/"
-remove_path "$GIG/skills"           "skills/"
+# skills/, hooks/, commands/ — co-located: рантайм читает из .gigacode/{skills,hooks,commands}
+# и туда же оператор кладёт СВОИ скиллы/хуки/команды. Снести каталог целиком (rm -rf) уносит
+# чужое — реальный инцидент: uninstall стёр все самописные скиллы оператора. Поэтому удаляем
+# ровно то, что клал deploy.sh: перечень берём из исходного репо ($SRC); всё, чего в $SRC нет,
+# — операторское, не трогаем (симметрично prune в deploy.sh). Родительский каталог убираем
+# ТОЛЬКО через rmdir (не rm -rf): опустеет — уйдёт, останется чужое (в т.ч. скрытое) — выживет.
+remove_forge_owned() {  # $1=src-эталон  $2=dst-в-проекте  $3=label
+  local src="$1" dst="$2" label="$3" entry base removed=0 kept=0
+  [ -d "$dst" ] || return 0
+  # dotfiles тоже (deploy копирует tar'ом); несматченный glob отсеет [ -e ].
+  for entry in "$dst"/* "$dst"/.[!.]*; do
+    [ -e "$entry" ] || continue
+    base="$(basename "$entry")"
+    if [ -e "$src/$base" ]; then                    # forge-owned → снять
+      if [ "$DRY_RUN" -eq 1 ]; then
+        echo "  [dry-run] удалить: $label/$base"
+      else
+        rm -rf "$entry"
+      fi
+      removed=$((removed + 1))
+    else                                            # операторское → оставить
+      kept=$((kept + 1))
+      [ "$DRY_RUN" -eq 1 ] && echo "  [dry-run] ОСТАВИТЬ (операторское): $label/$base"
+    fi
+  done
+  if [ "$kept" -gt 0 ]; then
+    echo "  ✓ снято форж-записей из $label/: $removed; ОСТАВЛЕНО операторского: $kept ($label/ сохранён)"
+  elif [ "$DRY_RUN" -eq 1 ]; then
+    echo "  [dry-run] удалить: $label/ (опустеет после снятия $removed форж-записей)"
+  else
+    rmdir "$dst" 2>/dev/null \
+      && echo "  ✓ удалено: $label/ (форж-записей: $removed)" \
+      || echo "  ✓ снято форж-записей из $label/: $removed ($label/ сохранён — остались скрытые файлы)"
+  fi
+}
+
+remove_forge_owned "$SRC/skills"   "$GIG/skills"   "skills"
+remove_forge_owned "$SRC/hooks"    "$GIG/hooks"    "hooks"
+[ -d "$SRC/commands" ] && remove_forge_owned "$SRC/commands" "$GIG/commands" "commands"
 remove_path "$GIG/deploy-local.sh"  "deploy-local.sh"
 remove_path "$GIG/FORGE.md"         "FORGE.md"
 remove_path "$GIG/SKILLS-REGISTRY.md" "SKILLS-REGISTRY.md"
