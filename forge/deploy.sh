@@ -103,18 +103,23 @@ for d in FORGE.md SKILLS-REGISTRY.md; do
 done
 echo "  ✓ deploy-local.sh и доки на месте"
 
-# 3b. слэш-команда /forge — короткая точка входа в feature-pipeline.
+# 3b. слэш-команды forge (/forge, /forge-lite, …) — короткие точки входа в пайплайн.
 # Кладём в .gigacode/commands/ — рядом с hooks/ и skills/, откуда GigaCode-рантайм
 # (перелицованный Qwen с базовым каталогом .gigacode) читает свой конфиг: settings.json,
 # skills/, commands/. Единый .gigacode-корень, как и остальной задеплоенный харнес.
 # Формат — Markdown+frontmatter: qwen-code ДЕПРЕКЕЙТНУЛ TOML-команды и при наличии *.toml
 # в commands/ показывает окно миграции на КАЖДОМ старте. Прошлые деплои клали forge.toml —
 # снимаем его, иначе нотификация не гаснет даже после перехода на .md.
-if [ -f "$SRC/commands/forge.md" ]; then
+# Копируем ВСЕ *.md из исходного commands/ (не хардкодим имена — добавил команду в репо → едет).
+if [ -d "$SRC/commands" ]; then
   mkdir -p "$GIG/commands"
-  cp "$SRC/commands/forge.md" "$GIG/commands/forge.md"
-  rm -f "$GIG/commands/forge.toml"
-  echo "  ✓ слэш-команда /forge → $GIG/commands/forge.md (устаревший forge.toml снят, если был)"
+  for c in "$SRC/commands/"*.md; do
+    [ -e "$c" ] || continue
+    base="$(basename "$c")"
+    cp "$c" "$GIG/commands/$base"
+    echo "  ✓ слэш-команда /${base%.md} → $GIG/commands/$base"
+  done
+  rm -f "$GIG/commands/forge.toml"     # устаревший TOML-вариант → окно миграции qwen-code
 fi
 
 # исполняемость
