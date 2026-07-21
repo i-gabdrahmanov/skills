@@ -31,12 +31,28 @@ PLACEHOLDER = "${PROJECT_ROOT}"
 PYTHON_PLACEHOLDER = "${PYTHON}"
 
 
+def to_command_path(path: str) -> str:
+    """Путь для подстановки в command-строку → прямые слэши.
+
+    Команду в settings.json рантайм режет на argv по POSIX-правилам (shlex), где "\\" —
+    символ экранирования. Неквотированный windows-путь "C:\\Work\\proj" при таком разборе
+    схлопывается в "C:Workproj" (drive-relative без слэша после ":") — рантайм ищет хук
+    относительно CWD и падает "can't open file" на КАЖДОМ вызове инструмента (виден как
+    сдвоенный путь "<cwd>\\Workproj...\\.gigacode\\hooks\\x.py"). Прямые слэши валидны в
+    путях на Windows и переживают POSIX-разбор без потерь. На POSIX .replace — no-op.
+    """
+    return path.replace("\\", "/")
+
+
 def find_python_cmd() -> str:
     """Абсолютный путь к интерпретатору, которым запущен сам resolver, + -X utf8.
 
     Путь — тот же python, что deploy-local.sh уже нашёл в PATH (python3/python/py),
     подставляем абсолютным, чтобы хуки на рантайме не зависели от PATH (на Windows
-    часто нет python3, только python.exe/py.exe).
+    часто нет python3, только python.exe/py.exe). Слэши прямые (to_command_path):
+    квотирование по пробелу спасало только пути вида "C:\\Program Files\\...python.exe";
+    python без пробела в пути ("C:\\Python313\\python.exe") шёл неквотированным и его
+    backslash'и рантайм тоже съедал → "C:Python313python.exe".
 
     -X utf8 (= PYTHONUTF8=1, но не зависит от синтаксиса cmd.exe/sh для передачи env)
     обязателен: хуки читают JSON-payload из stdin и печатают JSON с ensure_ascii=False
@@ -47,6 +63,7 @@ def find_python_cmd() -> str:
     exe = sys.executable
     if not exe:
         return "python3 -X utf8"
+    exe = to_command_path(exe)
     quoted = f'"{exe}"' if " " in exe else exe
     return f"{quoted} -X utf8"
 
@@ -286,7 +303,10 @@ def main():
         except (subprocess.CalledProcessError, FileNotFoundError):
             project_root = find_project_root()
 
-    project_root = str(Path(project_root).resolve())
+    # Прямые слэши обязательны: этот project_root подставляется в command-строки, которые
+    # рантайм режет по POSIX-правилам (см. to_command_path). str(Path.resolve()) на Windows
+    # отдаёт backslash'и даже если git вернул прямые слэши — нормализуем здесь, до подстановки.
+    project_root = to_command_path(str(Path(project_root).resolve()))
     project_gigacode = Path(project_root) / ".gigacode"
     hooks_template_path = project_gigacode / "hooks" / "settings.hooks.json"
     target_settings_path = project_gigacode / "settings.json"
@@ -318,7 +338,10 @@ def main():
                 stg = json.loads(target_settings_path.read_text(encoding="utf-8"))
                 abs_paths = has_absolute_hook_paths(stg)
                 expected_prefix = f"{project_root}/.gigacode/hooks/"
-                foreign = [p for p in abs_paths if not p.startswith(expected_prefix)]
+                # _norm с обеих сторон: settings.json прошлых деплоев мог остаться со
+                # смешанным разделителем ("C:\\Work\\proj/.gigacode/..."), а project_root
+                # теперь прямой — без нормализации свои же хуки ложно попали бы в foreign.
+                foreign = [p for p in abs_paths if not _norm(p).startswith(_norm(expected_prefix))]
                 if foreign:
                     issues.append(
                         f"FOREIGN ABSOLUTE PATHS in settings.json hooks: {foreign}"

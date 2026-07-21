@@ -220,6 +220,18 @@ class TestFindForeignHookPaths(unittest.TestCase):
         found = preflight._find_foreign_hook_paths(settings, project_root)
         self.assertEqual(found, [], found)
 
+    def test_windows_forward_slash_command_own_path_not_foreign(self):
+        """resolve_hook_paths.py теперь подставляет в command ПРЯМОЙ слэш (backslash рантайм
+        съедал при POSIX-разборе). project_root в preflight — из Path(...).resolve(), т.е.
+        обратные слэши. Без нормализации свой же хук ложно попал бы в foreign → preflight
+        зациклил бы совет запустить deploy-local.sh."""
+        project_root = r"C:\Work\JavaProjects\pprb-kid"
+        cmd = ('"C:/Program Files/Python313/python.exe" -X utf8 '
+               "C:/Work/JavaProjects/pprb-kid/.gigacode/hooks/destructive-blocker.py")
+        settings = {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"command": cmd}]}]}}
+        found = preflight._find_foreign_hook_paths(settings, project_root)
+        self.assertEqual(found, [], found)
+
     def test_windows_foreign_path_still_flagged(self):
         project_root = r"C:\Work\JavaProjects\pprb-kid"
         cmd = (r'"C:\Program Files\Python313\python.exe" -X utf8 '
