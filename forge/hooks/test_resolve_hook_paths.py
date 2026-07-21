@@ -38,16 +38,65 @@ class TestFindPythonCmd(unittest.TestCase):
         # на не-английской Windows-локали (cp1251) — см. commit-историю.
         self.assertIn("-X utf8", rhp.find_python_cmd())
 
-    def test_quotes_path_with_spaces(self):
+    def test_quotes_path_with_spaces_forward_slashes(self):
+        # Путь с пробелом квотится, слэши — прямые (backslash рантайм режет по POSIX-разбору).
         import sys
         orig = sys.executable
         try:
             sys.executable = r"C:\Program Files\Python313\python.exe"
             cmd = rhp.find_python_cmd()
-            self.assertIn('"C:\\Program Files\\Python313\\python.exe"', cmd)
+            self.assertIn('"C:/Program Files/Python313/python.exe"', cmd)
+            self.assertNotIn("\\", cmd)
             self.assertIn("-X utf8", cmd)
         finally:
             sys.executable = orig
+
+    def test_no_space_windows_path_survives_posix_split(self):
+        """python по пути без пробела шёл неквотированным → backslash'и съедались рантаймом
+        ("C:\\Python313\\python.exe" → "C:Python313python.exe"). Прямые слэши это чинят."""
+        import shlex
+        import sys
+        orig = sys.executable
+        try:
+            sys.executable = r"C:\Python313\python.exe"
+            cmd = rhp.find_python_cmd()
+            self.assertNotIn("\\", cmd)
+            # интерпретатор — первый токен после POSIX-разбора, путь цел
+            exe = shlex.split(cmd, posix=True)[0]
+            self.assertEqual(exe, "C:/Python313/python.exe")
+        finally:
+            sys.executable = orig
+
+
+class TestToCommandPath(unittest.TestCase):
+    def test_windows_backslashes_to_forward(self):
+        self.assertEqual(rhp.to_command_path(r"C:\Users\bandura-ev\proj"),
+                         "C:/Users/bandura-ev/proj")
+
+    def test_posix_is_noop(self):
+        self.assertEqual(rhp.to_command_path("/home/user/proj"), "/home/user/proj")
+
+
+class TestWindowsCommandSurvivesShlex(unittest.TestCase):
+    """Ядро бага: рантайм режет command в argv по POSIX-правилам shlex ("\\" = экранирование).
+    Неквотированный windows-путь "C:\\Users\\...\\pprb-kid" схлопывался в "C:Users...pprb-kid"
+    (drive-relative) → хук искался относительно CWD → "can't open file ...prompt-guard.py"
+    на КАЖДОМ вызове. Резолвер обязан подставлять прямые слэши, они переживают разбор."""
+
+    def test_resolved_command_script_intact_after_posix_split(self):
+        import shlex
+        # main() нормализует project_root к прямым слэшам ровно через to_command_path:
+        win_root = r"C:\Users\bandura-ev\IdeaProjects\kid\pprb-kid"
+        root_fwd = rhp.to_command_path(win_root)
+        block = {"PreToolUse": [{"hooks": [
+            {"command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/prompt-guard.py"}]}]}
+        resolved = rhp.resolve_hooks_block(block, root_fwd, rhp.find_python_cmd())
+        cmd = resolved["PreToolUse"][0]["hooks"][0]["command"]
+        script = shlex.split(cmd, posix=True)[-1]
+        # backslash'и не съедены: полный путь проекта на месте, не drive-relative
+        self.assertEqual(script, f"{root_fwd}/.gigacode/hooks/prompt-guard.py")
+        self.assertNotIn("\\", script)
+        self.assertTrue(script.startswith("C:/Users/bandura-ev/"), script)
 
 
 class TestHasAbsoluteHookPaths(unittest.TestCase):
@@ -234,6 +283,33 @@ class TestRemoveCli(unittest.TestCase):
             r = self._run(proj)
             self.assertEqual(r.returncode, 1)
             self.assertEqual((gig / "settings.json").read_text(encoding="utf-8"), "{ broken json")
+
+
+class TestResolveCli(unittest.TestCase):
+    """resolve-режим через реальный main(): эмитит settings.json, команды выживают POSIX-разбор."""
+
+    def test_emitted_commands_are_posix_safe(self):
+        import shlex
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td)
+            hooks = proj / ".gigacode" / "hooks"
+            hooks.mkdir(parents=True)
+            (hooks / "settings.hooks.json").write_text(json.dumps({"hooks": {"Stop": [
+                {"hooks": [{"command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/phase-gate.py",
+                            "name": "phase-gate"}]}]}}), encoding="utf-8")
+            r = subprocess.run(
+                [sys.executable, str(HOOKS / "resolve_hook_paths.py"), "--project", str(proj)],
+                capture_output=True, text=True, timeout=30)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            written = json.loads((proj / ".gigacode" / "settings.json").read_text(encoding="utf-8"))
+            cmd = written["hooks"]["Stop"][0]["hooks"][0]["command"]
+            self.assertNotIn("${PROJECT_ROOT}", cmd)
+            self.assertNotIn("${PYTHON}", cmd)
+            # хук-скрипт после POSIX-разбора цел и указывает в .gigacode/hooks/ этого проекта
+            script = shlex.split(cmd, posix=True)[-1]
+            self.assertTrue(script.endswith("/.gigacode/hooks/phase-gate.py"), script)
+            root_fwd = str(proj.resolve()).replace("\\", "/")
+            self.assertEqual(script, f"{root_fwd}/.gigacode/hooks/phase-gate.py")
 
 
 if __name__ == "__main__":

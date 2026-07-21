@@ -23,11 +23,13 @@ def _find_foreign_hook_paths(settings: dict, project_root: str) -> list[str]:
     hooks = settings.get("hooks", {})
     found = []
     # ВАЖНО: та же склейка, что в settings.hooks.json/resolve_hook_paths.py —
-    # project_root + "/.gigacode/hooks/" прямым слэшем, НЕ os.path.join(). На Windows
-    # project_root из Path(...).resolve() — обратные слэши ("C:\Work\..."), а хвост
-    # из шаблона — прямые; итоговый путь смешанный. os.path.join() дал бы чисто
-    # обратные слэши и никогда бы не совпал с реальным префиксом в command.
-    expected_prefix = f"{project_root}/.gigacode/hooks/"
+    # project_root + "/.gigacode/hooks/". Сравниваем через прямые слэши с обеих сторон:
+    # resolve_hook_paths.py теперь подставляет в command прямой слэш (backslash рантайм
+    # съедал при POSIX-разборе), а project_root тут из Path(...).resolve() — на Windows
+    # обратные слэши. Без нормализации свои же хуки ложно попали бы в foreign, и preflight
+    # зациклил бы совет «запусти deploy-local.sh». os.path.join не годится: дал бы чисто
+    # обратные слэши, никогда не совпал бы с реальным префиксом в command.
+    expected_prefix = f"{project_root}/.gigacode/hooks/".replace("\\", "/")
 
     def _walk(node, path=""):
         if isinstance(node, str) and path.endswith("command"):
@@ -35,7 +37,7 @@ def _find_foreign_hook_paths(settings: dict, project_root: str) -> list[str]:
             m = re.search(r"(\S+\.py)\s*$", node)
             if m:
                 p = m.group(1)
-                if not p.startswith(expected_prefix):
+                if not p.replace("\\", "/").startswith(expected_prefix):
                     found.append(p)
         elif isinstance(node, dict):
             for k, v in node.items():
