@@ -82,6 +82,13 @@ class GoldenStateCycle(unittest.TestCase):
             (appr / f"{key}.json").write_text(json.dumps(
                 {"produced_by": "record_approval", "key": key, "approved_by": "user",
                  "reason": "test"}), encoding="utf-8")
+        # Содержательная выжимка системы — update._check_grounding_substance не закроет
+        # 01-grounding без неё (0 модулей и 0 entities = заглушка).
+        sa = self.proj / "docs/system-analysis"
+        sa.mkdir(parents=True, exist_ok=True)
+        (sa / "grounding-excerpt.json").write_text(json.dumps(
+            {"modules": [{"name": "service-x"}], "entities": [{"name": "Foo"}]}),
+            encoding="utf-8")
 
     def test_full_cycle_reaches_empty_current_phase(self):
         # 1. init со статическими шагами

@@ -39,16 +39,25 @@ def check_grounding(project_root: str) -> dict:
         if p.exists():
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
-                return {
-                    "status": "found",
-                    "path": str(p),
-                    "kind": "excerpt",
-                    "modules": data.get("modules", []),
-                    "entities_count": len(data.get("entities", [])),
-                    "gate_total": data.get("gate_total", 0),
-                }
             except (json.JSONDecodeError, KeyError):
                 continue
+            modules = data.get("modules", []) or []
+            entities = data.get("entities", []) or []
+            # Пустой/тонкий excerpt ({} или без модулей И без entities) — это заглушка, а НЕ
+            # готовый обзор. Не считаем его reuse-источником: падаем ниже к README/scan/not_found,
+            # чтобы фаза пересобрала grounding (system-analyst/project-grounder). Иначе false-positive
+            # «grounding есть» глушил и рескан, и вопрос пользователю → SDD/дизайн писались «так себе».
+            if not modules and not entities:
+                continue
+            return {
+                "status": "found",
+                "path": str(p),
+                "kind": "excerpt",
+                "substantive": True,
+                "modules": modules,
+                "entities_count": len(entities),
+                "gate_total": data.get("gate_total", 0),
+            }
 
     # 2. Проверка README.md (краткий обзор)
     readme_path = sa / "README.md"
