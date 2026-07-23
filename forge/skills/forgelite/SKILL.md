@@ -56,7 +56,7 @@ description: >
 | Tech-design по спеке (Gate 1) | `lite-design` | субагент (`tech-design`) | agent() |
 | TDD RED | `lite-red` | субагент-тестописатель | agent() |
 | TDD GREEN | `lite-green` | java-spring-dev (субагент) | agent() |
-| Тесты + покрытие (финал) | `lite-verify` | субагент-раннер | agent() |
+| Тесты + регресс модулей + покрытие (финал) | `lite-verify` | субагент-раннер | agent() |
 
 > **Субагент = ЯВНЫЙ вызов `agent(subagent_type="general-purpose", ...)`.** RED-тесты / GREEN-код /
 > прогон тестов не пиши inline (заблокирует `inline-phase-guard`; нет SubagentStop → молчат
@@ -222,20 +222,26 @@ status:"completed" ТОЛЬКО если build_ok=true (сборка и тест
 Окинь diff `src/main/` на «велосипеды» (дублирование доступных util/библиотек из grounding).
 Нашёл — **покажи пользователю и предложи** заменить. Не блокирует, решает пользователь.
 
-## 7. Тесты + покрытие — субагент → `lite-verify`
+## 7. Тесты + покрытие + регресс затронутых модулей — субагент → `lite-verify`
 ```
-description: "Run tests + JaCoCo coverage gate for <JIRA-KEY>"
+description: "Run tests + regression guard + JaCoCo coverage gate for <JIRA-KEY>"
 subagent_type: general-purpose
 prompt:
-Прогони тесты и детерминированный gate покрытия изменённых файлов (порог 0.80).
+Прогони тесты, регресс-гейт затронутых модулей и детерминированный gate покрытия (порог 0.80).
 Корень репо: <toplevel>. Сборка: <gradle|maven>. Изменённые файлы (без тестов): <список>.
 Шаги:
 1. Gradle: ./gradlew test jacocoTestReport   |  Maven: mvn -q test jacoco:report
-2. Покрытие НЕ глазами — прогони gate ЧЕРЕЗ РАННЕР (он пишет evidence — без него шаг не закроется):
-   python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-verify --cmd "python3 <project>/.gigacode/skills/minor-defect-fix/scripts/check_coverage.py --root <toplevel> --base HEAD --threshold 0.80 --json"
-   Ниже порога — допиши тесты в src/test/ (стиль соседних) и повтори раннер.
-Верни JSON: {"step_id":"lite-verify","status":"completed|failed","tests":{"passed":N,"failed":N,"skipped":N},"coverage_gate":<вывод check_coverage.py>}
-status:"completed" ТОЛЬКО если тесты зелёные И coverage_gate exit 0. Компайл-эррор — status:"failed","build_error":"...".
+2. ЕДИНЫМ РАННЕРОМ прогони составной гейт (он пишет evidence — без него шаг не закроется).
+   Гейт = регресс затронутых модулей `&&` покрытие. Первый — `module_tests.py guard`: он сам
+   через git stash снимает эталон «зелёного ДО» по ВСЕМ модулям, затронутым твоим диффом (не
+   только твой сервис!), возвращает правки и сверяет — сломал/не прогнал тест второго сервиса
+   = FAIL. Это закрывает «тронул другой сервис, его тесты проигнорированы».
+   python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-verify --timeout 3000 --cmd "python3 <project>/.gigacode/skills/feature-pipeline/scripts/module_tests.py guard --root <toplevel> --base HEAD && python3 <project>/.gigacode/skills/minor-defect-fix/scripts/check_coverage.py --root <toplevel> --base HEAD --threshold 0.80 --json"
+   Регресс (ранее зелёный тест затронутого модуля теперь красный / не прогнался) — НЕ подгоняй
+   тест/код под зелёное: найди и устрани настоящую причину. Ниже порога покрытия — допиши тесты
+   в src/test/ (стиль соседних). После правок повтори раннер.
+Верни JSON: {"step_id":"lite-verify","status":"completed|failed","tests":{"passed":N,"failed":N,"skipped":N},"regression_ok":true|false,"coverage_gate":<вывод check_coverage.py>}
+status:"completed" ТОЛЬКО если тесты зелёные И регресс-гейт И coverage_gate дали exit 0 (составной раннер вернул 0). Компайл-эррор — status:"failed","build_error":"...".
 ```
 Лимит итераций GREEN↔verify форсится детерминированно (`quality.max_step_reopens`, дефолт 3) —
 на исчерпании `update.py` вернёт exit 3 (ESCALATE): СТОП, покажи пользователю и спроси.

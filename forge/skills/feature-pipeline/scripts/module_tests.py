@@ -13,14 +13,24 @@
 src-пути) для compare. Тесты гоняются полным сьютом модуля (`./gradlew :mod:test` / `mvn -pl`),
 результат парсится из JUnit XML (`<module>/build/test-results/.../TEST-*.xml`).
 
+Затронутые ДИФФОМ модули, которых НЕТ в baseline (тронул второй сервис, а baseline его не знал),
+судятся fail-closed: красный тест ИЛИ «тесты есть, но не прогнались» → блок. Раньше такое
+падение уходило в new_failures и молча пропускалось — «затронут другой сервис, его тесты
+проигнорированы». Если падение pre-existing — включи модуль в baseline (`--modules`), тогда оно
+корректно классифицируется как pre-existing и блокировать не будет.
+
+Для lite/minor (нет фазы baseline) есть режим `guard`: он сам снимает эталон через git stash
+(прячет правки → тесты затронутых модулей → возвращает правки → тесты снова → сверка).
+
 Usage:
     module_tests.py snapshot --root . --from-taskplan <task-plan.json> --out <baseline.json> [--json]
     module_tests.py compare  --root . --baseline <baseline.json> [--from-diff <base>] [--json]
     module_tests.py snapshot --root . --modules service-taskservice,utils-web --out <baseline.json>
+    module_tests.py guard    --root . --base HEAD [--json]      # self-contained, для lite/minor
 
 Exit:
-    0 — OK (snapshot записан / при compare регрессий нет)
-    2 — РЕГРЕССИЯ (compare: ранее зелёный тест теперь падает) либо не удалось прогнать тесты
+    0 — OK (snapshot записан / при compare|guard регрессий нет)
+    2 — РЕГРЕССИЯ (ранее зелёный тест теперь падает) либо не удалось прогнать/сравнить тесты
     1 — ошибка аргументов/ввода
 """
 from __future__ import annotations
@@ -87,18 +97,22 @@ def modules_from_taskplan(taskplan_path: Path) -> list[str]:
     return sorted(mods)
 
 
+def _git(root: Path, *args: str, timeout: int = 60) -> "subprocess.CompletedProcess | None":
+    try:
+        return subprocess.run(["git", "-C", str(root), *args],
+                              capture_output=True, text=True, timeout=timeout)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+
 def modules_from_diff(root: Path, base: str) -> list[str]:
     """Модули изменённых *.java (git diff vs base + staged + untracked)."""
     files: set[str] = set()
     for args in (["diff", "--name-only", base], ["diff", "--name-only", "--cached"],
                  ["ls-files", "--others", "--exclude-standard"]):
-        try:
-            r = subprocess.run(["git", "-C", str(root), *args],
-                               capture_output=True, text=True, timeout=30)
-            if r.returncode == 0:
-                files.update(r.stdout.splitlines())
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            continue
+        r = _git(root, *args, timeout=30)
+        if r is not None and r.returncode == 0:
+            files.update(r.stdout.splitlines())
     mods: set[str] = set()
     for f in files:
         if f.endswith(".java"):
@@ -146,6 +160,15 @@ def _module_test_cmd(module: str, build_system: str) -> list[str]:
     # (ни shebang, ни PATHEXT для файлов без расширения). Нужен gradlew.bat.
     gradlew = "gradlew.bat" if sys.platform == "win32" else "./gradlew"
     return [gradlew, f"{gp}:test", "--no-daemon", "--continue"]
+
+
+def _module_has_tests(root: Path, module: str) -> bool:
+    """Есть ли у модуля исходники тестов (src/test). Нужен, чтобы отличить «модуль без
+    тестов» (нечего регрессировать) от «тесты есть, но не прогнались» (fail-closed)."""
+    for seg in {module.replace("-", "/"), module.replace("-", "/", 1), module}:
+        if (root / seg / "src" / "test").is_dir():
+            return True
+    return False
 
 
 def _results_dirs(root: Path, module: str, build_system: str) -> list[Path]:
@@ -238,6 +261,77 @@ def _resolve_modules(root: Path, args) -> list[str]:
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
+def cmd_guard(args) -> int:
+    """Самодостаточный регресс-гейт затронутых модулей БЕЗ заранее снятого baseline (lite/minor).
+
+    «Зелёное ДО» берём через git stash: прячем правки → гоняем тесты затронутых диффом модулей
+    (эталон пред-change) → возвращаем правки → гоняем снова → сверяем. Fail-closed:
+      • регрессия (был зелёным ДО, теперь красный) → блок;
+      • затронут модуль, у него ЕСТЬ тесты, но в текущем прогоне нет результатов (не прогнались) → блок.
+    Второй сервис, чьи тесты сломались или не запустились, больше не проходит незамеченным.
+    """
+    root = Path(args.root).resolve()
+    bs = _build_system(root, args.build_system)
+    modules = modules_from_diff(root, args.base)
+
+    def _emit(status: str, rc: int, msg: str, **extra) -> int:
+        if args.json:
+            print(json.dumps({"status": status, "modules": modules, **extra}, ensure_ascii=False))
+        else:
+            print(msg)
+        return rc
+
+    if not modules:
+        return _emit("ok", 0, "✓ затронутых Java-модулей нет — регрессировать нечего")
+
+    st = _git(root, "status", "--porcelain")
+    if st is None:
+        return _emit("fail", 2, "✗ git недоступен — эталон не снять (fail-closed)")
+    if not st.stdout.strip():
+        return _emit("ok", 0, f"✓ рабочее дерево чистое — сравнивать нечего (модули: {', '.join(modules)})")
+
+    # 1) прячем правки и снимаем эталон пред-change
+    push = _git(root, "stash", "push", "-u", "-m", "forge-regression-guard")
+    stashed = push is not None and push.returncode == 0 and "No local changes" not in (push.stdout or "")
+    if not stashed:
+        why = (push.stderr.strip() if push else "git stash недоступен") or "не удалось спрятать правки"
+        return _emit("fail", 2, f"✗ не удалось снять эталон (git stash): {why} (fail-closed)")
+    try:
+        base_tests, _ = run_suite(root, modules, bs, args.timeout)
+    finally:
+        pop = _git(root, "stash", "pop")
+        if pop is None or pop.returncode != 0:
+            err = (pop.stderr.strip() if pop else "git stash pop недоступен")
+            # правки в стэше — критично, но НЕ теряем их: сообщаем, как восстановить
+            return _emit("fail", 2,
+                         f"✗ CRITICAL: git stash pop не прошёл — восстанови правки вручную "
+                         f"(`git stash pop`): {err}", stash_pop_failed=True)
+
+    # 2) текущее состояние и сверка
+    current, cur_no = run_suite(root, modules, bs, args.timeout)
+    d = diff_baseline(base_tests, current)
+    regressions = d["regressions"]
+    untested = [m for m in modules if m in cur_no and _module_has_tests(root, m)]
+    blocking = bool(regressions or untested)
+
+    if args.json:
+        print(json.dumps({"status": "fail" if blocking else "ok", "modules": modules,
+                          **d, "untested_affected_modules": untested}, ensure_ascii=False))
+    else:
+        if regressions:
+            print(f"✗ РЕГРЕССИЯ в затронутых модулях ({', '.join(modules)}): "
+                  f"{len(regressions)} ранее зелёных теста(ов) теперь падают — почини:")
+            for t in regressions[:20]:
+                print(f"   ✗ {t}")
+        if untested:
+            print(f"✗ затронуты модули с тестами, но тесты не прогнались: {', '.join(untested)} "
+                  "— нельзя подтвердить зелёное (fail-closed)")
+        if not blocking:
+            print(f"✓ регрессий нет в затронутых модулях ({', '.join(modules)}). "
+                  f"Починено: {len(d['fixed'])}, pre-existing (не блокируют): {len(d['pre_existing_failures'])}")
+    return 2 if blocking else 0
+
+
 def cmd_snapshot(args) -> int:
     root = Path(args.root).resolve()
     bs = _build_system(root, args.build_system)
@@ -283,34 +377,62 @@ def cmd_compare(args) -> int:
         return 2
     base_tests = bdata.get("tests", {})
     bs = _build_system(root, args.build_system or bdata.get("build_system"))
-    # сравниваем РОВНО те модули, что в baseline (одинаковый scope = чистый diff);
-    # из git-diff можно расширить, но регресс считаем по baseline-модулям.
-    modules = bdata.get("modules", [])
-    if args.from_diff is not None:
-        modules = sorted(set(modules) | set(modules_from_diff(root, args.from_diff)))
-    current, no_results = run_suite(root, modules, bs, args.timeout)
-    d = diff_baseline(base_tests, current)
+    baseline_modules = bdata.get("modules", [])
 
-    # Не удалось прогнать модуль(и) из baseline → нельзя подтвердить зелёное (fail-closed).
-    blocked_no_run = [m for m in bdata.get("modules", []) if m in no_results]
+    # 1) Регресс по baseline-модулям (ровно тот scope, что был зелёным ДО кода — чистый diff).
+    current, no_results = run_suite(root, baseline_modules, bs, args.timeout)
+    d = diff_baseline(base_tests, current)
     regressions = d["regressions"]
+    # Не удалось прогнать модуль из baseline → нельзя подтвердить зелёное (fail-closed).
+    blocked_no_run = [m for m in baseline_modules if m in no_results]
+
+    # 2) Затронутые диффом модули ВНЕ baseline. Их «зелёного ДО кода» нет, поэтому судим
+    #    fail-closed: красный тест ИЛИ «тесты есть, но не прогнались» → блок. Это и есть дыра
+    #    «тронул второй сервис — его тесты проигнорированы»: baseline их не знал, падение
+    #    уходило в new_failures и молча не блокировало.
+    extra_modules: list[str] = []
+    unbaselined_failures: list[str] = []
+    untested_affected: list[str] = []
+    if args.from_diff is not None:
+        extra_modules = [m for m in modules_from_diff(root, args.from_diff)
+                         if m not in baseline_modules]
+        if extra_modules:
+            cur_extra, no_run_extra = run_suite(root, extra_modules, bs, args.timeout)
+            unbaselined_failures = sorted(t for t, st in cur_extra.items() if st == "failed")
+            untested_affected = [m for m in extra_modules
+                                 if m in no_run_extra and _module_has_tests(root, m)]
+
+    blocking = bool(regressions or blocked_no_run or unbaselined_failures or untested_affected)
 
     if args.json:
-        print(json.dumps({"status": "fail" if (regressions or blocked_no_run) else "ok",
-                          **d, "modules_without_results": blocked_no_run}, ensure_ascii=False))
+        print(json.dumps({"status": "fail" if blocking else "ok", **d,
+                          "modules_without_results": blocked_no_run,
+                          "affected_unbaselined_modules": extra_modules,
+                          "unbaselined_failures": unbaselined_failures,
+                          "untested_affected_modules": untested_affected},
+                         ensure_ascii=False))
     else:
         if regressions:
             print(f"✗ РЕГРЕССИЯ: {len(regressions)} ранее зелёных теста(ов) теперь падают "
                   "(затронутые модули) — успеха нет, почини сломанный тест:")
             for t in regressions[:20]:
                 print(f"   ✗ {t}")
+        if unbaselined_failures:
+            print(f"✗ ЗАТРОНУТ СЕРВИС ВНЕ baseline ({', '.join(extra_modules)}): "
+                  f"{len(unbaselined_failures)} красных теста(ов), зелёного ДО кода на них нет "
+                  "(fail-closed). Pre-existing? — сними baseline на модуль (--modules); иначе почини:")
+            for t in unbaselined_failures[:20]:
+                print(f"   ✗ {t}")
+        if untested_affected:
+            print(f"✗ затронуты модули с тестами, но тесты не прогнались: "
+                  f"{', '.join(untested_affected)} — нельзя подтвердить зелёное (fail-closed)")
         if blocked_no_run:
-            print(f"✗ не удалось прогнать тесты модулей: {', '.join(blocked_no_run)} — "
+            print(f"✗ не удалось прогнать тесты модулей baseline: {', '.join(blocked_no_run)} — "
                   "нельзя подтвердить зелёное (fail-closed)")
-        if not regressions and not blocked_no_run:
+        if not blocking:
             print(f"✓ регрессий нет. Починено: {len(d['fixed'])}, "
                   f"pre-existing-падений (не блокируют): {len(d['pre_existing_failures'])}")
-    return 2 if (regressions or blocked_no_run) else 0
+    return 2 if blocking else 0
 
 
 def _no_res(no_results: list) -> str:
@@ -337,9 +459,15 @@ def main() -> int:
     cp.add_argument("--baseline", required=True, help="baseline.json из snapshot")
     cp.add_argument("--from-diff", default=None, help="git base — расширить scope изменёнными модулями")
 
+    gp = sub.add_parser("guard", parents=[common],
+                        help="самодостаточный регресс-гейт через git stash (lite/minor, без baseline)")
+    gp.add_argument("--base", default="HEAD", help="git ref для diff затронутых модулей (дефолт HEAD)")
+
     args = ap.parse_args()
     if args.mode == "snapshot":
         return cmd_snapshot(args)
+    if args.mode == "guard":
+        return cmd_guard(args)
     return cmd_compare(args)
 
 

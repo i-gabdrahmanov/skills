@@ -273,6 +273,11 @@ prompt:
 2. Покрытие НЕ считай вручную — прогони детерминированный gate (он сам берёт изменённые
    `*.java`, парсит JaCoCo XML, даёт per-file OK/LOW/MISSING, exit 2 при недоборе):
    `python3 <project>/.gigacode/skills/minor-defect-fix/scripts/check_coverage.py --root <toplevel> --base HEAD --threshold 0.80 --json`
+3. Регресс затронутых модулей — детерминированный gate. Он сам через git stash снимает эталон
+   «зелёного ДО» по ВСЕМ модулям, затронутым диффом (не только тому, что ты правил!), возвращает
+   правки и сверяет. Сломал/не прогнал тест ДРУГОГО сервиса = exit 2. Это закрывает «тронул
+   другой сервис, его тесты проигнорированы»:
+   `python3 <project>/.gigacode/skills/feature-pipeline/scripts/module_tests.py guard --root <toplevel> --base HEAD --json`
 
 Верни ровно такой JSON (без обёрток):
 {
@@ -280,10 +285,14 @@ prompt:
     "passed": <int>, "failed": <int>, "skipped": <int>,
     "failed_tests": [{"name": "...", "message": "..."}]
   },
-  "coverage_gate": <вставь сюда JSON-вывод check_coverage.py: {status, threshold, files:[{path,coverage,status}]}>
+  "coverage_gate": <вставь сюда JSON-вывод check_coverage.py: {status, threshold, files:[{path,coverage,status}]}>,
+  "regression_gate": <вставь сюда JSON-вывод module_tests.py guard: {status, modules, regressions, untested_affected_modules}>
 }
 
 Ничего не чини. Если compile error до тестов — верни {"build_error": "..."}.
+Успех раздела 7 = тесты зелёные И coverage_gate.status=="pass" (exit 0) И regression_gate.status=="ok"
+(exit 0). Регресс (regressions непустой / untested_affected_modules непустой) — НЕ подгоняй тест
+под зелёное: найди настоящую причину, что сломало тест другого модуля.
 ```
 
 Лимит итераций «тестописатель ↔ тестраннер»: **3**. На третьей итерации не зелёное —

@@ -18,7 +18,8 @@ Phases:
     build      — проверка build-артефактов
     spec       — проверка spec-документов
     coverage   — проверка JaCoCo-покрытия (закрывает шаг 05-tests)
-    regression — тесты затронутых модулей не регрессировали vs baseline (module_tests compare)
+    regression — тесты затронутых модулей не регрессировали vs baseline + затронутый диффом
+                 второй сервис вне baseline не красный/не «не прогнан» (module_tests compare)
     design     — check_taskplan + check_sdd (закрывает шаг 02-design)
 
 Если --recheck указан, скрипт проверяет, что вердикт судьи на диске есть и passed=true.
@@ -1401,8 +1402,9 @@ def check_coverage(slug: str, feature_dir: Path | None) -> dict:
 def check_regression(slug: str, feature_dir: Path | None) -> dict:
     """regression-judge (D): тесты ЗАТРОНУТЫХ модулей не должны регрессировать vs baseline.
 
-    Гоняет `module_tests.py compare` (baseline снят на старте Build — SKILL §7). РЕГРЕССИЯ
-    (ранее зелёный тест теперь падает) или невозможность прогнать модуль baseline → FAIL.
+    Гоняет `module_tests.py compare --from-diff` (baseline снят на старте Build — SKILL §7).
+    FAIL, если: РЕГРЕССИЯ (ранее зелёный тест теперь падает) | модуль baseline не прогнался |
+    затронут диффом ВТОРОЙ сервис вне baseline, а его тесты красные / не прогнались (fail-closed).
     Пре-существующие/infra-падения (красные и в baseline) НЕ блокируют. «Агент сломал тест → поймали».
     """
     project_root = PROJECT_ROOT
@@ -1438,6 +1440,9 @@ def check_regression(slug: str, feature_dir: Path | None) -> dict:
             data = {}
     regressions = data.get("regressions", [])
     no_run = data.get("modules_without_results", [])
+    unbaselined = data.get("unbaselined_failures", [])
+    untested_affected = data.get("untested_affected_modules", [])
+    affected_extra = data.get("affected_unbaselined_modules", [])
     passed = r.returncode == 0
 
     detail = (r.stdout.strip() or r.stderr.strip() or f"exit {r.returncode}")[:300]
@@ -1445,13 +1450,19 @@ def check_regression(slug: str, feature_dir: Path | None) -> dict:
                "status": "PASS" if passed else "FAIL", "detail": detail, "severity": "error"}]
     blocking = []
     blocking += [f"регрессия теста (был зелёным, теперь падает): {t}" for t in regressions[:10]]
+    blocking += [f"красный тест затронутого сервиса вне baseline "
+                 f"({', '.join(affected_extra)}), зелёного ДО кода нет: {t}" for t in unbaselined[:10]]
+    if untested_affected:
+        blocking.append(f"затронуты модули с тестами, но тесты не прогнались: "
+                        f"{', '.join(untested_affected)} — нельзя подтвердить зелёное (fail-closed)")
     if no_run:
         blocking.append(f"не удалось прогнать тесты модулей: {', '.join(no_run)} — "
                         "нельзя подтвердить зелёное (fail-closed)")
     if not passed and not blocking:
         # exit 2 без распарсенного JSON (напр. baseline не снят — SKILL §7)
         blocking.append(f"regression-gate FAIL: {(r.stderr.strip() or r.stdout.strip() or 'exit 2')[:200]}")
-    summary = f"module_tests compare exit {r.returncode}: регрессий {len(regressions)}"
+    summary = (f"module_tests compare exit {r.returncode}: регрессий {len(regressions)}, "
+               f"красных вне baseline {len(unbaselined)}")
     return _make_verdict("regression-judge", slug, passed, checks, blocking, [], summary)
 
 
