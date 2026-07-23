@@ -29,6 +29,11 @@ def _make_manifest(tmp: Path, status: str = "in_progress") -> None:
         "feature": FEATURE,
         "steps": [{"id": STEP, "status": status, "required_judges": []}],
     }), encoding="utf-8")
+    # Содержательная выжимка — update._check_grounding_substance не закроет 01-grounding без неё.
+    sa = tmp / "docs" / "system-analysis"
+    sa.mkdir(parents=True, exist_ok=True)
+    (sa / "grounding-excerpt.json").write_text(
+        json.dumps({"modules": [{"name": "svc"}], "entities": []}), encoding="utf-8")
 
 
 def _manifest_step(tmp: Path) -> dict:

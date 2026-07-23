@@ -40,6 +40,15 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.p
 спецификации (SDD)?». Только после «да». Если grounding не собран — НЕ переходи к бриф `02-sdd.md` §5a,
 выполни полный обзор через `system-analyst` (см. exit 1 выше).
 
+> **ХАРД-ГЕЙТ закрытия (детерминированный, в `update.py`).** Шаг `01-grounding` НЕ закроется,
+> пока `grounding-excerpt.json` не содержит хотя бы один модуль ИЛИ entity
+> (`_check_grounding_substance`). Пустой/тонкий excerpt (`{}`, 0 модулей и 0 entities) = заглушка,
+> а не обзор → `update.py` бросит ошибку. Это чинит прошлую дыру: `check_grounding.py` давал
+> false-positive «grounding есть» на пустышке, reuse-ветка глушила и рескан, и вопрос → SDD/дизайн
+> писались «так себе». Если выжимки нет/тонкая — пересобери (system-analyst / project-grounder §4),
+> НЕ пытайся закрыть шаг. Пропуск только через `override_judge --judge grounding-substance-01-grounding`
+> после явного «да» пользователя (§0.6.1) — и лишь когда grounding объективно недоступен.
+
 Закрой шаг явной командой (в output — `path`/`excerpt_path` из вердикта):
 ```bash
 python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py \

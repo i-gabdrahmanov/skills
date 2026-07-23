@@ -59,6 +59,15 @@ def _origin(d: Path, step_id: str):
     (d / "_origins" / f"{step_id}.json").write_text("{}", encoding="utf-8")
 
 
+def _excerpt(project: Path, *, modules=("service-x",), entities=()):
+    """Содержательная выжимка grounding — нужна, чтобы закрыть 01-grounding
+    (update._check_grounding_substance)."""
+    sa = project / "docs" / "system-analysis"
+    sa.mkdir(parents=True, exist_ok=True)
+    (sa / "grounding-excerpt.json").write_text(
+        json.dumps({"modules": list(modules), "entities": list(entities)}), encoding="utf-8")
+
+
 def _approval(project: Path, key: str, *, fake=False, inner_key: str | None = None):
     """Пишет approval-маркер ground/approvals/<key>.json. fake=True → без провенанса."""
     appr = project / "ground" / "approvals"
@@ -219,11 +228,33 @@ def main() -> int:
         rc, out = run(Path(td), "00-brd")
         check("override doc-approved → exit 0", rc == 0, out)
 
-    # 18. не-доко-фаза утверждения не требует (04-build с гейтом и origin)
+    # 18. не-доко-фаза утверждения не требует — но 01-grounding требует содержательную выжимку
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_manifest(Path(td), [{"id": "01-grounding", "status": "pending"}])
+        _excerpt(Path(td))
+        rc, out = run(Path(td), "01-grounding")
+        check("01-grounding с содержательным grounding → exit 0", rc == 0, out)
+
+    # 19. 01-grounding без содержательной выжимки → блок (заглушка/отсутствие обзора)
     with tempfile.TemporaryDirectory() as td:
         d = _write_manifest(Path(td), [{"id": "01-grounding", "status": "pending"}])
         rc, out = run(Path(td), "01-grounding")
-        check("01-grounding без утверждения → exit 0", rc == 0, out)
+        check("01-grounding без grounding-excerpt → блок",
+              rc != 0 and "grounding" in out, f"rc={rc} {out}")
+
+    # 19b. пустой excerpt ({} — 0 модулей и 0 entities) — тоже блок (заглушка)
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_manifest(Path(td), [{"id": "01-grounding", "status": "pending"}])
+        _excerpt(Path(td), modules=(), entities=())
+        rc, out = run(Path(td), "01-grounding")
+        check("01-grounding с пустым excerpt → блок", rc != 0, f"rc={rc} {out}")
+
+    # 19c. override grounding-substance снимает блок (деградация)
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_manifest(Path(td), [{"id": "01-grounding", "status": "pending"}])
+        _override(d, "grounding-substance-01-grounding")
+        rc, out = run(Path(td), "01-grounding")
+        check("override grounding-substance → exit 0", rc == 0, out)
 
     print(f"\n{PASSED} passed, {FAILED} failed")
     return 1 if FAILED else 0

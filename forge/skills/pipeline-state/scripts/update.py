@@ -321,6 +321,68 @@ def _check_doc_approval(step: dict, project: Path, skill: str, feature: str):
     )
 
 
+# Фаза grounding: закрыть 01-grounding можно только при СОДЕРЖАТЕЛЬНОЙ выжимке системы.
+_GROUNDING_STEP_PREFIX = "01-grounding"
+
+
+def _grounding_excerpt_path(project: Path) -> Path:
+    """Путь к grounding-excerpt.json по docs-конфигу (in-repo/separate-repo); фоллбэк docs/system-analysis."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1].parent / "feature-pipeline" / "scripts"))
+        import skill_paths  # type: ignore
+        return skill_paths.grounding_excerpt_path(project)
+    except Exception:
+        return project / "docs" / "system-analysis" / "grounding-excerpt.json"
+
+
+def _check_grounding_substance(step: dict, project: Path, skill: str, feature: str):
+    """Гарантия «01-grounding закрывается только при СОДЕРЖАТЕЛЬНОМ обзоре системы».
+
+    Дыра прошлых прогонов: check_grounding.py давал false-positive «grounding есть» на пустом/
+    тонком grounding-excerpt.json (даже {}), reuse-ветка брифа командовала «system-analyst НЕ
+    запускай, не спрашивай» → шаг закрывался, а SDD/tech-design писались без контекста системы
+    («так себе»). Теперь шаг 01-grounding нельзя закрыть, пока выжимка не содержит ХОТЯ БЫ один
+    модуль ИЛИ entity — детерминированный аналог check_brd_doc/_check_doc_approval для grounding
+    (enforcement > guidance: гейт в update.py, а не только в брифе).
+    Escape-hatch: overrides/grounding-substance-<step_id>.json (R4, через override_judge)."""
+    step_id = step.get("id", "")
+    if not step_id.startswith(_GROUNDING_STEP_PREFIX):
+        return
+    excerpt = _grounding_excerpt_path(project)
+    problem = None
+    if not excerpt.exists():
+        problem = (f"нет выжимки системы {excerpt} — grounding не собран "
+                   f"(system-analyst/project-grounder не отработал)")
+    else:
+        try:
+            data = json.loads(excerpt.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            problem = f"grounding-excerpt.json нечитаем/битый: {e}"
+        else:
+            if not isinstance(data, dict) or (
+                    not (data.get("modules") or []) and not (data.get("entities") or [])):
+                problem = ("grounding-excerpt.json пустой (0 модулей и 0 entities) — это заглушка, "
+                           "а не обзор системы")
+    if problem is None:
+        return
+    ov = _load_override(project, skill, feature, f"grounding-substance-{step_id}")
+    if ov:
+        step.setdefault("override_warnings", [])
+        msg = (f"⚠️  шаг '{step_id}' закрыт без содержательного grounding — пропущено вручную. "
+               f"Причина: {ov.get('reason', '?')}")
+        if msg not in step["override_warnings"]:
+            step["override_warnings"].append(msg)
+        print(f"  {msg}", file=sys.stderr)
+        return
+    raise RuntimeError(
+        f"Шаг {step_id} нельзя закрыть: {problem}.\n"
+        f"   Собери реальный обзор: system-analyst (обзора нет) или project-grounder "
+        f"(построить выжимку из scan/), затем повтори update.py.\n"
+        + _override_hint(f"grounding-substance-{step_id}", feature, step_id,
+                         "<почему grounding объективно недоступен>")
+    )
+
+
 def _gate_result_path(project: Path, skill: str, feature: str, step_id: str) -> Path:
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(step_id)).strip("-") or "x"
     return project / "ground" / "statements" / skill / feature / "gates" / f"{safe}.json"
@@ -547,6 +609,7 @@ def main():
         _check_gate_result(step, project, args.skill, args.feature)
         _check_judges(step, project, args.skill, args.feature)
         _check_doc_approval(step, project, args.skill, args.feature)
+        _check_grounding_substance(step, project, args.skill, args.feature)
 
     # Fallback=STOP: обязательный шаг нельзя тихо пропустить (skipped) без override
     if not args.skip_judges and args.status == "skipped":

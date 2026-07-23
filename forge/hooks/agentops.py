@@ -57,10 +57,19 @@ def main() -> int:
     pretool = 0
     subagents = set()
     total = 0
+    budget_tokens = 0   # свёрнутый учёт budget-meter — события {event:"budget"} в том же логе
+    budget_events = 0
     for jf in files:
         for rec in _iter_events(Path(jf)):
-            total += 1
             e = rec.get("event") or rec.get("hook_event_name")
+            # budget-события — не действия агента: не мусорим ими trust-метрики, считаем отдельно
+            if e == "budget":
+                budget_tokens += int(rec.get("tokens", 0) or 0)
+                budget_events += 1
+                continue
+            if e == "budget_summary":
+                continue
+            total += 1
             ev[e] += 1
             if rec.get("tool_name"):
                 tools[rec["tool_name"]] += 1
@@ -85,6 +94,8 @@ def main() -> int:
         "pretool_calls": pretool,
         "hook_block_rate": round(block_rate, 3),
         "tool_failure_rate": round(fail_rate, 3),
+        "budget_tokens": budget_tokens,
+        "budget_events": budget_events,
     }
     if args.json:
         print(json.dumps(metrics, ensure_ascii=False, indent=2))
@@ -94,6 +105,8 @@ def main() -> int:
         print(f"PreToolUse вызовов: {pretool}")
         print(f"hook-block rate:    {block_rate:.1%}")
         print(f"tool-failure rate:  {fail_rate:.1%}")
+        if budget_events:
+            print(f"токен-бюджет:       {budget_tokens} токенов ({budget_events} budget-событий)")
         print("по событиям:", dict(ev))
         print("топ тулов:  ", dict(tools.most_common(8)))
     return 0

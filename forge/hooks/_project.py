@@ -14,9 +14,18 @@ Usage:
 """
 
 import json
+import os
+import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
+
+try:
+    import fcntl  # POSIX
+except ImportError:  # Windows
+    fcntl = None
+    import msvcrt
 
 
 def gigacode_dir() -> Path:
@@ -77,6 +86,84 @@ def find_project_root(cwd: Optional[Path] = None) -> Path:
         if (parent / "ground" / "pipeline.json").exists():
             return parent
     return cwd
+
+
+# ── Логи прогона: единый каталог + конкурентно-безопасный append ─────────────
+# Общие для log-agent.py и budget-meter.py. Раньше каждый хук держал СВОЮ копию
+# _run_dir и разъезжался: log-agent писал в run-<session>/, а budget-meter — по
+# старой схеме (<feature>/iter-N/ или _adhoc/<ts>-<sess>/), поэтому budget.json
+# улетал в другой каталог, чем agents.log/.jsonl. Теперь оба зовут run_dir()
+# отсюда → «один прогон = одна папка», и оба пишут в общий agents.log/.jsonl
+# через append_locked() под одним flock.
+
+def _safe_run_key(s) -> str:
+    """Ключ каталога прогона без сюрпризов файловой системы."""
+    s = re.sub(r"[^A-Za-z0-9._-]+", "-", str(s)).strip("-")
+    return s or "x"
+
+
+def git_toplevel(cwd: str = "") -> str:
+    """Корень репо для логирующих хуков: git toplevel от cwd, иначе cwd/pwd.
+
+    log-agent и budget-meter обязаны резолвить корень ОДИНАКОВО, иначе их run-dir
+    разъедется. Это единый источник этой логики (раньше — две копии `_project_root`).
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd or None, capture_output=True, text=True, timeout=3,
+        )
+        top = out.stdout.strip()
+        if out.returncode == 0 and top:
+            return top
+    except Exception:
+        pass
+    return cwd or os.getcwd()
+
+
+def run_dir(root, session_id: str = "") -> Path:
+    """Каталог прогона: ОДИН на сессию — <root>/ground/ai-logs/run-<key>/.
+
+    Ключ (по убыванию приоритета): GIGACODE_RUN_ID (стабильный ключ от операторской
+    обёртки/headless) → session_id (стабилен в интерактиве) → 'nosess'. Так «один
+    прогон = одна папка» держится даже без стабильного session_id от рантайма.
+    """
+    base = Path(root) / "ground" / "ai-logs"
+    env_run = os.environ.get("GIGACODE_RUN_ID") or ""
+    if env_run:
+        key = _safe_run_key(env_run)[:16]
+    else:
+        key = _safe_run_key(session_id)[:8] if session_id else "nosess"
+    return base / f"run-{key}"
+
+
+def append_locked(path, text: str) -> None:
+    """Конкурентно-безопасный append под flock (POSIX) / msvcrt.locking (Windows).
+
+    Общий для log-agent и budget-meter: на PostToolUse/SubagentStop/Stop оба хука
+    дописывают в ОДИН agents.log/.jsonl прогона, поэтому запись обязана идти под
+    единым замком. Каталог создаётся при необходимости.
+    """
+    path = str(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        try:
+            if fcntl:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            else:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+            f.write(text)
+            f.flush()
+        finally:
+            try:
+                if fcntl:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                else:
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+            except Exception:
+                pass
 
 
 def active_feature(root: Path, skill: str = "feature-pipeline") -> str:
