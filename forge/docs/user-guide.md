@@ -132,7 +132,7 @@ gigacode --experimental-hooks -p "сделай фичу X"     # одной ко
 └── ground/
     ├── pipeline.json                  # конфиг конвейера (критичность, пороги, Jira-мета)
     ├── statements/feature-pipeline/<slug>/   # состояние прогона (манифест, судьи, errors.json)
-    └── ai-logs/<slug>/iter-NN/        # живые логи субагентов
+    └── ai-logs/run-<session>/         # живой лог прогона: agents.log + agents.jsonl (один на прогон)
 ```
 
 `<slug>` — kebab-case по сути фичи (или Jira-ключ). Спецификация правится в **отдельном** repo

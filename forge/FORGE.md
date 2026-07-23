@@ -78,7 +78,7 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 | `pii-boundary.py` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
 | `state-write-guard.py` | PreToolUse Write/Edit/Bash | запрет прямой записи моделью в control-plane-файлы (`manifest.json`, `_origins`, `gates`, `overrides`, `judges`, `approvals`, `pipeline.json`, `ground/phases/`) — мутация только через санкц. скрипты | exit 2 |
 | `inline-phase-guard.py` | PreToolUse Bash/Write/Edit | actor-guard: главный агент не производит артефакты/код/билд subagent-фазы inline (по `agent_type`) | exit 2 |
-| `budget-meter.py` | Post/SubagentStop/Stop | информационный учёт токен-бюджета: tally по фазам + финализация/сводка на Stop. **Не блокирует и не предупреждает** (никакого circuit-breaker) | нет |
+| `budget-meter.py` | Post/SubagentStop/Stop | информационный учёт токен-бюджета: расход дописывается budget-событиями в единый лог прогона (`agents.jsonl`), на Stop — сводка по фазам + запись `budget_summary`. Отдельного `budget.json` нет. **Не блокирует и не предупреждает** (никакого circuit-breaker) | нет |
 | `prompt-guard.py` | UserPromptSubmit + PostToolUse(read/fetch) | детект prompt-injection → additionalContext | нет |
 | `file-journal.py` | PostToolUse Write/Edit/Bash | безусловный журнал изменённых файлов активной фичи (`journal/files.jsonl`, привязка к step_id) — скоуп восстановления кода для `rollback.py` | нет |
 | `state-recorder.py` | SubagentStop | авто-запись шага в pipeline-state по `step_id` | нет |
@@ -152,8 +152,10 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
   минимальная реализация до зелёного → `check_build` → coverage. Шаги манифеста `04-test-<id>`→`04-build-<id>`.
   **Форсится хуком** `tdd-guard`: запись в `src/main` блокируется, пока `04-test-<id>` ещё `pending`
   (на прогоне TDD не происходил — код писали первым; теперь нельзя). Тесты писать можно всегда.
-- **Лог поведения агентов+субагентов для анализа** (`log-agent.py` пишет `ground/ai-logs/<run>/`
-  И в единый архив `<home>/ai-logs-archive/agents-YYYYMM.jsonl`).
+- **Лог поведения агентов+субагентов для анализа** (`log-agent.py` пишет один каталог на прогон
+  `ground/ai-logs/run-<session>/`: человекочитаемый `agents.log` + машинный `agents.jsonl`;
+  `budget-meter` сворачивает расход budget-событиями в тот же `agents.jsonl` — отдельного `budget.json`
+  нет. Плюс единый архив `<home>/ai-logs-archive/agents-YYYYMM.jsonl`. Каталог/append общий — `_project.run_dir`/`append_locked`).
 - **Pre-flight self-check харнеса** (`preflight.py`: `settings.hooks.json` + `pipeline.json`) — ловит
   незадеплоенный харнес ДО старта; exit 1 → «ENFORCEMENT OFF, остановись».
 - **Субагент = явный вызов `agent`**, не inline. Всё, что помечено «субагент» — через `agent` (иначе

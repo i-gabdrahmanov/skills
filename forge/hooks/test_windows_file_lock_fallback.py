@@ -7,6 +7,10 @@
 PostToolUse/Stop/...). Это не runtime-сбой отдельной функции, а гарантированный
 краш всей цепочки хуков на Windows. Починено platform-fallback'ом на msvcrt.locking.
 
+Теперь замок — ЕДИНЫЙ источник: `_project.append_locked` (оба хука пишут в один
+agents.log/.jsonl прогона и делят один flock). Поэтому тест бьёт по `_project`, а не
+по копиям в хуках (их больше нет).
+
 Тест эмулирует Windows in-process: sys.modules["fcntl"] = None форсит ImportError
 при `import fcntl` (документированное поведение CPython), поддельный sys.modules
 ["msvcrt"] ловит вызовы вместо реального (которого на macOS/Linux физически нет).
@@ -47,36 +51,19 @@ def _load_module_without_fcntl(name: str, path: Path, fake_msvcrt: _FakeMsvcrt):
     return module
 
 
-class TestLogAgentFallback(unittest.TestCase):
+class TestProjectLockFallback(unittest.TestCase):
     def test_loads_without_fcntl_and_uses_msvcrt(self):
         fake = _FakeMsvcrt()
-        mod = _load_module_without_fcntl("log_agent", HOOKS / "log-agent.py", fake)
+        mod = _load_module_without_fcntl("project", HOOKS / "_project.py", fake)
         self.assertIsNone(mod.fcntl, "должен деградировать в None, не пробросить ImportError")
 
-    def test_append_locks_and_unlocks_via_msvcrt(self):
+    def test_append_locked_locks_and_unlocks_via_msvcrt(self):
         fake = _FakeMsvcrt()
-        mod = _load_module_without_fcntl("log_agent", HOOKS / "log-agent.py", fake)
+        mod = _load_module_without_fcntl("project", HOOKS / "_project.py", fake)
         with tempfile.TemporaryDirectory() as td:
-            p = str(Path(td) / "sub" / "agents.log")
-            mod._append(p, "line1\n")
+            p = str(Path(td) / "sub" / "agents.log")  # dirname создаётся append_locked
+            mod.append_locked(p, "line1\n")
             self.assertEqual(Path(p).read_text(encoding="utf-8"), "line1\n")
-        self.assertIn((mock.ANY, fake.LK_LOCK, 1), fake.calls)
-        self.assertIn((mock.ANY, fake.LK_UNLCK, 1), fake.calls)
-
-
-class TestBudgetMeterFallback(unittest.TestCase):
-    def test_loads_without_fcntl_and_uses_msvcrt(self):
-        fake = _FakeMsvcrt()
-        mod = _load_module_without_fcntl("budget_meter", HOOKS / "budget-meter.py", fake)
-        self.assertIsNone(mod.fcntl)
-
-    def test_tally_locks_and_unlocks_via_msvcrt(self):
-        fake = _FakeMsvcrt()
-        mod = _load_module_without_fcntl("budget_meter", HOOKS / "budget-meter.py", fake)
-        with tempfile.TemporaryDirectory() as td:
-            p = str(Path(td) / "budget.json")
-            state = mod._tally(p, tokens=100, budget=1000, phase="design")
-        self.assertEqual(state["total_spent"], 100)
         self.assertIn((mock.ANY, fake.LK_LOCK, 1), fake.calls)
         self.assertIn((mock.ANY, fake.LK_UNLCK, 1), fake.calls)
 

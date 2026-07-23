@@ -234,23 +234,43 @@ def main() -> int:
         check("context-injector: нет файлов → нет инъекции", c == 0 and out.strip() == "")
 
         # ── budget-meter (информационный учёт, без блокировок/warn) ──
+        # Расход сворачивается в ЕДИНЫЙ лог прогона (agents.jsonl), отдельного budget.json нет.
         rc = make_project(tmp / "cost")
-        bud = rc / "ground" / "ai-logs" / "feature-pipeline" / "iter-p1"
-        bud.mkdir(parents=True, exist_ok=True)
-        (bud / "budget.json").write_text(json.dumps({"total_spent": 1300, "total_events": 5}), encoding="utf-8")
+        # payload без session_id → каталог прогона run-nosess (общий _project.run_dir)
+        jsonl = rc / "ground" / "ai-logs" / "run-nosess" / "agents.jsonl"
+
+        def _budget_events(kind: str):
+            if not jsonl.exists():
+                return []
+            out_recs = []
+            for ln in jsonl.read_text(encoding="utf-8").splitlines():
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    r = json.loads(ln)
+                except Exception:
+                    continue
+                if r.get("event") == kind:
+                    out_recs.append(r)
+            return out_recs
+
         c, out = run_hook("budget-meter.py", {"cwd": str(rc), "hook_event_name": "PreToolUse",
                         "tool_name": "Bash", "tool_input": {"command": "x"}})
-        check("budget-meter: PreToolUse → exit 0, ничего не выводит (не breaker)",
-              c == 0 and out.strip() == "")
+        check("budget-meter: PreToolUse → exit 0, ничего не выводит и не пишет (не breaker)",
+              c == 0 and out.strip() == "" and not jsonl.exists())
         c, out = run_hook("budget-meter.py", {"cwd": str(rc), "hook_event_name": "PostToolUse",
                         "tool_name": "Bash", "usage": {"total_tokens": 200}})
-        check("budget-meter: PostToolUse → tally прибавляет расход",
-              c == 0 and json.loads((bud / "budget.json").read_text(encoding="utf-8"))["total_spent"] == 1500)
+        evs = _budget_events("budget")
+        check("budget-meter: PostToolUse → budget-событие с расходом в agents.jsonl",
+              c == 0 and len(evs) == 1 and evs[0]["tokens"] == 200)
         c, out = run_hook("budget-meter.py", {"cwd": str(rc), "hook_event_name": "Stop",
                         "stop_hook_active": False})
-        check("budget-meter: Stop → exit 0, финализирует единый budget.json + сводка",
+        summ = _budget_events("budget_summary")
+        check("budget-meter: Stop → exit 0, сводка в контекст + budget_summary в общий лог",
               c == 0 and has_addctx(out)
-              and "finalized_at" in json.loads((bud / "budget.json").read_text(encoding="utf-8")))
+              and len(summ) == 1 and summ[0]["total_tokens"] == 200
+              and "finalized_at" in summ[0])
 
         # ── phase-gate ──
         rg = tmp / "phase"

@@ -244,7 +244,7 @@ sequenceDiagram
 | `destructive-blocker` | PreToolUse Bash | чёрный список (`rm -rf /`, force-push, DROP) | exit 2 |
 | `pii-boundary` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
 | `evidence-enforcer` | PreToolUse Bash | блок доставки без полного evidence bundle | exit 2 |
-| `budget-meter` | Post/SubagentStop/Stop | информационный учёт токен-бюджета по фазам + сводка на Stop. **Не блокирует и не предупреждает** | — |
+| `budget-meter` | Post/SubagentStop/Stop | информационный учёт токен-бюджета: budget-события в общий `agents.jsonl` + сводка на Stop (отдельного `budget.json` нет). **Не блокирует и не предупреждает** | — |
 | `prompt-guard` | UserPromptSubmit + PostToolUse | детект prompt-injection → additionalContext | — |
 | `state-recorder` | SubagentStop | авто-запись шага по `step_id` | — |
 | `context-injector` | SubagentStart | инъекция grounding-excerpt/conventions | — |
@@ -302,7 +302,8 @@ bash <project>/.gigacode/hooks/watch-agents.sh
 python3 <project>/.gigacode/hooks/agentops.py --archive <home>/ai-logs-archive
 ```
 
-Логи субагентов — `<project>/ground/ai-logs/<feature>/iter-NN/` + единый архив `ai-logs-archive/agents-YYYYMM.jsonl`.
+Логи прогона — один каталог `<project>/ground/ai-logs/run-<session>/` (`agents.log` + `agents.jsonl`,
+budget-расход свёрнут в тот же `agents.jsonl`) + единый архив `ai-logs-archive/agents-YYYYMM.jsonl`.
 
 ---
 
