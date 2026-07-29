@@ -67,7 +67,13 @@ def main() -> int:
         rc, j, out = run(_project(td, FULL))
         ids = _ids(j)
         check("exit 0 на полном конфиге", rc == 0, out)
-        check("00-brd активна", "00-brd" in ids, str(ids))
+        # Бизнес-анализ выключен (pipeline_phases.BRD_ENABLED=False): 00-brd резолвится в skipped,
+        # первая активная фаза — 01-grounding. Пинит, что блок работает (enforcement-guard).
+        check("00-brd отключена (в skipped)",
+              "00-brd" in _skipped(j) and "00-brd" not in ids, str(ids))
+        _order = [p["id"] for p in j.get("phases", [])]
+        check("первая активная фаза — 01-grounding",
+              bool(_order) and _order[0] == "01-grounding", str(_order))
         check("03-jira активна (jira.enabled)", "03-jira" in ids, str(ids))
         check("04-tdd активна (quality.tdd)", "04-tdd" in ids, str(ids))
         check("02-eval-plan активна (eval_enabled)", "02-eval-plan" in ids, str(ids))
