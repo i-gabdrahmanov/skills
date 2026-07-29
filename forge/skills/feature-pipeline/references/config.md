@@ -23,7 +23,7 @@ Read). Скрипт не нужен для чтения. Если файла н�
 | Скилл | Поля |
 |---|---|
 | `feature-pipeline` | весь файл; на старте грузит и при отсутствии запускает init |
-| `sdd` | `docs.*` (пишет `sdd.md` из BRD; фаза `02-sdd`) |
+| `sdd` | `docs.*` (пишет `sdd.md`; фаза `02-sdd`), `sdd.security_gate` (строгость состава) |
 | `tech-design` | `conventions.*` (package_root, migration_tool, changelog_path), `docs.*` |
 | `jira-task-writer` | `jira.*` |
 | `system-analyst` / спецадаптер | `docs.docs_path`, `project.modules` |
@@ -142,6 +142,10 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
     "feature_subdir": "feature-pipeline",       // подпапка фич под docs-базой
     "system_analysis_subdir": "system-analysis" // подпапка системного обзора под docs-базой
   },
+  "sdd": {                           // спецификация (фаза 02-sdd)
+    "security_gate": "applicability" // hard | applicability | soft — строгость ДКБ-разделов SDD
+                                     // (арх. контекст/границы доверия, модель угроз, регуляторка)
+  },
   "jira": {
     "enabled": null,                 // TODO
     "project_key": null,             // TODO напр. "NPF"
@@ -202,6 +206,25 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_traceability.p
 ```
 
 Деградирует мягко: нет sdd.md → резолв пропущен; нет eval-plan (eval выключен) → eval-цепочка пропущена.
+
+## Строгость состава SDD (`sdd.security_gate`)
+
+`sdd.md` пишется по обязательному составу разделов (SDD-шаблон, `sdd/references/sdd-template.md`).
+Гейт `check_sdd_doc.py` валидирует состав; насколько жёстко он требует ДКБ-разделы —
+задаётся `sdd.security_gate` (дефолт `applicability`). Ядро (§1–7 + Given-When-Then + запрет
+кода в спеке) жёстко всегда, независимо от значения.
+
+| Значение | §8 Арх. контекст + §9 Модель угроз | §10 User story / §11 Принятые решения / §12 Регуляторка |
+|---|---|---|
+| `hard` | обязательны с контентом (можно «не применимо: <причина>») | обязательны с контентом |
+| `applicability` (дефолт) | обязательны (контент **или** «не применимо: <причина>») | warning, если нет |
+| `soft` | warning, если нет | warning, если нет |
+
+Механика «по применимости»: раздел засчитан, если заголовок есть и под ним либо контент, либо
+явная пометка «не применимо: <причина>» — раздел закрывают осознанно, а не молча выпускают.
+Меняется через `config-helper` (`config.py set sdd.security_gate <hard|applicability|soft>`);
+`run_judge.py sdd` прокидывает путь конфига в гейт, автономный вызов гейта берёт политику из
+`<cwd>/ground/pipeline.json` или дефолт.
 
 ## Гейт тавтологичных тестов (`quality.tautology_check`)
 

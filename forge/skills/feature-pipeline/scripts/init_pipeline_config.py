@@ -208,6 +208,12 @@ def build_config(root):
             "feature_subdir": "feature-pipeline",      # подпапка фич под docs-базой
             "system_analysis_subdir": "system-analysis",  # подпапка системного обзора под docs-базой
         },
+        "sdd": {
+            # Строгость ДКБ-разделов SDD (check_sdd_doc): hard | applicability | soft.
+            # applicability (дефолт): арх. контекст + модель угроз обязательны (или «не применимо»),
+            # пользовательские истории/принятые решения/регуляторка — warning.
+            "security_gate": "applicability",
+        },
         "jira": {
             "enabled": None,                  # TODO: true/false
             "project_key": None,              # TODO: напр. "KIDPPRB"

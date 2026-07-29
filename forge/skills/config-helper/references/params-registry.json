@@ -163,6 +163,16 @@
       "aliases": ["трассируемость", "traceability", "матрица трассировки", "sdd_ref", "traceability_check"]
     },
     {
+      "id": "sdd.security_gate",
+      "file": "pipeline",
+      "path": "sdd.security_gate",
+      "type": "enum", "enum": ["hard", "applicability", "soft"], "default": "applicability",
+      "category": "quality", "sensitive": false,
+      "title": "Строгость ДКБ-разделов SDD",
+      "description": "Как check_sdd_doc гейтит новые разделы SDD (арх. контекст с границами доверия, модель угроз, привилегированные сценарии, регуляторка): hard — все обязательны с контентом; applicability — арх+модель угроз обязательны (можно 'не применимо: причина'), пользовательские истории/принятые решения/регуляторка — warning; soft — все новые разделы только warning. Ядро SDD (§1-7 + Given-When-Then + запрет кода) жёстко всегда",
+      "aliases": ["дкб", "security gate", "строгость спеки", "модель угроз", "sdd security", "состав спеки", "разделы sdd"]
+    },
+    {
       "id": "autonomy.mode",
       "file": "pipeline",
       "path": "autonomy.mode",
