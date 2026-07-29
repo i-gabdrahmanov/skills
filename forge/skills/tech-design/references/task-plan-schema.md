@@ -1,7 +1,7 @@
 # Схема task-plan.json
 
 `task-plan.json` — машиночитаемый контракт. Его потребляют:
-- `jira-task-writer` — создаёт Story (из BRD) и Sub-task (из каждой задачи);
+- `jira-task-writer` — создаёт Story (из sdd.md) и Sub-task (из каждой задачи);
 - build-фаза `feature-pipeline` — пишет код по `layers`/`artifacts`;
 - deliver-фаза — по `depends_on` строит порядок stacked-PR.
 
@@ -14,7 +14,7 @@
 {
   "feature_slug": "bulk-artifact-export",
   "title": "Массовый экспорт артефактов",
-  "brd_path": "docs/feature-pipeline/bulk-artifact-export/brd.md",
+  "sdd_path": "docs/feature-pipeline/bulk-artifact-export/sdd.md",
   "design_path": "docs/feature-pipeline/bulk-artifact-export/tech-design.md",
   "modules": ["storage-core"],
   "coverage_threshold": 0.80,
@@ -70,7 +70,7 @@
 |---|---|
 | `feature_slug` | kebab-case, латиница/транслит; совпадает с именем папки фичи |
 | `title` | человекочитаемое имя — станет заголовком Story в Jira |
-| `brd_path` / `design_path` | относительные пути к артефактам фичи |
+| `sdd_path` / `design_path` | относительные пути к артефактам фичи |
 | `modules` | модули из system-analysis, которые затрагиваются |
 | `coverage_threshold` | порог покрытия изменённых файлов; дефолт **0.80** |
 | `migrations[].changeset` | путь к Liquibase changeset (НЕ Flyway `V__*.sql`) |

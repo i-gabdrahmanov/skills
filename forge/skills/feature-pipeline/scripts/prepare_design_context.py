@@ -7,7 +7,15 @@ prepare_design_context.py — подготавливает компактный 
 фильтрует только релевантные entities/api/async/tables по затронутым модулям,
 генерирует компактный JSON (~50-200 строк) для передачи в контракт субагента.
 
+BRD выключен по умолчанию (см. pipeline_phases.BRD_ENABLED) — тогда модули берём из sdd.md
+(--sdd, тот же keyword-scan по markdown). --brd остаётся для случая, когда бизнес-анализ включён.
+
 Usage:
+    python3 prepare_design_context.py \\
+        --sdd docs/feature-pipeline/<slug>/sdd.md \\
+        --grounding docs/system-analysis/grounding-excerpt.json \\
+        --out docs/feature-pipeline/<slug>/design-context.json
+
     python3 prepare_design_context.py \\
         --brd docs/feature-pipeline/<slug>/brd.md \\
         --grounding docs/system-analysis/grounding-excerpt.json \\
@@ -52,7 +60,9 @@ KEYWORD_MODULE_MAP: list[tuple[re.Pattern, str]] = [
 
 
 def extract_modules_from_brd(brd_path: str) -> list[str]:
-    """Парсит BRD, извлекая названия затронутых модулей по ключевым словам."""
+    """Парсит markdown-документ (BRD или sdd.md), извлекая названия затронутых модулей по
+    ключевым словам. Функция работает с любым markdown — при выключенном BRD ей скармливают
+    sdd.md (см. --sdd)."""
     brd_file = Path(brd_path)
     if not brd_file.exists():
         return []
@@ -234,6 +244,7 @@ def main():
 
     # Парсим аргументы
     brd_path = None
+    sdd_path = None
     task_plan_path = None
     modules_str = None
     grounding_path = None
@@ -243,6 +254,8 @@ def main():
     for key, val in zip(args[::2], args[1::2]):
         if key == "--brd":
             brd_path = val
+        elif key == "--sdd":
+            sdd_path = val
         elif key == "--task-plan":
             task_plan_path = val
         elif key == "--modules":
@@ -277,6 +290,12 @@ def main():
     if brd_path:
         brd_modules = extract_modules_from_brd(brd_path)
         relevant_modules.update(brd_modules)
+
+    # BRD выключен → сужаем по sdd.md (тот же keyword-scan по markdown). Если ни brd, ни sdd
+    # модулей не дали — ниже сработает fallback «включить все модули».
+    if sdd_path:
+        sdd_modules = extract_modules_from_brd(sdd_path)
+        relevant_modules.update(sdd_modules)
 
     keywords = set()
     if task_plan_path:

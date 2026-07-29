@@ -289,10 +289,9 @@ def main() -> int:
             "schema": "phase-gate@1",
             "current_phase": "01-grounding",
             "phases": [
-                {"id": "00-brd", "skip_allowed": True, "status": "completed", "depends_on": [],
-                 "artifacts": ["docs/brd.md"]},
+                # Бизнес-анализ (00-brd) выключен: пайплайн стартует с 01-grounding (depends_on []).
                 {"id": "01-grounding", "skip_allowed": False, "status": "in_progress",
-                 "depends_on": ["00-brd"], "artifacts": ["ground/grounding-index.json"]},
+                 "depends_on": [], "artifacts": ["ground/grounding-index.json"]},
                 {"id": "02-design", "skip_allowed": True, "status": "pending",
                  "depends_on": ["01-grounding"], "artifacts": []},
             ]}), encoding="utf-8")
@@ -310,7 +309,7 @@ def main() -> int:
         rpl_manifest = rpl / "ground" / "statements" / "feature-pipeline" / "pipeline"
         rpl_manifest.mkdir(parents=True)
         (rpl_manifest / "manifest.json").write_text(json.dumps({"skill": "feature-pipeline",
-                        "steps": [{"id": "00-brd", "status": "completed"}, {"id": "01-grounding", "status": "in_progress"}]}), encoding="utf-8")
+                        "steps": [{"id": "01-grounding", "status": "in_progress"}]}), encoding="utf-8")
         (rpl / "ground" / "pipeline.json").write_text(json.dumps(
             {"autonomy": {"criticality": "medium", "auto_max_risk": "R1"}}), encoding="utf-8")
 

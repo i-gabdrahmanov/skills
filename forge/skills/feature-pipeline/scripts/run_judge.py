@@ -44,6 +44,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import skill_paths  # единый реестр путей (references/skill-paths.json)
 import check_brd_doc as _brd_doc  # структурный слой судьи БТ (co-located, Thrust 3)
+import pipeline_phases as _pp  # мастер-флаг BRD_ENABLED (бизнес-анализ вкл/выкл)
 
 SCHEMA_VERSION = "feature-pipeline/judge-verdict@1"
 
@@ -957,21 +958,24 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
                              warnings, summary)
 
     # 1. Проверка наличия обязательных документов
-    # brd.md может лежать в папке фичи или как <slug>-brd.md в корне docs/feature-pipeline/
-    brd_path = feature_dir / "brd.md"
-    brd_fallback = FEATURE_DOCS_DIR / f"{slug}-brd.md"
     tech_path = feature_dir / "tech-design.md"
     task_plan_path = feature_dir / "task-plan.json"
-    if brd_path.exists():
-        checks.append({"name": "BRD exists", "status": "PASS",
-                        "detail": f"brd.md found in feature dir", "severity": "error"})
-    elif brd_fallback.exists():
-        checks.append({"name": "BRD exists", "status": "PASS",
-                        "detail": f"brd.md found as {brd_fallback.name}", "severity": "error"})
-    else:
-        checks.append({"name": "BRD exists", "status": "FAIL",
-                        "detail": "brd.md not found", "severity": "error"})
-        blocking_issues.append("BRD (brd.md) не найден")
+    # BRD требуется ТОЛЬКО при включённом бизнес-анализе (BRD_ENABLED). По умолчанию BRD выключен:
+    # пайплайн стартует с 02-sdd и пишет sdd.md из идеи/Jira, brd.md не существует и не нужен.
+    # brd.md может лежать в папке фичи или как <slug>-brd.md в корне docs/feature-pipeline/
+    if _pp.BRD_ENABLED:
+        brd_path = feature_dir / "brd.md"
+        brd_fallback = FEATURE_DOCS_DIR / f"{slug}-brd.md"
+        if brd_path.exists():
+            checks.append({"name": "BRD exists", "status": "PASS",
+                            "detail": f"brd.md found in feature dir", "severity": "error"})
+        elif brd_fallback.exists():
+            checks.append({"name": "BRD exists", "status": "PASS",
+                            "detail": f"brd.md found as {brd_fallback.name}", "severity": "error"})
+        else:
+            checks.append({"name": "BRD exists", "status": "FAIL",
+                            "detail": "brd.md not found", "severity": "error"})
+            blocking_issues.append("BRD (brd.md) не найден")
 
     if tech_path.exists():
         checks.append({"name": "Tech design exists", "status": "PASS",

@@ -39,6 +39,16 @@ PREFIX_PHASE = {
 MAIN_PHASES = ["00-brd", "01-grounding", "02-sdd", "02-design", "02-eval-plan",
                "03-jira", "04-tdd", "05-verify", "06-document"]
 
+# ── Мастер-переключатель бизнес-анализа (BRD) ─────────────────────────
+# BRD-фаза (00-brd), BRD-грундинг (brd-grounder) и brd-judge ЗАБЛОКИРОВАНЫ: пайплайн стартует
+# сразу с фазы спецификации (02-sdd), которая пишет sdd.md из исходной идеи/Jira, а не из brd.md.
+# Код BRD НЕ удалён — 00-brd остаётся в MAIN_PHASES/PREFIX_PHASE/allowed_skills/judges-registry,
+# просто не резолвится в активный список фаз (resolve_phases) и не требуется судьями (run_judge).
+# ВЕРНУТЬ бизнес-анализ: поставь BRD_ENABLED = True, верни строку 00-brd в манифест-таблицу
+# feature-pipeline/SKILL.md и зависимость 02-sdd → 00-brd. SDD-промпты самонастроятся (при
+# переданном brd.md снова возьмут его как первичный источник требований).
+BRD_ENABLED = False
+
 # Маска судей по id шага. ЕДИНЫЙ источник — references/judges-registry.json (pipeline-state),
 # читается через judges_registry. Раньше маска дублировалась здесь, в init.py и
 # patch_manifest_judges.py и расходилась (00-brd добавили не во все копии). Имена судей ДОЛЖНЫ

@@ -112,12 +112,24 @@ def _evaluate_enabled_by(expr, pipeline, gates):
     return bool(_resolve_jpath(pipeline, expr, ENABLED_BY_DEFAULTS.get(expr, False)))
 
 
+# Мастер-флаг бизнес-анализа — единый источник pipeline_phases.BRD_ENABLED. Импорт защищённый:
+# если pipeline_phases недоступен рядом (кривой деплой) — считаем BRD выключенным (безопасный
+# дефолт: пайплайн стартует с 02-sdd, а не молча включает бизнес-анализ).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import pipeline_phases as _pp
+    _BRD_ENABLED = bool(getattr(_pp, "BRD_ENABLED", False))
+except Exception:
+    _BRD_ENABLED = False
+
 # База фаз пайплайна (id/порядок — стабильны; phases_override в pipeline.json может дополнить).
 # id фаз ДОЛЖНЫ быть подмножеством pipeline_phases.MAIN_PHASES и идти в каноническом порядке —
 # это пинит test_phase_consistency (раньше resolve_phases был вторым нескоординированным
 # источником списка фаз).
+# 00-brd: enabled_by завязан на BRD_ENABLED — при выключенном BRD фаза остаётся в списке
+# (подмножество MAIN_PHASES для test_phase_consistency), но резолвится в skipped.
 DEFAULT_PHASES = [
-    {"id": "00-brd",          "skill": "business-requirements", "enabled_by": None,              "skip_if": None,           "gates": ["brd"],        "description": "Discovery / BRD"},
+    {"id": "00-brd",          "skill": "business-requirements", "enabled_by": (None if _BRD_ENABLED else False), "skip_if": None,   "gates": ["brd"],        "description": "Discovery / BRD"},
     {"id": "01-grounding",    "skill": "project-grounder",      "enabled_by": None,              "skip_if": "grounding.exists", "gates": None,       "description": "System overview ensured"},
     {"id": "02-sdd",          "skill": "sdd",                   "enabled_by": None,              "skip_if": None,           "gates": ["sdd"],        "description": "SDD specification"},
     {"id": "02-design",       "skill": "tech-design",           "enabled_by": None,              "skip_if": None,           "gates": ["design"],     "description": "Tech design + task plan"},
