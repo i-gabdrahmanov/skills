@@ -1062,10 +1062,15 @@ def check_sdd_doc(slug: str, feature_dir: Path | None) -> dict:
     blocking_issues = []
     warnings = []
 
+    # Политика состава (sdd.security_gate) читается гейтом из ground/pipeline.json —
+    # прокидываем путь явно (по образцу check_architecture --pipeline-config).
+    pipeline_config = project_root / "ground" / "pipeline.json"
+
     if sdd_path and sdd_path.exists():
         try:
             r = subprocess.run(
-                [sys.executable, str(check_sdd_doc_script), str(sdd_path), "--json"],
+                [sys.executable, str(check_sdd_doc_script), str(sdd_path),
+                 "--pipeline-config", str(pipeline_config), "--json"],
                 capture_output=True, text=True, timeout=60,
             )
             if r.returncode == 0:

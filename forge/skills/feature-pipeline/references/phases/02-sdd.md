@@ -5,8 +5,10 @@
 > SKILL.md §0.6, override — SKILL.md §0.6.1. Нумерация секций ниже — историческая (§ из
 > монолитного SKILL.md), внутри брифа она самодостаточна.
 >
-> **Гейт закрытия фазы:** check_sdd_doc PASS + Гейт SDD (утверждение; маркер
-> `sdd-approved-<slug>` — enforced в update.py); закрой шаг 02-sdd
+> **Гейт закрытия фазы:** check_sdd_doc PASS (валидатор состава SDD — обязательные разделы по
+> политике `sdd.security_gate` из pipeline.json: hard | applicability | soft, дефолт
+> applicability) + Гейт SDD (утверждение; маркер `sdd-approved-<slug>` — enforced в update.py);
+> закрой шаг 02-sdd
 
 ## 5. Фаза 2 — Спецификация (SDD) и Дизайн
 
