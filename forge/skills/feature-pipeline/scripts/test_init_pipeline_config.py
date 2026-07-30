@@ -285,6 +285,79 @@ class TestDetectMigrationTool(unittest.TestCase):
         tool, changelog = ipc.detect_migration_tool(str(self.root), files)
         self.assertEqual(changelog, "db/changelog")
 
+    def test_changelog_skips_build_artifact(self):
+        """Первичный changelog — исходник, а НЕ копия-артефакт под build/ (регресс hits[0])."""
+        _touch(self.root / "database" / "src" / "main" / "resources" / "db" / "changelog" / "master.xml")
+        _touch(self.root / "database" / "build" / "resources" / "main" / "db" / "changelog" / "master.xml")
+        files = [str(self.root / "build.gradle")]
+        tool, changelog = ipc.detect_migration_tool(str(self.root), files)
+        self.assertEqual(changelog, os.path.join("database", "src", "main", "resources", "db", "changelog"))
+        self.assertNotIn("build", changelog.split(os.sep))
+
+
+class TestDetectMigrationServices(unittest.TestCase):
+    """Тесты сканирования всех сервисов монорепо с миграциями."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_multi_service(self):
+        """Два сервиса с разными миграциями — обе записи, с per-service инструментом."""
+        _touch(self.root / "settings.gradle", "include 'svc-a', 'svc-b'\n")
+        _touch(self.root / "svc-a" / "build.gradle", "dependencies { liquibaseRuntime 'x' }\n")
+        _touch(self.root / "svc-a" / "src" / "main" / "resources" / "db" / "changelog" / "master.xml")
+        _touch(self.root / "svc-b" / "build.gradle", "plugins { id 'org.flywaydb.flyway' }\n")
+        _touch(self.root / "svc-b" / "src" / "main" / "resources" / "db" / "migration" / "V1__init.sql")
+
+        files = ipc.gather_build_files(str(self.root), "gradle")
+        services = ipc.detect_migration_services(str(self.root), files, "liquibase")
+
+        by_svc = {s["service"]: s for s in services}
+        self.assertEqual(len(services), 2)
+        self.assertEqual(by_svc["svc-a"]["migration_tool"], "liquibase")
+        self.assertEqual(by_svc["svc-a"]["changelog_path"],
+                         os.path.join("svc-a", "src", "main", "resources", "db", "changelog"))
+        self.assertEqual(by_svc["svc-b"]["migration_tool"], "flyway")
+        self.assertEqual(by_svc["svc-b"]["changelog_path"],
+                         os.path.join("svc-b", "src", "main", "resources", "db", "migration"))
+
+    def test_artifact_filtered(self):
+        """Копия-артефакт под build/ не попадает в список (только исходник)."""
+        _touch(self.root / "database" / "build.gradle", "liquibase\n")
+        _touch(self.root / "database" / "src" / "main" / "resources" / "db" / "changelog" / "master.xml")
+        _touch(self.root / "database" / "build" / "resources" / "main" / "db" / "changelog" / "master.xml")
+
+        files = ipc.gather_build_files(str(self.root), "gradle")
+        services = ipc.detect_migration_services(str(self.root), files, "liquibase")
+
+        paths = [s["changelog_path"] for s in services]
+        self.assertEqual(paths, [os.path.join("database", "src", "main", "resources", "db", "changelog")])
+        for p in paths:
+            self.assertNotIn("build", p.split(os.sep))
+
+    def test_single_service_matches_scalar(self):
+        """Одиночный репо: ровно одна запись, совпадающая со скалярами (регресс совместимости)."""
+        _touch(self.root / "build.gradle", "group = 'com.acme'\nliquibase\n")
+        _touch(self.root / "src" / "main" / "resources" / "db" / "changelog" / "master.xml")
+
+        cfg = ipc.build_config(str(self.root))
+        conv = cfg["conventions"]
+        self.assertEqual(len(conv["migration_services"]), 1)
+        entry = conv["migration_services"][0]
+        self.assertEqual(entry["changelog_path"], conv["changelog_path"])
+        self.assertEqual(entry["migration_tool"], conv["migration_tool"])
+        self.assertEqual(entry["service"], ".")
+
+    def test_no_migrations(self):
+        """Нет каталогов миграций → пустой список."""
+        _touch(self.root / "build.gradle", "apply plugin: 'java'\n")
+        files = ipc.gather_build_files(str(self.root), "gradle")
+        self.assertEqual(ipc.detect_migration_services(str(self.root), files, "none"), [])
+
 
 class TestDetectJacoco(unittest.TestCase):
     """Тесты детекта JaCoCo."""

@@ -89,7 +89,10 @@ description: >
 
 4. **Данные и миграции.** Если меняется доменная модель — определи Liquibase changeset
    (таблицы/колонки/индексы/FK). Формат и расположение — по конвенции существующего
-   `db/changelog`. Если модель не меняется — «миграция не требуется».
+   `db/changelog`. **В монорепо** с несколькими сервисами-БД (`conventions.migration_services`
+   в `pipeline.json` содержит >1 записи) укажи changelog **того сервиса, который затрагивает
+   фича** (модуль изменяемых сущностей), а не первичный вслепую. Если модель не меняется —
+   «миграция не требуется».
 
 5. **Async и интеграции.** Затрагиваются ли Kafka-топики (новые события?), внешние
    клиенты (Feign/WebClient)? Если нет — явно напиши «не затрагивается», чтобы разработчик
@@ -125,7 +128,7 @@ description: >
 
 | Слой | Что это |
 |---|---|
-| `migration` | Liquibase changeset в `db/changelog` (пишет оркестратор, не разработчик) |
+| `migration` | Liquibase changeset в `db/changelog` (в монорепо — changelog затрагиваемого сервиса из `conventions.migration_services`; пишет оркестратор, не разработчик) |
 | `entity` | JPA-сущность (`@Getter @Setter @Entity`) |
 | `repository` | `JpaRepository<E, UUID>` + кастомные запросы |
 | `dto` | request (`@Data` + Bean Validation) и response DTO |
@@ -136,7 +139,8 @@ description: >
 
 **Миграции — Liquibase, а не Flyway.** В реальном проекте схема ведётся через Liquibase
 changeset. Не предлагай Flyway `V__*.sql`. Смотри формат (XML/YAML/SQL) и нейминг по
-существующему `db/changelog`.
+существующему `db/changelog`. В монорепо инструмент и путь бери из записи затрагиваемого
+сервиса в `conventions.migration_services` — соседний сервис может вести миграции иначе.
 
 **Без records, без статических фабрик.** План не должен предлагать `record` или
 `static from(...)` — проект использует обычные классы + Lombok + mapper-бин. Подробности

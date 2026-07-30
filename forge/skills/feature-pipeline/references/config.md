@@ -24,7 +24,7 @@ Read). Скрипт не нужен для чтения. Если файла н�
 |---|---|
 | `feature-pipeline` | весь файл; на старте грузит и при отсутствии запускает init |
 | `sdd` | `docs.*` (пишет `sdd.md`; фаза `02-sdd`), `sdd.security_gate` (строгость состава) |
-| `tech-design` | `conventions.*` (package_root, migration_tool, changelog_path), `docs.*` |
+| `tech-design` | `conventions.*` (package_root, migration_tool, changelog_path, **migration_services** — в монорепо выбирает changelog затрагиваемого сервиса), `docs.*` |
 | `jira-task-writer` | `jira.*` |
 | `system-analyst` / спецадаптер | `docs.docs_path`, `project.modules` |
 | фаза тестов | `quality.*` (coverage_threshold, test/build команды, отчёт) |
@@ -117,8 +117,16 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
   },
   "conventions": {
     "package_root": "ru.sbrf.pprb.npf",
-    "migration_tool": "none",        // liquibase | flyway | none
-    "changelog_path": null
+    "migration_tool": "none",        // liquibase | flyway | none — ПЕРВИЧНЫЙ (лучшая одиночная догадка)
+    "changelog_path": null,          // ПЕРВИЧНЫЙ changelog (исходник, не build-артефакт)
+    "migration_services": [          // ВСЕ сервисы монорепо с миграциями (авто-детект, по одному
+                                     // на changelog-каталог); [] если миграций нет; в одиночном
+                                     // репо — одна запись, совпадающая со скалярами выше.
+      {"service": "pprbulservice", "migration_tool": "liquibase",
+       "changelog_path": "pprbulservice/src/main/resources/db/changelog"},
+      {"service": "upzservice", "migration_tool": "flyway",
+       "changelog_path": "upzservice/src/main/resources/db/migration"}
+    ]
   },
   "quality": {
     "coverage_threshold": 0.80,
@@ -325,6 +333,10 @@ Git-политика (forge-no-delivery): forge **пишет** обновлен�
 - `jira.enabled` / `jira.project_key` — есть ли Jira и ключ проекта.
 - `conventions.migration_tool` — если в проекте Liquibase ещё не подключён, но он целевой,
   поставь `liquibase` и заведи baseline changelog (см. `migrations.md`).
+- `conventions.migration_services` — **авто-детект** (сканирует весь репо: все `db/changelog`/
+  `db/migration`, кроме build-артефактов, с атрибуцией сервису). Руками обычно не трогают;
+  пересобирается `init_pipeline_config.py --update`. В монорепо потребители (`tech-design`,
+  `migrations.md`) выбирают отсюда changelog того сервиса, который затрагивает фича.
 - `project.is_git=false` → сделай `git init` (иначе не работают чекпойнты rollback и pipeline-state).
 
 ## Обратная совместимость
