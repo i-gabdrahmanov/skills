@@ -109,7 +109,66 @@ def detect_versions(build_files):
     return java_v, spring_v
 
 
+# Каталоги-артефакты сборки / служебные: changelog внутри них — не исходник, а копия
+# (в реальном прогоне hits[0] хватал database/build/resources/main/db/changelog).
+_SKIP_SEGMENTS = ("build", "out", "target", "bin", ".gradle", ".git", "node_modules")
+
+
+def _is_build_artifact(path, root):
+    """True, если путь лежит внутри каталога сборки/служебного (посегментно от root)."""
+    rel = os.path.relpath(path, root)
+    return any(seg in _SKIP_SEGMENTS for seg in rel.split(os.sep))
+
+
+def _find_changelog_dirs(root):
+    """Все каталоги миграций (db/changelog | db/migration) по всему репо, без артефактов сборки."""
+    found = []
+    for d in ("db/changelog", "db/migration"):
+        for hit in glob.glob(os.path.join(root, "**", d), recursive=True):
+            if os.path.isdir(hit) and not _is_build_artifact(hit, root):
+                found.append(hit)
+    return found
+
+
+def _primary_changelog(dirs):
+    """Лучший одиночный changelog: под src/main/resources в приоритете, иначе кратчайший путь.
+    Детерминированно (замена произвольного hits[0])."""
+    def key(d):
+        rel = d.replace(os.sep, "/")
+        under_src = 0 if "/src/main/resources/" in rel + "/" else 1
+        return (under_src, len(rel), rel)
+    return sorted(dirs, key=key)[0]
+
+
+def _owning_service(changelog_dir, service_roots):
+    """Ближайший корень-сервиса (каталог с build-файлом), являющийся предком changelog-каталога.
+    root всегда в наборе, поэтому результат непустой (корень репо → сам root)."""
+    cl = os.path.abspath(changelog_dir)
+    best = None
+    for sr in service_roots:
+        if cl == sr or cl.startswith(sr + os.sep):
+            if best is None or len(sr) > len(best):
+                best = sr
+    return best
+
+
+def _service_tool(service_root, build_files, global_tool):
+    """Инструмент миграций конкретного сервиса — по его собственным build-файлам;
+    если они молчат — откат на глобально задетекченный."""
+    txt = " ".join(
+        read_text(bf).lower() for bf in build_files
+        if os.path.abspath(os.path.dirname(bf)) == service_root
+    )
+    if "liquibase" in txt:
+        return "liquibase"
+    if "flyway" in txt:
+        return "flyway"
+    return global_tool
+
+
 def detect_migration_tool(root, build_files):
+    """Глобальный (первичный) инструмент + лучший одиночный changelog — для скаляров
+    conventions. Полный список сервисов даёт detect_migration_services()."""
     blob = " ".join(read_text(bf).lower() for bf in build_files)
     if "liquibase" in blob:
         tool = "liquibase"
@@ -118,12 +177,31 @@ def detect_migration_tool(root, build_files):
     else:
         tool = "none"
     changelog = None
-    for d in ("db/changelog", "db/migration"):
-        hits = glob.glob(os.path.join(root, "**", d), recursive=True)
-        if hits:
-            changelog = os.path.relpath(hits[0], root)
-            break
+    dirs = _find_changelog_dirs(root)
+    if dirs:
+        changelog = os.path.relpath(_primary_changelog(dirs), root)
     return tool, changelog
+
+
+def detect_migration_services(root, build_files, global_tool):
+    """Все сервисы монорепо с миграциями: по одной записи
+    {service, migration_tool, changelog_path} на каждый найденный changelog-каталог.
+    service — путь корня сервиса относительно репо (корень репо → "."). Дедуп по
+    changelog_path, детерминированная сортировка."""
+    service_roots = {os.path.abspath(os.path.dirname(bf)) for bf in build_files}
+    service_roots.add(os.path.abspath(root))
+    services = {}
+    for cl in _find_changelog_dirs(root):
+        cl_rel = os.path.relpath(cl, root)
+        if cl_rel in services:
+            continue
+        owner = _owning_service(cl, service_roots)
+        services[cl_rel] = {
+            "service": os.path.relpath(owner, root),
+            "migration_tool": _service_tool(owner, build_files, global_tool),
+            "changelog_path": cl_rel,
+        }
+    return [services[k] for k in sorted(services)]
 
 
 def detect_jacoco(build_files):
@@ -142,6 +220,7 @@ def build_config(root):
     group = detect_group(root, build_files)
     java_v, spring_v = detect_versions(build_files)
     mig_tool, changelog = detect_migration_tool(root, build_files)
+    migration_services = detect_migration_services(root, build_files, mig_tool)
     has_jacoco = detect_jacoco(build_files)
     is_git = bool(sh(["git", "rev-parse", "--show-toplevel"], root))
 
@@ -161,8 +240,11 @@ def build_config(root):
         },
         "conventions": {
             "package_root": group,            # эвристика по group; уточни при необходимости
-            "migration_tool": mig_tool,       # liquibase | flyway | none
-            "changelog_path": changelog,      # null если миграций нет
+            "migration_tool": mig_tool,       # liquibase | flyway | none (первичный/глобальный)
+            "changelog_path": changelog,      # null если миграций нет (первичный сервис)
+            # Все сервисы монорепо с миграциями (по одному на changelog-каталог). Пустой,
+            # если миграций нет; в одиночном репо — ровно одна запись, совпадающая со скалярами.
+            "migration_services": migration_services,
         },
         "quality": {
             "coverage_threshold": 0.80,
