@@ -1207,6 +1207,38 @@ def check_design(slug: str, feature_dir: Path | None) -> dict:
         checks.append({"name": "check_sdd", "status": "SKIP",
                        "detail": "task-plan.json missing", "severity": "info"})
 
+    # 3. check_adr (если adr.enabled): состав ADR + резолв ссылок ADR-NNNN из tech-design/sdd.
+    pcfg = _load_json(GROUND_DIR / "pipeline.json") or {}
+    if isinstance(pcfg, dict) and (pcfg.get("adr") or {}).get("enabled"):
+        try:
+            adr_dir = skill_paths.master_adr_dir(PROJECT_ROOT)
+        except Exception:  # noqa: BLE001
+            adr_dir = None
+        if adr_dir is not None:
+            cmd = [sys.executable,
+                   str(skill_paths.script(PROJECT_ROOT, "system-analyst", "check_adr")),
+                   str(adr_dir), "--json"]
+            design_md = feature_dir / "tech-design.md" if feature_dir else None
+            for ref in (design_md, sdd_path):
+                if ref and ref.exists():
+                    cmd.extend(["--refs", str(ref)])
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                if r.returncode == 0:
+                    checks.append({"name": "check_adr", "status": "PASS",
+                                   "detail": str(adr_dir), "severity": "error"})
+                else:
+                    detail = (r.stdout or r.stderr).strip()
+                    checks.append({"name": "check_adr", "status": "FAIL",
+                                   "detail": detail[:200], "severity": "error"})
+                    blocking_issues.append(f"check_adr FAIL: {detail[:200]}")
+            except FileNotFoundError:
+                warnings.append("check_adr.py не найден — ADR не проверены")
+            except subprocess.TimeoutExpired:
+                checks.append({"name": "check_adr", "status": "FAIL",
+                               "detail": "timeout (60s)", "severity": "error"})
+                blocking_issues.append("check_adr: timeout")
+
     passed = len(blocking_issues) == 0
     summary = f"{sum(1 for c in checks if c['status'] == 'PASS')}/{len(checks)} checks passed"
     if blocking_issues:
