@@ -52,21 +52,29 @@ echo "== deploy Forge → $GIG =="
 mkdir -p "$GIG/hooks" "$GIG/skills"
 
 # 1. co-location: hooks И skills в один .gigacode (overwrite — source-managed).
-# tar-pipe вместо cp -a: копия работает от рабочего дерева, поэтому руками отсекаем
-# runtime-мусор (__pycache__/.pyc/.DS_Store) и ЛОКАЛЬНЫЙ конфиг оператора
-# (minor-defect-fix/config.json с реальными путями машины — в таргет едет только
-# config.json.example; сам конфиг оператор заводит на первом запуске).
+# cp -a вместо tar-конвейера — возврат к до-регрессионной команде. `tar -cf - .` тащит
+# в архив сам верхний каталог `.`, и при распаковке GNU tar (Linux) восстанавливает его
+# права/mtime (владельца — под root) на приёмник → "Operation not permitted", если
+# каталог не наш (ранняя установка под sudo, общий каталог) или на ограниченной ФС
+# (CIFS/NFS/оверлей контейнера); под `set -euo pipefail` это рвёт весь деплой. GNU
+# `cp -a src/. dst/` в существующий dst копирует СОДЕРЖИМОЕ, не переприменяя атрибуты
+# исходного каталога к самому dst (целевой рантайм — Linux), поэтому EPERM-операции с
+# верхним каталогом не происходит. Runtime-мусор (__pycache__/.pyc/.DS_Store) и
+# ЛОКАЛЬНЫЙ конфиг оператора (minor-defect-fix/config.json с реальными путями машины —
+# в таргет едет только config.json.example; сам конфиг оператор заводит на первом
+# запуске) вычищаем уже в приёмнике, раз cp не умеет --exclude.
 copy_tree() {  # $1=src-dir  $2=dst-dir
-  (cd "$1" && tar -cf - \
-      --exclude '*__pycache__*' --exclude '*.pyc' --exclude '*.DS_Store' \
-      --exclude '*.pytest_cache*' --exclude '*minor-defect-fix/config.json' \
-      .) | (cd "$2" && tar -xf -)
+  cp -a "$1/." "$2/"
+  find "$2" -type d \( -name '__pycache__' -o -name '.pytest_cache' \) -exec rm -rf {} + 2>/dev/null || true
+  find "$2" -type f \( -name '*.pyc' -o -name '.DS_Store' \) -delete 2>/dev/null || true
 }
 copy_tree "$SRC/hooks" "$GIG/hooks"
 copy_tree "$SRC/skills" "$GIG/skills"
+# локальный конфиг оператора в таргет не тащим — ниже (если файла нет) заведётся пустой
+rm -f "$GIG/skills/minor-defect-fix/config.json"
 echo "  ✓ скопированы hooks/ и skills/ (co-located, без __pycache__/.DS_Store/локального config.json)"
 
-# 1b. prune: copy_tree — это tar-overlay, он НАКЛАДЫВАЕТ файлы поверх таргета и НЕ удаляет
+# 1b. prune: copy_tree — это cp-overlay, он НАКЛАДЫВАЕТ файлы поверх таргета и НЕ удаляет
 # те, что исчезли из исходника. Удалённый хук (напр. cost-breaker.py → budget-meter.py)
 # оставался сиротой в .gigacode/hooks/, а settings.hooks.json прошлого деплоя продолжал его
 # регистрировать → рантайм на сбросе искал несуществующий хук. Подчищаем хук-скрипты, которых
