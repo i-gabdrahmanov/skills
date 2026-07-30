@@ -1155,6 +1155,13 @@ def check_design(slug: str, feature_dir: Path | None) -> dict:
     taskplan_path = feature_dir / "task-plan.json" if feature_dir else None
     sdd_path = feature_dir / "sdd.md" if feature_dir else None
 
+    # scan-каталог грундинга (structure.json — модули, components.json — классы). Без --scan
+    # кросс-чек модулей И reuses в check_taskplan не запускается (включается только при --scan).
+    try:
+        scan_dir = skill_paths.scan_dir(project_root)
+    except Exception:
+        scan_dir = None
+
     checks = []
     blocking_issues = []
     warnings = []
@@ -1162,9 +1169,11 @@ def check_design(slug: str, feature_dir: Path | None) -> dict:
     # 1. check_taskplan
     if taskplan_path and taskplan_path.exists():
         try:
+            cmd = [sys.executable, str(check_taskplan_script), str(taskplan_path), "--json"]
+            if scan_dir and Path(scan_dir).exists():
+                cmd.extend(["--scan", str(scan_dir)])
             r = subprocess.run(
-                [sys.executable, str(check_taskplan_script), str(taskplan_path), "--json"],
-                capture_output=True, text=True, timeout=60,
+                cmd, capture_output=True, text=True, timeout=60,
             )
             if r.returncode == 0:
                 checks.append({"name": "check_taskplan", "status": "PASS",

@@ -17,6 +17,7 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 import common  # noqa: E402
+import components  # noqa: E402
 import db  # noqa: E402
 import domain  # noqa: E402
 import endpoints  # noqa: E402
@@ -111,9 +112,52 @@ class ScannerFixture(unittest.TestCase):
     def test_scan_all_integrated(self):
         cats = scan_all.scan_root(self.root)
         self.assertIn("reuse", cats)
+        self.assertIn("components", cats)
         self.assertEqual(cats["domain"]["gate_total"], 1)
         self.assertGreaterEqual(len(cats["reuse"]["dependencies"]), 3)
         self.assertGreaterEqual(len(cats["reuse"]["project_utils"]), 1)
+
+    def test_components_finds_layers(self):
+        # Инвентарь компонентов по слоям — ground-truth для tech-design и гейта reuses.
+        base = self.root / "src/main/java/com/x"
+        files = {
+            "svc/ExportService.java":
+                "package com.x.svc;\nimport org.springframework.stereotype.Service;\n"
+                "@Service\npublic class ExportService { public void run(){} }\n",
+            "repo/ExportRepository.java":
+                "package com.x.repo;\nimport org.springframework.data.jpa.repository.JpaRepository;\n"
+                "public interface ExportRepository extends JpaRepository<Object, Long> {}\n",
+            "map/ExportMapper.java":
+                "package com.x.map;\nimport org.mapstruct.Mapper;\n"
+                "@Mapper\npublic interface ExportMapper { }\n",
+            "dto/ExportRequest.java":
+                "package com.x.dto;\npublic class ExportRequest { private String id; }\n",
+        }
+        for sub, content in files.items():
+            p = base / sub
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding="utf-8")
+        by_layer: dict[str, set] = {}
+        for it in components.scan(self.root):
+            by_layer.setdefault(it["layer"], set()).add(it["name"])
+        self.assertIn("ExportService", by_layer.get("service", set()))
+        self.assertIn("ExportRepository", by_layer.get("repository", set()))
+        self.assertIn("ExportMapper", by_layer.get("mapper", set()))
+        self.assertIn("ExportRequest", by_layer.get("dto", set()))
+        # @RestController из фикстуры setUp опознаётся как controller
+        self.assertIn("ArtifactController", by_layer.get("controller", set()))
+        # util-класс DateUtils — НЕ компонент (он в reuse.project_utils, не дублируем)
+        all_names = {n for names in by_layer.values() for n in names}
+        self.assertNotIn("DateUtils", all_names)
+
+    def test_components_test_sources_excluded(self):
+        # Компоненты из src/test не должны попадать в инвентарь.
+        p = self.root / "src/test/java/com/x/svc/FakeService.java"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("package com.x.svc;\nimport org.springframework.stereotype.Service;\n"
+                     "@Service\npublic class FakeService {}\n", encoding="utf-8")
+        names = {it["name"] for it in components.scan(self.root)}
+        self.assertNotIn("FakeService", names)
 
     def test_test_sources_excluded(self):
         # Фикстуры из src/test не должны попадать в grounding как продакшен-артефакты.

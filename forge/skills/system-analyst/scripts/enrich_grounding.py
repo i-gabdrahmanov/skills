@@ -192,6 +192,7 @@ def _build_excerpt(analysis_dir: Path, scan_dir: Path | None, feature_slug: str)
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "modules": [],
             "entities": [],
+            "components": [],
             "api_endpoints": [],
             "async": [],
             "external_clients": [],
@@ -253,6 +254,7 @@ def _build_excerpt(analysis_dir: Path, scan_dir: Path | None, feature_slug: str)
         # scan-категорий (consumers+producers) → одна authoritative-замена по ключу async.
         scan_mappings = [
             ("domain", "entities", ("name",)),
+            ("components", "components", ("name", "layer")),
             ("api", "api_endpoints", ("method", "path")),
             ("async_consumers", "async", ("topic", "direction")),
             ("async_producers", "async", ("topic", "direction")),
@@ -272,6 +274,11 @@ def _build_excerpt(analysis_dir: Path, scan_dir: Path | None, feature_slug: str)
             if key == "entities":
                 parsed = [{"name": i.get("name", "?"),
                            "kind": i.get("kind", "entity"),
+                           "module": i.get("module", "?")} for i in items]
+            elif key == "components":
+                parsed = [{"name": i.get("name", "?"),
+                           "layer": i.get("layer", "?"),
+                           "package": i.get("package", ""),
                            "module": i.get("module", "?")} for i in items]
             elif key == "api_endpoints":
                 parsed = [{"method": i.get("http_method", "?"),

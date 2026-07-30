@@ -188,6 +188,16 @@ def filter_grounding(
                 result.append(ent)
         return result
 
+    def _components_for_modules(components: list) -> list:
+        """Фильтрует инвентарь компонентов (service/repository/mapper/dto/controller)
+        по затронутым модулям. Даёт дизайнеру реальные имена классов этих слоёв, чтобы
+        не выдумывать «существующие» классы для переиспользования."""
+        result = []
+        for comp in components:
+            if _module_matches(comp):
+                result.append(comp)
+        return result
+
     def _endpoints_for_modules(endpoints: list) -> list:
         """Фильтрует API endpoints."""
         result = []
@@ -227,6 +237,7 @@ def filter_grounding(
         "generated_for_modules": sorted(relevant_modules),
         "updated_at": grounding.get("updated_at", ""),
         "entities": _entities_for_modules(grounding.get("entities", [])),
+        "components": _components_for_modules(grounding.get("components", [])),
         "api_endpoints": _endpoints_for_modules(grounding.get("api_endpoints", [])),
         "async": _async_for_modules(grounding.get("async", [])),
         "external_clients": _ext_clients_for_modules(grounding.get("external_clients", [])),
@@ -349,6 +360,8 @@ def main():
     # 4. Добавляем метаданные
     context["total_entities"] = len(grounding.get("entities", []))
     context["filtered_entities"] = len(context["entities"])
+    context["total_components"] = len(grounding.get("components", []))
+    context["filtered_components"] = len(context["components"])
     context["total_endpoints"] = len(grounding.get("api_endpoints", []))
     context["filtered_endpoints"] = len(context["api_endpoints"])
     context["total_tables"] = len(grounding.get("tables", []))
@@ -366,6 +379,7 @@ def main():
     stats = {
         "modules": len(relevant_modules),
         "entities": f"{context['filtered_entities']}/{context['total_entities']}",
+        "components": f"{context['filtered_components']}/{context['total_components']}",
         "endpoints": f"{context['filtered_endpoints']}/{context['total_endpoints']}",
         "tables": f"{context['filtered_tables']}/{context['total_tables']}",
     }

@@ -25,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import components as components_mod  # noqa: E402
 import config as config_mod  # noqa: E402
 import cross_cutting  # noqa: E402
 import db  # noqa: E402
@@ -98,6 +99,7 @@ def scan_root(root: Path, prefix: str = "") -> dict:
                       "spring_boot_version": struct["spring_boot_version"], "java_version": struct["java_version"],
                       "spring_boot_applications": struct["spring_boot_applications"], "modules": struct["modules"]},
         "domain": _cat("domain", domain.scan(root), index, prefix),
+        "components": _cat("components", components_mod.scan(root), index, prefix),
         "api": _cat("api", ep_items, index, prefix),
         "async_consumers": _cat("async_consumers", consumers, index, prefix),
         "async_producers": _cat("async_producers", producers, index, prefix),
@@ -172,6 +174,7 @@ def write_scan(roots: list[Path], out: Path) -> dict:
     counts = {
         "modules": cats["structure"]["total"],
         "entities": cats["domain"]["total"],
+        "components": cats["components"]["total"],
         "endpoints": cats["api"]["total"],
         "kafka_consumers": cats["async_consumers"]["total"],
         "kafka_producers": cats["async_producers"]["total"],
