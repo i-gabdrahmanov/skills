@@ -1037,6 +1037,50 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
         checks.append({"name": "Grounding excerpt exists", "status": "WARN",
                         "detail": "grounding-excerpt.json not found", "severity": "warning"})
 
+    # Требования-мастер (OpenSpec-style): при docs.master.enabled дельта фичи ДОЛЖНА быть слита
+    # в specs/<cap>/spec.md (merge_delta_to_master, фаза 06). Проверяем провенанс + состав.
+    pcfg = _load_json(GROUND_DIR / "pipeline.json") or {}
+    master_cfg = ((pcfg.get("docs") or {}).get("master") or {}) if isinstance(pcfg, dict) else {}
+    if master_cfg.get("enabled"):
+        try:
+            master_spec = skill_paths.master_spec_path(PROJECT_ROOT)
+        except Exception:  # noqa: BLE001
+            master_spec = None
+        if master_spec and master_spec.exists():
+            mtext = master_spec.read_text(encoding="utf-8", errors="replace")
+            if f"from: {slug}" in mtext:
+                checks.append({"name": "Master spec updated with delta", "status": "PASS",
+                               "detail": str(master_spec), "severity": "error"})
+            else:
+                checks.append({"name": "Master spec updated with delta", "status": "FAIL",
+                               "detail": "провенанс фичи не найден в мастере", "severity": "error"})
+                blocking_issues.append(
+                    "требования-мастер не обновлён дельтой — запусти merge_delta_to_master")
+            try:
+                import subprocess
+                cms = skill_paths.script(PROJECT_ROOT, "system-analyst", "check_master_spec")
+                r = subprocess.run(
+                    [sys.executable, str(cms), str(master_spec),
+                     "--pipeline-config", str(GROUND_DIR / "pipeline.json"), "--json"],
+                    capture_output=True, text=True, timeout=60)
+                if r.returncode == 0:
+                    checks.append({"name": "check_master_spec", "status": "PASS",
+                                   "detail": master_spec.name, "severity": "error"})
+                else:
+                    detail = (r.stdout or r.stderr).strip()[:200]
+                    checks.append({"name": "check_master_spec", "status": "FAIL",
+                                   "detail": detail, "severity": "error"})
+                    blocking_issues.append(f"check_master_spec FAIL: {detail}")
+            except FileNotFoundError:
+                warnings.append("check_master_spec.py не найден — состав мастера не проверен")
+            except Exception as e:  # noqa: BLE001
+                warnings.append(f"check_master_spec не выполнен: {e}")
+        else:
+            checks.append({"name": "Master spec exists", "status": "FAIL",
+                           "detail": "specs/<cap>/spec.md не найден", "severity": "error"})
+            blocking_issues.append(
+                "нет требования-мастера (docs.master.enabled) — запусти merge_delta_to_master")
+
     passed = len(blocking_issues) == 0
     summary = f"{sum(1 for c in checks if c['status'] == 'PASS')}/{len(checks)} checks passed. "
     if blocking_issues:

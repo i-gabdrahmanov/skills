@@ -112,6 +112,16 @@ def _is_na(body: str) -> bool:
     return bool(_NOT_APPLICABLE.search(body))
 
 
+def _has_gwt(raw: str) -> bool:
+    """≥1 реальный сценарий Given-When-Then в ТЕЛЕ (не в заголовке «(Given-When-Then)»)."""
+    for line in raw.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        if _GWT.search(line):
+            return True
+    return False
+
+
 def _present(text_lower: str, sections: list[tuple[str, str]], markers: list[str]) -> bool:
     """Раздел присутствует: маркер в заголовке ИЛИ в тексте (лениво, обратно-совместимо)."""
     if _find_body(sections, markers) is not None:
@@ -226,8 +236,8 @@ def check(sdd_path: Path, policy: str) -> dict:
         _check_group(REGULATORY_SECTIONS, text, sections,
                      hard=False, allow_na=True, errors=errors, warnings=warnings)
 
-    # 3. Хотя бы один сценарий Given-When-Then.
-    if not _GWT.search(raw):
+    # 3. Хотя бы один сценарий Given-When-Then (в теле, не в заголовке).
+    if not _has_gwt(raw):
         errors.append("в sdd.md не найден ни один сценарий Given-When-Then")
 
     # 4. SDD — «что», не «как»: код в спеке = утечка реализации.

@@ -207,15 +207,33 @@ def feature_docs_dir(project_root: Path, cfg: Optional[dict] = None) -> Path:
     return docs_base(project_root, cfg) / _clean_subdir(docs.get("feature_subdir"), "feature-pipeline")
 
 
+def _master_base(project_root: Path, cfg: Optional[dict] = None) -> Path:
+    """База МАСТЕРА (system-analysis + specs/). По умолчанию = docs_base (там же, где дельты),
+    но `docs.master.{mode,repo_path}` позволяет держать мастер в ОТДЕЛЬНОМ (в т.ч. удалённом)
+    репо, пока дельты остаются рядом с кодом. Фолбэк на глобальный docs при отсутствии блока."""
+    project_root = Path(project_root)
+    docs = _docs_cfg(cfg, project_root)
+    m = docs.get("master")
+    if isinstance(m, dict):
+        mode = m.get("mode", docs.get("mode"))
+        if mode == "separate-repo":
+            rp = m.get("repo_path") or docs.get("repo_path")
+            if isinstance(rp, str) and rp.strip():
+                p = Path(rp.strip()).expanduser()
+                return p if p.is_absolute() else (project_root / p)
+        # master.mode=in-repo или нет repo_path → фолбэк на глобальную базу docs
+    return docs_base(project_root, cfg)
+
+
 def system_analysis_dir(project_root: Path, cfg: Optional[dict] = None) -> Path:
-    """Каталог системного обзора: <docs_base>/system-analysis (или legacy docs.system_analysis_path)."""
+    """Каталог системного обзора: <master_base>/system-analysis (или legacy docs.system_analysis_path)."""
     project_root = Path(project_root)
     docs = _docs_cfg(cfg, project_root)
     legacy = docs.get("system_analysis_path")
     if (isinstance(legacy, str) and legacy and docs.get("mode") != "separate-repo"
             and not legacy.startswith(("/", "~")) and ".." not in Path(legacy).parts):
         return project_root / legacy
-    return docs_base(project_root, cfg) / _clean_subdir(docs.get("system_analysis_subdir"), "system-analysis")
+    return _master_base(project_root, cfg) / _clean_subdir(docs.get("system_analysis_subdir"), "system-analysis")
 
 
 def scan_dir(project_root: Path, cfg: Optional[dict] = None) -> Path:
@@ -226,3 +244,41 @@ def scan_dir(project_root: Path, cfg: Optional[dict] = None) -> Path:
 def grounding_excerpt_path(project_root: Path, cfg: Optional[dict] = None) -> Path:
     """Путь к компактной выжимке grounding: <system_analysis>/grounding-excerpt.json."""
     return system_analysis_dir(project_root, cfg) / "grounding-excerpt.json"
+
+
+def master_specs_dir(project_root: Path, cfg: Optional[dict] = None) -> Path:
+    """Каталог требований-мастера (OpenSpec-style): <master_base>/specs."""
+    return _master_base(project_root, cfg) / "specs"
+
+
+def master_capability(project_root: Path, cfg: Optional[dict] = None) -> str:
+    """Имя капабилити для spec.md: docs.master.capability → project.name → 'capability'."""
+    cfg = cfg if cfg is not None else load_pipeline_config(project_root)
+    docs = _docs_cfg(cfg, project_root)
+    m = docs.get("master")
+    cap = m.get("capability") if isinstance(m, dict) else None
+    if not (isinstance(cap, str) and cap.strip()):
+        proj = cfg.get("project") if isinstance(cfg, dict) else None
+        cap = proj.get("name") if isinstance(proj, dict) else None
+    return _clean_subdir(cap.strip(), "capability") if isinstance(cap, str) and cap.strip() else "capability"
+
+
+def master_spec_path(project_root: Path, cfg: Optional[dict] = None,
+                     capability: Optional[str] = None) -> Path:
+    """Путь к требованиям-мастеру: <master_base>/specs/<capability>/spec.md."""
+    cap = capability if (isinstance(capability, str) and capability.strip()) \
+        else master_capability(project_root, cfg)
+    return master_specs_dir(project_root, cfg) / _clean_subdir(cap, "capability") / "spec.md"
+
+
+def master_adr_dir(project_root: Path, cfg: Optional[dict] = None) -> Path:
+    """Каталог ADR (архитектурные решения): <master_base>/<adr_subdir> (дефолт 'adr')."""
+    docs = _docs_cfg(cfg, project_root)
+    m = docs.get("master")
+    sub = m.get("adr_subdir") if isinstance(m, dict) else None
+    return _master_base(project_root, cfg) / _clean_subdir(sub, "adr")
+
+
+def master_adr_path(project_root: Path, adr_id: str, cfg: Optional[dict] = None) -> Path:
+    """Путь к ADR-файлу: <master_base>/adr/<adr_id>.md (adr_id — безопасный слаг)."""
+    return master_adr_dir(project_root, cfg) / f"{safe_slug(adr_id)}.md"

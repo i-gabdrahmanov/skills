@@ -22,7 +22,7 @@ Kafka-топики и таблицы БД для затронутых модул
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/prepare_design_context.py \
     --brd "<папка фичи>/brd.md" \
     --task-plan "<папка фичи>/task-plan.json" \
-    --grounding "<project>/docs/system-analysis/grounding-excerpt.json" \
+    --project "<project>" \
     --out "<папка фичи>/design-context.json"
 ```
 

@@ -9,6 +9,16 @@
 
 ## 4. Фаза 1 — Grounding
 
+**Мастер в отдельном репо (если separate-repo).** При `docs.master.mode=separate-repo` grounding
+читает мастер (system-analysis) из КЛОНА спек-репо. Освежи клон перед проверкой:
+```bash
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/sync_master.py --project "<project>" --pull
+```
+- **exit 2** — клона нет: СТОП. Попроси пользователя склонировать репо мастер-спеки в
+  `docs.master.repo_path` (origin — `docs.master.repo_url`). forge авто-clone НЕ делает.
+- **exit 0** — продолжай (co-located → no-op; либо обновлено; либо `pull` мягко пропущен).
+  `--pull` реально тянет только при `sdd.pull_before_grounding=true` (иначе просто проверит клон).
+
 **Сначала детерминированно проверь, есть ли grounding (НЕ повторяй его снова и снова):**
 ```bash
 python3 <project>/.gigacode/skills/system-analyst/scripts/check_grounding.py --root . --json
@@ -30,9 +40,11 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/check_grounding.py --r
 использует гейт бриф `05-verify.md` §8.3c, чтобы отличать принятые связки от новых арх-связываний:
 ```bash
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.py \
-    --root "<project>" --emit-ground "<project>/docs/system-analysis/architecture-ground.json"
+    --root "<project>" --emit-ground
 ```
-(Если grounding в отдельном репо — путь к `docs/system-analysis/` оттуда.) Файл курируемый: архитектор
+`--emit-ground` без пути пишет `architecture-ground.json` в **резолвнутый** каталог system-analysis
+мастера (in-repo или `docs.master.repo_path` при separate-repo) — путь руками указывать не нужно.
+Файл курируемый: архитектор
 может уточнить правила в `ground/architecture-policy.json` (`module_deps.forbidden`/`allowed_new`).
 
 **Гейт Grounding (ОБЯЗАТЕЛЬНО, перед переходом к спецификации).**

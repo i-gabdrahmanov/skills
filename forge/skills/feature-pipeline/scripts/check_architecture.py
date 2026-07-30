@@ -445,9 +445,21 @@ def _creates_cycle(base_edges: set, frm: str, to: str) -> bool:
     return _reaches(base_edges, to, frm)
 
 
+def _default_arch_ground(root: Path) -> Path:
+    """Дефолтный путь architecture-ground.json — под system-analysis МАСТЕРА (резолвер
+    skill_paths, уважает docs.master/separate-repo), с фолбэком docs/system-analysis
+    для окружений без skill_paths."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import skill_paths  # co-located
+        return skill_paths.system_analysis_dir(root) / "architecture-ground.json"
+    except Exception:
+        return root / "docs" / "system-analysis" / "architecture-ground.json"
+
+
 def load_arch_ground(root: Path, explicit: "str | None" = None) -> "dict | None":
-    """architecture-ground.json (по умолчанию docs/system-analysis/), либо None."""
-    p = Path(explicit) if explicit else (root / "docs" / "system-analysis" / "architecture-ground.json")
+    """architecture-ground.json (по умолчанию — под system-analysis мастера), либо None."""
+    p = Path(explicit) if explicit else _default_arch_ground(root)
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
@@ -530,8 +542,10 @@ def main() -> int:
                     help="политика новых межмодульных зависимостей (дефолт quality.module_dep_policy / graph)")
     ap.add_argument("--arch-ground", default=None,
                     help="путь к architecture-ground.json (дефолт docs/system-analysis/)")
-    ap.add_argument("--emit-ground", default=None,
-                    help="построить граф модулей и записать architecture-ground.json по этому пути (без проверки)")
+    ap.add_argument("--emit-ground", nargs="?", const="__AUTO__", default=None,
+                    help="построить граф модулей и записать architecture-ground.json (без проверки). "
+                         "Без значения — авто-путь под system-analysis мастера (резолвер); "
+                         "либо явный путь")
     ap.add_argument("--strict", action="store_true", help="warnings тоже валят (exit 2)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
@@ -544,7 +558,7 @@ def main() -> int:
         g = build_module_graph(root)
         g = {"$schema": "feature-pipeline/architecture-ground@1",
              "generated_at": datetime.now(timezone.utc).isoformat(), **g}
-        out = Path(args.emit_ground)
+        out = _default_arch_ground(root) if args.emit_ground == "__AUTO__" else Path(args.emit_ground)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(g, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"✅ architecture-ground записан: {out}")
