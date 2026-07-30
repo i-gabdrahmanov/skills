@@ -14,21 +14,21 @@
 #### 5b.0 Pre-design: подготовка компактного data-context
 
 До вызова субагента tech-design сгенерируй **design-context.json** — отфильтрованную
-выжимку из grounding-excerpt.json, содержащую только релевантные entities, API-endpoints,
-Kafka-топики и таблицы БД для затронутых модулей. Это снижает размер контекста с ~2840
-до 50-200 строк и предотвращает проектирование дублирующих сущностей.
+выжимку из grounding-excerpt.json, содержащую только релевантные entities, **components**
+(service/repository/mapper/dto/controller), API-endpoints, Kafka-топики и таблицы БД для
+затронутых модулей. Это снижает размер контекста с ~2840 до 50-200 строк и предотвращает
+проектирование дублирующих сущностей и ссылки на несуществующие классы.
 
 ```bash
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/prepare_design_context.py \
-    --brd "<папка фичи>/brd.md" \
-    --task-plan "<папка фичи>/task-plan.json" \
+    --sdd "<папка фичи>/sdd.md" \
     --project "<project>" \
     --out "<папка фичи>/design-context.json"
 ```
 
-Если `task-plan.json` ещё не существует (до дизайна), скрипт определит модули по
-ключевым словам из BRD. Если и BRD не даёт модулей — будет включено всё (без потери),
-что безопасно для pre-design.
+Скрипт сузит контекст по модулям, упомянутым в `sdd.md` (BRD выключен — `brd.md` нет, а
+`task-plan.json` ещё не создан на этой фазе, поэтому сужаем по SDD). Если SDD не дал модулей —
+будет включено всё (без потери), что безопасно для pre-design.
 
 Полученный `design-context.json` передаётся в контракт субагента ниже.
 

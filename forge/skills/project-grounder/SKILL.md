@@ -167,6 +167,10 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/scan_all.py \
   "entities": [
     {"name": "Artifact", "module": "service-dbservice", "key_fields": ["id", "status", "createdAt"]}
   ],
+  "components": [
+    {"name": "ArtifactService", "layer": "service", "package": "com.x.service", "module": "service-dbservice"},
+    {"name": "ArtifactRepository", "layer": "repository", "package": "com.x.repo", "module": "service-dbservice"}
+  ],
   "api_endpoints": [
     {"method": "GET", "path": "/api/v1/artifacts", "module": "service-dbservice"}
   ],
@@ -186,6 +190,9 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/scan_all.py \
 
 > Каталог `reuse` нужен судье качества `reuse-judge` и разработчику: знать, что уже доступно
 > на classpath и какие util-классы есть в проекте, чтобы не писать велосипеды.
+> Инвентарь `components` — ground-truth реальных классов слоёв service/repository/mapper/dto/controller.
+> tech-design ссылается на переиспользуемые классы только по нему, а гейт `check_taskplan` валит
+> дизайн, если `reuses`-класс не найден в инвентаре (защита от выдуманных «существующих» классов).
 
 Сохрани в `<docs_path>/system-analysis/grounding-excerpt.json`.
 

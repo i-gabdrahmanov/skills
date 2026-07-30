@@ -34,6 +34,7 @@
       ],
       "acceptance": ["Сущность маппится на таблицу", "CRUD через репозиторий"],
       "sdd_ref": "sdd.md#хранение-export-job",
+      "reuses": [],
       "depends_on": []
     },
     {
@@ -48,16 +49,18 @@
       ],
       "acceptance": ["Запуск экспорта создаёт job", "Ошибка при пустом наборе"],
       "sdd_ref": "sdd.md#запуск-экспорта",
+      "reuses": [],
       "depends_on": ["T1"]
     },
     {
       "id": "T3",
-      "title": "REST-эндпойнт экспорта",
+      "title": "REST-эндпойнт экспорта в существующем контроллере",
       "modules": ["storage-core"],
       "layers": ["controller"],
-      "artifacts": ["controller/ExportController.java"],
+      "artifacts": ["controller/ArtifactController.java"],
       "acceptance": ["POST /api/v1/exports → 202", "401 без авторизации"],
       "sdd_ref": "sdd.md#rest-эндпойнт-экспорта",
+      "reuses": ["controller/ArtifactController.java"],
       "depends_on": ["T2"]
     }
   ]
@@ -81,6 +84,7 @@
 | `tasks[].artifacts` | для multi-module — пути **от корня репо** (напр. `service/dbservice/src/main/java/...`, `utils/web/src/main/java/...`); для одного модуля допустимо относительно его `src/main/java` (или `src/main/resources` для миграций) |
 | `tasks[].acceptance` | проверяемые утверждения из критериев приёмки BRD; основа тестов |
 | `tasks[].sdd_ref` | **обязателен** (гейт `check_sdd.py` валит пустой): якорь на раздел/сценарий `sdd.md` (напр. `sdd.md#запуск-экспорта`) — трассировка задача → спецификация |
+| `tasks[].reuses` | **опционально, но проверяется гейтом.** Список существующих классов/путей, которые задача **изменяет или переиспользует** — т.е. соответствуют строкам «изм.» в `tech-design.md §3`. Каждый обязан существовать в проекте (сверяется с инвентарём `scan/components.json`: service/repository/mapper/dto/controller + entity + util). Формат — путь (`controller/ArtifactController.java`), FQN (`com.x.ArtifactController`) или голое имя класса. **Не путать с `artifacts`** — там создаваемые НОВЫЕ файлы, здесь то, что уже есть |
 | `tasks[].depends_on` | ID задач, от которых зависит компиляция; задаёт порядок build, Sub-task и stacked-PR |
 
 ## Частые ошибки
@@ -92,3 +96,7 @@
   соответствующий пакет; иначе уложи в существующий слой или опиши в `tech-design.md §3`.
 - **Артефакт без слоя или слой без артефакта** — каждая пара должна сходиться.
 - **Задача без `acceptance`** — тогда build не сможет проверить, что сделал её правильно.
+- **Выдуманный «существующий» класс в `reuses`** — гейт `check_taskplan.py` валит фазу, если
+  класс из `reuses` не найден в инвентаре проекта (`scan/components.json`). Проектируй
+  переиспользование только по реальным классам из `design-context.json → components`.
+  Если класс на самом деле новый — он в `artifacts`, а не в `reuses`.

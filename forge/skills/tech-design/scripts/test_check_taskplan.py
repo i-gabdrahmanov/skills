@@ -127,6 +127,39 @@ def main() -> int:
         rc, j, raw = run(_plan(tasks=[_task("T1", module="core")]), "--scan", str(scan))
         check("module из scan → pass", rc == 0, raw)
 
+    # 12. Кросс-чек reuses: класс, помеченный переиспользуемым, обязан существовать (--scan)
+    with tempfile.TemporaryDirectory() as td:
+        scan = Path(td)
+        (scan / "structure.json").write_text(
+            json.dumps({"modules": [{"name": "core"}]}), encoding="utf-8")
+        (scan / "components.json").write_text(
+            json.dumps({"items": [{"name": "ExportService", "layer": "service"},
+                                  {"name": "ArtifactRepository", "layer": "repository"}]}),
+            encoding="utf-8")
+        # reuses существующего класса (по имени) → pass
+        rc, j, raw = run(_plan(tasks=[_task("T1", module="core", reuses=["ExportService"])]),
+                         "--scan", str(scan))
+        check("reuses существующего класса → pass", rc == 0, raw)
+        # reuses существующего класса по пути → pass
+        rc, j, raw = run(_plan(tasks=[_task("T1", module="core",
+                                            reuses=["repository/ArtifactRepository.java"])]),
+                         "--scan", str(scan))
+        check("reuses по пути → pass", rc == 0, raw)
+        # reuses выдуманного класса → fail
+        rc, j, raw = run(_plan(tasks=[_task("T1", module="core", reuses=["GhostService"])]),
+                         "--scan", str(scan))
+        check("reuses выдуманного класса → fail", rc == 2 and _has_err(j, "GhostService"), raw)
+
+    # 13. Нет components.json → кросс-чек reuses пропущен с warning, не fail
+    with tempfile.TemporaryDirectory() as td:
+        scan = Path(td)
+        (scan / "structure.json").write_text(
+            json.dumps({"modules": [{"name": "core"}]}), encoding="utf-8")
+        rc, j, raw = run(_plan(tasks=[_task("T1", module="core", reuses=["Whatever"])]),
+                         "--scan", str(scan))
+        check("нет components.json → reuses не валит (pass + warn)",
+              rc == 0 and any("components.json" in w for w in j.get("warnings", [])), raw)
+
     print(f"\n{PASSED} passed, {FAILED} failed")
     return 1 if FAILED else 0
 
