@@ -332,15 +332,31 @@ def feature_docs_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) ->
     return docs_base(root, cfg) / _clean_subdir(docs.get("feature_subdir"), "feature-pipeline")
 
 
+def _master_base(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
+    """База МАСТЕРА (system-analysis + specs/). По умолчанию = docs_base (дельты рядом),
+    но docs.master.{mode,repo_path} держит мастер в отдельном (в т.ч. удалённом) репо."""
+    root = Path(root) if root else find_project_root()
+    docs = _docs_cfg(cfg, root)
+    m = docs.get("master")
+    if isinstance(m, dict):
+        mode = m.get("mode", docs.get("mode"))
+        if mode == "separate-repo":
+            rp = m.get("repo_path") or docs.get("repo_path")
+            if isinstance(rp, str) and rp.strip():
+                p = Path(rp.strip()).expanduser()
+                return p if p.is_absolute() else (Path(root) / p)
+    return docs_base(root, cfg)
+
+
 def system_analysis_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
-    """<docs_base>/system-analysis (или legacy docs.system_analysis_path)."""
+    """<master_base>/system-analysis (или legacy docs.system_analysis_path)."""
     root = Path(root) if root else find_project_root()
     docs = _docs_cfg(cfg, root)
     legacy = docs.get("system_analysis_path")
     if (isinstance(legacy, str) and legacy and docs.get("mode") != "separate-repo"
             and not legacy.startswith(("/", "~")) and ".." not in Path(legacy).parts):
         return Path(root) / legacy
-    return docs_base(root, cfg) / _clean_subdir(docs.get("system_analysis_subdir"), "system-analysis")
+    return _master_base(root, cfg) / _clean_subdir(docs.get("system_analysis_subdir"), "system-analysis")
 
 
 def scan_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
@@ -351,6 +367,47 @@ def scan_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
 def grounding_excerpt_path(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
     """<system_analysis>/grounding-excerpt.json."""
     return system_analysis_dir(root, cfg) / "grounding-excerpt.json"
+
+
+def master_specs_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
+    """<master_base>/specs — требования-мастер (OpenSpec-style)."""
+    return _master_base(root, cfg) / "specs"
+
+
+def master_capability(root: Optional[Path] = None, cfg: Optional[dict] = None) -> str:
+    """docs.master.capability → project.name → 'capability'."""
+    root = Path(root) if root else find_project_root()
+    cfg = cfg if cfg is not None else load_pipeline_config(root)
+    docs = _docs_cfg(cfg, root)
+    m = docs.get("master")
+    cap = m.get("capability") if isinstance(m, dict) else None
+    if not (isinstance(cap, str) and cap.strip()):
+        proj = cfg.get("project") if isinstance(cfg, dict) else None
+        cap = proj.get("name") if isinstance(proj, dict) else None
+    return _clean_subdir(cap.strip(), "capability") if isinstance(cap, str) and cap.strip() else "capability"
+
+
+def master_spec_path(root: Optional[Path] = None, cfg: Optional[dict] = None,
+                     capability: Optional[str] = None) -> Path:
+    """<master_base>/specs/<capability>/spec.md."""
+    cap = capability if (isinstance(capability, str) and capability.strip()) \
+        else master_capability(root, cfg)
+    return master_specs_dir(root, cfg) / _clean_subdir(cap, "capability") / "spec.md"
+
+
+def master_adr_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
+    """<master_base>/<adr_subdir> (дефолт 'adr') — каталог архитектурных решений."""
+    root = Path(root) if root else find_project_root()
+    docs = _docs_cfg(cfg, root)
+    m = docs.get("master")
+    sub = m.get("adr_subdir") if isinstance(m, dict) else None
+    return _master_base(root, cfg) / _clean_subdir(sub, "adr")
+
+
+def master_adr_path(root: Optional[Path] = None, cfg: Optional[dict] = None,
+                    adr_id: str = "") -> Path:
+    """<master_base>/adr/<adr_id>.md."""
+    return master_adr_dir(root, cfg) / f"{safe_slug(adr_id)}.md"
 
 
 def load_settings_hooks() -> dict:

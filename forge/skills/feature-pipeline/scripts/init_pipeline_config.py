@@ -207,12 +207,27 @@ def build_config(root):
             "repo_path": None,                # separate-repo: АБСОЛЮТНЫЙ путь к внешнему репо спеки
             "feature_subdir": "feature-pipeline",      # подпапка фич под docs-базой
             "system_analysis_subdir": "system-analysis",  # подпапка системного обзора под docs-базой
+            "master": {
+                # МАСТЕР (system-analysis + specs/) отдельно от дельт. null → там же, где docs.
+                "mode": None,          # None | in-repo | separate-repo (фолбэк на docs.mode)
+                "repo_path": None,     # АБС. путь к клону репо мастер-спеки (separate-repo)
+                "repo_url": None,      # origin для гайд-клона (авто-clone forge НЕ делает)
+                "enabled": False,      # вести требования-мастер specs/<cap>/spec.md (фаза 06)
+                "capability": None,    # имя капабилити (spec.md); None → project.name
+                "adr_subdir": "adr",   # подпапка ADR под master-базой (<master_base>/adr)
+            },
         },
         "sdd": {
             # Строгость ДКБ-разделов SDD (check_sdd_doc): hard | applicability | soft.
             # applicability (дефолт): арх. контекст + модель угроз обязательны (или «не применимо»),
             # пользовательские истории/принятые решения/регуляторка — warning.
             "security_gate": "applicability",
+            "pull_before_grounding": False,  # git pull --ff-only мастер-репо перед grounding
+        },
+        "adr": {
+            # Architecture Decision Records (rationale+статус). ADR-файлы в <master_base>/adr.
+            "enabled": False,             # гейтить ADR на 02-design (check_adr в design-judge)
+            "enforce_couplings": False,   # новая связка модулей требует accepted ADR (05-verify)
         },
         "jira": {
             "enabled": None,                  # TODO: true/false

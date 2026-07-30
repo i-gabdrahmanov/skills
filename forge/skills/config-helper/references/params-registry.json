@@ -173,6 +173,16 @@
       "aliases": ["дкб", "security gate", "строгость спеки", "модель угроз", "sdd security", "состав спеки", "разделы sdd"]
     },
     {
+      "id": "sdd.pull_before_grounding",
+      "file": "pipeline",
+      "path": "sdd.pull_before_grounding",
+      "type": "bool", "default": false,
+      "category": "quality", "sensitive": false,
+      "title": "git pull мастера перед grounding",
+      "description": "Если мастер в отдельном репо (docs.master.mode=separate-repo) — перед фазой grounding сделать git -C <repo_path> pull --ff-only, чтобы grounding читал свежий мастер. Мягко: на ошибке — предупреждение, не блок",
+      "aliases": ["pull before grounding", "обновить мастер", "pull мастера", "свежий grounding"]
+    },
+    {
       "id": "autonomy.mode",
       "file": "pipeline",
       "path": "autonomy.mode",
@@ -271,6 +281,86 @@
       "title": "Подпапка системного обзора",
       "description": "Имя подпапки под docs-базой для system-analysis",
       "aliases": ["system analysis subdir"]
+    },
+    {
+      "id": "docs.master.mode",
+      "file": "pipeline",
+      "path": "docs.master.mode",
+      "type": "enum", "enum": ["in-repo", "separate-repo"], "default": null,
+      "category": "docs", "sensitive": false,
+      "title": "Режим локации мастера",
+      "description": "Где живёт МАСТЕР (system-analysis + specs/): null → там же, где docs (фолбэк на docs.mode); separate-repo → в docs.master.repo_path (отдельный/удалённый репо), пока дельты остаются рядом с кодом",
+      "aliases": ["мастер репо", "master mode", "мастер отдельно", "локация мастера", "master location"]
+    },
+    {
+      "id": "docs.master.repo_path",
+      "file": "pipeline",
+      "path": "docs.master.repo_path",
+      "type": "string", "default": null,
+      "category": "docs", "sensitive": false,
+      "title": "Путь к клону мастер-репо",
+      "description": "АБСОЛЮТНЫЙ путь к уже склонированному репозиторию мастер-спеки (при docs.master.mode=separate-repo). forge пишет в рабочее дерево, коммит/push делает пользователь",
+      "aliases": ["master repo path", "путь мастера", "клон мастера", "спек-репо"]
+    },
+    {
+      "id": "docs.master.repo_url",
+      "file": "pipeline",
+      "path": "docs.master.repo_url",
+      "type": "string", "default": null,
+      "category": "docs", "sensitive": false,
+      "title": "origin мастер-репо (для гайд-клона)",
+      "description": "URL origin репозитория мастер-спеки — используется как подсказка для ручного git clone, если repo_path отсутствует. forge авто-clone НЕ делает",
+      "aliases": ["master repo url", "origin мастера", "url мастера"]
+    },
+    {
+      "id": "master.enabled",
+      "file": "pipeline",
+      "path": "docs.master.enabled",
+      "type": "bool", "default": false,
+      "category": "docs", "sensitive": false,
+      "title": "Требования-мастер (specs/<cap>/spec.md)",
+      "description": "Вести требования-мастер spec.md и сливать в неё принятые требования дельт (sdd.md) на фазе 06 (merge_delta_to_master). Выключено → работает только grounding-мастер (system-analysis)",
+      "aliases": ["мастер спека", "master spec", "требования мастер", "specs", "мастер enabled"]
+    },
+    {
+      "id": "master.capability",
+      "file": "pipeline",
+      "path": "docs.master.capability",
+      "type": "string", "default": null,
+      "category": "docs", "sensitive": false,
+      "title": "Капабилити мастер-спеки",
+      "description": "Имя капабилити — папка требования-мастера specs/<capability>/spec.md. null → project.name (один мастер на репо)",
+      "aliases": ["capability", "капабилити", "имя спеки", "master capability"]
+    },
+    {
+      "id": "docs.master.adr_subdir",
+      "file": "pipeline",
+      "path": "docs.master.adr_subdir",
+      "type": "string", "default": "adr",
+      "category": "docs", "sensitive": false,
+      "title": "Подпапка ADR",
+      "description": "Имя подпапки под master-базой для ADR-файлов (<master_base>/adr)",
+      "aliases": ["adr subdir", "папка adr", "каталог решений"]
+    },
+    {
+      "id": "adr.enabled",
+      "file": "pipeline",
+      "path": "adr.enabled",
+      "type": "bool", "default": false,
+      "category": "quality", "sensitive": false,
+      "title": "ADR — архитектурные решения",
+      "description": "Вести ADR-файлы (MADR: rationale+статус) в <master_base>/adr и гейтить их на 02-design (check_adr в design-judge: состав + целостность ссылок ADR-NNNN из tech-design/sdd). Дефолт выключено",
+      "aliases": ["adr", "адр", "решения", "architecture decisions", "adr enabled", "decision record"]
+    },
+    {
+      "id": "adr.enforce_couplings",
+      "file": "pipeline",
+      "path": "adr.enforce_couplings",
+      "type": "bool", "default": false,
+      "category": "quality", "sensitive": false,
+      "title": "ADR обязателен для новых связок модулей",
+      "description": "На 05-verify новая межмодульная group-связка проходит, только если её запись в architecture-policy.json (module_deps.allowed_new) ссылается на accepted ADR. architecture-policy.json становится энфорсимой проекцией ADR. Дефолт выключено",
+      "aliases": ["adr связки", "enforce couplings", "adr для модулей", "связки требуют adr"]
     },
     {
       "id": "conventions.migration_tool",

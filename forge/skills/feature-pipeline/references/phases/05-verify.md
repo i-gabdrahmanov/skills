@@ -92,7 +92,9 @@ task-plan-модулей), тогда его падения классифици
 который по правилам проекта подключать нельзя. Гейт ловит **новые межмодульные зависимости**
 (Gradle `project(':...')` и Maven `<dependency>` на внутренний модуль в `pom.xml`, в diff
 build-файлов) и проверяет их против **архитектурного граунда** проекта
-(`docs/system-analysis/architecture-ground.json` — что проект УЖЕ соединяет, эмитится на grounding бриф `01-grounding.md` §4):
+(`architecture-ground.json` под резолвнутым system-analysis мастера — при separate-repo из
+`docs.master.repo_path`; что проект УЖЕ соединяет, эмитится на grounding бриф `01-grounding.md` §4;
+`check_architecture` читает его дефолтным путём через резолвер):
 ```bash
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.py \
     --root "<project>" --pipeline-config "<project>/ground/pipeline.json"
@@ -104,6 +106,11 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.p
   **Не вводи новое арх-связывание ради того, чтобы код собрался**: используй существующий
   API-модуль/контракт. Если это осознанное архрешение — внеси ребро в `ground/architecture-policy.json`
   (`module_deps.allowed_new`) или подтверди override (§0.6.1).
+- **ADR-энфорс (`adr.enforce_couplings`):** если включён, ребро в `allowed_new` проходит **только**
+  со ссылкой на **accepted** ADR: `{"edge": ["service-a","service-b"], "adr": "ADR-0007"}`. Bare-форма
+  `["A","B"]` без ADR → exit 2 («связка в allowed_new без accepted ADR»). Так grounding-гейт (граф из
+  кода) заставляет зафиксировать *почему* связка введена, а `architecture-policy.json` становится
+  энфорсимой проекцией принятого ADR. Оформи ADR (фаза 02-design) и сошлись на него.
 
 Политика `quality.module_dep_policy`: `graph` (дефолт — проверка против архитектурного граунда:
 цикл/новая group-связка блокируются, принятые связки проходят) | `deny_new` (блок любой новой

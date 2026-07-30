@@ -61,6 +61,13 @@ CASES = {
                           PROJ / "docs/feats", PROJ / "docs/system-analysis"),
     "sep ignores legacy": ({"mode": "separate-repo", "repo_path": EXT, "feature_docs_path": "docs/feats"},
                            Path(EXT) / "feature-pipeline", Path(EXT) / "system-analysis"),
+    # docs.master: мастер (system-analysis) отдельно, дельты (feature) — по глобальному docs.
+    "master separate, deltas in-repo": (
+        {"docs_path": "docs", "master": {"mode": "separate-repo", "repo_path": EXT}},
+        PROJ / "docs/feature-pipeline", Path(EXT) / "system-analysis"),
+    "master in-repo override on sep global": (
+        {"mode": "separate-repo", "repo_path": EXT, "master": {"mode": "in-repo"}},
+        Path(EXT) / "feature-pipeline", Path(EXT) / "system-analysis"),
 }
 
 
@@ -91,6 +98,28 @@ class TestResolverConsistency(unittest.TestCase):
         # сторона хуков — тот же путь
         self.assertEqual(str(_project.grounding_excerpt_path(PROJ, cfg)),
                          f"{EXT}/system-analysis/grounding-excerpt.json")
+
+    def test_master_override_splits_location(self):
+        """docs.master → мастер в отдельном репо, дельты остаются in-repo; skill_paths==_project."""
+        cfg = {"docs": {"docs_path": "docs",
+                        "master": {"mode": "separate-repo", "repo_path": EXT}}}
+        # дельты (feature) — по глобальному docs (in-repo), все три копии согласны
+        for mod in (skill_paths, _project, _util):
+            self.assertEqual(str(mod.feature_docs_dir(PROJ, cfg)),
+                             str(PROJ / "docs/feature-pipeline"))
+        # мастер (system-analysis/scan/excerpt/specs/adr) — в EXT; skill_paths и _project совпадают
+        for fn in ("system_analysis_dir", "scan_dir", "grounding_excerpt_path",
+                   "master_specs_dir", "master_adr_dir"):
+            a = str(getattr(skill_paths, fn)(PROJ, cfg))
+            b = str(getattr(_project, fn)(PROJ, cfg))
+            self.assertEqual(a, b, f"{fn}: skill_paths≠_project под docs.master")
+            self.assertTrue(a.startswith(EXT), f"{fn} мастер не в EXT: {a}")
+        # adr_subdir override
+        cfg2 = {"docs": {"docs_path": "docs",
+                         "master": {"mode": "separate-repo", "repo_path": EXT, "adr_subdir": "decisions"}}}
+        self.assertEqual(str(skill_paths.master_adr_dir(PROJ, cfg2)),
+                         str(_project.master_adr_dir(PROJ, cfg2)))
+        self.assertTrue(str(skill_paths.master_adr_dir(PROJ, cfg2)).endswith("/decisions"))
 
 
 # ── Часть B: нет хардкода docs-пути в обход резолвера ─────────────────────────
@@ -153,6 +182,13 @@ _FEAT_SUB = [None, "feature-pipeline", "custom", "../x", "a/b", "..", 7, ""]
 _SA_SUB = [None, "system-analysis", "sa", "../x", "..", 3]
 _LEGACY_FD = [None, "docs/feats", "../x", "/abs", "deep/a/b", 4]
 _LEGACY_SA = [None, "docs/sa", "../x", "/abs", 8]
+# docs.master — per-класс оверрайд локации мастера (system-analysis + specs/).
+_MASTER = [None, {}, "notdict", 7,
+           {"mode": "separate-repo", "repo_path": "/ext/master"},
+           {"mode": "separate-repo"},                 # без repo_path → фолбэк на глобальную базу
+           {"mode": "in-repo"},                        # → глобальная база
+           {"repo_path": "/ext/master"},               # без mode → наследует docs.mode
+           {"mode": "separate-repo", "repo_path": "rel/master"}]
 
 
 def _rand_docs(rng: random.Random):
@@ -168,6 +204,7 @@ def _rand_docs(rng: random.Random):
     if rng.random() < 0.6: d["system_analysis_subdir"] = rng.choice(_SA_SUB)
     if rng.random() < 0.4: d["feature_docs_path"] = rng.choice(_LEGACY_FD)
     if rng.random() < 0.4: d["system_analysis_path"] = rng.choice(_LEGACY_SA)
+    if rng.random() < 0.5: d["master"] = rng.choice(_MASTER)
     return d
 
 

@@ -445,9 +445,21 @@ def _creates_cycle(base_edges: set, frm: str, to: str) -> bool:
     return _reaches(base_edges, to, frm)
 
 
+def _default_arch_ground(root: Path) -> Path:
+    """Дефолтный путь architecture-ground.json — под system-analysis МАСТЕРА (резолвер
+    skill_paths, уважает docs.master/separate-repo), с фолбэком docs/system-analysis
+    для окружений без skill_paths."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import skill_paths  # co-located
+        return skill_paths.system_analysis_dir(root) / "architecture-ground.json"
+    except Exception:
+        return root / "docs" / "system-analysis" / "architecture-ground.json"
+
+
 def load_arch_ground(root: Path, explicit: "str | None" = None) -> "dict | None":
-    """architecture-ground.json (по умолчанию docs/system-analysis/), либо None."""
-    p = Path(explicit) if explicit else (root / "docs" / "system-analysis" / "architecture-ground.json")
+    """architecture-ground.json (по умолчанию — под system-analysis мастера), либо None."""
+    p = Path(explicit) if explicit else _default_arch_ground(root)
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
@@ -458,13 +470,58 @@ def _mdep_violation(edge: dict, detail: str) -> dict:
     return {"file": edge["file"], "rule": "module-dependency", "severity": "error", "detail": detail}
 
 
-def check_module_deps(root: Path, base: str, mode: str, arch_ground: "dict | None" = None) -> list[dict]:
-    """Нарушения по новым межмодульным зависимостям. mode: graph | deny_new | policy | off."""
+def _norm_allowed_entry(e) -> "tuple | None":
+    """Запись allowed_new: ['A','B'] (bare) ИЛИ {'edge':['A','B'],'adr':'ADR-0007'} → (pair, adr|None)."""
+    if isinstance(e, dict):
+        edge = e.get("edge")
+        if isinstance(edge, (list, tuple)) and len(edge) == 2:
+            return (tuple(_canon_module(x) for x in edge), e.get("adr"))
+        return None
+    if isinstance(e, (list, tuple)) and len(e) == 2:
+        return (tuple(_canon_module(x) for x in e), None)
+    return None
+
+
+def _adr_accepted(root: Path, adr_ref, cfg: "dict | None" = None) -> bool:
+    """ADR (по номеру из adr_ref, напр. 'ADR-0007') существует и имеет Status: accepted."""
+    if not adr_ref:
+        return False
+    m = re.search(r"(\d+)", str(adr_ref))
+    if not m:
+        return False
+    n = int(m.group(1))
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import skill_paths  # co-located
+        adr_dir = skill_paths.master_adr_dir(root, cfg)
+    except Exception:
+        return False
+    if not adr_dir.exists():
+        return False
+    for f in adr_dir.glob("*.md"):
+        fm = re.match(r"^(\d+)-", f.name)
+        if fm and int(fm.group(1)) == n:
+            text = f.read_text(encoding="utf-8", errors="replace")
+            sm = re.search(r"(?im)^\*\*Status:\*\*\s*(\w+)", text)
+            return bool(sm and sm.group(1).lower() == "accepted")
+    return False
+
+
+def check_module_deps(root: Path, base: str, mode: str, arch_ground: "dict | None" = None,
+                      enforce_adr: bool = False, cfg: "dict | None" = None) -> list[dict]:
+    """Нарушения по новым межмодульным зависимостям. mode: graph | deny_new | policy | off.
+
+    enforce_adr (adr.enforce_couplings): связка в allowed_new проходит только со ссылкой на
+    accepted ADR — architecture-policy.json становится энфорсимой проекцией принятого решения."""
     if mode == "off":
         return []
     policy = load_arch_policy(root)
     forbidden = {tuple(_canon_module(x) for x in e) for e in policy.get("forbidden", []) if len(e) == 2}
-    allowed = {tuple(_canon_module(x) for x in e) for e in policy.get("allowed_new", []) if len(e) == 2}
+    allowed: dict = {}
+    for e in policy.get("allowed_new", []):
+        norm = _norm_allowed_entry(e)
+        if norm:
+            allowed[norm[0]] = norm[1]  # pair → adr-ref | None
 
     new_edges = _added_module_dep_edges(root, base)
     if not new_edges:
@@ -490,6 +547,12 @@ def check_module_deps(root: Path, base: str, mode: str, arch_ground: "dict | Non
         frm, to = edge["from"], edge["to"]
         pair = (frm, to)
         if pair in allowed:
+            if enforce_adr and not _adr_accepted(root, allowed[pair], cfg):
+                violations.append(_mdep_violation(
+                    edge, f"связка {frm} → {to} в allowed_new без accepted ADR "
+                          f"(adr.enforce_couplings): оформи запись "
+                          f"{{\"edge\": [\"{frm}\",\"{to}\"], \"adr\": \"ADR-NNNN\"}} со ссылкой на "
+                          f"ПРИНЯТЫЙ ADR (или подтверди override §0.6.1)."))
             continue
         if pair in forbidden:
             violations.append(_mdep_violation(
@@ -530,8 +593,10 @@ def main() -> int:
                     help="политика новых межмодульных зависимостей (дефолт quality.module_dep_policy / graph)")
     ap.add_argument("--arch-ground", default=None,
                     help="путь к architecture-ground.json (дефолт docs/system-analysis/)")
-    ap.add_argument("--emit-ground", default=None,
-                    help="построить граф модулей и записать architecture-ground.json по этому пути (без проверки)")
+    ap.add_argument("--emit-ground", nargs="?", const="__AUTO__", default=None,
+                    help="построить граф модулей и записать architecture-ground.json (без проверки). "
+                         "Без значения — авто-путь под system-analysis мастера (резолвер); "
+                         "либо явный путь")
     ap.add_argument("--strict", action="store_true", help="warnings тоже валят (exit 2)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
@@ -544,7 +609,7 @@ def main() -> int:
         g = build_module_graph(root)
         g = {"$schema": "feature-pipeline/architecture-ground@1",
              "generated_at": datetime.now(timezone.utc).isoformat(), **g}
-        out = Path(args.emit_ground)
+        out = _default_arch_ground(root) if args.emit_ground == "__AUTO__" else Path(args.emit_ground)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(g, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"✅ architecture-ground записан: {out}")
@@ -577,17 +642,17 @@ def main() -> int:
     verdict = analyze(files, package_root)
 
     # Гейт межмодульных зависимостей (по git diff build-файлов) — независим от --changed/слоёв.
-    mode = args.module_dep_policy
-    if mode is None:
-        mode = "graph"
-        if args.pipeline_config:
-            try:
-                cfg = json.loads(Path(args.pipeline_config).read_text(encoding="utf-8"))
-                mode = (cfg.get("quality") or {}).get("module_dep_policy", "graph")
-            except Exception:
-                pass
+    pcfg: dict = {}
+    if args.pipeline_config:
+        try:
+            pcfg = json.loads(Path(args.pipeline_config).read_text(encoding="utf-8"))
+        except Exception:
+            pcfg = {}
+    mode = args.module_dep_policy or (pcfg.get("quality") or {}).get("module_dep_policy", "graph")
+    enforce_adr = bool((pcfg.get("adr") or {}).get("enforce_couplings"))
     arch_ground = load_arch_ground(root, args.arch_ground) if mode == "graph" else None
-    mdep = check_module_deps(root, args.base, mode, arch_ground)
+    mdep = check_module_deps(root, args.base, mode, arch_ground,
+                             enforce_adr=enforce_adr, cfg=pcfg)
     if mdep:
         verdict["violations"].extend(mdep)
         verdict["counts"]["error"] += len(mdep)

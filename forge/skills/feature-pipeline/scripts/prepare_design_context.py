@@ -250,6 +250,7 @@ def main():
     grounding_path = None
     out_path = None
     pipeline_path = None
+    project_root = None
 
     for key, val in zip(args[::2], args[1::2]):
         if key == "--brd":
@@ -266,10 +267,22 @@ def main():
             out_path = val
         elif key == "--pipeline":
             pipeline_path = val
+        elif key == "--project":
+            project_root = val
 
+    # --grounding опционален: без него резолвим путь мастера по docs.* (master separate-repo
+    # aware) через skill_paths, взяв корень из --project (или cwd).
     if not grounding_path:
-        print(json.dumps({"error": "--grounding is required"}, ensure_ascii=False))
-        sys.exit(1)
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import skill_paths
+            proot = Path(project_root).resolve() if project_root else Path.cwd()
+            grounding_path = str(skill_paths.grounding_excerpt_path(proot))
+        except Exception:
+            print(json.dumps(
+                {"error": "--grounding не задан и не удалось резолвить по --project"},
+                ensure_ascii=False))
+            sys.exit(1)
 
     grounding_file = Path(grounding_path)
     if not grounding_file.exists():

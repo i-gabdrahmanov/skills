@@ -140,11 +140,25 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
     "docs_path": "docs",             // in-repo: база под корнем проекта
     "repo_path": null,               // separate-repo: АБСОЛЮТНЫЙ путь к внешнему репо спеки
     "feature_subdir": "feature-pipeline",       // подпапка фич под docs-базой
-    "system_analysis_subdir": "system-analysis" // подпапка системного обзора под docs-базой
+    "system_analysis_subdir": "system-analysis", // подпапка системного обзора под docs-базой
+    "master": {                      // МАСТЕР (system-analysis + specs/) ОТДЕЛЬНО от дельт.
+                                     // null/нет → мастер там же, где docs (как сегодня).
+      "mode": null,                  // null | in-repo | separate-repo (фолбэк на docs.mode)
+      "repo_path": null,             // АБСОЛЮТНЫЙ путь к КЛОНУ репо мастер-спеки (separate-repo)
+      "repo_url": null,              // origin для гайд-клона (forge авто-clone НЕ делает)
+      "enabled": false,              // вести требования-мастер specs/<cap>/spec.md (фаза 06)
+      "capability": null,            // имя капабилити (spec.md); null → project.name
+      "adr_subdir": "adr"            // подпапка ADR под master-базой (<master_base>/adr)
+    }
   },
   "sdd": {                           // спецификация (фаза 02-sdd)
-    "security_gate": "applicability" // hard | applicability | soft — строгость ДКБ-разделов SDD
+    "security_gate": "applicability", // hard | applicability | soft — строгость ДКБ-разделов SDD
                                      // (арх. контекст/границы доверия, модель угроз, регуляторка)
+    "pull_before_grounding": false   // git pull --ff-only мастер-репо перед grounding (separate-repo)
+  },
+  "adr": {                           // Architecture Decision Records (rationale+статус)
+    "enabled": false,                // вести ADR-файлы в <master_base>/adr и гейтить их на 02-design
+    "enforce_couplings": false       // новая межмодульная связка требует accepted ADR (05-verify)
   },
   "jira": {
     "enabled": null,                 // TODO
@@ -262,6 +276,48 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_tautological_t
   после чего весь пайплайн (скрипты, хуки, судьи) подхватит расположение из резолвера.
 - **Legacy:** старые ключи `docs.feature_docs_path` / `docs.system_analysis_path` (полные
   относительные пути) ещё поддерживаются резолвером в in-repo режиме.
+
+### Раздельная локация: мастер отдельно от дельт (`docs.master`)
+
+Мастер (системный обзор `system-analysis/` + требования-мастер `specs/<cap>/spec.md`) можно
+держать в **отдельном (в т.ч. удалённом) репозитории**, пока дельты (`feature-pipeline/`:
+`sdd.md`/`tech-design.md`/`task-plan.json`) лежат рядом с кодом. Блок `docs.master`:
+
+| Поле | Значение |
+|---|---|
+| `mode` | `null` → мастер там же, где `docs` (фолбэк на `docs.mode`); `separate-repo` → в `repo_path` |
+| `repo_path` | АБСОЛЮТНЫЙ путь к **уже склонированному** репо мастер-спеки |
+| `repo_url` | origin для гайд-клона (forge авто-clone НЕ делает — только подсказывает) |
+| `enabled` | вести требования-мастер `specs/<cap>/spec.md` и сливать в неё дельты (фаза 06) |
+| `capability` | имя капабилити для `spec.md`; `null` → `project.name` |
+
+Резолв: `system_analysis_dir`/`grounding_excerpt_path`/`scan_dir` и (при `enabled`)
+`specs/<cap>/spec.md` берут базу из `docs.master` (функция `_master_base`), а `feature_docs_dir`
+(дельты) — из глобального `docs`. Синхронность скрипт/хук пинит `test_docs_resolver_consistency.py`.
+
+Git-политика (forge-no-delivery): forge **пишет** обновление мастера в рабочее дерево клона
+(`enrich_grounding` + `merge_delta_to_master`), но коммит/push мастер-репо делает пользователь.
+`sdd.pull_before_grounding: true` включает `git -C <repo_path> pull --ff-only` перед grounding
+(мягко: на ошибке — предупреждение).
+
+### ADR — архитектурные решения (третья ось: `adr.*`)
+
+Триада артефактов: **grounding** = «как построено» (из кода), **мастер-спека** = «что должно
+делать» (требования), **ADR** = «почему так решили» (rationale + статус). ADR из кода не
+выводится (это не grounding) — авторский MADR-файл. Живут в `<master_base>/adr/` (едут в тот же
+мастер-репо, что `specs/`), формат — `references/adr-template.md` в `system-analyst`.
+
+| Поле | Значение |
+|---|---|
+| `adr.enabled` | вести ADR-файлы и гейтить их на 02-design (`check_adr` в design-judge). Дефолт false |
+| `adr.enforce_couplings` | новая межмодульная связка проходит 05-verify только с accepted ADR (см. ниже). Дефолт false |
+| `docs.master.adr_subdir` | подпапка ADR под master-базой (дефолт `adr`) |
+
+**Связь с grounding (триггер+энфорс):** `check_architecture` (граф связей из кода) на 05-verify
+детектит новую group-связку модулей — это момент, когда нужен ADR. При `adr.enforce_couplings`
+запись в `ground/architecture-policy.json` → `module_deps.allowed_new` должна ссылаться на ADR:
+`{"edge": ["service-a","service-b"], "adr": "ADR-0007"}` (accepted). Так `architecture-policy.json`
+становится энфорсимой проекцией принятого ADR. Старый формат `["A","B"]` (без ADR) поддерживается.
 
 ## Что заполнить вручную после init
 

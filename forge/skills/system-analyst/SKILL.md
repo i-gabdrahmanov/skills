@@ -473,6 +473,31 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/verify_coverage.py \
 
 ---
 
+## 5.1 Требования-мастер (specs/) — co-located скрипты
+
+Кроме системного обзора (`system-analysis/`), этот скилл co-located несёт скрипты
+**требований-мастера** (OpenSpec-style `specs/<cap>/spec.md`), которые вызываются оркестратором
+на фазе `06-document` при `docs.master.enabled` (см. бриф `06-document.md`, а не этот воркфлоу):
+
+- `scripts/merge_delta_to_master.py` — вливает принятую дельту (`sdd.md` фичи) в `specs/<cap>/spec.md`
+  мастера (апсерт сценариев/требований с провенансом `[from: <feature> <date>]`, идемпотентно,
+  создаёт из `references/master-spec-template.md`). Пишет в рабочее дерево клона мастер-репо,
+  **коммит/push — на пользователе** (forge-no-delivery).
+- `scripts/check_master_spec.py` — валидатор состава мастер-спеки (та же политика `sdd.security_gate`);
+  вшит в spec-judge (`run_judge spec`).
+- `references/master-spec-template.md` — обязательный состав мастер-спеки.
+- `scripts/check_adr.py` + `references/adr-template.md` — ADR (Architecture Decision Records,
+  «почему так решили»: rationale+статус). ADR-файлы живут в `<master_base>/adr/`, автор — фаза
+  02-design (tech-design), гейт — `check_adr` вшит в design-judge (`run_judge design`) при
+  `adr.enabled`. Триггер/энфорс новых межмодульных связок — `check_architecture` на 05-verify при
+  `adr.enforce_couplings` (запись `allowed_new` ссылается на accepted ADR). ADR из кода НЕ
+  выводится (grounding — факты, ADR — обоснование).
+
+Расположение мастера (in-repo или отдельный/удалённый репо) резолвится через `docs.master.*`
+(см. `config.md`), поэтому эти скрипты пишут туда же, куда `enrich_grounding`.
+
+---
+
 ## Когда чего НЕ делать
 
 - Не подключайся к БД (даже если в config есть JDBC URL — это другая версия скилла).

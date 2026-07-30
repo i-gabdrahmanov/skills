@@ -22,7 +22,7 @@ Kafka-топики и таблицы БД для затронутых модул
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/prepare_design_context.py \
     --brd "<папка фичи>/brd.md" \
     --task-plan "<папка фичи>/task-plan.json" \
-    --grounding "<project>/docs/system-analysis/grounding-excerpt.json" \
+    --project "<project>" \
     --out "<папка фичи>/design-context.json"
 ```
 
@@ -56,10 +56,14 @@ agent(
   1. tech-design.md — по шаблону `<project>/.gigacode/skills/tech-design/references/design-template.md`
   2. task-plan.json — по шаблону `<project>/.gigacode/skills/tech-design/references/task-plan-schema.md`
      Каждая задача: непустой acceptance (Given-When-Then) + sdd_ref на раздел sdd.md.
+  ADR (только если adr.enabled в pipeline.json): значимые арх-решения оформи ADR-файлами в
+     <master_base>/adr/NNNN-<slug>.md по adr-template.md, а в §8 tech-design и §11 sdd проставь
+     ссылки ADR-NNNN. Мелкие развилки — инлайн, не плоди ADR.
 
 Gate (обязательно, перед завершением):
   python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py design <slug> --project-root <project>
-  Должен быть PASS (check_taskplan + check_sdd-линковка). Сохраняет вердикт в judges/design-judge.json.
+  Должен быть PASS (check_taskplan + check_sdd-линковка; при adr.enabled — ещё check_adr: состав ADR
+  + резолв ссылок ADR-NNNN). Сохраняет вердикт в judges/design-judge.json.
 
 Выходной JSON:
   {"step_id": "02-design", "status": "completed", "path": "...", "gates": {"design-judge": "PASS"}}
