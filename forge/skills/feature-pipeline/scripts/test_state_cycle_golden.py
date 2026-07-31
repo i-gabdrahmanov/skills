@@ -24,7 +24,7 @@ INIT = REPO / "skills/pipeline-state/scripts/init.py"
 UPDATE = REPO / "skills/pipeline-state/scripts/update.py"
 ADD_STEPS_FP = REPO / "skills/feature-pipeline/scripts/add_steps.py"
 
-SLUG = "demo-feature"
+SLUG = "KID-1"  # Jira-ключ: init.py гейтит feature-pipeline на формат ключа
 
 STATIC_STEPS = [
     {"id": "00-brd", "depends_on": []},
@@ -147,12 +147,12 @@ class GoldenStateCycle(unittest.TestCase):
     def test_step_blocked_without_verdict(self):
         """02-design нельзя закрыть, пока нет design-judge.json (enforcement жив)."""
         r = _run([INIT, "--project", self.proj, "--skill", "feature-pipeline",
-                  "--feature", "neg",
+                  "--feature", "KID-2",
                   "--steps", json.dumps([{"id": "02-design", "depends_on": []}])], self.proj)
         self.assertEqual(r.returncode, 0, r.stderr)
         # без вердикта design-judge
         r = _run([UPDATE, "--project", self.proj, "--skill", "feature-pipeline",
-                  "--feature", "neg", "--step-id", "02-design", "--status", "completed",
+                  "--feature", "KID-2", "--step-id", "02-design", "--status", "completed",
                   "--output-json", json.dumps({"step_id": "02-design"})], self.proj)
         self.assertNotEqual(r.returncode, 0,
                             "02-design закрылся без вердикта судьи — enforcement сломан")

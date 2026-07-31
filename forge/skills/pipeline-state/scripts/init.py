@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import judges_registry
-from _util import repo_root, feature_docs_dir, safe_slug, safe_load_json
+from _util import repo_root, feature_docs_dir, safe_slug, safe_load_json, is_jira_key
 
 
 def load_json_arg(value: str):
@@ -44,6 +44,11 @@ def iso_now() -> str:
 # База данных скиллов внутри проекта (НЕ dot-папка — иначе рантайм режет доступ
 # по path-гарду и seatbelt). Единый каталог для всех скиллов конвейера.
 DATA_DIR = "ground"
+
+# Скиллы, где стейт намеспейсится Jira-ключом входного issue (а не свободным слагом).
+# feature-pipeline: ключ ОБЯЗАТЕЛЕН — без валидного Jira-ключа папка стейта не создаётся,
+# оверрайда нет. Ловит баг «MCP не подключён → безслаговая папка ground/.../pipeline/».
+SKILLS_REQUIRING_JIRA_KEY = {"feature-pipeline"}
 
 
 def pipeline_dir(project: Path, skill: str, feature: str = "pipeline") -> Path:
@@ -67,6 +72,15 @@ def main():
         safe_slug(args.feature)
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(2)
+
+    # Жёсткий гейт «Jira-ключ обязателен» (без оверрайда): для скиллов из набора --feature
+    # обязан быть валидным Jira-ключом входного issue, а не дефолтом/свободным слагом.
+    if args.skill in SKILLS_REQUIRING_JIRA_KEY and not is_jira_key(args.feature):
+        print(f"ERROR: {args.skill} требует Jira-ключ входного issue как --feature "
+              f"(формат PROJ-123), получено {args.feature!r}. Передай ключ, напр. STOR-123. "
+              f"Подключать Jira MCP не обязательно, но ключ обязателен — оверрайда нет.",
+              file=sys.stderr)
         sys.exit(2)
 
     project = Path(args.project or repo_root()).resolve()
