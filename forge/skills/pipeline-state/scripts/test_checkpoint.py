@@ -24,7 +24,7 @@ UPDATE = HERE / "update.py"
 INIT = HERE / "init.py"
 
 SKILL = "feature-pipeline"
-FEATURE = "feat"
+FEATURE = "KID-1"  # Jira-ключ: init.py требует его для feature-pipeline (гейт «ключ обязателен»)
 STEP = "01-grounding"
 
 

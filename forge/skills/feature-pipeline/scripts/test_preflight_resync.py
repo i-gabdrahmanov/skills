@@ -43,7 +43,7 @@ class TestPreflightResync(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.proj = Path(self._tmp.name)
-        self.feature = "resync-feat"
+        self.feature = "KID-1"  # Jira-ключ: init.py гейтит feature-pipeline на формат ключа
         self.sd = self.proj / "ground" / "statements" / "feature-pipeline" / self.feature
         r = _run([INIT, "--project", self.proj, "--skill", "feature-pipeline",
                   "--feature", self.feature, "--steps", json.dumps(BASE_STEPS), "--force"])

@@ -101,26 +101,26 @@ class MultiFeatureGate(unittest.TestCase):
             self.assertEqual(r.returncode, 0, f"{feat}/{sid}: {r.stderr or r.stdout}")
 
     def test_two_features_isolated(self):
-        self._setup_feature("alpha")
-        self._setup_feature("beta")
+        self._setup_feature("KID-1")
+        self._setup_feature("KID-2")
 
         # отдельные gate-файлы
-        self.assertTrue((self.proj / "ground/phases/alpha/gate.json").exists())
-        self.assertTrue((self.proj / "ground/phases/beta/gate.json").exists())
+        self.assertTrue((self.proj / "ground/phases/KID-1/gate.json").exists())
+        self.assertTrue((self.proj / "ground/phases/KID-2/gate.json").exists())
 
-        # завершаем alpha полностью
-        self._close_all("alpha")
-        self.assertEqual(self._gate("alpha")["current_phase"], "")
+        # завершаем KID-1 полностью
+        self._close_all("KID-1")
+        self.assertEqual(self._gate("KID-1")["current_phase"], "")
 
-        # beta не затронута настройкой alpha
-        self.assertNotEqual(self._gate("beta")["current_phase"], "",
-                            "gate beta затёрт работой alpha (C1 регресс)")
+        # KID-2 не затронута настройкой KID-1
+        self.assertNotEqual(self._gate("KID-2")["current_phase"], "",
+                            "gate KID-2 затёрт работой KID-1 (C1 регресс)")
 
-        # завершаем beta — alpha остаётся завершённой
-        self._close_all("beta")
-        self.assertEqual(self._gate("beta")["current_phase"], "")
-        self.assertEqual(self._gate("alpha")["current_phase"], "",
-                         "после работы beta gate alpha изменился (C1 регресс)")
+        # завершаем KID-2 — KID-1 остаётся завершённой
+        self._close_all("KID-2")
+        self.assertEqual(self._gate("KID-2")["current_phase"], "")
+        self.assertEqual(self._gate("KID-1")["current_phase"], "",
+                         "после работы KID-2 gate KID-1 изменился (C1 регресс)")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -84,6 +85,17 @@ def safe_slug(slug) -> str:
     if not _is_safe_segment(slug):
         raise ValueError(f"небезопасный feature-slug: {slug!r} (запрещены '/', '..', '~', абсолютный, пустой)")
     return slug
+
+
+# Jira issue key вида PROJ-123: project-key начинается с буквы, затем буквы/цифры (≥2 симв.),
+# дефис, номер. Согласован с прозой feature-pipeline/SKILL.md §2 ([A-Z]+-\d+), но допускает
+# цифры в project-key.
+JIRA_KEY_RE = re.compile(r"[A-Z][A-Z0-9]+-\d+")
+
+
+def is_jira_key(s) -> bool:
+    """True, если s — Jira issue key вида PROJ-123 (полное совпадение)."""
+    return isinstance(s, str) and bool(JIRA_KEY_RE.fullmatch(s))
 
 
 def docs_base(project_root: Path, cfg: Optional[dict] = None) -> Path:
