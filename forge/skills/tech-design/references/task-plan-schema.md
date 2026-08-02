@@ -81,6 +81,7 @@
 | `tasks[].id` | короткий стабильный ID (`T1`, `T2`…); используется в `pipeline-state` как `04-build-<id>` |
 | `tasks[].modules` | модули, затрагиваемые задачей (**массив** — задача бывает кросс-модульной: напр. сущность в `service-X` + DTO в `utils-web`). Допустима строка `tasks[].module` как одно-модульное сокращение |
 | `tasks[].layers` | из словаря: `migration`, `entity`, `repository`, `dto`, `mapper`, `service`, `controller`, `scheduler`. Только реально затрагиваемые |
+| `tasks[].no_test` | **опционально** (bool). `true` → задача освобождается от RED-гейта и покрытия — точечный escape-hatch для «не про код» задач, не ложащихся в словарь слоёв. Обычно НЕ нужен: слои `migration`/`entity`/`dto`/`repository` уже освобождены через `quality.no_test_layers`. Смешанная задача со слоем `service`/`controller`/`scheduler` тестируется, если только не выставлен явный `no_test:true` |
 | `tasks[].artifacts` | для multi-module — пути **от корня репо** (напр. `service/dbservice/src/main/java/...`, `utils/web/src/main/java/...`); для одного модуля допустимо относительно его `src/main/java` (или `src/main/resources` для миграций) |
 | `tasks[].acceptance` | проверяемые утверждения из критериев приёмки BRD; основа тестов |
 | `tasks[].sdd_ref` | **обязателен** (гейт `check_sdd.py` валит пустой): якорь на раздел/сценарий `sdd.md` (напр. `sdd.md#запуск-экспорта`) — трассировка задача → спецификация |

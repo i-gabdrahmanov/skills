@@ -34,6 +34,12 @@ if str(_PSTATE_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_PSTATE_SCRIPTS))
 import junit_report
 
+# pipeline_phases co-located (тот же каталог) — единый предикат test-exemption
+_SELF_DIR = Path(__file__).resolve().parent
+if str(_SELF_DIR) not in sys.path:
+    sys.path.insert(0, str(_SELF_DIR))
+import pipeline_phases
+
 # cmd.exe (куда на Windows всегда уходит shell=True, вне зависимости от оболочки, из
 # которой запущен сам python) не умеет ни в shebang, ни в "./" без расширения.
 _GRADLEW = "gradlew.bat" if sys.platform == "win32" else "./gradlew"
@@ -91,12 +97,20 @@ def _apply_test_filter(test_cmd: str, build_system: str, test_filter: str | None
     return f'{test_cmd} --tests "*{test_filter}*"'
 
 
-def _extract_tasks(plan: dict, task_filter: str | None = None) -> list[dict]:
+def _extract_tasks(plan: dict, task_filter: str | None = None, cfg: dict | None = None) -> list[dict]:
+    """Задачи, для которых нужен RED: пишут реальный код (src/main/java) И не освобождены.
+
+    Освобождение — единый предикат pipeline_phases (task.no_test / quality.no_test_layers). Раньше
+    триггер был по подстроке 'src/main' в артефакте, из-за чего задачи-миграции (changeset в
+    src/main/resources) ложно затягивались в RED-гейт.
+    """
     tasks = plan.get("tasks", [])
     if task_filter:
         tasks = [t for t in tasks if t.get("id") == task_filter]
-    return [t for t in tasks if "main" in str(t.get("layers", "")) or
-            any("main/java" in a or "src/main" in a for a in t.get("artifacts", []))]
+    cfg = cfg or {}
+    return [t for t in tasks
+            if pipeline_phases.task_touches_code(t)
+            and not pipeline_phases.task_is_test_exempt(t, cfg)]
 
 
 def main() -> int:
@@ -122,9 +136,9 @@ def main() -> int:
     test_filter = args.test_filter
     full_test_cmd = _apply_test_filter(test_cmd, build_system, test_filter)
 
-    tasks = _extract_tasks(plan, args.task)
+    tasks = _extract_tasks(plan, args.task, cfg)
     if not tasks:
-        print(f"RED gate: PASS (нет задач с main-слоем), filter={args.task}")
+        print(f"RED gate: PASS (нет задач, требующих тестов — не код/освобождены), filter={args.task}")
         return 0
 
     # Шаг 1: компиляция тестов (обязательно ДО тестов — ранний выход при ошибке)

@@ -134,6 +134,11 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
     "test_command": "./gradlew test jacocoTestReport",
     "coverage_report": "build/reports/jacoco/test/jacocoTestReport.xml",
     "jacoco_configured": false,
+    "no_test_layers": null,          // слои task-plan, освобождаемые от RED-гейта (tdd-guard/
+                                      // check_tests_red/red-judge). null → migration/entity/dto/
+                                      // repository (совпадает с coverage-исключениями). Задача
+                                      // exempt, если ВСЕ её слои в списке ЛИБО task.no_test=true.
+                                      // src/main/resources (liquibase/yml) не гейтится независимо
     "eval_enabled": true,            // Eval-Driven Development: eval-guard хук блокирует
                                       // запись в src/main/ пока eval'ы задачи не пройдены
     "eval_threshold": 0.95,          // Порог прохождения eval'ов по умолчанию
