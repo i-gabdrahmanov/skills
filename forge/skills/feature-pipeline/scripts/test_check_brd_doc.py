@@ -56,6 +56,12 @@ class TestCheckBrdDoc(unittest.TestCase):
         errors, _ = m.check(no_criteria)
         self.assertTrue(any("критери" in e for e in errors), errors)
 
+    def test_cjk_char_fails(self):
+        # китайские/CJK-символы (charset_hygiene) — блок
+        bad = _GOOD + "\nСервис 订单 обрабатывает заявки.\n"
+        errors, _ = m.check(bad)
+        self.assertTrue(any("CJK" in e for e in errors), errors)
+
 
 if __name__ == "__main__":
     unittest.main()

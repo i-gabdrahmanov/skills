@@ -258,6 +258,13 @@ def build_config(root):
             "eval_threshold": 0.95,           # min доля зелёных eval'ов задачи (см. build_evals_from_design.py)
             "compile_test_command": f"{_GRADLEW} compileTestJava" if gradle else "mvn -q test-compile",
             "test_layer": "service-unit",     # по умолчанию ТОЛЬКО Mockito unit; НЕ писать JPA/@DataJpaTest/@SpringBootTest (red-judge блокирует)
+            "charset_gate": {                 # чистота текста спеки (charset_hygiene): китайские/CJK → блок; мусор → warn
+                "enabled": True,
+                "cjk": "block",               # китайские/CJK-символы в brd/sdd/tech-design/мастере — блок
+                "mojibake": "warn",           # символ замены U+FFFD (битая перекодировка)
+                "zero_width": "warn",         # невидимые/zero-width/bidi-символы
+                "mixed_script": "warn",       # слова кириллица+латиница (homoglyph, «странные слова»)
+            },
         },
         "evidence": {
             "threshold": 0.95,                # min completeness evidence bundle перед доставкой

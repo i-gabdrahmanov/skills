@@ -22,6 +22,8 @@ import json
 import re
 from pathlib import Path
 
+import charset_hygiene  # чистота текста: китайские/CJK-символы (co-located, тот же скилл)
+
 # Каждая группа = набор синонимов; хотя бы один должен встретиться (иначе секции нет).
 REQUIRED_SECTION_GROUPS = [
     ("контекст", "предпосылк", "проблем", "предыстор"),
@@ -65,6 +67,12 @@ def check(text_raw: str) -> tuple[list[str], list[str]]:
     if _SQL_DDL.search(text_raw):
         errors.append("в brd.md есть SQL DDL / Liquibase changeSet — схему БД описывает "
                       "tech-design, BRD — только бизнес-смысл данных")
+
+    # Чистота текста: китайские/CJK-символы (блок) + мусор (warn). Правописание валидной
+    # кириллицы — на LLM-судье brd-judge; здесь только Unicode-детерминизм (без словаря).
+    ch_errors, ch_warnings = charset_hygiene.scan(text_raw)
+    errors.extend(ch_errors)
+    warnings.extend(ch_warnings)
     return errors, warnings
 
 
