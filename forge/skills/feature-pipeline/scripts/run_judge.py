@@ -44,6 +44,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import skill_paths  # единый реестр путей (references/skill-paths.json)
 import check_brd_doc as _brd_doc  # структурный слой судьи БТ (co-located, Thrust 3)
+import charset_hygiene  # чистота текста спеки: китайские/CJK-символы (co-located)
 import pipeline_phases as _pp  # мастер-флаг BRD_ENABLED (бизнес-анализ вкл/выкл)
 
 SCHEMA_VERSION = "feature-pipeline/judge-verdict@1"
@@ -912,6 +913,49 @@ def _build_floor() -> tuple:
     return checks, blocking, warnings
 
 
+def _charset_floor(files: list, quality_cfg: dict) -> tuple:
+    """Детерминированный пол чистоты текста спеки: китайские/CJK-символы (блок по дефолту)
+    + текстовый мусор (mojibake/zero-width/homoglyph — warn). Работает даже без/при битом
+    LLM-вердикте: модель не может «протащить» иероглифы, объявив passed=true (важно на Qwen).
+
+    quality_cfg — секция quality из ground/pipeline.json; настройки в quality.charset_gate
+    (enabled/cjk/mojibake/zero_width/mixed_script). Правописание валидной кириллицы —
+    отдельно на LLM-судье (brd-judge/spec-judge), тут только Unicode-детерминизм."""
+    checks: list = []
+    blocking: list = []
+    warnings: list = []
+    gate_cfg = quality_cfg.get("charset_gate", {}) if isinstance(quality_cfg, dict) else {}
+    if isinstance(gate_cfg, dict) and gate_cfg.get("enabled", True) is False:
+        return checks, blocking, warnings
+
+    scanned = 0
+    for f in files:
+        if f is None:
+            continue
+        p = Path(f)
+        if not p.exists():
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        scanned += 1
+        errs, warns = charset_hygiene.scan(text, gate_cfg if isinstance(gate_cfg, dict) else None)
+        blocking.extend(f"{p.name}: {e}" for e in errs)
+        warnings.extend(f"{p.name}: {w}" for w in warns)
+
+    if scanned == 0:
+        return checks, blocking, warnings
+    name = "Чистота текста: нет китайских/CJK-символов"
+    if blocking:
+        checks.append({"name": name, "status": "FAIL",
+                       "detail": "; ".join(blocking[:5])[:300], "severity": "error"})
+    else:
+        checks.append({"name": name, "status": "PASS",
+                       "detail": f"проверено документов: {scanned}", "severity": "error"})
+    return checks, blocking, warnings
+
+
 def check_build(slug: str, feature_dir: Path | None) -> dict:
     """build-judge — гибрид: вердикт LLM-субагента + детерминированный пол (stubs).
 
@@ -1097,6 +1141,20 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
             blocking_issues.append(
                 "нет требования-мастера (docs.master.enabled) — запусти merge_delta_to_master")
 
+    # Пол чистоты текста: китайские/CJK-символы в tech-design.md, task-plan.json и мастере (блок).
+    _charset_files = [tech_path, task_plan_path]
+    try:
+        _ms = skill_paths.master_spec_path(PROJECT_ROOT)
+        if _ms and _ms.exists():
+            _charset_files.append(_ms)
+    except Exception:  # noqa: BLE001
+        pass
+    cf_checks, cf_block, cf_warn = _charset_floor(
+        _charset_files, pcfg.get("quality", {}) if isinstance(pcfg, dict) else {})
+    checks.extend(cf_checks)
+    blocking_issues.extend(cf_block)
+    warnings.extend(cf_warn)
+
     passed = len(blocking_issues) == 0
     summary = f"{sum(1 for c in checks if c['status'] == 'PASS')}/{len(checks)} checks passed. "
     if blocking_issues:
@@ -1149,6 +1207,13 @@ def check_sdd_doc(slug: str, feature_dir: Path | None) -> dict:
         checks.append({"name": "check_sdd_doc", "status": "FAIL",
                        "detail": f"sdd.md not found at {sdd_path}", "severity": "error"})
         blocking_issues.append(f"SDD (sdd.md) не найден: {sdd_path}")
+
+    # Пол чистоты текста: китайские/CJK-символы в sdd.md (блок) + мусор (warn).
+    _qual = (_load_json(GROUND_DIR / "pipeline.json") or {}).get("quality", {})
+    cf_checks, cf_block, cf_warn = _charset_floor([sdd_path], _qual)
+    checks.extend(cf_checks)
+    blocking_issues.extend(cf_block)
+    warnings.extend(cf_warn)
 
     passed = len(blocking_issues) == 0
     summary = f"{sum(1 for c in checks if c['status'] == 'PASS')}/{len(checks)} checks passed"
@@ -1263,6 +1328,14 @@ def check_design(slug: str, feature_dir: Path | None) -> dict:
                 checks.append({"name": "check_adr", "status": "FAIL",
                                "detail": "timeout (60s)", "severity": "error"})
                 blocking_issues.append("check_adr: timeout")
+
+    # Пол чистоты текста: китайские/CJK-символы в tech-design.md и task-plan.json (блок) + мусор.
+    design_md = feature_dir / "tech-design.md" if feature_dir else None
+    _qual = pcfg.get("quality", {}) if isinstance(pcfg, dict) else {}
+    cf_checks, cf_block, cf_warn = _charset_floor([design_md, taskplan_path], _qual)
+    checks.extend(cf_checks)
+    blocking_issues.extend(cf_block)
+    warnings.extend(cf_warn)
 
     passed = len(blocking_issues) == 0
     summary = f"{sum(1 for c in checks if c['status'] == 'PASS')}/{len(checks)} checks passed"
