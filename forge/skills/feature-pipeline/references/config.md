@@ -322,7 +322,7 @@ Git-политика (forge-no-delivery): forge **пишет** обновлен�
 
 | Поле | Значение |
 |---|---|
-| `adr.enabled` | вести ADR-файлы и гейтить их на 02-design (`check_adr` в design-judge). Дефолт false |
+| `adr.enabled` | учитывать существующие ADR как вход-ограничение tech-design, вести новые ADR-файлы и гейтить их на 02-design (`check_adr` в design-judge). Дефолт false |
 | `adr.enforce_couplings` | новая межмодульная связка проходит 05-verify только с accepted ADR (см. ниже). Дефолт false |
 | `docs.master.adr_subdir` | подпапка ADR под master-базой (дефолт `adr`) |
 
