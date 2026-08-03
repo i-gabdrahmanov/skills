@@ -160,6 +160,13 @@ def main() -> int:
         check("нет components.json → reuses не валит (pass + warn)",
               rc == 0 and any("components.json" in w for w in j.get("warnings", [])), raw)
 
+    # 14. no_test: валидный bool → pass без предупреждений; не-bool → warning (не валит)
+    rc, j, raw = run(_plan(tasks=[_task("T1", no_test=True)]))
+    check("no_test:true → pass", rc == 0 and j.get("status") == "pass", raw)
+    rc, j, raw = run(_plan(tasks=[_task("T1", no_test="yes")]))
+    check("no_test не-bool → warning, не fail",
+          rc == 0 and any("no_test" in w for w in j.get("warnings", [])), raw)
+
     print(f"\n{PASSED} passed, {FAILED} failed")
     return 1 if FAILED else 0
 

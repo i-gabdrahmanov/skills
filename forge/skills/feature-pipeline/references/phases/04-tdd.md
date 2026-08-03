@@ -28,6 +28,25 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/module_tests.py snap
 её сверяет регресс-гейт в бриф `05-verify.md` §8. Если затронутый модуль уже красный — это зафиксируется как
 pre-existing и НЕ будет считаться твоей виной (но видно в отчёте).
 
+### 7.0.1 Освобождённые задачи (test-exempt) — БЕЗ RED-шага
+
+Задачи, которые НЕ пишут тестируемый код, не проходят RED-цикл: **НЕ заводи** для них
+`04-test-<id>`, red-judge и record_gate(check_tests_red) — идут сразу в GREEN (`04-build-<id>`,
+он по-прежнему проходит build-judge + reuse-judge + check_build).
+
+Задача **test-exempt**, если выполнено ЛЮБОЕ:
+- `task.no_test == true` (разовое исключение в task-plan для «других не тестируемых» задач), ИЛИ
+- ВСЕ её `layers` ∈ `pipeline.json quality.no_test_layers` (дефолт: `migration`, `entity`, `dto`,
+  `repository`). Смешанная задача (напр. `repository`+`service`) — **НЕ** exempt, RED нужен.
+
+Типовые exempt: liquibase-миграции (`migration`), JPA-сущности (`entity`), DTO, Spring Data
+репозитории (`repository`). Слои `service`/`controller`/`scheduler` **всегда** требуют RED.
+
+> Это оптимизация плана шагов — детерминированный пол дублируют `check_tests_red` (PASS для exempt)
+> и `tdd-guard` (пропускает запись exempt-задачи и любую запись в `src/main/resources`: liquibase/
+> yml). Настройка списка — через config-helper («не тестируй миграции и jpa-репо» →
+> `quality.no_test_layers`).
+
 ### 7.1 Per-task: RED (субагент-тестописатель)
 
 > **ВАЖНО: TDD RED = тесты ОБЯЗАНЫ падать.** Если метод/класс уже частично реализован

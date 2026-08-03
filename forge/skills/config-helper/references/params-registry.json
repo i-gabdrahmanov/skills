@@ -83,6 +83,16 @@
       "aliases": ["исключения покрытия", "coverage exclude", "глобы покрытия", "не считать покрытие"]
     },
     {
+      "id": "quality.no_test_layers",
+      "file": "pipeline",
+      "path": "quality.no_test_layers",
+      "type": "list", "default": null,
+      "category": "quality", "sensitive": false,
+      "title": "Слои без RED-теста",
+      "description": "Список слоёв task-plan, освобождаемых от RED-гейта (tdd-guard/check_tests_red/red-judge). null → дефолт migration/entity/dto/repository (совпадает с тем, что coverage уже исключает). service/controller/scheduler игнорируются (всегда тестируются). Задача exempt, если ВСЕ её слои в списке, либо у задачи task.no_test=true. Ресурсы (src/main/resources: liquibase, yml) не гейтятся независимо от списка",
+      "aliases": ["без тестов", "не тестировать слои", "no test layers", "освободить от red", "миграции без тестов", "jpa repo без тестов", "слои без тестов", "red исключения"]
+    },
+    {
       "id": "quality.module_dep_policy",
       "file": "pipeline",
       "path": "quality.module_dep_policy",

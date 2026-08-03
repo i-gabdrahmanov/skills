@@ -36,6 +36,39 @@ def _payload(project: Path, cwd: Path) -> str:
     })
 
 
+def _payload_path(project: Path, rel: str) -> str:
+    return json.dumps({
+        "hook_event_name": "PreToolUse", "cwd": str(project), "tool_name": "Write",
+        "tool_input": {"file_path": str(project / rel), "content": "x"},
+    })
+
+
+def _seed_taskplan(project: Path, tasks: list) -> None:
+    d = project / "docs" / "feature-pipeline" / "exp"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "task-plan.json").write_text(
+        json.dumps({"feature_slug": "exp", "title": "t", "tasks": tasks}), encoding="utf-8")
+
+
+def _seed_full(project: Path, steps: list, no_test_layers=None) -> None:
+    """Full-манифест feature-pipeline (namespace exp) + pipeline.json (docs=in-repo)."""
+    d = project / "ground" / "statements" / "feature-pipeline" / "exp"
+    d.mkdir(parents=True, exist_ok=True)
+    quality = {"tdd": True, "tdd_integration_skip": False}
+    if no_test_layers is not None:
+        quality["no_test_layers"] = no_test_layers
+    (project / "ground" / "pipeline.json").write_text(json.dumps({
+        "quality": quality,
+        "docs": {"mode": "in-repo", "docs_path": "docs", "feature_subdir": "feature-pipeline"},
+    }), encoding="utf-8")
+    (d / "manifest.json").write_text(json.dumps({"steps": steps}), encoding="utf-8")
+
+
+def _run(payload: str) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(HOOK)], input=payload,
+                          capture_output=True, text=True, timeout=30)
+
+
 class T(unittest.TestCase):
     def test_module_loads(self):
         sys.path.insert(0, str(HOOK.parent))
@@ -57,6 +90,63 @@ class T(unittest.TestCase):
                                capture_output=True, text=True, timeout=30)
             self.assertEqual(r.returncode, 2, r.stderr)
             self.assertIn("lite-red", r.stderr)
+
+    def test_allows_resources_migration(self):
+        """Механизм A: запись в src/main/resources (liquibase changeset) НЕ гейтится RED,
+        даже при незакрытом RED-шаге — ресурсы не покрываются unit-тестами."""
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td).resolve()
+            _seed_red_pending(project)  # lite-red pending
+            r = _run(_payload_path(project, "svc/src/main/resources/db/changelog/x.xml"))
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_allows_exempt_task_without_red_step(self):
+        """Механизм B: код exempt-задачи (migration+entity, все слои в дефолте) пишется без
+        04-test-<id>. Хук сам резолвит task-plan и освобождает задачу."""
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td).resolve()
+            _seed_taskplan(project, [
+                {"id": "T1", "layers": ["migration", "entity"],
+                 "artifacts": ["src/main/resources/db/changelog/x.xml", "entity/Foo.java"]},
+            ])
+            _seed_full(project, [{"id": "02-design", "status": "completed"},
+                                 {"id": "04-build-T1", "status": "in_progress"}])
+            r = _run(_payload_path(project, "svc/src/main/java/entity/Foo.java"))
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_blocks_nonexempt_task_without_red(self):
+        """Fail-closed сохранён: service-задача (не exempt) с незакрытым 04-test-<id> — блок."""
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td).resolve()
+            _seed_taskplan(project, [
+                {"id": "T2", "layers": ["service"], "artifacts": ["service/BarService.java"]},
+            ])
+            _seed_full(project, [{"id": "02-design", "status": "completed"},
+                                 {"id": "04-test-T2", "status": "pending"},
+                                 {"id": "04-build-T2", "status": "in_progress"}])
+            r = _run(_payload_path(project, "svc/src/main/java/service/BarService.java"))
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("04-test-T2", r.stderr)
+
+    def test_repository_exempt_by_default_but_gated_when_removed(self):
+        """repository освобождён дефолтом; если сузить no_test_layers, RED снова требуется."""
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td).resolve()
+            _seed_taskplan(project, [
+                {"id": "T3", "layers": ["repository"], "artifacts": ["repository/FooRepository.java"]},
+            ])
+            steps = [{"id": "02-design", "status": "completed"},
+                     {"id": "04-test-T3", "status": "pending"},
+                     {"id": "04-build-T3", "status": "in_progress"}]
+            payload = _payload_path(project, "svc/src/main/java/repository/FooRepository.java")
+            # дефолт (repository exempt) → пропуск
+            _seed_full(project, steps)
+            self.assertEqual(_run(payload).returncode, 0)
+            # сузили список (только migration) → repository снова гейтится
+            _seed_full(project, steps, no_test_layers=["migration"])
+            r = _run(payload)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("04-test-T3", r.stderr)
 
     def test_blocks_when_cwd_is_subdir(self):
         """Пин m1: root = git-toplevel(cwd), а не сырой cwd. Раньше при cwd=подкаталог

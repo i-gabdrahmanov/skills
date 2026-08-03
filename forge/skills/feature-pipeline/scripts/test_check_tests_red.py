@@ -55,14 +55,53 @@ class TestExtractTasks(unittest.TestCase):
         self.assertEqual(len(tasks), 0)
 
     def test_filter_by_task(self):
-        """--task T2 — только T2."""
+        """--task T2 — только T2 (java-слой service)."""
         plan = {"tasks": [
-            {"id": "T1", "layers": ["main"]},
-            {"id": "T2", "layers": ["main"]},
+            {"id": "T1", "layers": ["service"]},
+            {"id": "T2", "layers": ["service"]},
         ]}
         tasks = ctr._extract_tasks(plan, "T2")
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]["id"], "T2")
+
+    def test_service_layer_requires_red(self):
+        """Одномодульная service-задача (артефакт относителен к src/main/java) → нужен RED.
+        Раньше без 'main/java' в пути и без псевдо-слоя 'main' она молча выпадала из гейта."""
+        plan = {"tasks": [{"id": "T1", "layers": ["service"],
+                           "artifacts": ["service/FooService.java"]}]}
+        self.assertEqual(len(ctr._extract_tasks(plan)), 1)
+
+    def test_migration_only_exempt(self):
+        """Задача-миграция (changeset в src/main/resources) → RED не требуется (exempt по дефолту)."""
+        plan = {"tasks": [{"id": "T1", "layers": ["migration"],
+                           "artifacts": ["src/main/resources/db/changelog/x.xml"]}]}
+        self.assertEqual(ctr._extract_tasks(plan), [])
+
+    def test_data_holder_layers_exempt_by_default(self):
+        """entity/dto/repository-only задачи освобождены дефолтом no_test_layers."""
+        for lay in ("entity", "dto", "repository"):
+            plan = {"tasks": [{"id": "T1", "layers": [lay],
+                               "artifacts": [f"{lay}/Foo.java"]}]}
+            self.assertEqual(ctr._extract_tasks(plan), [], f"{lay} должен быть exempt")
+
+    def test_mixed_task_not_exempt(self):
+        """Смешанная задача repository+service — НЕ exempt (часть про service тестируется)."""
+        plan = {"tasks": [{"id": "T1", "layers": ["repository", "service"],
+                           "artifacts": ["service/FooService.java"]}]}
+        self.assertEqual(len(ctr._extract_tasks(plan)), 1)
+
+    def test_no_test_flag_exempts(self):
+        """task.no_test=true освобождает даже service-задачу (разовый escape-hatch)."""
+        plan = {"tasks": [{"id": "T1", "layers": ["service"], "no_test": True,
+                           "artifacts": ["service/FooService.java"]}]}
+        self.assertEqual(ctr._extract_tasks(plan), [])
+
+    def test_custom_no_test_layers_via_cfg(self):
+        """quality.no_test_layers сужает список: repository снова требует RED."""
+        plan = {"tasks": [{"id": "T1", "layers": ["repository"],
+                           "artifacts": ["repository/FooRepository.java"]}]}
+        cfg = {"quality": {"no_test_layers": ["migration"]}}
+        self.assertEqual(len(ctr._extract_tasks(plan, None, cfg)), 1)
 
     def test_empty_tasks(self):
         """Пустой список → []."""

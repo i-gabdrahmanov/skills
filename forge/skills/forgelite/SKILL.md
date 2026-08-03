@@ -165,7 +165,14 @@ prompt:
 Субагент закрывает `lite-design` сам (SubagentStop → `state-recorder`).
 
 ## 5. TDD RED — субагент → `lite-red`
-Хук `tdd-guard` не даст писать `src/main/`, пока `lite-red` не закрыт.
+Хук `tdd-guard` не даст писать `src/main/java/`, пока `lite-red` не закрыт (ресурсы —
+`src/main/resources`: liquibase changeset, yml — не гейтятся, RED для них не нужен).
+
+> **Задача не про код → БЕЗ `lite-red`.** Если все слои задачи ∈ `quality.no_test_layers`
+> (дефолт `migration`/`entity`/`dto`/`repository`) или у неё `no_test:true` в task-plan —
+> RED не пиши: **не заводи шаг `lite-red`**, иди сразу в `lite-green`. Без `lite-red` в
+> манифесте хук `tdd-guard` пропустит запись `src/main/java/` этой задачи (test-exempt).
+
 ```
 description: "TDD RED tests for <JIRA-KEY>"
 subagent_type: general-purpose

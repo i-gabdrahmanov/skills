@@ -123,6 +123,58 @@ def requires_no_silent_skip(step_id) -> bool:
     return isinstance(step_id, str) and step_id.startswith(REQUIRED_STEP_PREFIXES)
 
 
+# ── Освобождение задач от RED-теста/покрытия по типу (слои/флаг) ───────────────────────
+# Прецедент — coverage-гейт (run_judge DEFAULT_SERVICE_UNIT_COVERAGE_EXCLUDES): не тестируемые
+# слои не должны требовать RED, иначе гейт требует невозможного (для DDL/data-holder unit-теста
+# нет). Задача exempt, если task.no_test=true ЛИБО ВСЕ её слои ∈ quality.no_test_layers. Дефолт
+# совпадает с тем, что coverage уже исключает (data-holders / framework-generated). service/
+# controller/scheduler НИКОГДА не в дефолте. Правило «ВСЕ слои» — fail-closed: смешанная задача
+# (repository+service) тестируется. ЕДИНЫЙ предикат — импортируют check_tests_red, run_judge,
+# tdd-guard (тем же best-effort паттерном, что судейская маска).
+NO_TEST_LAYERS_DEFAULT = ["migration", "entity", "dto", "repository"]
+
+# Слои, дающие реальный Java-код (src/main/java). migration → src/main/resources (не код).
+_JAVA_LAYERS = frozenset({"entity", "repository", "dto", "mapper", "service", "controller", "scheduler"})
+
+
+def resolve_no_test_layers(cfg: dict) -> list:
+    """quality.no_test_layers из pipeline.json; None/не-список → дефолт (как coverage_exclude_globs)."""
+    v = ((cfg or {}).get("quality") or {}).get("no_test_layers")
+    return v if isinstance(v, list) else list(NO_TEST_LAYERS_DEFAULT)
+
+
+def task_is_test_exempt(task: dict, cfg: dict) -> bool:
+    """Освобождена ли задача от RED-гейта/покрытия: явный no_test ЛИБО ВСЕ слои в no_test_layers.
+
+    Пустой layers → НЕ exempt (fail-closed: непроклассифицированная задача тестируется).
+    """
+    if not isinstance(task, dict):
+        return False
+    if task.get("no_test") is True:
+        return True
+    layers = task.get("layers") or []
+    if not layers:
+        return False
+    ntl = resolve_no_test_layers(cfg)
+    return all(lay in ntl for lay in layers)
+
+
+def task_touches_code(task: dict) -> bool:
+    """Пишет ли задача реальный код — по java-слоям или артефакту под main/java.
+
+    ЕДИНЫЙ сигнал «код» — java-слои (service/controller/... — одномодульные артефакты в task-plan
+    относительны к src/main/java, поэтому по пути их не отличить, а по слою — точно) плюс
+    подстрока main/java в артефакте (мульти-модульные полные пути). migration → changeset в
+    src/main/resources (не java) — НЕ код. src/test/... — тоже не main-код (не содержит main/java).
+    """
+    if not isinstance(task, dict):
+        return False
+    for a in task.get("artifacts", []) or []:
+        if isinstance(a, str) and "main/java" in a.replace("\\", "/"):
+            return True
+    return any(lay in _JAVA_LAYERS for lay in (task.get("layers") or []))
+
+
 def _task_id_after(step_id, prefix: str):
     """task-id из id шага по префиксу ('04-build-T1' → 'T1'); иначе None."""
     if isinstance(step_id, str) and step_id.startswith(prefix):

@@ -590,6 +590,22 @@ def check_red(slug: str, feature_dir: Path | None) -> dict:
         except (json.JSONDecodeError, OSError):
             pass
 
+    # test-exempt: если у фичи нет ни одной задачи, пишущей код и не освобождённой (no_test /
+    # quality.no_test_layers) — RED не требуется. Belt-and-suspenders для standalone-вызова
+    # (обычно 04-test для exempt-задач не заводится, но судья мог быть вызван напрямую).
+    _cfg = _load_json(pipeline_json_path) or {}
+    _tp = _load_json(feature_dir / "task-plan.json") if feature_dir else None
+    if _tp:
+        _relevant = [t for t in _tp.get("tasks", [])
+                     if _pp.task_touches_code(t) and not _pp.task_is_test_exempt(t, _cfg)]
+        if not _relevant:
+            return _make_verdict(
+                "red-judge", slug, True,
+                [{"name": "test:exempt", "status": "PASS",
+                  "detail": "все задачи фичи test-exempt (no_test_layers/no_test) — RED не требуется",
+                  "severity": "info"}],
+                [], [], "0/0 — нет задач, требующих RED (test-exempt)")
+
     checks = []
     blocking_issues = []
     warnings: list[str] = []

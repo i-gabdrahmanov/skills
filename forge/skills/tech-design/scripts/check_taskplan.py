@@ -158,6 +158,8 @@ def validate(plan: dict, known_modules: set[str] | None, scan_given: bool,
         for lay in layers:
             if lay not in LAYERS:
                 warnings.append(f"task {loc}: слой '{lay}' вне словаря {sorted(LAYERS)}")
+        if "no_test" in t and not isinstance(t.get("no_test"), bool):
+            warnings.append(f"task {loc}: no_test должен быть true/false (получено {t.get('no_test')!r})")
 
     for t in tasks:
         for d in t.get("depends_on", []):
