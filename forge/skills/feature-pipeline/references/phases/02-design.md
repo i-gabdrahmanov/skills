@@ -49,6 +49,7 @@ agent(
 - Design context (компактная выжимка grounding под фичу): <путь к design-context.json>
 - Grounding (полный — для редких справок): <путь к grounding-excerpt.json>
 - BRD (первоисточник, только как справка): <путь к brd.md>
+- ADR (только если adr.enabled): каталог <master_base>/adr/ — принятые арх-решения как ОГРАНИЧЕНИЕ входа
 
 Шаг 1: Проектируй ПО sdd.md и design-context. К grounding-excerpt.json обращайся
         только если design-context не содержит нужной информации. BRD — лишь справка.
@@ -56,9 +57,11 @@ agent(
   1. tech-design.md — по шаблону `<project>/.gigacode/skills/tech-design/references/design-template.md`
   2. task-plan.json — по шаблону `<project>/.gigacode/skills/tech-design/references/task-plan-schema.md`
      Каждая задача: непустой acceptance (Given-When-Then) + sdd_ref на раздел sdd.md.
-  ADR (только если adr.enabled в pipeline.json): значимые арх-решения оформи ADR-файлами в
-     <master_base>/adr/NNNN-<slug>.md по adr-template.md, а в §8 tech-design и §11 sdd проставь
-     ссылки ADR-NNNN. Мелкие развилки — инлайн, не плоди ADR.
+  ADR (только если adr.enabled в pipeline.json): СНАЧАЛА прочитай существующие ADR в <master_base>/adr/
+     — accepted = ограничения дизайна, не противоречь молча; релевантные процитируй в §8 как ADR-NNNN.
+     Значимые НОВЫЕ арх-решения оформи ADR-файлами в <master_base>/adr/NNNN-<slug>.md по adr-template.md,
+     ссылки ADR-NNNN — в §8 tech-design и §11 sdd. Конфликт с accepted ADR — через супер-седес, не игнором.
+     Мелкие развилки — инлайн, не плоди ADR.
 
 Gate (обязательно, перед завершением):
   python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py design <slug> --project-root <project>
