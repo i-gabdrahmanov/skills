@@ -176,7 +176,7 @@ def _bash_mutation_paths(cmd: str) -> list[str]:
 
 
 def _append(path: str, text: str) -> None:
-    """Конкурентный append (flock/msvcrt) — как log-agent._append."""
+    """Конкурентный append (flock/msvcrt)."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         try:

@@ -72,6 +72,10 @@ class TestDocsHooksConsistency(unittest.TestCase):
         raw = SETTINGS.read_text(encoding="utf-8")
         self.assertNotIn("subagent-enforcer", raw, "subagent-enforcer должен быть удалён из settings")
         self.assertNotIn("gate-resolver", raw, "gate-resolver должен быть удалён из settings")
+        # Логи и бюджет сняты целиком: ни хуков, ни их имён в разводке.
+        self.assertNotIn("budget-meter", raw, "budget-meter удалён — не должен быть в settings")
+        self.assertNotIn("log-agent", raw, "log-agent удалён — не должен быть в settings")
+        self.assertNotIn("agent-logger", raw, "agent-logger (log-agent) удалён — не должен быть в settings")
 
     def test_every_wired_hook_in_forge_roster(self):
         """Каждый проведённый в settings хук обязан присутствовать в ростер-таблице FORGE.md.

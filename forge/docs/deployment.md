@@ -120,7 +120,6 @@ bash uninstall.sh /path/to/target-project --purge-state   # + снести ра�
 | чужие хуки в `settings.json` | хук оператора вне `.gigacode/hooks/` — не наш enforcement, снимать не вправе |
 | `*.bak` | бэкапы, включая первозданный `settings.json.bak` (каким конфиг был ДО установки Forge) |
 | `refs/forge/*` | git-чекпойнты отката. Сносит только `--purge-state` |
-| `<home>/ai-logs-archive/` | общий архив логов вне проекта, шарится между проектами |
 
 `--purge-state` дополнительно сносит `ground/` и git-refs чекпойнтов (`refs/forge/*`).
 Обычные коммиты, ветки и HEAD проекта не затрагиваются. Это необратимо — сначала `--dry-run`.

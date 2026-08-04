@@ -88,13 +88,10 @@ def find_project_root(cwd: Optional[Path] = None) -> Path:
     return cwd
 
 
-# ── Логи прогона: единый каталог + конкурентно-безопасный append ─────────────
-# Общие для log-agent.py и budget-meter.py. Раньше каждый хук держал СВОЮ копию
-# _run_dir и разъезжался: log-agent писал в run-<session>/, а budget-meter — по
-# старой схеме (<feature>/iter-N/ или _adhoc/<ts>-<sess>/), поэтому budget.json
-# улетал в другой каталог, чем agents.log/.jsonl. Теперь оба зовут run_dir()
-# отсюда → «один прогон = одна папка», и оба пишут в общий agents.log/.jsonl
-# через append_locked() под одним flock.
+# ── Каталог прогона + конкурентно-безопасный append ──────────────────────────
+# Общие файловые утилиты. Исходные потребители (log-agent/budget-meter, писавшие
+# agents.log/.jsonl) удалены; функции оставлены как переиспользуемые хелперы —
+# `append_locked` покрыт кросс-платформенным тестом файл-лока (test_windows_file_lock_fallback).
 
 def _safe_run_key(s) -> str:
     """Ключ каталога прогона без сюрпризов файловой системы."""
@@ -103,11 +100,7 @@ def _safe_run_key(s) -> str:
 
 
 def git_toplevel(cwd: str = "") -> str:
-    """Корень репо для логирующих хуков: git toplevel от cwd, иначе cwd/pwd.
-
-    log-agent и budget-meter обязаны резолвить корень ОДИНАКОВО, иначе их run-dir
-    разъедется. Это единый источник этой логики (раньше — две копии `_project_root`).
-    """
+    """Корень репо: git toplevel от cwd, иначе cwd/pwd."""
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -140,9 +133,8 @@ def run_dir(root, session_id: str = "") -> Path:
 def append_locked(path, text: str) -> None:
     """Конкурентно-безопасный append под flock (POSIX) / msvcrt.locking (Windows).
 
-    Общий для log-agent и budget-meter: на PostToolUse/SubagentStop/Stop оба хука
-    дописывают в ОДИН agents.log/.jsonl прогона, поэтому запись обязана идти под
-    единым замком. Каталог создаётся при необходимости.
+    Запись идёт под единым замком (несколько писателей в один файл), каталог
+    создаётся при необходимости.
     """
     path = str(path)
     os.makedirs(os.path.dirname(path), exist_ok=True)

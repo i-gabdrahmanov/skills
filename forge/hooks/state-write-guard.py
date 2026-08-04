@@ -37,7 +37,7 @@ BASH_TOOLS = ("Bash", "run_shell_command")
 # judges/ — вердикты судей: подделанный Write с produced_by:"run_judge" проходил провенанс-
 # проверку update._check_judges (легитимный путь — только run_judge.py). ground/phases/ —
 # фазовая машина (gate.json/phase-defs.json/agent-evidence.jsonl), её читает phase-lock
-# gate-guard; пишут только init_phase_gate.py/phase_sync.py и хук log-agent (не тул-вызовы).
+# gate-guard; пишут только init_phase_gate.py/phase_sync.py и хук grounding-evidence (не тул-вызовы).
 # evals.json — кэш результатов EDD (eval-guard читает status:"passed" по нему): без защиты
 # прямой Write этого файла со всеми passed снимал eval-гейт целиком (тот же класс BLOCKER-1,
 # что judges/gates). Легитимный писатель — run_pending_evals.py (Bash→python, не тул Write).

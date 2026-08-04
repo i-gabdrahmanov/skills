@@ -244,16 +244,15 @@ sequenceDiagram
 | `destructive-blocker` | PreToolUse Bash | чёрный список (`rm -rf /`, force-push, DROP) | exit 2 |
 | `pii-boundary` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
 | `evidence-enforcer` | PreToolUse Bash | блок доставки без полного evidence bundle | exit 2 |
-| `budget-meter` | Post/SubagentStop/Stop | информационный учёт токен-бюджета: budget-события в общий `agents.jsonl` + сводка на Stop (отдельного `budget.json` нет). **Не блокирует и не предупреждает** | — |
+| `grounding-evidence` | PreToolUse Read | пишет `read_grounding` в `agent-evidence.jsonl` при чтении grounding-index (по нему `gate-guard` снимает блок `01-grounding`) | — |
 | `prompt-guard` | UserPromptSubmit + PostToolUse | детект prompt-injection → additionalContext | — |
 | `state-recorder` | SubagentStop | авто-запись шага по `step_id` | — |
 | `context-injector` | SubagentStart | инъекция grounding-excerpt/conventions | — |
 | `phase-gate` | Stop | блок завершения с висящим `in_progress` | block |
-| `log-agent` | все | append-only JSONL аудит | — |
 
 **Порядок (sequential) PreToolUse Bash:** destructive-blocker → evidence-enforcer →
-inline-phase-guard → gate-guard → log-agent. **Write/Edit:** pii-boundary → tdd-guard → eval-guard →
-sod-enforcer → inline-phase-guard → gate-guard → log-agent. Логгер всегда последний и неблокирующий.
+inline-phase-guard → gate-guard. **Write/Edit:** pii-boundary → tdd-guard → eval-guard →
+sod-enforcer → inline-phase-guard → gate-guard.
 
 > Гарантию «фаза выполнена ЧЕРЕЗ субагента» держит не PreToolUse-хук (он срабатывает и внутри
 > субагента → заблокировал бы его), а `update._check_subagent_origin` на закрытии шага: фазы из
@@ -294,16 +293,7 @@ python3 <project>/.gigacode/hooks/preflight.py --project .
 
 # какие фичи в работе:
 python3 <project>/.gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
-
-# живой лог прогона:
-bash <project>/.gigacode/hooks/watch-agents.sh
-
-# метрики:
-python3 <project>/.gigacode/hooks/agentops.py --archive <home>/ai-logs-archive
 ```
-
-Логи прогона — один каталог `<project>/ground/ai-logs/run-<session>/` (`agents.log` + `agents.jsonl`,
-budget-расход свёрнут в тот же `agents.jsonl`) + единый архив `ai-logs-archive/agents-YYYYMM.jsonl`.
 
 ---
 

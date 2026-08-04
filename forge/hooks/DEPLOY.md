@@ -27,19 +27,17 @@ risk ladder R0–R5, evidence bundle, информационный учёт то
 | `state-write-guard.py` | PreToolUse Write/Edit/Bash | запрет прямой записи моделью в control-plane state (`manifest.json`/`_origins`/`gates`/`overrides`/`approvals`/`pipeline.json`) — только через санкц. скрипты | exit 2 |
 | `sod-enforcer.py` | PreToolUse Write/Edit/Bash | separation of duties: роль из активного шага (test не пишет src/main; design/spec/jira не билдят). git commit/push не гейтится — доставка на пользователе | exit 2 |
 | `inline-phase-guard.py` | PreToolUse Write/Edit/Bash | actor-guard: ГЛАВНЫЙ агент (пустой `agent_type`) не производит артефакты/код subagent-фазы inline | exit 2 |
-| `budget-meter.py` | Post/SubagentStop/Stop | информационный учёт токен-бюджета: tally по фазам + сводка на Stop. **Не блокирует и не предупреждает** (никакого circuit-breaker) | нет |
+| `grounding-evidence.py` | PreToolUse Read | пишет `read_grounding` в `agent-evidence.jsonl` при чтении grounding-index — `gate-guard` снимает по нему блок фазы `01-grounding` | нет |
 | `prompt-guard.py` | UserPromptSubmit + PostToolUse(read/fetch) | детект prompt-injection → additionalContext | нет |
 | `file-journal.py` | PostToolUse Write/Edit/Bash | безусловный журнал изменённых файлов активной фичи (`journal/files.jsonl`) — скоуп восстановления кода для `rollback.py` | нет |
 | `state-recorder.py` | SubagentStop | авто-запись шага в pipeline-state по `step_id` | нет |
 | `context-injector.py` | SubagentStart | инъекция grounding-excerpt/conventions | нет |
 | `phase-gate.py` | Stop | блок завершения с висящим `in_progress` | block |
-| `log-agent.py` | все | append-only JSONL аудит (sync) | нет |
 
 Не-хуки рядом: `preflight.py` (проверка «харнес активен?» ПЕРЕД пайплайном — ловит «0 hook entries»),
 `resolve_hook_paths.py` (ЕДИНЫЙ владелец блока hooks в settings.json: merge + `--check`/`--dry-run`,
 а также `--remove` — снятие forge-хуков для `uninstall.sh`),
-`agentops.py` (Trust-метрики), `evals/run-evals.py` (eval-набор), `watch-agents.sh` (живой просмотр),
-`settings.hooks.json` (эталон). Статическая диагностика (`doctor.py`) и валидация скиллов живут
+`evals/run-evals.py` (eval-набор), `settings.hooks.json` (эталон). Статическая диагностика (`doctor.py`) и валидация скиллов живут
 в `skills/feature-pipeline/scripts/` — `preflight.py` зовёт их сам.
 
 ## Порядок и sequential
@@ -125,15 +123,9 @@ python3 <project>/.gigacode/hooks/preflight.py --project <project>
 «skills не рядом» и чужие пути ДО запуска. `exit 1` → Forge не готов: гони `deploy.sh` или
 (если только пути устарели) `deploy-local.sh`.
 
-Дополнительно:
-```bash
-python3 <project>/.gigacode/hooks/agentops.py --root <project>   # Trust-метрики из аудита
-bash <project>/.gigacode/hooks/watch-agents.sh                   # живой просмотр (отдельный терминал)
-```
-
 ## Конфиг проекта (`ground/pipeline.json`)
 
-Новые блоки v3.5 (создаёт `skills/feature-pipeline/scripts/init_pipeline_config.py`): `quality.token_budget`, `evidence.threshold`,
+Новые блоки v3.5 (создаёт `skills/feature-pipeline/scripts/init_pipeline_config.py`): `evidence.threshold`,
 `risk.{policy,deny_first}`, `security.{destructive_blocker,pii_boundary,prompt_guard}`,
 `autonomy.{level,auto_max_risk}`.
 

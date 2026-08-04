@@ -22,7 +22,7 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/read.py --skill featur
 
 > Глубже: eval-набор хуков — `bash <project>/.gigacode/hooks/run-hook-tests.sh`; тесты скиллов
 > И юнит-тесты хуков (единый прогон) — `python3 <project>/.gigacode/skills/run_all_tests.py`
-> (только хуки — `--skill hooks`); метрики из аудита — `hooks/agentops.py`.
+> (только хуки — `--skill hooks`).
 
 ---
 
@@ -83,12 +83,8 @@ service-unit + моки, либо переключите на `test_layer=mixed`
 **Причина:** evidence bundle неполный (completeness ниже `evidence.threshold`) — доставка преждевременна.
 **Фикс:** доведите предыдущие фазы (тесты/покрытие/спека) до закрытых шагов, затем доставка.
 
-### B6. `budget-meter`: учёт токен-бюджета
-**Симптом:** его нет — хук никогда не блокирует и не предупреждает (circuit-breaker удалён).
-**Что делает:** дописывает расход budget-событиями в единый лог прогона `<run-dir>/agents.jsonl`
-(отдельного `budget.json` больше нет) и печатает сводку по фазам на Stop.
-Ориентир бюджета — `quality.token_budget` в `pipeline.json` (справочно, без стопов). Если прогон
-дорогой — сжимайте контекст (выжимки шагов вместо полных выводов), тяжёлый вывод — в субагентах.
+> Если прогон дорогой по токенам — сжимайте контекст (выжимки шагов вместо полных выводов),
+> тяжёлый вывод держите в субагентах. Отдельного бюджет-гейта нет.
 
 ---
 
@@ -218,14 +214,11 @@ Override **не подделывает вердикт**: FAIL остаётся �
 ## Наблюдаемость (что смотреть при разборе)
 
 ```bash
-# живой лог прогона (отдельный терминал)
-bash <project>/.gigacode/hooks/watch-agents.sh
+# харнес активен ДО прогона:
+python3 <project>/.gigacode/hooks/preflight.py --project .
 
-# лог прогона (главный агент + субагенты + budget — один каталог)
-ls <project>/ground/ai-logs/run-<session>/   # agents.log + agents.jsonl
-
-# метрики из аудита
-python3 <project>/.gigacode/hooks/agentops.py --root <project>
+# статус шагов пайплайна:
+python3 <project>/.gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
 ```
 
 > Если после всех шагов проблема не воспроизводится через `preflight`/`doctor` — это, скорее всего,

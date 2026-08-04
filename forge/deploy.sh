@@ -75,7 +75,7 @@ rm -f "$GIG/skills/minor-defect-fix/config.json"
 echo "  ✓ скопированы hooks/ и skills/ (co-located, без __pycache__/.DS_Store/локального config.json)"
 
 # 1b. prune: copy_tree — это cp-overlay, он НАКЛАДЫВАЕТ файлы поверх таргета и НЕ удаляет
-# те, что исчезли из исходника. Удалённый хук (напр. cost-breaker.py → budget-meter.py)
+# те, что исчезли из исходника. Удалённый хук (напр. log-agent.py/budget-meter.py)
 # оставался сиротой в .gigacode/hooks/, а settings.hooks.json прошлого деплоя продолжал его
 # регистрировать → рантайм на сбросе искал несуществующий хук. Подчищаем хук-скрипты, которых
 # больше нет в исходнике: «удалён хук — значит его нет нигде». Скоуп — только top-level *.py/*.sh

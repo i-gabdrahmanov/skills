@@ -78,13 +78,12 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 | `pii-boundary.py` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
 | `state-write-guard.py` | PreToolUse Write/Edit/Bash | запрет прямой записи моделью в control-plane-файлы (`manifest.json`, `_origins`, `gates`, `overrides`, `judges`, `approvals`, `pipeline.json`, `ground/phases/`) — мутация только через санкц. скрипты | exit 2 |
 | `inline-phase-guard.py` | PreToolUse Bash/Write/Edit | actor-guard: главный агент не производит артефакты/код/билд subagent-фазы inline (по `agent_type`) | exit 2 |
-| `budget-meter.py` | Post/SubagentStop/Stop | информационный учёт токен-бюджета: расход дописывается budget-событиями в единый лог прогона (`agents.jsonl`), на Stop — сводка по фазам + запись `budget_summary`. Отдельного `budget.json` нет. **Не блокирует и не предупреждает** (никакого circuit-breaker) | нет |
+| `grounding-evidence.py` | PreToolUse Read | пишет `read_grounding` в `agent-evidence.jsonl` при чтении grounding-index — по нему `gate-guard` снимает блок фазы `01-grounding` | нет |
 | `prompt-guard.py` | UserPromptSubmit + PostToolUse(read/fetch) | детект prompt-injection → additionalContext | нет |
 | `file-journal.py` | PostToolUse Write/Edit/Bash | безусловный журнал изменённых файлов активной фичи (`journal/files.jsonl`, привязка к step_id) — скоуп восстановления кода для `rollback.py` | нет |
 | `state-recorder.py` | SubagentStop | авто-запись шага в pipeline-state по `step_id` | нет |
 | `context-injector.py` | SubagentStart | инъекция grounding-excerpt/conventions | нет |
 | `phase-gate.py` | Stop | блок завершения с висящим `in_progress` | block |
-| `log-agent.py` | все | append-only JSONL аудит (sync) | нет |
 
 **Не-хуки рядом:** `preflight.py` (проверка «харнес активен?» ПЕРЕД пайплайном — ловит «0 hook entries»),
 `risk-policy.json` (policy-as-code, `risk_ladder.py` читает), `settings.hooks.json` (эталон).
@@ -114,7 +113,7 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 ## Журнал решений (почему так)
 
 - **Enforcement в рантайме, не в тексте.** SKILL.md модель может проигнорировать → гейты/политики
-  форсятся хуками (gate-guard/risk-ladder, phase-gate, security). Токен-бюджет — только учёт (`budget-meter`), не гейт.
+  форсятся хуками (gate-guard/risk-ladder, phase-gate, security).
 - **Risk ladder R0–R5, deny-first** (`risk-policy.json`) — policy-as-code, рисковое fail-closed.
 - **Выбор критичности фичи форсится** — после BRD SKILL спрашивает критичность (low/medium/high →
   `autonomy.auto_max_risk` R2/R1/R0 в `pipeline.json`); `gate-guard` блокирует любое R2+ действие, пока
@@ -152,10 +151,6 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
   минимальная реализация до зелёного → `check_build` → coverage. Шаги манифеста `04-test-<id>`→`04-build-<id>`.
   **Форсится хуком** `tdd-guard`: запись в `src/main` блокируется, пока `04-test-<id>` ещё `pending`
   (на прогоне TDD не происходил — код писали первым; теперь нельзя). Тесты писать можно всегда.
-- **Лог поведения агентов+субагентов для анализа** (`log-agent.py` пишет один каталог на прогон
-  `ground/ai-logs/run-<session>/`: человекочитаемый `agents.log` + машинный `agents.jsonl`;
-  `budget-meter` сворачивает расход budget-событиями в тот же `agents.jsonl` — отдельного `budget.json`
-  нет. Плюс единый архив `<home>/ai-logs-archive/agents-YYYYMM.jsonl`. Каталог/append общий — `_project.run_dir`/`append_locked`).
 - **Pre-flight self-check харнеса** (`preflight.py`: `settings.hooks.json` + `pipeline.json`) — ловит
   незадеплоенный харнес ДО старта; exit 1 → «ENFORCEMENT OFF, остановись».
 - **Субагент = явный вызов `agent`**, не inline. Всё, что помечено «субагент» — через `agent` (иначе
@@ -172,7 +167,6 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 5. `sod-enforcer` — separation of duties (роль фазы: design/spec/jira не билдят; git не гейтится)
 6. `inline-phase-guard` — actor: главный агент не билдит/тестит inline в subagent-фазе
 7. `gate-guard` — risk ladder
-8. `log-agent` — аудит (последний, неблокирующий)
 
 **PreToolUse `(Write|Edit)` — sequential:**
 1. `pii-boundary` — PII scope
@@ -182,9 +176,8 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 5. `sod-enforcer` — separation of duties (роль из активного шага)
 6. `inline-phase-guard` — actor: главный агент не пишет артефакты/код subagent-фазы inline
 7. `gate-guard` — risk ladder
-8. `log-agent` — аудит
 
-Любой блокирующий может остановить (exit 2) до действия. Логгер — всегда последний и неблокирующий.
+Любой блокирующий может остановить (exit 2) до действия.
 Точный блок — в `settings.hooks.json`. Эта секция пинится `hooks/test_docs_hooks_consistency.py`
 (дрейф «доки ↔ деплой» → fail). Изоляцию фаз держат два слоя: `inline-phase-guard` (PreToolUse,
 по `agent_type`) не даёт ГЛАВНОМУ агенту производить артефакты/код subagent-фазы inline, а
@@ -285,10 +278,6 @@ Verify — пайплайн НЕ дошёл до Document/Deliver.
   только чтобы тест поднялся без `UpzClient`; ранее сама добавила второй `notifyEvent`, сломала
   существующий тест (ждал 1 вызов) и стала править тест под новое поведение, а не усомнилась в нём.
   Нет судьи «прод-код/ослабление существующего теста ради GREEN».
-- ⚪ **Токен-бюджет — только учёт, не тормоз (решено).** Бывший `cost-breaker` заменён на
-  информационный `budget-meter`: circuit-breaker (стоп/warn) удалён полностью. Учёт по-прежнему
-  расходится с реальностью (прогон #3: `budget.json` 843K/2M ≈ 42% против реальных 51.8M входных
-  токенов, ~60×), но на него никто не полагается как на ограничитель — это осознанно справочная метрика.
 - 🟠 **Гейт критичности форсит вопрос, но не следствие.** `auto_max_risk` хардкожен `R1`
   (`init_pipeline_config.py:223`), деривации `low→R2/high→R0` нет ни в коде, ни в тесте. Модель
   отредактировала только `criticality` (для medium совпало) — при low/high autonomy была бы неверной.
@@ -383,9 +372,6 @@ Verify — пайплайн НЕ дошёл до Document/Deliver.
 - [x] **Судья «GREEN любой ценой»** (C2): floor `_test_integrity_floor` в `check_coverage` (фаза Verify)
       блокирует ослабление СУЩЕСТВУЮЩИХ тестов (`--diff-filter=M`): добавленный `@Disabled`/`@Ignore`,
       рост `times(N)→times(M)`; WARN на нетто-потерю assert/verify. Тесты: `test_run_judge_guards.py`.
-- [x] **`budget-meter`** (C3, бывший `cost-breaker`): по решению владельца circuit-breaker удалён
-      полностью — **бюджет только справочный**. Учёт токенов расходится с реальностью (~60×), поэтому
-      как тормоз он и не задуман; хук лишь считает расход по фазам и печатает сводку на Stop.
 - [x] **Деривация `auto_max_risk` из criticality** (H4): `set_criticality.py` атомарно пишет оба поля
       (`low→R2/medium→R1/high→R0`); гейт критичности в SKILL.md зовёт его, а не сырой Edit. Тесты:
       `test_set_criticality.py`.
@@ -398,8 +384,6 @@ Verify — пайплайн НЕ дошёл до Document/Deliver.
       задокументировано в «Известные ограничения», в SKILL/доках — `Glob`/`Grep`/`Read`.
 - [x] (M8) Памятка про лимит `header ≤ 12` добавлена в гейт критичности (SKILL.md) и BRD-скиллы.
 - [x] (L9) BRD-интервью калибрует число вопросов по входу: при детальной Jira — 1–2 точечных, не «3 для галочки».
-- [x] (L10) `log-agent.py` группирует логи по сессии: `ai-logs/run-<session8>/` («один прогон = одна папка»);
-      `watch-agents.sh` обновлён под новый layout.
 
 **Раунд 2 (доп. находки прогона #3):**
 - [x] **Регресс-гейт затронутых модулей** (D): «успеха нет, пока тесты затронутых модулей не зелёные».
@@ -452,12 +436,9 @@ dual-vocabulary, контракты pipeline-state, payload-схема snake_cas
       в .gitignore, в репо — нейтральный `config.json.example`; `deploy.sh` исключает локальный
       конфиг из копии. Пин: `test_no_hardcoded_paths_left.py` сканирует все md/json скиллов
       на машинные `/Users/<имя>/`-пути.
-- [x] **M: тесты log-agent замусоривали боевой кросс-прогонный архив** — смоук с пустым stdin
-      без изоляции дописывал all-null записи в `ai-logs-archive/` (17 шт. накопилось; это же
-      объясняло «загадочные» null-логи — НЕ сбой рантайма) и создавал `ground/` в git-toplevel
-      каталога запуска тестов. Фикс: tmp-cwd + `GIGACODE_AILOG_ARCHIVE` в тестах, мусор вычищен.
-      Пин: pollution-guard в `run_all_tests.py` (прогон, изменивший `ai-logs-archive/`/`ground/`
-      репо, — красный).
+- [x] **M: смоук-тесты хуков замусоривали боевой рантайм-каталог** — тест с пустым stdin
+      без изоляции создавал `ground/` в git-toplevel каталога запуска тестов. Фикс: tmp-cwd в
+      тестах. Пин: pollution-guard в `run_all_tests.py` (прогон, изменивший `ground/` репо, — красный).
 - [x] Минорные: `tdd-guard`/`eval-guard` резолвят корень через `project_root(cwd)` (git-toplevel),
       как соседи по цепочке — при cwd=подкаталог единственные форсеры TDD/EDD молча fail-open'или
       (пин: кейс «блок из подкаталога» в `test_tdd-guard.py`); `run-hook-tests.sh` теперь гоняет
@@ -679,16 +660,12 @@ dual-vocabulary, контракты pipeline-state, payload-схема snake_cas
   2026-07-04). При апгрейде рантайма/правке `settings.hooks.json` сверять матчеры с канон-именами
   (`test_matcher_canonical_names.py` / `preflight._check_matchers_canonical`). Subagent-события
   срабатывают для тула `agent`.
-- **Токен-бюджет НЕ тормоз by design** (`budget-meter`, бывший `cost-breaker`): circuit-breaker
-  удалён, хук только считает расход. Прогон #3: `budget.json` показал 42% (`spent 843K/2M`), тогда как
-  реальная сессия сожгла 51.8M входных токенов (расхождение ~60×). Не полагаться на бюджет как на
-  ограничитель стоимости — это справочная метрика.
 - **Payload-схема хуков подтверждена по стоковому qwen-code 0.19.3** (верификация 2026-07-03):
   вход хука строится `createBaseInput` → `stdin.write(JSON.stringify(input))` со snake_case-ключами
   (`hook_event_name`/`session_id`/`cwd`/`tool_name`) — ровно то, что читают наши парсеры. В стоке
   хуки включены по умолчанию (гейт `!getDisableAllHooks()`); `--experimental-hooks` — специфика
-  форка GigaCode на более старой базе. При апгрейде форка перепроверять схему по свежим записям
-  `ai-logs` (сплошные `event=null` = схема/поставка payload сломана, enforcement под вопросом).
+  форка GigaCode на более старой базе. При апгрейде форка перепроверять схему payload по свежему
+  дампу hook-JSON из stdin (ключи snake_case; пустые/`null`-поля = схема/поставка payload сломана).
 - **User-level settings могут подключать УСТАРЕВШУЮ копию харнеса** (найдено на машине оператора:
   `~/.qwen/settings.json` вёл на `$HOME/.qwen/hooks/` со старым ростером без fork-syntax-guard/
   sod/inline/eval-guard). Канон — проектный деплой `deploy.sh`; user-level блок hooks либо убрать,
@@ -707,16 +684,6 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/read.py --skill featur
 
 - `preflight.py` — проверка settings (линтер на живом `settings.json`)
 - `feature-pipeline/scripts/doctor.py` — статика (хуки + скиллы + evals)
-
-## Наблюдаемость
-
-```bash
-# живой лог прогона (отдельный терминал):
-bash <project>/.gigacode/hooks/watch-agents.sh
-
-# сводка по метрикам:
-python3 <project>/.gigacode/hooks/agentops.py --root <project>
-```
 
 ## Поддерживаемая структура
 
