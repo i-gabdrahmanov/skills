@@ -1,22 +1,15 @@
 #!/usr/bin/env python3
 """test_windows_file_lock_fallback.py — регресс: fcntl (Unix-only) падал ImportError на Windows.
 
-Самая критичная находка Windows-аудита: budget-meter.py и log-agent.py безусловно
-делали `import fcntl` — модуля физически нет на Windows, значит ImportError уже на
-загрузке модуля, а log-agent висит почти на КАЖДОМ событии харнесса (PreToolUse/
-PostToolUse/Stop/...). Это не runtime-сбой отдельной функции, а гарантированный
-краш всей цепочки хуков на Windows. Починено platform-fallback'ом на msvcrt.locking.
-
-Теперь замок — ЕДИНЫЙ источник: `_project.append_locked` (оба хука пишут в один
-agents.log/.jsonl прогона и делят один flock). Поэтому тест бьёт по `_project`, а не
-по копиям в хуках (их больше нет).
+Находка Windows-аудита: безусловный `import fcntl` — модуля физически нет на Windows,
+значит ImportError уже на загрузке модуля. Замок вынесен в ЕДИНЫЙ источник
+`_project.append_locked` с platform-fallback'ом на msvcrt.locking, поэтому тест бьёт
+именно по `_project`.
 
 Тест эмулирует Windows in-process: sys.modules["fcntl"] = None форсит ImportError
 при `import fcntl` (документированное поведение CPython), поддельный sys.modules
 ["msvcrt"] ловит вызовы вместо реального (которого на macOS/Linux физически нет).
-Модуль грузится через importlib СВЕЖИМ (не subprocess, как smoke-тесты в
-test_log-agent.py/test_budget-meter.py) — иначе моки в sys.modules теста не видны
-дочернему процессу.
+Модуль грузится через importlib СВЕЖИМ — иначе моки в sys.modules теста не видны.
 """
 from __future__ import annotations
 

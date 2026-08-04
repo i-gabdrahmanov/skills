@@ -20,7 +20,7 @@ preflight = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(preflight)
 
 ESSENTIAL = ["gate-guard.py", "phase-gate.py", "state-recorder.py", "eval-guard.py",
-             "state-write-guard.py", "log-agent.py"]
+             "state-write-guard.py", "grounding-evidence.py"]
 
 
 def _hooks_block(root: Path, names: list[str]) -> dict:

@@ -212,6 +212,8 @@ def match_required_judges(step_id: str) -> list:
 
 
 # ── Метаданные фаз (phase-defs) ───────────────────────────────────────
+# 01-grounding блокирует чтение src/ до сверки с grounding-index: evidence-разблок
+# (запись read_grounding) даёт хук grounding-evidence, снимает блок gate-guard.
 def blocked_tools(phase_id: str) -> list:
     return ["Read", "GrepSearch", "Glob", "Grep"] if phase_id == "01-grounding" else []
 

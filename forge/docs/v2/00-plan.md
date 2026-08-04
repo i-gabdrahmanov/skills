@@ -164,7 +164,7 @@ setdefault — модель могла выставить true). В `--check` �
   через `merge_permissions()` (единая семантика) → `forge-run.sh -p "<бриф фазы>"` → restore в
   `finally` (+ `--restore` на случай краха). **Межфазные гейты driver гоняет сам** (record_gate/
   check_*) и не продвигается при passed:false — слово модели не участвует. Лимиты на вызов
-  (timeout/max-requests) — замена удалённого cost-breaker (бюджет теперь только учёт, `budget-meter`).
+  (timeout/max-requests) — замена удалённого cost-breaker (токен-бюджет как гейт не используется).
 - `driver/test_driver.py`; `skills/run_all_tests.py` — добавить driver/ в discovery.
 
 ---

@@ -169,12 +169,6 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
 Это создаёт `manifest.json` со всеми шагами в статусе `pending` (или
 `in_progress` для тех, что главный агент собирается запускать сразу).
 
-> Хук-логгер `agent-logger` группирует живые логи тул-вызовов агента и субагентов в
-> `<project>/ground/ai-logs/<feature>/iter-NN/` (см. `<project>/.gigacode/hooks/log-agent.py`).
-> Папка `<feature>` берётся из namespace-флага `--feature` (имя каталога манифеста), а **не** из
-> `context.feature`; из `context` логгер использует только `iteration` (→ `iter-NN`). Без `--feature`
-> логи лягут под именем скилла + хвост `pipeline_id`.
-
 При **резюмировании** (после "Резюмировать" в шаге 0): `init.py` НЕ зовётся —
 вместо этого читается существующий manifest. `update.py` помечает failed →
 pending перед перезапуском.

@@ -281,8 +281,6 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
 когда известна разбивка задач. (При `quality.tdd: false` шаг `04-test-*` опускается.)
 `06-spec` — финальный шаг: доставку (commit/push/PR/отчёт) делает пользователь сам.
 
-> `--context` поля `feature` (slug/Jira-ключ) и `iteration` — по ним хук `agent-logger`
-> группирует живые логи в `ground/ai-logs/<feature>/iter-NN/`.
 После каждого завершённого субагента/шага — `update.py --skill feature-pipeline --feature <slug>
 --step-id <id> --status completed` с его JSON. Для шагов, создающих файловые артефакты
 (02-sdd, 02-design, 02-eval-plan, 03-jira), обязательно передавай `--artifacts '{"key":"path"}'`.

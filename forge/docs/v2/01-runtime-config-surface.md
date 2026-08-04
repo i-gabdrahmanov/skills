@@ -35,7 +35,7 @@ allow/denylist'ы тулов, sandbox-флаги **никогда не выст�
 - `"^(run_shell_command|Bash)$"` (sequential blocking)
 - `"^(write_file|edit|notebook_edit|Write|Edit|WriteFile|NotebookEdit)$"` (sequential blocking)
 - `"^(read_file|web_fetch|run_shell_command|Read|ReadFile|Fetch|WebFetch|Bash)$"` (PostToolUse prompt-guard)
-- `"*"` → только `log-agent.py`.
+- `"*"` → `context-injector` (SubagentStart) / `state-recorder` (SubagentStop).
 
 `deploy-local.sh`: поддерживает `--dry-run` и `--check`.
 
@@ -49,8 +49,8 @@ allow/denylist'ы тулов, sandbox-флаги **никогда не выст�
 3. **`getDisableAllHooks()`** — апстрим-гейт (`FORGE.md`: «в стоке хуки on по умолчанию,
    гейт `!getDisableAllHooks()`»).
 4. **`$version`** = 3.
-5. **`permission_mode`** — нативное поле approval-режима; репо его **не задаёт**, только пассивно
-   пишет в аудит-логи: значения `auto-edit` (92×) и `default` (55×) в `прогоны харнес/.../ai-logs`.
+5. **`permission_mode`** — нативное поле approval-режима; репо его **не задаёт** (наблюдались
+   значения `auto-edit` и `default` в hook-payload прогонов).
 6. **`permissions`/`mcpServers`** — упомянуты только как секции, которые resolver **сохраняет**.
 7. Семантика хуков (`FORGE.md` «Известные ограничения»): stdin JSON snake_case
    (`hook_event_name`/`session_id`/`cwd`/`tool_name`), подтверждено на qwen-code 0.19.3;
@@ -66,8 +66,8 @@ allow/denylist'ы тулов, sandbox-флаги **никогда не выст�
 - **Нет события «скилл выбран»** → вход через `router` не форсится.
 - **Хуки за экспериментальным флагом** (в отличие от апстрима).
 - **`agent_type` субагента всегда `general-purpose`** → SoD по agent_type — best-effort.
-- **Нет нативного token/cost-потолка** на который опираются: circuit-breaker удалён, остался только
-  информационный `budget-meter` (учёт без стопа).
+- **Нет нативного token/cost-потолка** на который опираются: circuit-breaker удалён, учёта
+  токен-бюджета в control-plane больше нет.
 - **НИГДЕ не упомянуты** (grep по .md/.json/.sh/.py): `approvalMode`, `yolo`, `autoAccept`,
   `coreTools`, `excludeTools`, `allowedTools`, `sandbox`, `seatbelt`, `docker`. Нет ни одного
   шаблона settings.json для нативной permission-системы — только hooks-блок.
@@ -87,6 +87,7 @@ allow/denylist'ы тулов, sandbox-флаги **никогда не выст�
 - Блокирующие (exit 2) цепочки — только shell (`run_shell_command`) и write
   (`write_file`/`edit`/`notebook_edit`).
 - `read_file`/`web_fetch` — только PostToolUse (prompt-guard scan), не блок.
-- Прочие тулы (Glob, Grep, LS, `agent`) — только `*` → log-agent (audit).
+- Прочие тулы (Glob, Grep, LS) — без выделенного хука (аудит-catch-all `*` удалён вместе с логами);
+  `agent` покрыт SubagentStart/Stop (context-injector/state-recorder).
 - preflight канон-проверка частична (не валидирует PostToolUse read/fetch матчеры).
 - Риск user-level stale config: `~/.qwen/settings.json` может затенять project-деплой.

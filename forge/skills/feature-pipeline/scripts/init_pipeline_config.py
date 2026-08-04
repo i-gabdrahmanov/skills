@@ -252,7 +252,6 @@ def build_config(root):
             "test_command": f"{_GRADLEW} test jacocoTestReport" if gradle else "mvn -q test jacoco:report",
             "coverage_report": "build/reports/jacoco/test/jacocoTestReport.xml" if gradle else "target/site/jacoco/jacoco.xml",
             "jacoco_configured": has_jacoco,
-            "token_budget": 2000000,          # PDLC v3.5 cost circuit breaker (warn 80% / stop 120%)
             "tdd": True,                      # TDD по умолчанию: тесты (RED) → код (GREEN); см. check_tests_red.py
             "eval_enabled": True,             # Eval-Driven Development: фаза 02-eval-plan + eval-guard (resolve_phases.enabled_by)
             "eval_threshold": 0.95,           # min доля зелёных eval'ов задачи (см. build_evals_from_design.py)
@@ -279,7 +278,6 @@ def build_config(root):
             "prompt_guard": True,
         },
         "hooks": {
-            "budget_default": 2000000,        # token/cost circuit breaker (warn 80% / stop 120%)
             "allowed_paths": [
                 ".gigacode/",
                 "ground/statements/",

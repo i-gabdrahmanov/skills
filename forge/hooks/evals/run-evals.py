@@ -42,7 +42,7 @@ def make_project(tmp: Path, *, tests_status="completed", spec_status="completed"
     ]}
     (pdir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     (root / "ground" / "pipeline.json").write_text(
-        json.dumps({"quality": {"token_budget": 1000, "tdd": True}, "evidence": {"threshold": 0.95},
+        json.dumps({"quality": {"tdd": True}, "evidence": {"threshold": 0.95},
                     "autonomy": {"criticality": "medium", "auto_max_risk": "R1"}}), encoding="utf-8")
     plan = {"tasks": [{"id": "T1", "title": "x", "artifacts": ["src/main/java/Foo.java"],
                        "acceptance": ["Given a When b Then c"], "sdd_ref": "sdd.md#T1"}]}
@@ -233,45 +233,6 @@ def main() -> int:
         c, out = run_hook("context-injector.py", {"cwd": str(rci2), "agent_type": "general-purpose", "agent_id": "x"})
         check("context-injector: нет файлов → нет инъекции", c == 0 and out.strip() == "")
 
-        # ── budget-meter (информационный учёт, без блокировок/warn) ──
-        # Расход сворачивается в ЕДИНЫЙ лог прогона (agents.jsonl), отдельного budget.json нет.
-        rc = make_project(tmp / "cost")
-        # payload без session_id → каталог прогона run-nosess (общий _project.run_dir)
-        jsonl = rc / "ground" / "ai-logs" / "run-nosess" / "agents.jsonl"
-
-        def _budget_events(kind: str):
-            if not jsonl.exists():
-                return []
-            out_recs = []
-            for ln in jsonl.read_text(encoding="utf-8").splitlines():
-                ln = ln.strip()
-                if not ln:
-                    continue
-                try:
-                    r = json.loads(ln)
-                except Exception:
-                    continue
-                if r.get("event") == kind:
-                    out_recs.append(r)
-            return out_recs
-
-        c, out = run_hook("budget-meter.py", {"cwd": str(rc), "hook_event_name": "PreToolUse",
-                        "tool_name": "Bash", "tool_input": {"command": "x"}})
-        check("budget-meter: PreToolUse → exit 0, ничего не выводит и не пишет (не breaker)",
-              c == 0 and out.strip() == "" and not jsonl.exists())
-        c, out = run_hook("budget-meter.py", {"cwd": str(rc), "hook_event_name": "PostToolUse",
-                        "tool_name": "Bash", "usage": {"total_tokens": 200}})
-        evs = _budget_events("budget")
-        check("budget-meter: PostToolUse → budget-событие с расходом в agents.jsonl",
-              c == 0 and len(evs) == 1 and evs[0]["tokens"] == 200)
-        c, out = run_hook("budget-meter.py", {"cwd": str(rc), "hook_event_name": "Stop",
-                        "stop_hook_active": False})
-        summ = _budget_events("budget_summary")
-        check("budget-meter: Stop → exit 0, сводка в контекст + budget_summary в общий лог",
-              c == 0 and has_addctx(out)
-              and len(summ) == 1 and summ[0]["total_tokens"] == 200
-              and "finalized_at" in summ[0])
-
         # ── phase-gate ──
         rg = tmp / "phase"
         pg = rg / "ground" / "statements" / "feature-pipeline" / "pipeline"
@@ -344,6 +305,25 @@ def main() -> int:
                         "tool_input": {"file_path": "src/main/java/Foo.java"},
                         "agent_type": "system-analyst"})
         check("phase-lock: Read src/ после grounding-index → allow", c == 0)
+
+        # 6. grounding-evidence: чтение grounding-index → запись read_grounding в evidence
+        rge = rpl / "_ge"
+        (rge / "ground" / "statements" / "feature-pipeline" / "pipeline").mkdir(parents=True)
+        (rge / "ground" / "statements" / "feature-pipeline" / "pipeline" / "manifest.json").write_text(
+            json.dumps({"skill": "feature-pipeline", "steps": [{"id": "01-grounding", "status": "in_progress"}]}),
+            encoding="utf-8")
+        c, out = run_hook("grounding-evidence.py", {"cwd": str(rge), "tool_name": "Read",
+                        "tool_input": {"file_path": "docs/system-analysis/grounding-index.json"}})
+        ge_ev = rge / "ground" / "phases" / "pipeline" / "agent-evidence.jsonl"
+        check("grounding-evidence: Read grounding-index → read_grounding в agent-evidence.jsonl",
+              c == 0 and ge_ev.exists()
+              and "read_grounding" in ge_ev.read_text(encoding="utf-8")
+              and "grounding-index" in ge_ev.read_text(encoding="utf-8"))
+        # не-grounding чтение → ничего не пишет
+        c, out = run_hook("grounding-evidence.py", {"cwd": str(rge), "tool_name": "Read",
+                        "tool_input": {"file_path": "src/main/java/Foo.java"}})
+        check("grounding-evidence: Read src/ (не grounding) → evidence не растёт",
+              c == 0 and ge_ev.read_text(encoding="utf-8").count("read_grounding") == 1)
 
     passed = sum(1 for _, ok, _ in results if ok)
     failed = [r for r in results if not r[1]]

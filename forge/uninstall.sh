@@ -25,7 +25,6 @@
 #   - settings.json      — остальные секции (permissions, mcpServers, $version) не наши.
 #   - *.bak              — бэкапы, в т.ч. первозданный settings.json.bak (до установки Forge).
 #   - refs/forge/*       — git-чекпойнты отката. Только --purge-state.
-#   - <home>/ai-logs-archive/ — общий архив логов вне проекта, шарится между проектами.
 #
 # Usage (из корня склонированного Forge):
 #   bash uninstall.sh /path/to/target-project
@@ -278,6 +277,5 @@ fi
 if [ -f "$GIG/minor-defect-fix-config.json.bak" ]; then
   echo "  осталось: minor-defect-fix-config.json.bak — конфиг оператора"
 fi
-echo "  не тронут: <home>/ai-logs-archive/ (общий архив логов вне проекта)"
 echo
 echo "  Вернуть Forge: bash deploy.sh $TARGET"

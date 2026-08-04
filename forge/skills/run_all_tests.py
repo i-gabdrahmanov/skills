@@ -43,11 +43,11 @@ def discover(skill: str | None) -> list[Path]:
 
 
 def _pollution_snapshot() -> dict[str, int]:
-    """Гард изоляции тестов: runtime-каталоги репо (ai-logs-archive/, ground/) не должны
-    меняться прогоном тестов. Прецедент: смоук log-agent с пустым stdin без tmp-cwd и
-    GIGACODE_AILOG_ARCHIVE дописывал all-null записи в боевой кросс-прогонный архив."""
+    """Гард изоляции тестов: runtime-каталог репо ground/ не должен меняться прогоном
+    тестов. Прецедент: смоук-хук с пустым stdin без tmp-cwd дописывал мусор в боевой
+    рантайм-каталог вместо временного."""
     snap: dict[str, int] = {}
-    for base in (REPO / "ai-logs-archive", REPO / "ground"):
+    for base in (REPO / "ground",):
         if base.is_dir():
             for p in sorted(base.rglob("*")):
                 if p.is_file():
@@ -85,11 +85,10 @@ def main() -> int:
     pollution_after = _pollution_snapshot()
     if pollution_after != pollution_before:
         changed = sorted(set(pollution_after.items()) ^ set(pollution_before.items()))
-        print("\n❌ ИЗОЛЯЦИЯ НАРУШЕНА: тесты изменили runtime-каталоги репо "
-              "(ai-logs-archive/ или ground/):")
+        print("\n❌ ИЗОЛЯЦИЯ НАРУШЕНА: тесты изменили runtime-каталог репо (ground/):")
         for path, size in changed:
             print(f"   {path} ({size}b)")
-        print("   Тест обязан писать в tmp (cwd=tmp, GIGACODE_AILOG_ARCHIVE=tmp).")
+        print("   Тест обязан писать в tmp (cwd=tmp).")
         failed.append(Path("pollution-guard"))
 
     print(f"\n=== PASS={len(passed)} FAIL={len(failed)} (всего {len(tests)}) ===")

@@ -170,7 +170,7 @@ def preflight(project_root: str) -> dict:
         "state-recorder.py",
         "eval-guard.py",
         "state-write-guard.py",
-        "log-agent.py",
+        "grounding-evidence.py",
     ]
     hooks_dir = Path(project_root) / ".gigacode" / "hooks"
     for hook in essential_hooks:
