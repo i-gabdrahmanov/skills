@@ -1,0 +1,6 @@
+{
+  "name": "forge",
+  "version": "1.0.0",
+  "displayName": "Forge",
+  "description": "Forge — PDLC control-plane для Java/Spring: SDD → tech-design → TDD (RED→GREEN→покрытие) с гейтами-энфорсментом на хуках, скиллами пайплайна и слэш-командами /forge, /forge-lite."
+}

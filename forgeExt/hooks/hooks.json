@@ -1,0 +1,167 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(run_shell_command|Bash)$",
+        "sequential": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/destructive-blocker.py",
+            "name": "destructive-blocker"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/fork-syntax-guard.py",
+            "name": "fork-syntax-guard"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/pii-boundary.py",
+            "name": "pii-boundary"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/state-write-guard.py",
+            "name": "state-write-guard"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/sod-enforcer.py",
+            "name": "sod-enforcer"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/inline-phase-guard.py",
+            "name": "inline-phase-guard"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/gate-guard.py",
+            "name": "gate-guard"
+          }
+        ]
+      },
+      {
+        "matcher": "^(write_file|edit|notebook_edit|Write|Edit|WriteFile|NotebookEdit)$",
+        "sequential": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/pii-boundary.py",
+            "name": "pii-boundary"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/state-write-guard.py",
+            "name": "state-write-guard"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/tdd-guard.py",
+            "name": "tdd-guard"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/eval-guard.py",
+            "name": "eval-guard"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/sod-enforcer.py",
+            "name": "sod-enforcer"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/inline-phase-guard.py",
+            "name": "inline-phase-guard"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/gate-guard.py",
+            "name": "gate-guard"
+          }
+        ]
+      },
+      {
+        "matcher": "^(read_file|Read|ReadFile)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/grounding-evidence.py",
+            "name": "grounding-evidence"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(read_file|web_fetch|run_shell_command|Read|ReadFile|Fetch|WebFetch|Bash)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/prompt-guard.py",
+            "name": "prompt-guard"
+          }
+        ]
+      },
+      {
+        "matcher": "^(write_file|edit|notebook_edit|Write|Edit|WriteFile|NotebookEdit|run_shell_command|Bash)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/file-journal.py",
+            "name": "file-journal"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/prompt-guard.py",
+            "name": "prompt-guard"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/context-injector.py",
+            "name": "context-injector"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/state-recorder.py",
+            "name": "state-recorder"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "sequential": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/phase-gate.py",
+            "name": "phase-gate"
+          }
+        ]
+      }
+    ]
+  }
+}

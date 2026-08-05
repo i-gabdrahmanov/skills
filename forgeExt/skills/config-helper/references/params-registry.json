@@ -1,0 +1,538 @@
+{
+  "$schema": "config-helper/params-registry@1",
+  "_comment": "Единственный источник правды по настраиваемым параметрам forge. config.py пишет только параметры, описанные здесь (fail-closed). file: pipeline=ground/pipeline.json, gates=ground/feature-gates.json, risk=.gigacode/hooks/risk-policy.json (config.py резолвит с фолбэком на hooks/risk-policy.json для source-layout forge). path — dotted-путь внутри файла. aliases помогают модели смапить свободный запрос на id.",
+  "params": [
+    {
+      "id": "quality.coverage_threshold",
+      "file": "pipeline",
+      "path": "quality.coverage_threshold",
+      "type": "float", "min": 0, "max": 1, "default": 0.8,
+      "category": "quality", "sensitive": false,
+      "title": "Порог покрытия тестами",
+      "description": "Минимальное покрытие (0..1), ниже которого coverage-гейт фейлит",
+      "aliases": ["покрытие", "coverage", "процент покрытия", "тестовое покрытие"]
+    },
+    {
+      "id": "quality.eval_enabled",
+      "file": "pipeline",
+      "path": "quality.eval_enabled",
+      "type": "bool", "default": true,
+      "category": "quality", "sensitive": false,
+      "title": "Eval-Driven Development",
+      "description": "Включает eval-guard: блокирует запись в src/main, пока eval'ы задачи не пройдены",
+      "aliases": ["eval", "эвалы", "eval-driven", "edd", "проверки до кода"]
+    },
+    {
+      "id": "quality.max_step_reopens",
+      "file": "pipeline",
+      "path": "quality.max_step_reopens",
+      "type": "int", "min": 1, "max": 20, "default": 3,
+      "category": "quality", "sensitive": false,
+      "title": "Лимит ре-итераций шага",
+      "description": "Сколько раз шаг манифеста можно переоткрыть/провалить, прежде чем update.py вернёт exit 3 (ESCALATE — стоп-и-спроси)",
+      "aliases": ["лимит итераций", "reopens", "переоткрытия шага", "брейк итераций", "max reopens"]
+    },
+    {
+      "id": "project.build_system",
+      "file": "pipeline",
+      "path": "project.build_system",
+      "type": "enum", "enum": ["gradle", "maven"], "default": null,
+      "category": "project", "sensitive": false,
+      "title": "Сборочная система",
+      "description": "gradle или maven. Обычно детектится init_pipeline_config.py по build-файлам; ручка нужна, когда детект не смог и поле попало в _incomplete (§0.1)",
+      "aliases": ["build system", "сборка", "билд-система", "gradle", "maven"]
+    },
+    {
+      "id": "quality.max_judge_iterations",
+      "file": "pipeline",
+      "path": "quality.max_judge_iterations",
+      "type": "int", "min": 1, "max": 20, "default": 3,
+      "category": "quality", "sensitive": false,
+      "title": "Лимит ре-итераций судьи",
+      "description": "Сколько fail'ов подряд может дать один судья run_judge, прежде чем вернёт exit 3 (ESCALATE — стоп-и-спроси) вместо бесконечного FAIL",
+      "aliases": ["лимит судьи", "judge iterations", "ре-итерации судьи", "max judge", "брейк судьи"]
+    },
+    {
+      "id": "quality.tdd",
+      "file": "pipeline",
+      "path": "quality.tdd",
+      "type": "bool", "default": true,
+      "category": "quality", "sensitive": false,
+      "title": "TDD-цикл (RED→GREEN)",
+      "description": "ЖИВАЯ ручка TDD: выключает и фазу 04-tdd (resolve_phases), и блок tdd-guard (запись в src/main без RED-теста). Гейт-флаг gates.tdd_enforced фазой/хуком НЕ читается",
+      "aliases": ["tdd", "тдд", "выключи tdd", "red green", "тест до кода"]
+    },
+    {
+      "id": "quality.test_layer",
+      "file": "pipeline",
+      "path": "quality.test_layer",
+      "type": "enum", "enum": ["service-unit", "mixed"], "default": "service-unit",
+      "category": "quality", "sensitive": false,
+      "title": "Слой тестирования",
+      "description": "service-unit: только Mockito-юниты, tdd-guard блокирует @DataJpaTest/@SpringBootTest; mixed: escape-hatch, интеграционные аннотации разрешены",
+      "aliases": ["test layer", "слой тестов", "mixed", "разреши интеграционные тесты", "datajpatest"]
+    },
+    {
+      "id": "quality.coverage_exclude_globs",
+      "file": "pipeline",
+      "path": "quality.coverage_exclude_globs",
+      "type": "list", "default": null,
+      "category": "quality", "sensitive": false,
+      "title": "Исключения покрытия (glob'ы)",
+      "description": "Список glob'ов, исключаемых из coverage-гейта (check_coverage --exclude). null — дефолты слоя: при service-unit исключаются repository/entity/dto/config",
+      "aliases": ["исключения покрытия", "coverage exclude", "глобы покрытия", "не считать покрытие"]
+    },
+    {
+      "id": "quality.no_test_layers",
+      "file": "pipeline",
+      "path": "quality.no_test_layers",
+      "type": "list", "default": null,
+      "category": "quality", "sensitive": false,
+      "title": "Слои без RED-теста",
+      "description": "Список слоёв task-plan, освобождаемых от RED-гейта (tdd-guard/check_tests_red/red-judge). null → дефолт migration/entity/dto/repository (совпадает с тем, что coverage уже исключает). service/controller/scheduler игнорируются (всегда тестируются). Задача exempt, если ВСЕ её слои в списке, либо у задачи task.no_test=true. Ресурсы (src/main/resources: liquibase, yml) не гейтятся независимо от списка",
+      "aliases": ["без тестов", "не тестировать слои", "no test layers", "освободить от red", "миграции без тестов", "jpa repo без тестов", "слои без тестов", "red исключения"]
+    },
+    {
+      "id": "quality.module_dep_policy",
+      "file": "pipeline",
+      "path": "quality.module_dep_policy",
+      "type": "enum", "enum": ["graph", "deny_new", "policy", "off"], "default": "graph",
+      "category": "quality", "sensitive": false,
+      "title": "Политика межмодульных зависимостей",
+      "description": "check_module_deps в фазе verify: graph — блок циклов и новых group-связок, которых проект не делает (дефолт); deny_new — блок любых новых; policy — по module_deps.forbidden; off — выключено",
+      "aliases": ["module deps", "межмодульные зависимости", "политика модулей", "граф модулей"]
+    },
+    {
+      "id": "quality.eval_threshold",
+      "file": "pipeline",
+      "path": "quality.eval_threshold",
+      "type": "float", "min": 0, "max": 1, "default": 0.95,
+      "category": "quality", "sensitive": false,
+      "title": "Порог прохождения eval'ов",
+      "description": "Доля eval'ов (0..1), которая должна пройти по умолчанию",
+      "aliases": ["порог eval", "eval threshold"]
+    },
+    {
+      "id": "quality.build_command",
+      "file": "pipeline",
+      "path": "quality.build_command",
+      "type": "string", "default": "./gradlew clean build",
+      "category": "quality", "sensitive": false,
+      "title": "Команда сборки",
+      "description": "Shell-команда полной сборки проекта",
+      "aliases": ["build", "сборка", "команда сборки"]
+    },
+    {
+      "id": "quality.test_command",
+      "file": "pipeline",
+      "path": "quality.test_command",
+      "type": "string", "default": "./gradlew test jacocoTestReport",
+      "category": "quality", "sensitive": false,
+      "title": "Команда тестов",
+      "description": "Shell-команда прогона тестов и отчёта покрытия",
+      "aliases": ["test", "тесты", "команда тестов"]
+    },
+    {
+      "id": "quality.jacoco_configured",
+      "file": "pipeline",
+      "path": "quality.jacoco_configured",
+      "type": "bool", "default": false,
+      "category": "quality", "sensitive": false,
+      "title": "JaCoCo подключён",
+      "description": "Подключён ли JaCoCo (генерит XML-отчёт покрытия). Если coverage-гейт активен, а это false — coverage в --strict будет FAIL без отчёта (см. validate)",
+      "aliases": ["jacoco", "жакоко", "покрытие подключено", "jacoco_configured"]
+    },
+    {
+      "id": "quality.architecture_check",
+      "file": "pipeline",
+      "path": "quality.architecture_check",
+      "type": "bool", "default": false,
+      "category": "quality", "sensitive": false,
+      "title": "Гейт архитектуры (ArchUnit-lite)",
+      "description": "Включить детерминированный гейт слоёв check_architecture.py в фазе verify: package_root, размещение классов по слоям, запрет зависимостей (entity→service и т.п.). Без Java/ArchUnit",
+      "aliases": ["архитектура", "archunit", "слои", "layering", "architecture", "architecture_check"]
+    },
+    {
+      "id": "quality.tautology_check",
+      "file": "pipeline",
+      "path": "quality.tautology_check",
+      "type": "bool", "default": true,
+      "category": "quality", "sensitive": false,
+      "title": "Гейт тавтологичных тестов",
+      "description": "Статический детектор пустых/тавтологичных тестов check_tautological_tests.py (assertTrue(true), пустое тело, нет ассертов). Вшит floor'ом в coverage-judge (05-tests); дефолт ВКЛ, выключение — явное false. Дополняет RED-гейт, работает без build",
+      "aliases": ["тавтология", "тавтологичные тесты", "tautology", "пустые тесты", "tautology_check"]
+    },
+    {
+      "id": "quality.traceability_check",
+      "file": "pipeline",
+      "path": "quality.traceability_check",
+      "type": "bool", "default": false,
+      "category": "quality", "sensitive": false,
+      "title": "Гейт трассируемости",
+      "description": "Включить сквозной judge трассируемости check_traceability.py: каждая задача имеет резолвимый sdd_ref, ≥1 eval и непустой acceptance (матрица требование→SDD→задача→eval). Ловит 'забыли верифицировать требование'",
+      "aliases": ["трассируемость", "traceability", "матрица трассировки", "sdd_ref", "traceability_check"]
+    },
+    {
+      "id": "sdd.security_gate",
+      "file": "pipeline",
+      "path": "sdd.security_gate",
+      "type": "enum", "enum": ["hard", "applicability", "soft"], "default": "applicability",
+      "category": "quality", "sensitive": false,
+      "title": "Строгость ДКБ-разделов SDD",
+      "description": "Как check_sdd_doc гейтит новые разделы SDD (арх. контекст с границами доверия, модель угроз, привилегированные сценарии, регуляторка): hard — все обязательны с контентом; applicability — арх+модель угроз обязательны (можно 'не применимо: причина'), пользовательские истории/принятые решения/регуляторка — warning; soft — все новые разделы только warning. Ядро SDD (§1-7 + Given-When-Then + запрет кода) жёстко всегда",
+      "aliases": ["дкб", "security gate", "строгость спеки", "модель угроз", "sdd security", "состав спеки", "разделы sdd"]
+    },
+    {
+      "id": "sdd.pull_before_grounding",
+      "file": "pipeline",
+      "path": "sdd.pull_before_grounding",
+      "type": "bool", "default": false,
+      "category": "quality", "sensitive": false,
+      "title": "git pull мастера перед grounding",
+      "description": "Если мастер в отдельном репо (docs.master.mode=separate-repo) — перед фазой grounding сделать git -C <repo_path> pull --ff-only, чтобы grounding читал свежий мастер. Мягко: на ошибке — предупреждение, не блок",
+      "aliases": ["pull before grounding", "обновить мастер", "pull мастера", "свежий grounding"]
+    },
+    {
+      "id": "autonomy.mode",
+      "file": "pipeline",
+      "path": "autonomy.mode",
+      "type": "enum", "enum": ["gated", "auto"], "default": "gated",
+      "category": "autonomy", "sensitive": false,
+      "title": "Режим автономии",
+      "description": "gated — каждый гейт требует подтверждения; auto — пайплайн идёт сам до auto_max_risk",
+      "aliases": ["автономия", "режим", "gated", "auto"]
+    },
+    {
+      "id": "autonomy.auto_max_risk",
+      "file": "pipeline",
+      "path": "autonomy.auto_max_risk",
+      "type": "enum", "enum": ["R0", "R1", "R2", "R3", "R4", "R5"], "default": "R1",
+      "category": "autonomy", "sensitive": true,
+      "title": "Макс. риск авто-аппрува (проект)",
+      "description": "Действия с риском <= уровня проходят без подтверждения. Переопределяет risk-policy autonomy_auto_max для этого проекта",
+      "aliases": ["авто-аппрув", "auto approve", "макс риск", "auto_max_risk", "уровень риска"]
+    },
+    {
+      "id": "autonomy.criticality",
+      "file": "pipeline",
+      "path": "autonomy.criticality",
+      "type": "enum", "enum": ["low", "medium", "high"], "default": "medium",
+      "category": "autonomy", "sensitive": false,
+      "title": "Критичность проекта",
+      "description": "Класс критичности проекта, влияет на строгость гейтов",
+      "aliases": ["критичность", "criticality"]
+    },
+    {
+      "id": "pipeline.mode",
+      "file": "pipeline",
+      "path": "pipeline.mode",
+      "type": "enum", "enum": ["lite", "full"], "default": "",
+      "category": "pipeline", "sensitive": false,
+      "title": "Режим пайплайна (выбранный путь)",
+      "description": "Выбранный путь: lite (готовая Jira-подзадача, forgelite) | full (фича с нуля, feature-pipeline). Записывает router — для аудита и headless-предзаписи выбора. Хуком НЕ гейтится (сам путь кодирует namespace активного манифеста); required_decisions форсит sources.spec/криктичность, а не mode.",
+      "aliases": ["режим", "путь", "mode", "lite/full"]
+    },
+    {
+      "id": "sources.spec",
+      "file": "pipeline",
+      "path": "sources.spec",
+      "type": "string", "default": "",
+      "category": "pipeline", "sensitive": false,
+      "title": "Путь к спецификации (source of truth)",
+      "description": "Путь к готовой спеке/SDD, по которой строится tech-design (lite+design). Source of truth — required_decisions для фазы lite-design (gate-guard блокирует запись фазы без него).",
+      "aliases": ["спека", "спецификация", "spec", "source of truth", "sdd path"]
+    },
+    {
+      "id": "docs.mode",
+      "file": "pipeline",
+      "path": "docs.mode",
+      "type": "enum", "enum": ["in-repo", "separate-repo"], "default": "in-repo",
+      "category": "docs", "sensitive": false,
+      "title": "Где живут доки",
+      "description": "in-repo — в репозитории кода; separate-repo — во внешнем репо спеки (repo_path)",
+      "aliases": ["доки", "документация", "куда класть доки", "docs mode"]
+    },
+    {
+      "id": "docs.docs_path",
+      "file": "pipeline",
+      "path": "docs.docs_path",
+      "type": "string", "default": "docs",
+      "category": "docs", "sensitive": false,
+      "title": "Папка доков (in-repo)",
+      "description": "Базовая папка документных артефактов под корнем проекта",
+      "aliases": ["docs path", "папка доков"]
+    },
+    {
+      "id": "docs.repo_path",
+      "file": "pipeline",
+      "path": "docs.repo_path",
+      "type": "string", "default": null,
+      "category": "docs", "sensitive": false,
+      "title": "Путь к внешнему репо спеки (separate-repo)",
+      "description": "Абсолютный путь к внешнему репозиторию спеки, если docs.mode = separate-repo",
+      "aliases": ["repo path", "внешний репо спеки"]
+    },
+    {
+      "id": "docs.feature_subdir",
+      "file": "pipeline",
+      "path": "docs.feature_subdir",
+      "type": "string", "default": "feature-pipeline",
+      "category": "docs", "sensitive": false,
+      "title": "Подпапка фич",
+      "description": "Имя подпапки под docs-базой для артефактов фич",
+      "aliases": ["feature subdir"]
+    },
+    {
+      "id": "docs.system_analysis_subdir",
+      "file": "pipeline",
+      "path": "docs.system_analysis_subdir",
+      "type": "string", "default": "system-analysis",
+      "category": "docs", "sensitive": false,
+      "title": "Подпапка системного обзора",
+      "description": "Имя подпапки под docs-базой для system-analysis",
+      "aliases": ["system analysis subdir"]
+    },
+    {
+      "id": "docs.master.mode",
+      "file": "pipeline",
+      "path": "docs.master.mode",
+      "type": "enum", "enum": ["in-repo", "separate-repo"], "default": null,
+      "category": "docs", "sensitive": false,
+      "title": "Режим локации мастера",
+      "description": "Где живёт МАСТЕР (system-analysis + specs/): null → там же, где docs (фолбэк на docs.mode); separate-repo → в docs.master.repo_path (отдельный/удалённый репо), пока дельты остаются рядом с кодом",
+      "aliases": ["мастер репо", "master mode", "мастер отдельно", "локация мастера", "master location"]
+    },
+    {
+      "id": "docs.master.repo_path",
+      "file": "pipeline",
+      "path": "docs.master.repo_path",
+      "type": "string", "default": null,
+      "category": "docs", "sensitive": false,
+      "title": "Путь к клону мастер-репо",
+      "description": "АБСОЛЮТНЫЙ путь к уже склонированному репозиторию мастер-спеки (при docs.master.mode=separate-repo). forge пишет в рабочее дерево, коммит/push делает пользователь",
+      "aliases": ["master repo path", "путь мастера", "клон мастера", "спек-репо"]
+    },
+    {
+      "id": "docs.master.repo_url",
+      "file": "pipeline",
+      "path": "docs.master.repo_url",
+      "type": "string", "default": null,
+      "category": "docs", "sensitive": false,
+      "title": "origin мастер-репо (для гайд-клона)",
+      "description": "URL origin репозитория мастер-спеки — используется как подсказка для ручного git clone, если repo_path отсутствует. forge авто-clone НЕ делает",
+      "aliases": ["master repo url", "origin мастера", "url мастера"]
+    },
+    {
+      "id": "master.enabled",
+      "file": "pipeline",
+      "path": "docs.master.enabled",
+      "type": "bool", "default": false,
+      "category": "docs", "sensitive": false,
+      "title": "Требования-мастер (specs/<cap>/spec.md)",
+      "description": "Вести требования-мастер spec.md и сливать в неё принятые требования дельт (sdd.md) на фазе 06 (merge_delta_to_master). Выключено → работает только grounding-мастер (system-analysis)",
+      "aliases": ["мастер спека", "master spec", "требования мастер", "specs", "мастер enabled"]
+    },
+    {
+      "id": "master.capability",
+      "file": "pipeline",
+      "path": "docs.master.capability",
+      "type": "string", "default": null,
+      "category": "docs", "sensitive": false,
+      "title": "Капабилити мастер-спеки",
+      "description": "Имя капабилити — папка требования-мастера specs/<capability>/spec.md. null → project.name (один мастер на репо)",
+      "aliases": ["capability", "капабилити", "имя спеки", "master capability"]
+    },
+    {
+      "id": "docs.master.adr_subdir",
+      "file": "pipeline",
+      "path": "docs.master.adr_subdir",
+      "type": "string", "default": "adr",
+      "category": "docs", "sensitive": false,
+      "title": "Подпапка ADR",
+      "description": "Имя подпапки под master-базой для ADR-файлов (<master_base>/adr)",
+      "aliases": ["adr subdir", "папка adr", "каталог решений"]
+    },
+    {
+      "id": "adr.enabled",
+      "file": "pipeline",
+      "path": "adr.enabled",
+      "type": "bool", "default": false,
+      "category": "quality", "sensitive": false,
+      "title": "ADR — архитектурные решения",
+      "description": "Вести ADR-файлы (MADR: rationale+статус) в <master_base>/adr и гейтить их на 02-design (check_adr в design-judge: состав + целостность ссылок ADR-NNNN из tech-design/sdd). Дефолт выключено",
+      "aliases": ["adr", "адр", "решения", "architecture decisions", "adr enabled", "decision record"]
+    },
+    {
+      "id": "adr.enforce_couplings",
+      "file": "pipeline",
+      "path": "adr.enforce_couplings",
+      "type": "bool", "default": false,
+      "category": "quality", "sensitive": false,
+      "title": "ADR обязателен для новых связок модулей",
+      "description": "На 05-verify новая межмодульная group-связка проходит, только если её запись в architecture-policy.json (module_deps.allowed_new) ссылается на accepted ADR. architecture-policy.json становится энфорсимой проекцией ADR. Дефолт выключено",
+      "aliases": ["adr связки", "enforce couplings", "adr для модулей", "связки требуют adr"]
+    },
+    {
+      "id": "conventions.migration_tool",
+      "file": "pipeline",
+      "path": "conventions.migration_tool",
+      "type": "enum", "enum": ["liquibase", "flyway", "none"], "default": "none",
+      "category": "conventions", "sensitive": false,
+      "title": "Инструмент миграций",
+      "description": "Какой инструмент схемных миграций используется в проекте",
+      "aliases": ["миграции", "migration", "liquibase", "flyway"]
+    },
+    {
+      "id": "conventions.package_root",
+      "file": "pipeline",
+      "path": "conventions.package_root",
+      "type": "string", "default": null,
+      "category": "conventions", "sensitive": false,
+      "title": "Корневой пакет",
+      "description": "Корневой Java-пакет проекта (например ru.sbrf.pprb.npf)",
+      "aliases": ["package root", "корневой пакет", "пакет"]
+    },
+    {
+      "id": "conventions.changelog_path",
+      "file": "pipeline",
+      "path": "conventions.changelog_path",
+      "type": "string", "default": null,
+      "category": "conventions", "sensitive": false,
+      "title": "Путь к changelog миграций",
+      "description": "Путь к корневому changelog Liquibase/Flyway",
+      "aliases": ["changelog", "changelog path"]
+    },
+    {
+      "id": "jira.enabled",
+      "file": "pipeline",
+      "path": "jira.enabled",
+      "type": "bool", "default": null,
+      "category": "jira", "sensitive": false,
+      "title": "Jira включена",
+      "description": "Создавать ли задачи в Jira в фазе постановки",
+      "aliases": ["jira", "джира", "jira enabled"]
+    },
+    {
+      "id": "jira.project_key",
+      "file": "pipeline",
+      "path": "jira.project_key",
+      "type": "string", "default": null,
+      "category": "jira", "sensitive": false,
+      "title": "Ключ проекта Jira",
+      "description": "Ключ проекта в Jira (например NPF)",
+      "aliases": ["project key", "ключ jira", "ключ проекта"]
+    },
+    {
+      "id": "jira.issue_type_story",
+      "file": "pipeline",
+      "path": "jira.issue_type_story",
+      "type": "string", "default": "Story",
+      "category": "jira", "sensitive": false,
+      "title": "Тип задачи Story",
+      "description": "Название типа задачи для Story",
+      "aliases": ["story type"]
+    },
+    {
+      "id": "jira.issue_type_subtask",
+      "file": "pipeline",
+      "path": "jira.issue_type_subtask",
+      "type": "string", "default": "Sub-task",
+      "category": "jira", "sensitive": false,
+      "title": "Тип задачи Sub-task",
+      "description": "Название типа задачи для Sub-task",
+      "aliases": ["subtask type"]
+    },
+
+    {
+      "id": "eval_driven_dev",
+      "file": "gates",
+      "path": "gates.eval_driven_dev.enabled",
+      "type": "bool", "default": true,
+      "category": "gates", "sensitive": false,
+      "title": "Гейт: eval-driven dev",
+      "description": "Рантайм-флаг eval-guard (блок src/main до прохождения eval-plan)",
+      "aliases": ["eval gate", "edd gate"]
+    },
+    {
+      "id": "security_review",
+      "file": "gates",
+      "path": "gates.security_review.enabled",
+      "type": "bool", "default": false,
+      "category": "gates", "sensitive": false,
+      "title": "Гейт: security review",
+      "description": "Включает фазу security-review (SAST + CVE)",
+      "aliases": ["security", "секьюрити", "security review"]
+    },
+    {
+      "id": "tdd_enforced",
+      "file": "gates",
+      "path": "gates.tdd_enforced.enabled",
+      "type": "bool", "default": true,
+      "category": "gates", "sensitive": false,
+      "title": "Gate-флаг TDD (только для phases_override)",
+      "description": "Флаг для enabled_by/skip_if кастомных фаз (gates.tdd_enforced). НЕ управляет tdd-guard и фазой 04-tdd — их живая ручка quality.tdd",
+      "aliases": ["gates tdd", "tdd gate flag"]
+    },
+    {
+      "id": "parallel_build",
+      "file": "gates",
+      "path": "gates.parallel_build.enabled",
+      "type": "bool", "default": false,
+      "category": "gates", "sensitive": false,
+      "title": "Гейт: параллельная сборка",
+      "description": "Разрешает параллельную сборку задач",
+      "aliases": ["parallel build", "параллельная сборка"]
+    },
+    {
+      "id": "background_consolidation",
+      "file": "gates",
+      "path": "gates.background_consolidation.enabled",
+      "type": "bool", "default": false,
+      "category": "gates", "sensitive": false,
+      "title": "Гейт: фоновая консолидация",
+      "description": "Запускает консолидацию асинхронно",
+      "aliases": ["background consolidation"]
+    },
+    {
+      "id": "migration_impact_check",
+      "file": "gates",
+      "path": "gates.migration_impact_check.enabled",
+      "type": "bool", "default": true,
+      "category": "gates", "sensitive": false,
+      "title": "Гейт: проверка миграций",
+      "description": "Проверяет зависимости миграций",
+      "aliases": ["migration check", "проверка миграций"]
+    },
+    {
+      "id": "module_deps_validation",
+      "file": "gates",
+      "path": "gates.module_deps_validation.enabled",
+      "type": "bool", "default": true,
+      "category": "gates", "sensitive": false,
+      "title": "Гейт: валидация зависимостей модулей",
+      "description": "Проверяет DAG зависимостей модулей",
+      "aliases": ["module deps", "зависимости модулей"]
+    },
+
+    {
+      "id": "risk.autonomy_auto_max",
+      "file": "risk",
+      "path": "autonomy_auto_max",
+      "type": "enum", "enum": ["R0", "R1", "R2", "R3", "R4", "R5"], "default": "R1",
+      "category": "risk", "sensitive": true,
+      "title": "Глобальный порог авто-аппрува (risk-policy)",
+      "description": "Действия с риском <= уровня проходят авто (с логом). Глобально для всех проектов; pipeline.autonomy.auto_max_risk переопределяет на проект",
+      "aliases": ["risk auto max", "глобальный авто-аппрув", "autonomy_auto_max"]
+    },
+    {
+      "id": "risk.default_level",
+      "file": "risk",
+      "path": "default_level",
+      "type": "enum", "enum": ["R0", "R1", "R2", "R3", "R4", "R5"], "default": "R1",
+      "category": "risk", "sensitive": true,
+      "title": "Дефолтный уровень риска",
+      "description": "Уровень риска по умолчанию, если действие не классифицировано path/command-правилами",
+      "aliases": ["default risk level", "дефолтный риск"]
+    }
+  ]
+}
