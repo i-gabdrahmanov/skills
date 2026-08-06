@@ -9,8 +9,8 @@
   2. Если в нём есть поле "step_id" (контракт субагентов пайплайна) — пишем шаг напрямую
      через update.py в namespace активной фичи (каждый SubagentStop — отдельный процесс,
      поэтому буферизация между вызовами невозможна; прежний FlushGate был мёртвым кодом).
-  3. Если step_id нет — НИЧЕГО не метим (не угадываем), но складываем вывод в
-     <root>/ground/ai-logs/_subagent-outputs/<agent_type>-<id8>.json для трассировки.
+  3. Если step_id нет — НИЧЕГО не делаем (не угадываем и не логируем). Никакого
+     дампа вывода на диск: субагенты вне контракта пайплайна не оставляют артефактов.
 
 Никогда не роняет прогон: всегда exit 0 (это пост-событие, блокировать смысла нет).
 """
@@ -98,12 +98,6 @@ def _read_transcript_tail(path: str, limit: int = 20000) -> str:
         return ""
 
 
-def _agent_label(data: dict) -> str:
-    at = re.sub(r"[^A-Za-z0-9._-]+", "-", str(data.get("agent_type") or "agent")).strip("-")
-    aid = re.sub(r"[^A-Za-z0-9]+", "", str(data.get("agent_id") or ""))[:8]
-    return at + (f"-{aid}" if aid else "")
-
-
 def _status_from(obj: dict) -> str:
     for key in ("status", "result", "ok", "passed"):
         v = obj.get(key)
@@ -171,12 +165,9 @@ def main() -> int:
             _update_gate_phase(root, feature, step_id, status)
             return 0
 
-        # нет step_id — не угадываем, просто сохраняем вывод для трассировки
-        drop = root / "ground" / "ai-logs" / "_subagent-outputs"
-        drop.mkdir(parents=True, exist_ok=True)
-        (drop / f"{_agent_label(data)}.json").write_text(
-            json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        # нет step_id — не угадываем и не логируем (пост-событие вне контракта пайплайна,
+        # никаких артефактов на диск)
+        return 0
     except Exception:
         return 0
     return 0
