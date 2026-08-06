@@ -68,9 +68,13 @@ description: >
 
 ### 1.1. Инициализация (один раз)
 ```
-python3 <project>/.gigacode/hooks/preflight.py --project <toplevel>
+python3 <forge>/hooks/preflight.py --project <toplevel>
 ```
-exit 0 — продолжаем; exit 1 — стоп, чинить деплой. Заведи стейт (namespace forgelite):
+> **`<forge>` — корень кода форжа: каталог на два уровня выше этого SKILL.md**
+> (`<project>/.gigacode` при legacy-деплое либо корень extension'а). preflight печатает его в
+> `layout.base`; ниже любой путь `<project>/.gigacode/skills/...` читай как `<forge>/skills/...`.
+
+exit 0 — продолжаем; exit 1 — стоп, чинить деплой/установку extension'а. Заведи стейт (namespace forgelite):
 ```
 python3 <project>/.gigacode/skills/pipeline-state/scripts/init.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --steps @<project>/.gigacode/skills/forgelite/references/manifest-steps.json
 ```

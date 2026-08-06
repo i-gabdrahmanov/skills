@@ -4,9 +4,18 @@ Pre-flight check для feature-pipeline.
 Проверяет, что control-plane включён и конфигурация доступна.
 Вызывается самым первым при старте пайплайна.
 
+Код форжа живёт в ДВУХ раскладках, и проверять надо ту, из которой реально запущен этот
+файл (база выводится из его расположения — тот же приём, что в hooks/_project.py):
+  • extension — нативный extension рантайма (qwen/gigacode): код в <ext>/{hooks,skills},
+    подключение хуков — <ext>/hooks/hooks.json через ${CLAUDE_PLUGIN_ROOT};
+  • project   — legacy deploy.sh: код в <project>/.gigacode/{hooks,skills},
+    подключение — <project>/.gigacode/settings.json (генерится resolve_hook_paths.py).
+Раньше проверялась ТОЛЬКО project-раскладка → в extension'е preflight валил старт
+(«хуки не задеплоены»), хотя харнес был поднят.
+
 Exit 0 — харнес активен, можно продолжать.
 Exit 1 — ENFORCEMENT OFF (essential-хук не подключён / settings / risk-policy).
-         Стоп-и-предупреди: сначала deploy, потом заново.
+         Стоп-и-предупреди: сначала deploy/установка extension'а, потом заново.
 Exit 2 — конфиг не инициализирован (ground/pipeline.json нет/неполон). Нормальный
          первый запуск: инициализируй конфиг и перезапусти preflight до exit 0.
 """
@@ -17,19 +26,90 @@ import re
 import sys
 from pathlib import Path
 
+# Ключевые хуки: файл на диске + РЕАЛЬНОЕ подключение (wiring). Раньше проверялось только
+# наличие файла → eval-guard лежал на диске, но не был в settings.json, и preflight давал
+# зелёный свет при выключенном enforcement.
+ESSENTIAL_HOOKS = [
+    "gate-guard.py",
+    "phase-gate.py",
+    "state-recorder.py",
+    "eval-guard.py",
+    "state-write-guard.py",
+    "grounding-evidence.py",
+]
 
-def _find_foreign_hook_paths(settings: dict, project_root: str) -> list[str]:
-    """Ищет в блоке hooks пути, ведущие за пределы .gigacode/hooks/ текущего проекта."""
+# Единственная переменная, которую рантайм подставляет в file-based хуках extension'а
+# (= корень extension'а). От неё строятся пути в hooks/hooks.json.
+PLUGIN_ROOT_VAR = "${CLAUDE_PLUGIN_ROOT}"
+
+# Каталоги рантаймов: .gigacode (форк GigaCode, прод) и .qwen (dev/тест).
+_RUNTIME_DIRS = (".gigacode", ".qwen")
+_EXT_MANIFESTS = ("gigacode-extension.json", "qwen-extension.json")
+
+
+def _home() -> Path:
+    """Домашний каталог (точка подмены в тестах)."""
+    return Path.home()
+
+
+def _self_base() -> Path:
+    """База кода, из которой запущен ЭТОТ preflight.
+
+    Файл лежит в <base>/hooks/preflight.py → база = parents[1]:
+    корень extension'а, либо <project>/.gigacode (legacy deploy), либо корень source-репо.
+    """
+    return Path(__file__).resolve().parents[1]
+
+
+def resolve_layout(project_root, self_base=None) -> dict:
+    """Где физически лежит код форжа, который грузит рантайм.
+
+    Проверяем ТУ раскладку, из которой запущен этот файл: запуск из extension'а (рядом есть
+    hooks/hooks.json) → extension, иначе развёрнутый в проекте `.gigacode` → project.
+    Обратный приоритет («сначала проект») давал ложный блок: устаревший/битый `.gigacode`
+    в репо валил старт, хотя энфорсмент реально шёл через установленный extension.
+
+    Исключение — extension лежит рядом, но рантайм его НЕ грузит (не установлен), а деплой
+    в проекте есть: тогда проверяем рабочий деплой, а не мёртвый каталог.
+
+    `shadow` — вторая раскладка, найденная одновременно с первой: цепочки хуков сложатся и
+    задвоятся (INSTALL.md §1), об этом предупреждаем.
+    """
+    proj_base = Path(project_root) / ".gigacode"
+    base = Path(self_base).resolve() if self_base is not None else _self_base()
+    deployed = ((proj_base / "hooks" / "settings.hooks.json").exists()
+                or (proj_base / "hooks" / "gate-guard.py").exists())
+    ext_wired = base != proj_base and (base / "hooks" / "hooks.json").exists()
+    if ext_wired and not (deployed
+                          and _extension_registry_status(base, project_root)[0] == "absent"):
+        return {"mode": "extension", "base": base,
+                "shadow": proj_base if deployed else None}
+    if deployed:
+        return {"mode": "project", "base": proj_base,
+                "shadow": base if ext_wired else None}
+    # Ни развёрнутого проекта, ни extension'а — сообщения ниже подскажут оба пути установки.
+    return {"mode": "none", "base": proj_base, "shadow": None}
+
+
+def _find_foreign_hook_paths(settings: dict, project_root=None, prefixes=None) -> list[str]:
+    """Ищет в блоке hooks пути к хукам вне ожидаемого каталога.
+
+    По умолчанию (project-раскладка) ожидается project_root + "/.gigacode/hooks/" — та же
+    склейка, что в settings.hooks.json/resolve_hook_paths.py. Сравниваем через прямые слэши
+    с обеих сторон: resolve_hook_paths.py подставляет в command прямой слэш (backslash рантайм
+    съедал при POSIX-разборе), а project_root тут из Path(...).resolve() — на Windows обратные
+    слэши. Без нормализации свои же хуки ложно попали бы в foreign, и preflight зациклил бы
+    совет «запусти deploy-local.sh». os.path.join не годится: дал бы чисто обратные слэши,
+    никогда не совпал бы с реальным префиксом в command.
+
+    `prefixes` — явный список допустимых префиксов (extension: "${CLAUDE_PLUGIN_ROOT}/hooks/"
+    и абсолютный путь каталога хуков extension'а).
+    """
     hooks = settings.get("hooks", {})
     found = []
-    # ВАЖНО: та же склейка, что в settings.hooks.json/resolve_hook_paths.py —
-    # project_root + "/.gigacode/hooks/". Сравниваем через прямые слэши с обеих сторон:
-    # resolve_hook_paths.py теперь подставляет в command прямой слэш (backslash рантайм
-    # съедал при POSIX-разборе), а project_root тут из Path(...).resolve() — на Windows
-    # обратные слэши. Без нормализации свои же хуки ложно попали бы в foreign, и preflight
-    # зациклил бы совет «запусти deploy-local.sh». os.path.join не годится: дал бы чисто
-    # обратные слэши, никогда не совпал бы с реальным префиксом в command.
-    expected_prefix = f"{project_root}/.gigacode/hooks/".replace("\\", "/")
+    if prefixes is None:
+        prefixes = [f"{project_root}/.gigacode/hooks/"]
+    prefixes = [p.replace("\\", "/") for p in prefixes]
 
     def _walk(node, path=""):
         if isinstance(node, str) and path.endswith("command"):
@@ -37,7 +117,7 @@ def _find_foreign_hook_paths(settings: dict, project_root: str) -> list[str]:
             m = re.search(r"(\S+\.py)\s*$", node)
             if m:
                 p = m.group(1)
-                if not p.replace("\\", "/").startswith(expected_prefix):
+                if not any(p.replace("\\", "/").startswith(pref) for pref in prefixes):
                     found.append(p)
         elif isinstance(node, dict):
             for k, v in node.items():
@@ -109,80 +189,219 @@ def _check_matchers_canonical(hooks_block: dict, wiring_src: str | None) -> list
     return errs
 
 
-# Минимальная версия Python (копия doctor.MIN_PYTHON; пинится test_doctor). Скрипты/хуки
-# используют синтаксис 3.10+ (PEP604 `X | None`, match); на 3.9 phase_sync падал.
-MIN_PYTHON = (3, 10)
+def _check_wiring(hooks_block: dict, wiring_src: str, prefixes: list[str] | None,
+                  errors: list[str]) -> None:
+    """Общая для обеих раскладок проверка подключения: essential-хуки перечислены,
+    матчеры матчат канон-имена, пути ведут в ожидаемый каталог.
 
-
-def preflight(project_root: str) -> dict:
-    errors = []
-    warnings = []
-    # «Ещё не инициализирован» — отдельный класс, НЕ enforcement off. Держим вне errors,
-    # чтобы deploy сразу после раскатки не выглядел провальным, но passed остаётся False
-    # (гейт арминга: субагентов не поднимать, пока конфиг не создан). Различие errors/init
-    # маппится на exit-код: 1 = enforcement off, 2 = инициализируй и перезапусти.
-    init_needed = []
-
-    # 0. Версия Python (раньше всего — иначе doctor/скрипты упадут с невнятным импорт-эррором)
-    if sys.version_info[:2] < MIN_PYTHON:
-        have = f"{sys.version_info.major}.{sys.version_info.minor}"
-        warnings.append(
-            f"Python {have}: пайплайн требует {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ "
-            f"(PEP604/match). Часть скриптов/хуков может падать. Обнови интерпретатор."
-        )
-
-    # 1. pipeline.json — конфиг control-plane. Отсутствие/неполнота — это «нормальный первый
-    #    запуск» (файл создаёт init_pipeline_config.py, а preflight бежит ДО него), а не поломка
-    #    энфорсмента → init_needed, а не errors. Битый JSON (не пустой, а невалидный) — уже реальная
-    #    ошибка: конфиг есть, но рантайм его не прочитает → errors.
-    pipeline_json = Path(project_root) / "ground" / "pipeline.json"
-    if not pipeline_json.exists():
-        init_needed.append("ground/pipeline.json not found — конфигурация не инициализирована")
-    else:
-        try:
-            cfg = json.loads(pipeline_json.read_text(encoding="utf-8"))
-            if cfg.get("_incomplete"):
-                init_needed.append(f"pipeline.json incomplete: {cfg['_incomplete']}")
-        except json.JSONDecodeError as e:
-            errors.append(f"pipeline.json parse error: {e}")
-
-    # 2. settings.hooks.json
-    hooks_settings = Path(project_root) / ".gigacode" / "hooks" / "settings.hooks.json"
-    if not hooks_settings.exists():
+    `prefixes=None` — проверку путей не делать (project-раскладка проверяет их отдельно,
+    на живом settings.json, и даёт свой совет про deploy-local.sh)."""
+    referenced = _referenced_hook_basenames(hooks_block)
+    for hook in ESSENTIAL_HOOKS:
+        if hook not in referenced:
+            errors.append(
+                f"essential hook НЕ подключён в {wiring_src}: {hook} "
+                f"(файл есть, но рантайм его не вызывает → enforcement off для этого хука)"
+            )
+    # Матчеры PreToolUse-цепочек ДОЛЖНЫ матчить КАНОНИЧЕСКИЕ имена инструментов рантайма
+    # (run_shell_command/write_file/edit), а не Claude-нотацию (^Bash$/Write|Edit). Иначе
+    # блок-хуки не попадают в execution-plan и весь deny-first молчит (BLOCKER-0). Рантайм
+    # матчит как new RegExp(matcher).test(canonicalToolName) — здесь мимикрия через re.search.
+    errors.extend(_check_matchers_canonical(hooks_block, wiring_src))
+    if prefixes is None:
+        return
+    foreign = _find_foreign_hook_paths({"hooks": hooks_block}, prefixes=prefixes)
+    if foreign:
         errors.append(
-            ".gigacode/hooks/settings.hooks.json not found — хуки не задеплоены"
+            f"{wiring_src}: обнаружены пути к хукам вне ожидаемого каталога: {foreign}. "
+            f"Ожидается префикс {prefixes[0]!r}."
         )
+
+
+def _check_risk_policy(hooks_dir: Path, label: str, errors: list[str]) -> None:
+    """risk-policy.json должен существовать и парситься — иначе risk_ladder тихо
+    деградирует до R1-auto («allow all»). Fail-closed на уровне готовности."""
+    risk_policy_p = hooks_dir / "risk-policy.json"
+    if not risk_policy_p.exists():
+        errors.append(f"{label}/risk-policy.json not found — risk ladder выключится (fail-open)")
+        return
+    try:
+        json.loads(risk_policy_p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        errors.append(f"risk-policy.json parse error: {e} — risk ladder деградирует до allow-all")
+
+
+def _ext_name(base: Path) -> str | None:
+    """Имя extension'а из его манифеста (gigacode-/qwen-extension.json)."""
+    for mf in _EXT_MANIFESTS:
+        p = base / mf
+        try:
+            if p.exists():
+                name = json.loads(p.read_text(encoding="utf-8")).get("name")
+                if isinstance(name, str) and name:
+                    return name
+        except (json.JSONDecodeError, OSError):
+            continue
+    return None
+
+
+def _registry_dirs(project_root) -> list[Path]:
+    """Каталоги установленных extension'ов: ~/.{gigacode,qwen}/extensions и проектные."""
+    dirs = [_home() / rt / "extensions" for rt in _RUNTIME_DIRS]
+    dirs += [Path(project_root) / rt / "extensions" for rt in _RUNTIME_DIRS]
+    return [d for d in dirs if d.is_dir()]
+
+
+def _extension_registry_status(base: Path, project_root) -> tuple[str, str]:
+    """Видит ли рантайм ИМЕННО ЭТОТ extension.
+
+    В extension-раскладке «файлы на месте» проверяет сам себя (хуки лежат рядом с preflight),
+    поэтому единственный содержательный вопрос — зарегистрирован ли каталог в рантайме.
+    Возвращает ("ok"|"other-copy"|"absent"|"unknown", деталь).
+    """
+    name = _ext_name(base)
+    entries: list[Path] = []
+    other: Path | None = None
+    for d in _registry_dirs(project_root):
+        try:
+            children = sorted(d.iterdir())
+        except OSError:
+            continue
+        for entry in children:
+            if not entry.is_dir():
+                continue
+            entries.append(entry)
+            try:
+                if entry.resolve() == base:      # install-копия: рантайм грузит нас же
+                    return "ok", str(entry)
+            except OSError:
+                pass
+            # link-установка: в каталоге лежит указатель на источник
+            for f in entry.glob("*-extension-install.json"):
+                try:
+                    src = json.loads(f.read_text(encoding="utf-8")).get("source")
+                except (json.JSONDecodeError, OSError):
+                    continue
+                if isinstance(src, str) and src:
+                    try:
+                        if Path(src).expanduser().resolve() == base:
+                            return "ok", str(entry)
+                    except OSError:
+                        pass
+            if name and entry.name == name and other is None:
+                other = entry
+    if other is not None:
+        return "other-copy", str(other)
+    if not entries:
+        return "unknown", ""
+    return "absent", ", ".join(str(e) for e in entries[:5])
+
+
+def _legacy_settings_drift(base: Path, project_root) -> list[str]:
+    """forge-хуки, прописанные в settings.json рантайма/проекта (старый deploy.sh).
+
+    Extension грузится ПОВЕРХ settings.json — цепочки складываются, хуки задваиваются,
+    а устаревшие пути из settings.json ещё и падают на каждом вызове (INSTALL.md §1).
+    """
+    try:
+        ours = {p.name for p in (base / "hooks").glob("*.py")}
+    except OSError:
+        ours = set(ESSENTIAL_HOOKS)
+    hits = []
+    candidates = [_home() / rt / "settings.json" for rt in _RUNTIME_DIRS]
+    candidates += [Path(project_root) / rt / "settings.json" for rt in _RUNTIME_DIRS]
+    for p in candidates:
+        try:
+            if not p.exists():
+                continue
+            block = json.loads(p.read_text(encoding="utf-8")).get("hooks", {})
+        except (json.JSONDecodeError, OSError):
+            continue
+        dup = sorted(_referenced_hook_basenames(block) & ours)
+        if dup:
+            hits.append(
+                f"{p}: forge-хуки прописаны и в settings.json, и в extension'е "
+                f"({dup[:6]}{'…' if len(dup) > 6 else ''}) — цепочка задвоится "
+                f"(INSTALL.md §1: убрать forge-записи из settings.json)"
+            )
+    return hits
+
+
+def _check_extension_layout(base: Path, project_root, errors: list[str],
+                            warnings: list[str]) -> None:
+    """Раскладка extension: код рядом с этим файлом, wiring — hooks/hooks.json."""
+    hooks_dir = base / "hooks"
+    for hook in ESSENTIAL_HOOKS:
+        if not (hooks_dir / hook).exists():
+            errors.append(f"hook not found: {hooks_dir / hook} (extension повреждён)")
+
+    wiring_p = hooks_dir / "hooks.json"
+    try:
+        hooks_block = json.loads(wiring_p.read_text(encoding="utf-8")).get("hooks", {})
+    except (json.JSONDecodeError, OSError) as e:
+        errors.append(f"hooks/hooks.json parse error: {e} — рантайм не подключит ни одного хука")
+        hooks_block = None
+    if hooks_block is not None:
+        if not hooks_block:
+            errors.append("hooks/hooks.json: hooks block is empty — enforcement inactive")
+        else:
+            _check_wiring(
+                hooks_block, "hooks/hooks.json",
+                [f"{PLUGIN_ROOT_VAR}/hooks/", f"{hooks_dir}/".replace("\\", "/")],
+                errors,
+            )
+
+    _check_risk_policy(hooks_dir, "hooks", errors)
+
+    status, detail = _extension_registry_status(base, project_root)
+    if status == "absent":
+        errors.append(
+            f"extension не установлен в рантайме: {base} нет среди установленных "
+            f"({detail}) → хуки не грузятся (ENFORCEMENT OFF). Поставь "
+            f"`qwen extensions link {base}` (для форка — `gigacode extensions link …`) "
+            f"и перезапусти сессию."
+        )
+    elif status == "other-copy":
+        warnings.append(
+            f"рантайм грузит другую копию extension'а: {detail} (preflight запущен из {base}). "
+            f"Проверено содержимое {base} — обнови установленную копию "
+            f"(`extensions update` либо uninstall + link/install)."
+        )
+    elif status == "unknown":
+        warnings.append(
+            "не удалось проверить установку extension'а: каталогов "
+            f"{'/'.join(_RUNTIME_DIRS)}/extensions нет. Убедись сам, что "
+            "`extensions list` показывает forge."
+        )
+
+    for msg in _legacy_settings_drift(base, project_root):
+        warnings.append(msg)
+
+
+def _check_project_layout(base: Path, project_root, errors: list[str],
+                          warnings: list[str]) -> None:
+    """Legacy-раскладка deploy.sh: код в <project>/.gigacode, wiring — settings.json."""
+    hooks_dir = base / "hooks"
+    hooks_settings = hooks_dir / "settings.hooks.json"
+    if not hooks_settings.exists():
+        errors.append(".gigacode/hooks/settings.hooks.json not found — хуки не задеплоены")
     else:
         try:
             hs = json.loads(hooks_settings.read_text(encoding="utf-8"))
-            hooks_block = hs.get("hooks", {})
-            if not hooks_block:
+            if not hs.get("hooks", {}):
                 errors.append("hooks block is empty — enforcement inactive")
         except json.JSONDecodeError as e:
             errors.append(f"settings.hooks.json parse error: {e}")
 
-    # 3. Проверка ключевых хуков: ФАЙЛ на диске + РЕАЛЬНОЕ подключение (wiring).
-    #    Раньше проверялось только наличие файла → eval-guard лежал на диске, но не был
-    #    в settings.json, и preflight давал зелёный свет при выключенном enforcement.
-    essential_hooks = [
-        "gate-guard.py",
-        "phase-gate.py",
-        "state-recorder.py",
-        "eval-guard.py",
-        "state-write-guard.py",
-        "grounding-evidence.py",
-    ]
-    hooks_dir = Path(project_root) / ".gigacode" / "hooks"
-    for hook in essential_hooks:
+    for hook in ESSENTIAL_HOOKS:
         if not (hooks_dir / hook).exists():
             errors.append(f"hook not found: .gigacode/hooks/{hook}")
 
     # Источник истины wiring — задеплоенный settings.json (его читает рантайм); если его ещё
     # нет — эталон settings.hooks.json (он будет развёрнут).
-    settings_json_p = Path(project_root) / ".gigacode" / "settings.json"
-    hooks_template_p = Path(project_root) / ".gigacode" / "hooks" / "settings.hooks.json"
+    settings_json = base / "settings.json"
     wiring_src, wiring_block = None, None
-    for cand in (settings_json_p, hooks_template_p):
+    for cand in (settings_json, hooks_settings):
         if cand.exists():
             try:
                 wiring_block = json.loads(cand.read_text(encoding="utf-8")).get("hooks", {})
@@ -191,40 +410,19 @@ def preflight(project_root: str) -> dict:
             except (json.JSONDecodeError, OSError):
                 continue
     if wiring_block is not None:
-        referenced = _referenced_hook_basenames(wiring_block)
-        for hook in essential_hooks:
-            if hook not in referenced:
-                errors.append(
-                    f"essential hook НЕ подключён в {wiring_src}: {hook} "
-                    f"(файл есть, но рантайм его не вызывает → enforcement off для этого хука)"
-                )
-        # 3a. Матчеры PreToolUse-цепочек ДОЛЖНЫ матчить КАНОНИЧЕСКИЕ имена инструментов рантайма
-        #     (run_shell_command/write_file/edit), а не Claude-нотацию (^Bash$/Write|Edit). Иначе
-        #     блок-хуки не попадают в execution-plan и весь deny-first молчит (BLOCKER-0). Рантайм
-        #     матчит как new RegExp(matcher).test(canonicalToolName) — здесь мимикрия через re.search.
-        errors.extend(_check_matchers_canonical(wiring_block, wiring_src))
+        # prefixes=None: пути проверяются ниже, на живом settings.json (в эталоне
+        # settings.hooks.json они ещё в виде плейсхолдеров ${PROJECT_ROOT}).
+        _check_wiring(wiring_block, wiring_src, None, errors)
 
-    # 3b. risk-policy.json должен существовать и парситься — иначе risk_ladder тихо
-    #     деградирует до R1-auto («allow all»). Fail-closed на уровне готовности.
-    risk_policy_p = Path(project_root) / ".gigacode" / "hooks" / "risk-policy.json"
-    if not risk_policy_p.exists():
-        errors.append(".gigacode/hooks/risk-policy.json not found — risk ladder выключится (fail-open)")
-    else:
-        try:
-            json.loads(risk_policy_p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as e:
-            errors.append(f"risk-policy.json parse error: {e} — risk ladder деградирует до allow-all")
+    _check_risk_policy(hooks_dir, ".gigacode/hooks", errors)
 
-    # 4. Проверка settings.json (потребляется рантаймом)
-    settings_json = Path(project_root) / ".gigacode" / "settings.json"
-    resolver_script = Path(project_root) / ".gigacode" / "hooks" / "resolve_hook_paths.py"
-    deploy_script = Path(project_root) / ".gigacode" / "deploy-local.sh"
+    resolver_script = hooks_dir / "resolve_hook_paths.py"
+    deploy_script = base / "deploy-local.sh"
 
     if settings_json.exists():
         try:
             stg = json.loads(settings_json.read_text(encoding="utf-8"))
-            hooks_block = stg.get("hooks", {})
-            if not hooks_block:
+            if not stg.get("hooks", {}):
                 errors.append(
                     ".gigacode/settings.json: hooks block is empty — enforcement inactive"
                 )
@@ -248,16 +446,17 @@ def preflight(project_root: str) -> dict:
             errors.append(
                 ".gigacode/settings.json не найден. "
                 "Скопируй .gigacode/hooks/settings.hooks.json в .gigacode/settings.json "
-                "или создай resolve_hook_paths.py."
+                "или создай resolve_hook_paths.py. Либо поставь форж как extension "
+                "(см. INSTALL.md) — тогда settings.json не нужен."
             )
 
-    # 5. Проверка resolve_hook_paths.py
+    # Проверка resolve_hook_paths.py
     if resolver_script.exists():
         try:
             import subprocess
             res = subprocess.run(
                 [sys.executable, "-X", "utf8", str(resolver_script),
-                 "--check", "--project", project_root],
+                 "--check", "--project", str(project_root)],
                 capture_output=True, text=True, encoding="utf-8", timeout=15,
             )
             if res.returncode != 0:
@@ -280,45 +479,114 @@ def preflight(project_root: str) -> dict:
                 "Пути в settings.hooks.json могут быть неактуальными."
             )
 
-    # 6. doctor.py — self-check целостности пайплайна (advisory: предупреждение, не блок)
-    doctor_script = (Path(project_root) / ".gigacode" / "skills" / "feature-pipeline"
-                     / "scripts" / "doctor.py")
-    if doctor_script.exists():
+
+def _run_doctor(base: Path, project_root, errors: list[str], warnings: list[str]) -> None:
+    """doctor.py — self-check целостности пайплайна (advisory: предупреждение, не блок)."""
+    doctor_script = base / "skills" / "feature-pipeline" / "scripts" / "doctor.py"
+    if not doctor_script.exists():
+        return
+    try:
+        import subprocess
+        res = subprocess.run(
+            [sys.executable, "-X", "utf8", str(doctor_script),
+             "--project", str(project_root), "--json"],
+            capture_output=True, text=True, encoding="utf-8", timeout=20,
+        )
         try:
-            import subprocess
-            res = subprocess.run(
-                [sys.executable, "-X", "utf8", str(doctor_script),
-                 "--project", project_root, "--json"],
-                capture_output=True, text=True, encoding="utf-8", timeout=20,
+            detail = json.loads(res.stdout) if res.stdout.strip() else {}
+        except json.JSONDecodeError:
+            detail = {}
+        if res.returncode == 1:
+            if detail.get("problems"):
+                for prob in detail["problems"]:
+                    # Битые межскилловые пути (skill-paths.json) — ЖЁСТКАЯ ошибка: гейты,
+                    # которые скиллы зовут по этим путям, молча отвалятся в рантайме
+                    # (например forgelite → minor-defect-fix/scripts/check_coverage.py).
+                    if str(prob).startswith("registry-paths-exist"):
+                        errors.append(f"doctor: {prob}")
+                    else:
+                        warnings.append(f"doctor: {prob}")
+            else:
+                warnings.append("doctor: обнаружены проблемы целостности (см. doctor.py)")
+        elif res.returncode == 2:
+            warnings.append(f"doctor: не выполнен ({res.stderr.strip()[:200]})")
+        # средовые/конфиг-советы doctor (Python/git/config) — даже при exit 0
+        for w in detail.get("warnings", []):
+            warnings.append(f"doctor: {w}")
+    except Exception as e:
+        warnings.append(f"doctor.py не выполнен: {e}")
+
+
+# Минимальная версия Python (копия doctor.MIN_PYTHON; пинится test_doctor). Скрипты/хуки
+# используют синтаксис 3.10+ (PEP604 `X | None`, match); на 3.9 phase_sync падал.
+MIN_PYTHON = (3, 10)
+
+
+def preflight(project_root: str, self_base=None) -> dict:
+    errors = []
+    warnings = []
+    # «Ещё не инициализирован» — отдельный класс, НЕ enforcement off. Держим вне errors,
+    # чтобы deploy сразу после раскатки не выглядел провальным, но passed остаётся False
+    # (гейт арминга: субагентов не поднимать, пока конфиг не создан). Различие errors/init
+    # маппится на exit-код: 1 = enforcement off, 2 = инициализируй и перезапусти.
+    init_needed = []
+
+    # 0. Версия Python (раньше всего — иначе doctor/скрипты упадут с невнятным импорт-эррором)
+    if sys.version_info[:2] < MIN_PYTHON:
+        have = f"{sys.version_info.major}.{sys.version_info.minor}"
+        warnings.append(
+            f"Python {have}: пайплайн требует {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ "
+            f"(PEP604/match). Часть скриптов/хуков может падать. Обнови интерпретатор."
+        )
+
+    # 1. pipeline.json — конфиг control-plane. ДАННЫЕ всегда в проекте, раскладка кода на это
+    #    не влияет. Отсутствие/неполнота — это «нормальный первый запуск» (файл создаёт
+    #    init_pipeline_config.py, а preflight бежит ДО него), а не поломка энфорсмента →
+    #    init_needed, а не errors. Битый JSON (не пустой, а невалидный) — уже реальная ошибка:
+    #    конфиг есть, но рантайм его не прочитает → errors.
+    pipeline_json = Path(project_root) / "ground" / "pipeline.json"
+    if not pipeline_json.exists():
+        init_needed.append("ground/pipeline.json not found — конфигурация не инициализирована")
+    else:
+        try:
+            cfg = json.loads(pipeline_json.read_text(encoding="utf-8"))
+            if cfg.get("_incomplete"):
+                init_needed.append(f"pipeline.json incomplete: {cfg['_incomplete']}")
+        except json.JSONDecodeError as e:
+            errors.append(f"pipeline.json parse error: {e}")
+
+    # 2. Проверяем ТУ раскладку кода, которую реально грузит рантайм.
+    layout = resolve_layout(project_root, self_base)
+    base = layout["base"]
+    if layout["mode"] == "extension":
+        _check_extension_layout(base, project_root, errors, warnings)
+        if layout["shadow"] is not None:
+            warnings.append(
+                f"форж поставлен extension'ом И развёрнут в проекте ({layout['shadow']}) — "
+                f"цепочки хуков сложатся и задвоятся. Оставь один способ (INSTALL.md §1)."
             )
-            try:
-                detail = json.loads(res.stdout) if res.stdout.strip() else {}
-            except json.JSONDecodeError:
-                detail = {}
-            if res.returncode == 1:
-                if detail.get("problems"):
-                    for prob in detail["problems"]:
-                        # Битые межскилловые пути (skill-paths.json) — ЖЁСТКАЯ ошибка: гейты,
-                        # которые скиллы зовут по этим путям, молча отвалятся в рантайме
-                        # (например forgelite → minor-defect-fix/scripts/check_coverage.py).
-                        if str(prob).startswith("registry-paths-exist"):
-                            errors.append(f"doctor: {prob}")
-                        else:
-                            warnings.append(f"doctor: {prob}")
-                else:
-                    warnings.append("doctor: обнаружены проблемы целостности (см. doctor.py)")
-            elif res.returncode == 2:
-                warnings.append(f"doctor: не выполнен ({res.stderr.strip()[:200]})")
-            # средовые/конфиг-советы doctor (Python/git/config) — даже при exit 0
-            for w in detail.get("warnings", []):
-                warnings.append(f"doctor: {w}")
-        except Exception as e:
-            warnings.append(f"doctor.py не выполнен: {e}")
+    else:
+        _check_project_layout(base, project_root, errors, warnings)
+        if layout["shadow"] is not None:
+            warnings.append(
+                f"рядом лежит extension ({layout['shadow']}), но рантайм его не грузит — "
+                f"проверена раскладка проекта (.gigacode). Если хотел extension: "
+                f"`qwen|gigacode extensions link {layout['shadow']}` + перезапуск сессии."
+            )
+
+    # 3. doctor.py — self-check целостности (база кода зависит от раскладки)
+    _run_doctor(base, project_root, errors, warnings)
 
     # passed=True требует и отсутствия enforcement-ошибок, и инициализированного конфига —
     # гейт арминга остаётся жёстким. Но init_needed отделён от errors для разного exit-кода.
     passed = len(errors) == 0 and len(init_needed) == 0
-    result = {"passed": passed, "errors": errors}
+    result = {
+        "passed": passed,
+        # Раскладка + база кода: этим же префиксом зовутся скрипты скиллов
+        # (<base>/skills/<skill>/scripts/…) — оркестратору не надо угадывать путь.
+        "layout": {"mode": layout["mode"], "base": str(base)},
+        "errors": errors,
+    }
     if init_needed:
         result["init_needed"] = init_needed
     if warnings:
