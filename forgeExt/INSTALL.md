@@ -88,8 +88,9 @@ qwen extensions uninstall forge
 Механизм тот же, отличия:
 
 - бинарь `gigacode`, каталог расширений `.gigacode/extensions/`, settings — `~/.gigacode/settings.json`;
-- если `gigacode extensions link` ругнётся на манифест — скопировать
-  `qwen-extension.json` → `gigacode-extension.json` (ре-бренд форка);
+- манифест форка `gigacode-extension.json` уже в комплекте (побайтовая копия
+  `qwen-extension.json`) — копировать руками не нужно; при бампе `version` править **оба**
+  (`sync-from-forge.sh` манифесты не трогает);
 - шаг 1 (дрейф) делать в `~/.gigacode/settings.json`.
 
 ## Установка по git-URL — пока НЕ из этого репо

@@ -84,17 +84,26 @@ description: >
 Прежде чем что-либо делать — убедись, что control-plane включён (иначе гейты/risk/TDD/evidence
 молчат, как на провальном прогоне с `0 hook entries`):
 ```bash
-python3 <project>/.gigacode/hooks/preflight.py --project .
+python3 <forge>/hooks/preflight.py --project .
 ```
+> **`<forge>` — корень кода форжа: каталог на два уровня выше этого SKILL.md**
+> (`<forge>/skills/feature-pipeline/SKILL.md`). Две раскладки:
+> `<project>/.gigacode` (legacy `deploy.sh`) либо корень extension'а
+> (`~/.qwen|.gigacode/extensions/forge` или слинкованный `forgeExt/`).
+> **preflight сам сообщает его в `layout.base`** — дальше по этому SKILL.md любой путь вида
+> `<project>/.gigacode/skills/...` читай как `<forge>/skills/...` (данные — `ground/`, `docs/` —
+> всегда в проекте, они от раскладки не зависят).
 - **exit 0** — харнес активен, продолжай.
 - **exit 2** — конфиг не инициализирован (в JSON — `init_needed`, а **не** `errors`:
   `ground/pipeline.json not found`/`incomplete`). Это нормальный первый запуск.
   Инициализируй конфиг (§0.1) и **обязательно перезапусти preflight** — он должен стать **exit 0**
   до первого субагента.
 - **exit 1** — посмотри `errors`. Это **ENFORCEMENT OFF**: `settings.json` / `hooks block empty` /
-  `essential hook НЕ подключён` / `resolve_hook_paths` / битый `pipeline.json` — хуки реально не
-  срабатывают. **Остановись и предупреди пользователя**, сначала `deploy.sh` +
-  `bash .gigacode/deploy-local.sh` + `doctor.py`. Дальше только после подтверждения, что харнес поднят.
+  `essential hook НЕ подключён` / `resolve_hook_paths` / `extension не установлен` / битый
+  `pipeline.json` — хуки реально не срабатывают. **Остановись и предупреди пользователя**:
+  для extension — `qwen|gigacode extensions link <forge>` + перезапуск сессии (INSTALL.md),
+  для legacy-деплоя — `deploy.sh` + `bash .gigacode/deploy-local.sh` + `doctor.py`.
+  Дальше только после подтверждения, что харнес поднят.
 
 > **ЖЁСТКИЙ ГЕЙТ АРМИНГА.** Не вызывай **ни одного `agent()`**, пока `preflight.py` не вернул
 > **exit 0**. Хуки рантайм связывает при запуске сессии; если на старте было `enforcement off`,
@@ -167,7 +176,7 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/resolve_phases.py \
 rollback и журнал файлов).
 
 5. **Перезапусти preflight — гейт арминга.** Как только `_incomplete` пуст, **повторно** прогони
-   `python3 <project>/.gigacode/hooks/preflight.py --project .` и убедись в **exit 0**. Это
+   `python3 <forge>/hooks/preflight.py --project .` и убедись в **exit 0**. Это
    единственная проверка, что харнес действительно поднят, прежде чем пойдут субагенты. Пока не
    PASS — `agent()` не вызывай (см. жёсткий гейт в §0.0).
 

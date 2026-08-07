@@ -15,7 +15,6 @@ Usage:
 
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -88,16 +87,11 @@ def find_project_root(cwd: Optional[Path] = None) -> Path:
     return cwd
 
 
-# ── Каталог прогона + конкурентно-безопасный append ──────────────────────────
-# Общие файловые утилиты. Исходные потребители (log-agent/budget-meter, писавшие
-# agents.log/.jsonl) удалены; функции оставлены как переиспользуемые хелперы —
-# `append_locked` покрыт кросс-платформенным тестом файл-лока (test_windows_file_lock_fallback).
-
-def _safe_run_key(s) -> str:
-    """Ключ каталога прогона без сюрпризов файловой системы."""
-    s = re.sub(r"[^A-Za-z0-9._-]+", "-", str(s)).strip("-")
-    return s or "x"
-
+# ── Конкурентно-безопасный append ────────────────────────────────────────────
+# Общий файловый хелпер. Исходные потребители (log-agent/budget-meter, писавшие
+# agents.log/.jsonl, и каталог прогона ground/ai-logs/run-<key>/) удалены; остаётся
+# только `append_locked` — его использует file-journal.py и покрывает кросс-платформенный
+# тест файл-лока (test_windows_file_lock_fallback).
 
 def git_toplevel(cwd: str = "") -> str:
     """Корень репо: git toplevel от cwd, иначе cwd/pwd."""
@@ -112,22 +106,6 @@ def git_toplevel(cwd: str = "") -> str:
     except Exception:
         pass
     return cwd or os.getcwd()
-
-
-def run_dir(root, session_id: str = "") -> Path:
-    """Каталог прогона: ОДИН на сессию — <root>/ground/ai-logs/run-<key>/.
-
-    Ключ (по убыванию приоритета): GIGACODE_RUN_ID (стабильный ключ от операторской
-    обёртки/headless) → session_id (стабилен в интерактиве) → 'nosess'. Так «один
-    прогон = одна папка» держится даже без стабильного session_id от рантайма.
-    """
-    base = Path(root) / "ground" / "ai-logs"
-    env_run = os.environ.get("GIGACODE_RUN_ID") or ""
-    if env_run:
-        key = _safe_run_key(env_run)[:16]
-    else:
-        key = _safe_run_key(session_id)[:8] if session_id else "nosess"
-    return base / f"run-{key}"
 
 
 def append_locked(path, text: str) -> None:

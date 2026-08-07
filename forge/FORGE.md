@@ -238,7 +238,7 @@ gigacode --experimental-hooks
 
 **Перед каждым серьёзным прогоном — быстрый self-check, что контроль реально включён:**
 ```bash
-python3 <project>/.gigacode/hooks/preflight.py --project <project>
+python3 <forge>/hooks/preflight.py --project <project>   # <forge> = <project>/.gigacode либо корень extension'а
 ```
 - ✅ `exit 0` — можно работать
 - ❌ `exit 1` — ENFORCEMENT OFF, подними флаг/деплой
@@ -674,7 +674,7 @@ dual-vocabulary, контракты pipeline-state, payload-схема snake_cas
 ## Диагностика (перед прогоном)
 
 ```bash
-python3 <project>/.gigacode/hooks/preflight.py --project <project>   # харнес активен?
+python3 <forge>/hooks/preflight.py --project <project>   # харнес активен? (<forge> — см. layout.base в выводе)
 
 # какие фичи в работе:
 python3 <project>/.gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
@@ -766,6 +766,14 @@ forge/
 
 - **`hooks/preflight.py`** — основная проверка готовности (settings + pipeline.json + пути хуков).
   Сам зовёт `resolve_hook_paths.py --check` и `feature-pipeline/scripts/doctor.py` (advisory).
+  **Раскладко-осведомлён**: базу кода выводит из собственного расположения (`parents[1]`, как
+  `hooks/_project.py`) и проверяет ТУ, что грузит рантайм — `extension` (wiring `hooks/hooks.json`
+  через `${CLAUDE_PLUGIN_ROOT}` + факт установки в `~/.{qwen,gigacode}/extensions`) либо
+  `project` (legacy `deploy.sh`: `<project>/.gigacode` + `settings.json`). Раскладку и базу
+  возвращает в `layout` — этим префиксом зовутся скрипты скиллов. Если найдены обе, побеждает
+  та, из которой запущен сам preflight (устаревший `.gigacode` в репо больше не валит старт
+  при живом extension'е; если же extension не установлен в рантайме — откат на деплой),
+  вторая уходит в варнинг о задвоении цепочек (INSTALL.md §1).
 - **`hooks/resolve_hook_paths.py`** — merge блока hooks в `settings.json` с подстановкой путей;
   `--check` валидирует, `--dry-run` показывает результат без записи.
 - При проблемах: `bash <project>/.gigacode/deploy-local.sh` (починка путей) или повторный

@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 HOOKS = Path(__file__).resolve().parent
@@ -180,6 +181,205 @@ class TestExitCodes(unittest.TestCase):
             _make(tmp, wired=[n for n in ESSENTIAL if n != "eval-guard.py"])
             (tmp / "ground" / "pipeline.json").unlink()
             self.assertEqual(self._exit(tmp), 1)
+
+
+def _make_ext(ext: Path, *, wired: list[str] | None = None, policy_ok: bool = True,
+              cmd_prefix: str = "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/") -> None:
+    """Фикстура extension-раскладки: <ext>/hooks/{*.py,hooks.json,risk-policy.json} + манифест."""
+    wired = ESSENTIAL if wired is None else wired
+    hooks = ext / "hooks"
+    hooks.mkdir(parents=True, exist_ok=True)
+    for n in ESSENTIAL:                       # файлы есть все, wiring — только `wired`
+        (hooks / n).write_text("# stub\n", encoding="utf-8")
+    block = {"PreToolUse": [{"matcher": "^(run_shell_command|Bash)$", "hooks": [
+        {"type": "command", "command": f"{cmd_prefix}{n}", "name": n} for n in wired]}]}
+    (hooks / "hooks.json").write_text(json.dumps({"hooks": block}), encoding="utf-8")
+    (hooks / "risk-policy.json").write_text(
+        '{"version":1}' if policy_ok else "{ broken json", encoding="utf-8")
+    (ext / "qwen-extension.json").write_text(json.dumps({"name": "forge"}), encoding="utf-8")
+
+
+def _make_project(tmp: Path) -> None:
+    """Проект БЕЗ развёрнутого .gigacode: только данные (ground/pipeline.json)."""
+    (tmp / "ground").mkdir(parents=True, exist_ok=True)
+    (tmp / "ground" / "pipeline.json").write_text(json.dumps({"quality": {}}), encoding="utf-8")
+
+
+def _install_link(home: Path, ext: Path, runtime: str = ".qwen") -> Path:
+    """Имитация `extensions link`: каталог-указатель на источник."""
+    d = home / runtime / "extensions" / "forge"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / ".qwen-extension-install.json").write_text(
+        json.dumps({"source": str(ext), "type": "link"}), encoding="utf-8")
+    return d
+
+
+class TestExtensionLayout(unittest.TestCase):
+    """Форж, установленный как нативный extension: код в <ext>/, wiring — hooks/hooks.json.
+
+    Регрессия: preflight проверял ТОЛЬКО <project>/.gigacode и в extension-раскладке валил
+    старт («хуки не задеплоены», exit 1 = ENFORCEMENT OFF), хотя харнес был поднят.
+    """
+
+    def _run(self, tmp: Path, ext: Path, home: Path) -> dict:
+        with unittest.mock.patch.object(preflight, "_home", lambda: home):
+            return preflight.preflight(str(tmp), self_base=ext)
+
+    def test_installed_extension_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            ext, home = tmp / "ext", tmp / "home"
+            _make_project(tmp)
+            _make_ext(ext)
+            _install_link(home, ext)
+            res = self._run(tmp, ext, home)
+            self.assertTrue(res["passed"], res)
+            self.assertEqual(res["layout"], {"mode": "extension", "base": str(ext)}, res)
+
+    def test_not_installed_in_runtime_is_error(self):
+        # Каталог extension'ов есть, нашего там нет → рантайм хуки не грузит = enforcement off.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            ext, home = tmp / "ext", tmp / "home"
+            _make_project(tmp)
+            _make_ext(ext)
+            (home / ".qwen" / "extensions" / "other").mkdir(parents=True)
+            res = self._run(tmp, ext, home)
+            self.assertFalse(res["passed"])
+            self.assertTrue(any("не установлен" in e for e in res["errors"]), res["errors"])
+
+    def test_no_registry_dirs_is_warning_not_block(self):
+        # Каталогов extensions вообще нет (другой рантайм/своя раскладка) — проверить нечем,
+        # но блокировать старт из-за этого нельзя.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            ext, home = tmp / "ext", tmp / "home"
+            home.mkdir()
+            _make_project(tmp)
+            _make_ext(ext)
+            res = self._run(tmp, ext, home)
+            self.assertTrue(res["passed"], res)
+            self.assertTrue(any("установку extension" in w for w in res.get("warnings", [])), res)
+
+    def test_other_copy_loaded_is_warning(self):
+        # Рантайм грузит копию с тем же именем, но по другому пути (link на старый источник).
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            ext, home = tmp / "ext", tmp / "home"
+            _make_project(tmp)
+            _make_ext(ext)
+            _install_link(home, tmp / "stale-ext")
+            res = self._run(tmp, ext, home)
+            self.assertTrue(res["passed"], res)
+            self.assertTrue(any("другую копию" in w for w in res.get("warnings", [])), res)
+
+    def test_essential_hook_not_wired_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            ext, home = tmp / "ext", tmp / "home"
+            _make_project(tmp)
+            _make_ext(ext, wired=[n for n in ESSENTIAL if n != "eval-guard.py"])
+            _install_link(home, ext)
+            res = self._run(tmp, ext, home)
+            self.assertFalse(res["passed"])
+            self.assertTrue(any("eval-guard.py" in e for e in res["errors"]), res["errors"])
+
+    def test_corrupt_risk_policy_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            ext, home = tmp / "ext", tmp / "home"
+            _make_project(tmp)
+            _make_ext(ext, policy_ok=False)
+            _install_link(home, ext)
+            res = self._run(tmp, ext, home)
+            self.assertFalse(res["passed"])
+            self.assertTrue(any("risk-policy" in e for e in res["errors"]), res["errors"])
+
+    def test_hook_path_outside_plugin_root_flagged(self):
+        # Пути в hooks.json обязаны идти от ${CLAUDE_PLUGIN_ROOT} — иначе на чужой машине
+        # (install-копия, другой home) рантайм зовёт несуществующие файлы.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            ext, home = tmp / "ext", tmp / "home"
+            _make_project(tmp)
+            _make_ext(ext, cmd_prefix="python3 /opt/forge-old/hooks/")
+            _install_link(home, ext)
+            res = self._run(tmp, ext, home)
+            self.assertFalse(res["passed"])
+            self.assertTrue(any("вне ожидаемого каталога" in e for e in res["errors"]),
+                            res["errors"])
+
+    def test_missing_pipeline_json_is_init_needed(self):
+        # Гейт арминга и exit-контракт в extension-раскладке те же: 2, а не 1.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            ext, home = tmp / "ext", tmp / "home"
+            _make_ext(ext)
+            _install_link(home, ext)
+            res = self._run(tmp, ext, home)
+            self.assertFalse(res["passed"])
+            self.assertEqual(res["errors"], [], res)
+            self.assertTrue(res.get("init_needed"), res)
+
+    def test_legacy_hooks_in_runtime_settings_warn(self):
+        # Extension грузится ПОВЕРХ settings.json: forge-хуки из старого deploy.sh задвоят
+        # цепочку (INSTALL.md §1).
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            ext, home = tmp / "ext", tmp / "home"
+            _make_project(tmp)
+            _make_ext(ext)
+            _install_link(home, ext)
+            (home / ".qwen").mkdir(parents=True, exist_ok=True)
+            (home / ".qwen" / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [
+                {"matcher": "*", "hooks": [{"command": "python3 /old/.gigacode/hooks/gate-guard.py"}]}]}}),
+                encoding="utf-8")
+            res = self._run(tmp, ext, home)
+            self.assertTrue(res["passed"], res)
+            self.assertTrue(any("задвоится" in w for w in res.get("warnings", [])), res)
+
+
+class TestLayoutResolution(unittest.TestCase):
+    """Проверяется та раскладка, из которой запущен preflight; вторая — предупреждение."""
+
+    def test_installed_extension_wins_over_stale_project_deploy(self):
+        # Ключевая регрессия: устаревший .gigacode в репо НЕ должен валить старт, когда
+        # энфорсмент реально идёт через установленный extension.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            ext, home = tmp / "ext", tmp / "home"
+            _make(tmp, wired=ESSENTIAL)     # legacy deploy в проекте
+            (tmp / ".gigacode" / "settings.json").unlink()   # и он «протух»
+            _make_ext(ext)                  # и одновременно extension
+            _install_link(home, ext)
+            with unittest.mock.patch.object(preflight, "_home", lambda: home):
+                res = preflight.preflight(str(tmp), self_base=ext)
+            self.assertEqual(res["layout"]["mode"], "extension", res)
+            self.assertTrue(res["passed"], res)
+            self.assertTrue(any("задвоятся" in w for w in res.get("warnings", [])), res)
+
+    def test_uninstalled_extension_falls_back_to_project_deploy(self):
+        # Каталог extension'а рядом есть, но рантайм его не грузит → проверяем рабочий деплой.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            ext, home = tmp / "ext", tmp / "home"
+            _make(tmp, wired=ESSENTIAL)
+            _make_ext(ext)
+            (home / ".qwen" / "extensions" / "other").mkdir(parents=True)
+            with unittest.mock.patch.object(preflight, "_home", lambda: home):
+                res = preflight.preflight(str(tmp), self_base=ext)
+            self.assertEqual(res["layout"]["mode"], "project", res)
+            self.assertTrue(res["passed"], res)
+            self.assertTrue(any("не грузит" in w for w in res.get("warnings", [])), res)
+
+    def test_nothing_installed_reports_project_errors(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            _make_project(tmp)
+            res = preflight.preflight(str(tmp), self_base=tmp / "nowhere")
+            self.assertFalse(res["passed"])
+            self.assertEqual(res["layout"]["mode"], "none", res)
+            self.assertTrue(any("settings.hooks.json not found" in e for e in res["errors"]), res)
 
 
 class TestMatcherCanonical(unittest.TestCase):

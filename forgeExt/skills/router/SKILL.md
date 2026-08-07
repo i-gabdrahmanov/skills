@@ -21,10 +21,13 @@ description: >
 > вся работа идёт в выбранном оркестраторе. Запуск харнеса: `gigacode --experimental-hooks -p "..."`.
 
 ## 0. Предусловия
-- cwd = корень репо кода (`<toplevel>`), там же `.gigacode/`. Харнес развёрнут.
-- Прогони preflight — **exit 1 = стоп** (ENFORCEMENT OFF или битые пути харнеса; чини деплой, не продолжай):
+- cwd = корень репо кода (`<toplevel>`). Харнес развёрнут: либо `.gigacode/` в проекте
+  (legacy `deploy.sh`), либо установленный extension. `<forge>` = корень кода форжа —
+  каталог на два уровня выше этого SKILL.md; preflight печатает его в `layout.base`, и
+  ниже любой путь `<project>/.gigacode/skills/...` читается как `<forge>/skills/...`.
+- Прогони preflight — **exit 1 = стоп** (ENFORCEMENT OFF или битые пути харнеса; чини деплой/установку, не продолжай):
   ```
-  python3 <project>/.gigacode/hooks/preflight.py --project <toplevel>
+  python3 <forge>/hooks/preflight.py --project <toplevel>
   ```
 
 ## 1. Выбор пути (ПЕРВОЕ действие)
