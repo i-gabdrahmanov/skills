@@ -339,6 +339,96 @@ class TestExtensionLayout(unittest.TestCase):
             self.assertTrue(any("задвоится" in w for w in res.get("warnings", [])), res)
 
 
+def _make_skill(root: Path, name: str) -> Path:
+    d = root / "skills" / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: x\n---\n", encoding="utf-8")
+    return d
+
+
+class TestShadowingCopies(unittest.TestCase):
+    """Старые копии скиллов/команд перекрывают extension — рантайм грузит НЕ его код.
+
+    Регрессия из жизни: после переезда на extension в `~/.qwen/skills/feature-pipeline`
+    остался бриф от прежнего deploy.sh. Скиллы резолвятся project > user > extension, поэтому
+    оркестратор шёл по старому SKILL.md (`python3 ~/.gigacode/hooks/preflight.py` — путь мёртв),
+    а preflight этого не видел: хуки-то грузились из extension'а и были зелёными.
+    """
+
+    def _run(self, tmp: Path, ext: Path, home: Path) -> dict:
+        with unittest.mock.patch.object(preflight, "_home", lambda: home):
+            return preflight.preflight(str(tmp), self_base=ext)
+
+    def _armed(self, tmp: Path, ext: Path, home: Path) -> None:
+        _make_project(tmp)
+        _make_ext(ext)
+        _install_link(home, ext)
+        _make_skill(ext, "feature-pipeline")
+
+    def test_stale_user_skill_is_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            ext, home = tmp / "ext", tmp / "home"
+            self._armed(tmp, ext, home)
+            _make_skill(home / ".qwen", "feature-pipeline")
+            res = self._run(tmp, ext, home)
+            self.assertFalse(res["passed"], res)
+            self.assertTrue(any("перекрывают extension" in e and "feature-pipeline" in e
+                                for e in res["errors"]), res["errors"])
+
+    def test_stale_project_skill_is_error(self):
+        # project-уровень бьёт user и extension — самый опасный случай на форке GigaCode,
+        # где `<project>/.gigacode` был целью прежнего deploy.sh.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            ext, home = tmp / "ext", tmp / "home"
+            self._armed(tmp, ext, home)
+            _make_skill(tmp / ".gigacode", "feature-pipeline")
+            res = self._run(tmp, ext, home)
+            self.assertFalse(res["passed"], res)
+            self.assertTrue(any("перекрывают extension" in e for e in res["errors"]),
+                            res["errors"])
+
+    def test_stale_command_is_error(self):
+        # Одноимённую команду extension'а рантайм переименовывает — `/forge` уедет на старую.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            ext, home = tmp / "ext", tmp / "home"
+            self._armed(tmp, ext, home)
+            (ext / "commands").mkdir(parents=True, exist_ok=True)
+            (ext / "commands" / "forge.md").write_text("new\n", encoding="utf-8")
+            (home / ".qwen" / "commands").mkdir(parents=True, exist_ok=True)
+            (home / ".qwen" / "commands" / "forge.md").write_text("old\n", encoding="utf-8")
+            res = self._run(tmp, ext, home)
+            self.assertFalse(res["passed"], res)
+            self.assertTrue(any("commands" in e and "forge" in e for e in res["errors"]), res["errors"])
+
+    def test_foreign_skill_with_other_name_is_ignored(self):
+        # Чужие скиллы оператора в тех же каталогах — не наша забота, блокировать нельзя.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            ext, home = tmp / "ext", tmp / "home"
+            self._armed(tmp, ext, home)
+            _make_skill(home / ".qwen", "pptx")
+            res = self._run(tmp, ext, home)
+            self.assertTrue(res["passed"], res)
+
+    def test_symlink_to_extension_is_not_shadowing(self):
+        # Каталог рантайма, указывающий на сам extension, — это он же, а не подмена.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d).resolve()
+            ext, home = tmp / "ext", tmp / "home"
+            self._armed(tmp, ext, home)
+            (home / ".qwen" / "skills").mkdir(parents=True, exist_ok=True)
+            try:
+                (home / ".qwen" / "skills" / "feature-pipeline").symlink_to(
+                    ext / "skills" / "feature-pipeline", target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks недоступны")
+            res = self._run(tmp, ext, home)
+            self.assertTrue(res["passed"], res)
+
+
 class TestLayoutResolution(unittest.TestCase):
     """Проверяется та раскладка, из которой запущен preflight; вторая — предупреждение."""
 
