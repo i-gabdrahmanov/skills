@@ -87,6 +87,15 @@ full; их пол — evidence детерминированных гейтов (
 `04-build-<id>` + `eval_enabled=false`). Инвариант «каждая subagent-фаза покрыта хуком» пинится
 `test_phase_enforcement_coverage.py` (включая `lite-*` и `fix-*`).
 
+**Артефакты — в docs ПРОЕКТА, не в харнесе** (2026-08-10). Брифы веток писали путь плейсхолдером
+(`<docs>/feature-pipeline/<slug>/`), и нерезолвнутый плейсхолдер уводил запись «рядом со SKILL.md» —
+в `skills/` харнеса; в extension-раскладке это общий каталог на все проекты, так что артефакт одной
+задачи уезжал в следующий. Теперь: `skill_paths.py feature-docs --project <root> --feature <slug>`
+печатает абсолютный путь (in-repo/separate-repo), брифы fix/lite обязаны резолвить его ДО фаз и
+подставлять субагентам целиком, а `state-write-guard` блокирует запись внутрь корня харнеса, пока
+идёт прогон (корень определяется от самого хука, поэтому правило работает во всех раскладках;
+разработка форжа вне прогона не блокируется).
+
 Установка и запуск — те же: `bash deploy.sh <project>` (router+forgelite+forgefix едут в
 `skills/`), затем `gigacode --experimental-hooks -p "..."`. Отдельных инсталляторов для веток
 нет; коллизии `.gigacode` нет — харнес один.
@@ -102,7 +111,7 @@ full; их пол — evidence детерминированных гейтов (
 | `destructive-blocker.py` | PreToolUse `run_shell_command` | чёрный список (`rm -rf /`, force-push, DROP…) | exit 2 |
 | `fork-syntax-guard.py` | PreToolUse `run_shell_command` | инструктивный блок синтаксиса, который режет нативный сейфти форка (`$(...)`, backticks, `find -exec`, `ls -R`) — вместо молчаливого deny объясняет замену (Glob/Grep/Read) | exit 2 |
 | `pii-boundary.py` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
-| `state-write-guard.py` | PreToolUse Write/Edit/Bash | запрет прямой записи моделью в control-plane-файлы (`manifest.json`, `_origins`, `gates`, `overrides`, `judges`, `approvals`, `pipeline.json`, `ground/phases/`) — мутация только через санкц. скрипты | exit 2 |
+| `state-write-guard.py` | PreToolUse Write/Edit/Bash | запрет прямой записи моделью в control-plane-файлы (`manifest.json`, `_origins`, `gates`, `overrides`, `judges`, `approvals`, `pipeline.json`, `ground/phases/`) — мутация только через санкц. скрипты; плюс запрет писать артефакты фазы в КАТАЛОГ ХАРНЕСА (корень резолвится от самого хука, гейт активен только при активном манифесте) | exit 2 |
 | `inline-phase-guard.py` | PreToolUse Bash/Write/Edit | actor-guard: главный агент не производит артефакты/код/билд subagent-фазы inline (по `agent_type`) | exit 2 |
 | `grounding-evidence.py` | PreToolUse Read | пишет `read_grounding` в `agent-evidence.jsonl` при чтении grounding-index — по нему `gate-guard` снимает блок фазы `01-grounding` | нет |
 | `prompt-guard.py` | UserPromptSubmit + PostToolUse(read/fetch) | детект prompt-injection → additionalContext | нет |

@@ -91,9 +91,21 @@ python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <to
 python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py --project <toplevel> --skill forgefix --feature <KEY|slug> --step-id <id> --status completed
 ```
 
-**Папка артефактов фикса** `<docs>/feature-pipeline/<KEY|slug>/` (тот же резолвер `docs.*`, что у
-остальных веток): `fix-plan.md` + `task-plan.json` (шаг `fix-diag`) и `sdd.md` — дельта спеки
-(шаг `fix-spec`). Больше фикс ничего не производит.
+**Папка артефактов фикса — РЕЗОЛВНИ ЕЁ СЕЙЧАС, не подставляй плейсхолдер:**
+```
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/skill_paths.py feature-docs --project <toplevel> --feature <KEY|slug>
+```
+Команда печатает абсолютный путь по `docs.*` (in-repo → `<toplevel>/docs/feature-pipeline/<KEY|slug>`,
+separate-repo → каталог внешнего репо спеки). Дальше в этом брифе `<fixdir>` = ровно этот путь;
+подставляй его субагентам целиком, они конфиг не читают.
+
+Туда и только туда пишутся: `fix-plan.md` + `task-plan.json` (шаг `fix-diag`) и `sdd.md` — дельта
+спеки (шаг `fix-spec`). Больше фикс ничего не производит.
+
+> ⛔ **Каталог харнеса — не место для артефактов.** `<project>/.gigacode/skills/...` (или корень
+> extension'а) — это КОД форжа, общий на все проекты; артефакт задачи, записанный туда, уедет в
+> следующий проект и подменит бриф фазы. `state-write-guard` блокирует такую запись во время
+> прогона (exit 2). Не знаешь путь — выполни команду выше, а не пиши рядом со SKILL.md.
 
 ---
 
@@ -152,9 +164,9 @@ Grounding: если есть <toplevel>/docs/system-analysis/grounding-excerpt.j
      СНАЧАЛА простой вопрос **«по какой стори этот баг? (ключ, напр. STOR-100; не знаешь — так и
      скажи)»** — человек помнит стори, а не ID требований. Список `<REQ-ID>: <название>` со score
      и evidence приложи как второй вопрос (плюс вариант «в спеке не описано»).
-4. Запиши <docs>/feature-pipeline/<KEY|slug>/fix-plan.md — не больше 15 строк:
+4. Запиши <fixdir>/fix-plan.md — не больше 15 строк:
    что сломано → что должно быть, где правим, подход в одном предложении, edge cases, риск регресса.
-5. Запиши <docs>/feature-pipeline/<KEY|slug>/task-plan.json — мини-план из ОДНОЙ задачи:
+5. Запиши <fixdir>/task-plan.json — мини-план из ОДНОЙ задачи:
    {"feature_slug":"<KEY|slug>","title":"<кратко>","tasks":[{"id":"F1","title":"...",
     "layers":["service"],"artifacts":["src/main/java/..."],"depends_on":[],
     "acceptance":["Given <условие бага> When <действие> Then <корректное поведение>"],
@@ -163,7 +175,7 @@ Grounding: если есть <toplevel>/docs/system-analysis/grounding-excerpt.j
    Задача ОДНА: фикс не декомпозируется. Нужна вторая — значит это не минорный дефект: верни
    status:"failed" с причиной, оркестратор сменит путь.
 6. ПОСЛЕДНИМ действием прогони гейт ЧЕРЕЗ РАННЕР (без него шаг не закроется):
-   python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgefix --feature <KEY|slug> --step-id fix-diag --cmd "python3 <project>/.gigacode/skills/tech-design/scripts/check_taskplan.py <docs>/feature-pipeline/<KEY|slug>/task-plan.json"
+   python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgefix --feature <KEY|slug> --step-id fix-diag --cmd "python3 <project>/.gigacode/skills/tech-design/scripts/check_taskplan.py <fixdir>/task-plan.json"
 Код НЕ правь. Верни JSON: {"step_id":"fix-diag","status":"completed|failed","root_cause":"...",
 "files":["file:line"],"affected_tests":["..."],
 "spec_anchor":{"status":"resolved|ambiguous|not_found","id":"<REQ-ID или null>","title":"<название или null>",
@@ -289,7 +301,7 @@ description: "Spec delta for <KEY> (точечная правка требова
 subagent_type: general-purpose
 prompt:
 Сначала прочитай и строго следуй: read_file("<project>/.gigacode/skills/forgefix/references/fix-delta-template.md")
-Задача: записать ДЕЛЬТУ спеки фикса — <docs>/feature-pipeline/<KEY|slug>/sdd.md.
+Задача: записать ДЕЛЬТУ спеки фикса — <fixdir>/sdd.md.
 Корень репо: <toplevel>.
 Что чинили: <root cause + суть фикса, 2-3 предложения>.
 ЯКОРЬ (зафиксированное решение sources.spec_anchor): <REQ-ID и название | none>.
@@ -305,7 +317,7 @@ Diff фикса (только src/main): <git diff HEAD -- src/main>.
    Баг вскрыл поведение, которого в спеке нет вовсе — заведи ОДНО новое требование.
 3. Больше ничего в дельту не клади: ни архитектуру, ни NFR, ни код, ни описание самого фикса.
 4. ПОСЛЕДНИМ действием прогони гейт ЧЕРЕЗ РАННЕР (без него шаг не закроется):
-   python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgefix --feature <KEY|slug> --step-id fix-spec --cmd "python3 <project>/.gigacode/skills/forgefix/scripts/check_fix_delta.py <docs>/feature-pipeline/<KEY|slug>/sdd.md --plan <docs>/feature-pipeline/<KEY|slug>/task-plan.json --project-root <toplevel> --anchor <REQ-ID|none>"
+   python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgefix --feature <KEY|slug> --step-id fix-spec --cmd "python3 <project>/.gigacode/skills/forgefix/scripts/check_fix_delta.py <fixdir>/sdd.md --plan <fixdir>/task-plan.json --project-root <toplevel> --anchor <REQ-ID|none>"
    FAIL «не правит зафиксированный якорь» — название требования в дельте разошлось с якорем.
    FAIL «сценарии будут потеряны» — ты не перенёс сценарии мастера, вернись к п.2.
    FAIL «лимит требований/строк» — ты переписал спеку, оставь только затронутое.

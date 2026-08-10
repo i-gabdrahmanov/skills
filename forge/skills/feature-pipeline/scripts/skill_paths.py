@@ -282,3 +282,39 @@ def master_adr_dir(project_root: Path, cfg: Optional[dict] = None) -> Path:
 def master_adr_path(project_root: Path, adr_id: str, cfg: Optional[dict] = None) -> Path:
     """Путь к ADR-файлу: <master_base>/adr/<adr_id>.md (adr_id — безопасный слаг)."""
     return master_adr_dir(project_root, cfg) / f"{safe_slug(adr_id)}.md"
+
+
+# ── CLI: печать резолвнутых путей ─────────────────────────────────────────────
+# Зачем: брифы скиллов раньше писали плейсхолдер `<docs>` и полагались на то, что модель
+# сама прочитает docs.* из pipeline.json и подставит. Нерезолвнутый плейсхолдер — прямая
+# дорога записать артефакты рядом со SKILL.md, т.е. В КАТАЛОГ ХАРНЕСА (skills/), а не в
+# docs/ проекта. Один вызов вместо догадки.
+_CLI_TARGETS = {
+    "docs-base": docs_base,
+    "feature-docs": feature_docs_dir,
+    "master-base": _master_base,
+    "master-specs": master_specs_dir,
+    "master-spec": master_spec_path,
+    "master-adr": master_adr_dir,
+}
+
+
+def _cli() -> int:
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="Печатает резолвнутый путь из docs.* (ground/pipeline.json).")
+    ap.add_argument("target", choices=sorted(_CLI_TARGETS), help="какой путь напечатать")
+    ap.add_argument("--project", default=".", help="корень репо кода (по умолчанию cwd)")
+    ap.add_argument("--feature", help="слаг/Jira-ключ: для feature-docs добавит подкаталог фичи")
+    args = ap.parse_args()
+
+    root = Path(args.project).resolve()
+    path = _CLI_TARGETS[args.target](root)
+    if args.feature and args.target == "feature-docs":
+        path = path / safe_slug(args.feature)
+    print(path)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_cli())

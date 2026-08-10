@@ -90,6 +90,19 @@ python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <to
 python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id <id> --status completed
 ```
 
+**Папка артефактов задачи — РЕЗОЛВНИ ЕЁ СЕЙЧАС, не подставляй плейсхолдер:**
+```
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/skill_paths.py feature-docs --project <toplevel> --feature <JIRA-KEY>
+```
+Печатает абсолютный путь по `docs.*` (in-repo → `<toplevel>/docs/feature-pipeline/<JIRA-KEY>`,
+separate-repo → каталог внешнего репо). Дальше `<litedir>` = ровно этот путь; туда идут
+`tech-design.md` и `task-plan.json` (шаг `lite-design`), и его целиком подставляй субагентам —
+конфиг они не читают.
+
+> ⛔ **Каталог харнеса — не место для артефактов.** `<project>/.gigacode/skills/...` (или корень
+> extension'а) — это КОД форжа, общий на все проекты. `state-write-guard` блокирует запись туда
+> во время прогона (exit 2). Не знаешь путь — выполни команду выше, а не пиши рядом со SKILL.md.
+
 ---
 
 ## 2. Fetch Jira + скоуп-чек → `lite-jira`
@@ -149,8 +162,9 @@ prompt:
    **Если путь не получить интерактивно** (вопрос не отрендерился — headless/форк): НЕ угадывай и
    НЕ пропускай `lite-design` (это обязательный шаг — `update.py` даст `exit 3`). Остановись и
    попроси предзапись `config.py set sources.spec <путь>` + перезапуск.
-2. **Субагентом** (`tech-design`) построй `tech-design.md` + `task-plan.json` ПО ЭТОЙ спеке
-   (вход — `sources.spec`, а не свежий `sdd.md`). Главный агент tech-design.md/task-plan.json inline
+2. **Субагентом** (`tech-design`) построй `<litedir>/tech-design.md` + `<litedir>/task-plan.json`
+   ПО ЭТОЙ спеке (вход — `sources.spec`, а не свежий `sdd.md`; `<litedir>` — резолвнутый путь из §1.1,
+   подставь его абсолютным). Главный агент tech-design.md/task-plan.json inline
    НЕ пишет (заблокирует `inline-phase-guard`). Гейт: `check_taskplan.py` + `check_sdd.py --sdd
    <sources.spec>` — ЧЕРЕЗ РАННЕР `record_gate.py` (он пишет evidence; `update.py` НЕ закроет
    `lite-design` без него — слово субагента не доказательство).
@@ -158,8 +172,9 @@ prompt:
    subagent_type: general-purpose
    prompt: |
      Ты — tech-design. Прочитай СУЩЕСТВУЮЩУЮ спеку (source of truth) по пути <sources.spec> и
-     grounding-excerpt. Построй tech-design.md + task-plan.json по слоям СТРОГО по этой спеке
-     (sdd_ref якори — на её разделы). НЕ пиши BRD/SDD заново.
+     grounding-excerpt. Построй <litedir>/tech-design.md + <litedir>/task-plan.json по слоям СТРОГО
+     по этой спеке (sdd_ref якори — на её разделы). НЕ пиши BRD/SDD заново. Пиши ТОЛЬКО в <litedir>
+     (абсолютный путь выше) — запись в каталог харнеса (skills/) блокирует state-write-guard.
      ПОСЛЕДНИМ действием прогони гейт ЧЕРЕЗ РАННЕР (без него шаг не закроется):
      python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-design --cmd "python3 <project>/.gigacode/skills/tech-design/scripts/check_taskplan.py <путь-к-task-plan.json> && python3 <project>/.gigacode/skills/tech-design/scripts/check_sdd.py <путь-к-task-plan.json> --sdd <sources.spec>"
      Верни JSON {"step_id":"lite-design","status":"completed"} только если раннер дал exit 0.
