@@ -5,8 +5,8 @@
 > SKILL.md §0.6, override — SKILL.md §0.6.1. Нумерация секций ниже — историческая (§ из
 > монолитного SKILL.md), внутри брифа она самодостаточна.
 >
-> **Гейт закрытия фазы:** spec-judge PASS + enrich_grounding (+ merge_delta_to_master при
-> `docs.master.enabled`); закрой 06-spec
+> **Гейт закрытия фазы:** spec-judge PASS + enrich_grounding; закрой 06-spec. Требования-мастер
+> (`specs/`) фаза НЕ обновляет — это делает пользователь командой `/forge-spec merge`.
 
 ## 9. Фаза 5 — Document
 
@@ -42,18 +42,20 @@ python3 .gigacode/skills/system-analyst/scripts/enrich_grounding.py \
 Если `enrich_grounding.py` вернул non-zero (coverage не сошёлся) — нужен полный рескан через
 `system-analyst` (см. фазу 1).
 
-### 9.2b Требования-мастер: слияние дельты (если `docs.master.enabled`)
+### 9.2b Требования-мастер: пайплайн его НЕ пишет
 
-Если ведётся требования-мастер — влей принятый `sdd.md` (дельту фичи) в `specs/<cap>/spec.md`
-мастера (создаётся из шаблона, если нет):
+Мастер (`specs/<cap>/spec.md`) обновляет **пользователь по запросу** командой `/forge-spec merge
+<slug>` — фаза 06 в него не пишет. Причина: merge правит рабочее дерево ЧУЖОГО репо (клона
+мастер-спеки), и делать это молча посреди пайплайна нельзя; плюс операция `~` («требование
+изменилось») требует решения человека, а не автомата.
+
+Твоя задача здесь — только показать расхождение. Если `docs.master.enabled` — выполни:
 ```bash
-python3 <project>/.gigacode/skills/system-analyst/scripts/merge_delta_to_master.py \
-    --sdd "<папка фичи>/sdd.md" --feature "<slug>" --project-root "<project>"
+python3 <project>/.gigacode/skills/system-analyst/scripts/spec_cli.py \
+    --project-root "<project>" status
 ```
-Апсерт идемпотентен (провенанс `[from: <feature> <date>]`, повтор не плодит дубли), пишет в
-рабочее дерево КЛОНА мастер-репо (при separate-repo). Состав мастера затем проверит spec-judge
-(`check_master_spec` вшит в `run_judge spec`). **Коммит/push мастер-репо — на пользователе**
-(forge-no-delivery). При `docs.master.enabled=false` шаг пропусти (работает только grounding-мастер).
+и включи вывод в итоговое сообщение (§9.3). **Сам ничего не сливай.** При
+`docs.master.enabled=false` шаг пропусти целиком (работает только grounding-мастер).
 
 ### 9.3 Judge-gate spec
 
@@ -74,8 +76,12 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py \
 
 **Это финальная фаза пайплайна.** Покажи пользователю итог: что изменено (файлы),
 тесты/покрытие, обновлённая спека. Коммиты, push, PR и отчёты в Jira пайплайн НЕ делает —
-их пользователь выполняет сам (промптом или руками), когда сочтёт артефакт готовым. Если мастер
-в отдельном репо (`docs.master.mode=separate-repo`) — напомни закоммитить/запушить **и мастер-репо**
-(обновлённые `system-analysis/` и `specs/<cap>/spec.md`), forge его не коммитит.
+их пользователь выполняет сам (промптом или руками), когда сочтёт артефакт готовым.
+
+Если ведётся требования-мастер (`docs.master.enabled`) — добавь в итог вывод `spec_cli status`
+из §9.2b и строку-подсказку: дельта в мастер не слита, слить командой `/forge-spec merge <slug>`
+(или `/forge-merge <slug>`). Если мастер в отдельном репо (`docs.master.mode=separate-repo`) —
+напомни закоммитить/запушить **и мастер-репо** (обновлённые `system-analysis/`, а после слияния
+и `specs/<cap>/spec.md`), forge его не коммитит.
 
 ---

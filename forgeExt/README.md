@@ -14,8 +14,10 @@ forgeExt/
 │   ├── *.py                # 18 хук-скриптов + зависимости (_project.py, risk_ladder.py)
 │   └── risk-policy.json    # deny-политика
 ├── commands/
-│   ├── forge.md            # /forge      → feature-pipeline
-│   └── forge-lite.md       # /forge-lite → forgelite (исполнение готовой задачи)
+│   ├── forge.md            # /forge       → feature-pipeline
+│   ├── forge-lite.md       # /forge-lite  → forgelite (исполнение готовой задачи)
+│   ├── forge-spec.md       # /forge-spec  → требования-мастер: status/diff/merge/remove/check
+│   └── forge-merge.md      # /forge-merge → ярлык слияния дельты в мастер
 ├── skills/<19 скиллов>/SKILL.md
 ├── FORGE.md                # справочная дока (НЕ авто-контекст — см. ниже)
 └── sync-from-forge.sh      # регенерация из ../forge (пока forge/ = source of truth)
@@ -53,7 +55,7 @@ qwen extensions uninstall forge
 
 ## Проверено (2026-08-05, qwen 0.19.5)
 
-- Линкуется без ошибок; trust-промпт перечисляет все 19 скиллов + 2 команды.
+- Линкуется без ошибок; trust-промпт перечисляет все 19 скиллов + 4 команды.
 - A/B/A по `n_keep`: forge enabled → 22507, disabled → 21896, enabled → 22507. Ровно +611
   токенов forge-контента грузятся в промпт только при включённом extension'е (скиллы как
   слэш-команды) — воспроизводимо.

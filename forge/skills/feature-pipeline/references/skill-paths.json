@@ -45,7 +45,12 @@
       "scripts": {
         "scan_all": ".gigacode/skills/system-analyst/scripts/scan_all.py",
         "check_grounding": ".gigacode/skills/system-analyst/scripts/check_grounding.py",
-        "verify_coverage": ".gigacode/skills/system-analyst/scripts/verify_coverage.py"
+        "verify_coverage": ".gigacode/skills/system-analyst/scripts/verify_coverage.py",
+        "enrich_grounding": ".gigacode/skills/system-analyst/scripts/enrich_grounding.py",
+        "spec_cli": ".gigacode/skills/system-analyst/scripts/spec_cli.py",
+        "merge_delta_to_master": ".gigacode/skills/system-analyst/scripts/merge_delta_to_master.py",
+        "check_master_spec": ".gigacode/skills/system-analyst/scripts/check_master_spec.py",
+        "check_adr": ".gigacode/skills/system-analyst/scripts/check_adr.py"
       }
     },
 

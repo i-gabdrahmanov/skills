@@ -1097,10 +1097,14 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
         checks.append({"name": "Grounding excerpt exists", "status": "WARN",
                         "detail": "grounding-excerpt.json not found", "severity": "warning"})
 
-    # Требования-мастер (OpenSpec-style): при docs.master.enabled дельта фичи ДОЛЖНА быть слита
-    # в specs/<cap>/spec.md (merge_delta_to_master, фаза 06). Проверяем провенанс + состав.
+    # Требования-мастер: мастер обновляет ПОЛЬЗОВАТЕЛЬ командой /forge-spec merge, пайплайн в
+    # него не пишет. Поэтому судья фазу не блокирует — он показывает расхождение (spec.drift):
+    #   warn (дефолт) — предупреждение со ссылкой на команду; off — молчим.
+    # Состав мастера (check_master_spec) блокирует только если мастер уже заведён: сломанный
+    # мастер чинить надо, а незаведённый — это просто «ещё не начинали».
     pcfg = _load_json(GROUND_DIR / "pipeline.json") or {}
     master_cfg = ((pcfg.get("docs") or {}).get("master") or {}) if isinstance(pcfg, dict) else {}
+    drift = ((pcfg.get("spec") or {}).get("drift") or "warn") if isinstance(pcfg, dict) else "warn"
     if master_cfg.get("enabled"):
         try:
             master_spec = skill_paths.master_spec_path(PROJECT_ROOT)
@@ -1110,12 +1114,13 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
             mtext = master_spec.read_text(encoding="utf-8", errors="replace")
             if f"from: {slug}" in mtext:
                 checks.append({"name": "Master spec updated with delta", "status": "PASS",
-                               "detail": str(master_spec), "severity": "error"})
-            else:
-                checks.append({"name": "Master spec updated with delta", "status": "FAIL",
-                               "detail": "провенанс фичи не найден в мастере", "severity": "error"})
-                blocking_issues.append(
-                    "требования-мастер не обновлён дельтой — запусти merge_delta_to_master")
+                               "detail": str(master_spec), "severity": "warning"})
+            elif drift != "off":
+                checks.append({"name": "Master spec updated with delta", "status": "WARN",
+                               "detail": "провенанс фичи не найден в мастере",
+                               "severity": "warning"})
+                warnings.append(
+                    f"дельта не слита в требования-мастер — /forge-spec merge {slug}")
             try:
                 import subprocess
                 cms = skill_paths.script(PROJECT_ROOT, "system-analyst", "check_master_spec")
@@ -1135,11 +1140,11 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
                 warnings.append("check_master_spec.py не найден — состав мастера не проверен")
             except Exception as e:  # noqa: BLE001
                 warnings.append(f"check_master_spec не выполнен: {e}")
-        else:
-            checks.append({"name": "Master spec exists", "status": "FAIL",
-                           "detail": "specs/<cap>/spec.md не найден", "severity": "error"})
-            blocking_issues.append(
-                "нет требования-мастера (docs.master.enabled) — запусти merge_delta_to_master")
+        elif drift != "off":
+            checks.append({"name": "Master spec exists", "status": "WARN",
+                           "detail": "specs/<cap>/spec.md не найден", "severity": "warning"})
+            warnings.append(
+                f"требования-мастер ещё не заведён — /forge-spec merge {slug} создаст его")
 
     # Пол чистоты текста: китайские/CJK-символы в tech-design.md, task-plan.json и мастере (блок).
     _charset_files = [tech_path, task_plan_path]

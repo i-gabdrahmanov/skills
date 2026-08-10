@@ -159,7 +159,7 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
       "mode": null,                  // null | in-repo | separate-repo (фолбэк на docs.mode)
       "repo_path": null,             // АБСОЛЮТНЫЙ путь к КЛОНУ репо мастер-спеки (separate-repo)
       "repo_url": null,              // origin для гайд-клона (forge авто-clone НЕ делает)
-      "enabled": false,              // вести требования-мастер specs/<cap>/spec.md (фаза 06)
+      "enabled": false,              // вести требования-мастер specs/<cap>/spec.md (обновляется командой)
       "capability": null,            // имя капабилити (spec.md); null → project.name
       "adr_subdir": "adr"            // подпапка ADR под master-базой (<master_base>/adr)
     }
@@ -172,6 +172,12 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
   "adr": {                           // Architecture Decision Records (rationale+статус)
     "enabled": false,                // вести ADR-файлы в <master_base>/adr и гейтить их на 02-design
     "enforce_couplings": false       // новая межмодульная связка требует accepted ADR (05-verify)
+  },
+  "spec": {                          // ПОВЕДЕНИЕ требований-мастера (где он лежит — в docs.master)
+    "id_prefix": "REQ",              // префикс стабильных ID требований (### REQ-0007: ...)
+    "drift": "warn",                 // off | warn — реакция spec-judge на неслитую дельту
+    "scenario_floor": true,          // каждое требование обязано иметь ≥1 Given-When-Then
+    "profile": "forge"               // состав разделов мастера (forge = разделы с ДКБ)
   },
   "jira": {
     "enabled": null,                 // TODO
@@ -309,7 +315,8 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_tautological_t
 (дельты) — из глобального `docs`. Синхронность скрипт/хук пинит `test_docs_resolver_consistency.py`.
 
 Git-политика (forge-no-delivery): forge **пишет** обновление мастера в рабочее дерево клона
-(`enrich_grounding` + `merge_delta_to_master`), но коммит/push мастер-репо делает пользователь.
+(`enrich_grounding` на фазе 06 и `/forge-spec merge` по запросу пользователя), но коммит/push
+мастер-репо делает пользователь.
 `sdd.pull_before_grounding: true` включает `git -C <repo_path> pull --ff-only` перед grounding
 (мягко: на ошибке — предупреждение).
 
@@ -331,6 +338,25 @@ Git-политика (forge-no-delivery): forge **пишет** обновлен�
 запись в `ground/architecture-policy.json` → `module_deps.allowed_new` должна ссылаться на ADR:
 `{"edge": ["service-a","service-b"], "adr": "ADR-0007"}` (accepted). Так `architecture-policy.json`
 становится энфорсимой проекцией принятого ADR. Старый формат `["A","B"]` (без ADR) поддерживается.
+
+### Поведение требований-мастера (`spec.*`)
+
+`docs.master` отвечает на вопрос **где** лежит мастер и ведётся ли он вообще; блок `spec` — на
+вопрос **как он устроен и как проверяется**. Разделение не косметическое: `docs.master.*` читают
+резолверы и скриптов, и хуков (синхронность пинится `test_docs_resolver_consistency.py`), а `spec.*`
+читают только `spec_cli.py` и spec-judge — новые поведенческие ручки не тянут правку резолверов.
+
+| Поле | Значение |
+|---|---|
+| `spec.id_prefix` | префикс стабильных ID требований мастера (`### REQ-0007: <название>`). Дефолт `REQ` |
+| `spec.drift` | `off` \| `warn` — что делает spec-judge, если дельта фичи не слита в мастер. Дефолт `warn` (сообщает, не блокирует фазу) |
+| `spec.scenario_floor` | каждое требование обязано нести ≥1 сценарий Given-When-Then (`check_master_spec`). Дефолт true |
+| `spec.profile` | профиль состава разделов мастера. Дефолт `forge` (разделы с ДКБ: границы доверия, модель угроз, регуляторка) |
+
+**Мастер обновляется по запросу, а не пайплайном.** Фаза 06 в `specs/<cap>/spec.md` не пишет —
+она лишь сообщает о расхождении. Слияние дельты делает пользователь командой `/forge-spec merge
+<slug>` (предпросмотр — `/forge-spec diff <slug>`, состояние — `/forge-spec status`). Запись идёт
+в рабочее дерево клона мастер-репо, коммит/push — на пользователе (forge-no-delivery).
 
 ## Что заполнить вручную после init
 
