@@ -96,7 +96,7 @@ qwen extensions install /Users/iskandergabdrahmanov/Documents/dev/skills/forgeEx
 ## 3. Проверить
 
 ```bash
-qwen extensions list      # → ✓ Forge (1.0.0), команды /forge, /forge-lite, /forge-spec, /forge-merge
+qwen extensions list      # → ✓ Forge (1.0.0), команды /forge, /forge-fix, /forge-lite, /forge-spec, /forge-merge
 ```
 
 Если `/forge` не виден в текущей сессии — перезапустить `qwen`.

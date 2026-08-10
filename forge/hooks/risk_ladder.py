@@ -246,8 +246,9 @@ def agent_cap(agent_type: str | None) -> str | None:
 # ── проверки выполнения требований уровня ─────────────────────────────────────────────
 def active_manifest(root: Path) -> Path | None:
     """Активная фича = самый свежий manifest под statements/*/*/ ПО ВСЕМ skill-namespace
-    (feature-pipeline И forgelite), кроме archived. Так один общий control-plane обслуживает
-    и full-, и lite-ветку: активной считается та, чей manifest свежее."""
+    (feature-pipeline, forgelite, forgefix), кроме archived. Резолв glob-овый, а не по списку
+    имён, поэтому новая ветка forge подхватывается хуками без правки этого модуля. Так один
+    общий control-plane обслуживает full-, lite- и fix-ветку: активна та, чей manifest свежее."""
     base = root / "ground" / "statements"
     newest, mt = None, -1.0
     try:

@@ -94,16 +94,23 @@ TEST_STEP_PREFIX = "04-test-"        # 04-test-<taskId>  — RED-фаза зад
 
 # Фазы, ОБЯЗАННЫЕ исполняться субагентом (не inline). Совпадает с префиксами шагов.
 # Хвост lite-* — плоские шаги lite-ветки (forgelite): RED/GREEN/verify тоже идут субагентом.
+# Хвост fix-* — плоские шаги fix-ветки (forgefix, минорный дефект): диагностика/RED/GREEN/
+# verify/дельта спеки. fix-intake (чтение тикета + скоуп-чек) — инлайн, как lite-jira.
 SUBAGENT_PHASE_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
-                           "lite-design", "lite-red", "lite-green", "lite-verify")
+                           "lite-design", "lite-red", "lite-green", "lite-verify",
+                           "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec")
 
 # Фазы, закрытие которых требует gate-result артефакта (gates/<step_id>.json от record_gate.py):
 # «шаг закрыт, потому что детерминированный гейт РЕАЛЬНО прошёл», а не потому что субагент
 # вернул status:"completed". Код/тесты/сборка + lite-контроль: lite-jira (скоуп-чек check_scope —
 # иначе его молча пропускали) и lite-design (check_taskplan + check_sdd по sources.spec — иначе
 # шаг закрывался со слов субагента: судей у lite-* нет по дизайну, evidence — единственный пол).
+# fix-* — вся ветка целиком: судей у неё нет по дизайну (дешёвый путь), поэтому evidence
+# детерминированного гейта — единственный пол под закрытием шага, включая инлайн-скоуп-чек
+# fix-intake (иначе «это баг или фича» решалось бы прозой) и дельту спеки fix-spec.
 GATE_RESULT_PREFIXES = ("04-test", "04-build", "05-tests",
-                        "lite-jira", "lite-design", "lite-red", "lite-green", "lite-verify")
+                        "lite-jira", "lite-design", "lite-red", "lite-green", "lite-verify",
+                        "fix-intake", "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec")
 
 
 def requires_gate_result(step_id) -> bool:

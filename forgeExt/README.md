@@ -14,11 +14,12 @@ forgeExt/
 │   ├── *.py                # 18 хук-скриптов + зависимости (_project.py, risk_ladder.py)
 │   └── risk-policy.json    # deny-политика
 ├── commands/
-│   ├── forge.md            # /forge       → feature-pipeline
+│   ├── forge.md            # /forge       → router (классификация fix | lite | full)
+│   ├── forge-fix.md        # /forge-fix   → forgefix (минорный дефект, спека правится точечно)
 │   ├── forge-lite.md       # /forge-lite  → forgelite (исполнение готовой задачи)
 │   ├── forge-spec.md       # /forge-spec  → требования-мастер: status/diff/merge/remove/check
 │   └── forge-merge.md      # /forge-merge → ярлык слияния дельты в мастер
-├── skills/<19 скиллов>/SKILL.md
+├── skills/<20 скиллов>/SKILL.md
 ├── FORGE.md                # справочная дока (НЕ авто-контекст — см. ниже)
 └── sync-from-forge.sh      # регенерация из ../forge (пока forge/ = source of truth)
 ```

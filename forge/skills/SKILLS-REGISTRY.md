@@ -12,9 +12,10 @@
 
 | Skill | Owner | Validity | Scope | Evals |
 |---|---|---|---|---|
-| router | @team | 2026-12 | точка входа: выбор режима full/lite, делегация на общий control-plane | — (вход не форсится рантаймом; смягчения — preflight, check_scope) |
+| router | @team | 2026-12 | точка входа: выбор режима fix/lite/full, делегация на общий control-plane | — (вход не форсится рантаймом; смягчения — preflight, check_fix_scope/check_scope) |
 | feature-pipeline | @team | 2026-12 | Java/Spring фичи end-to-end до верифицированного артефакта (режим full; доставка — на пользователе) | gate-скрипты + hooks/evals |
 | forgelite | @team | 2026-12 | исполнение подготовленной подзадачи Jira (режим lite: grounding→tech-design по спеке→RED→GREEN→verify; доставка — на пользователе) | check_scope.py + record_gate (RED/GREEN) + check_coverage.py |
+| forgefix | @team | 2026-12 | минорный дефект (режим fix: диагностика→RED воспроизводит баг→минимальный фикс→verify→точечная дельта спеки; доставка — на пользователе) | check_fix_scope.py + find_spec_anchor.py + record_gate (RED/GREEN/verify) + check_fix_delta.py |
 | pipeline-state | @team | 2026-12 | оркестраторы >3 субагентов | косвенно через evals |
 | project-grounder | @team | 2026-12 | фаза grounding | verify_coverage.py |
 | system-analyst | @team | 2026-12 | скан Java/Spring сервиса | verify_coverage.py |
@@ -23,7 +24,7 @@
 | java-spring-dev | @team | 2026-12 | генерация Java-кода | check_build.py |
 | test-writer | @team | 2026-12 | тестописатель RED/GREEN (feature-pipeline §4.1/§4.4, forgelite lite-red); кэш конвенций тестовой базы scan/test-conventions.json | test_analyze_tests.py + check_tests_red.py / check_tautological_tests.py |
 | jira-task-writer | @team | 2026-12 | создание задач Jira | check_jira.py |
-| minor-defect-fix | @team | 2026-12 | минорный дефект из Jira | check_coverage.py |
+| minor-defect-fix | @team | 2026-12 | LEGACY-путь дефекта (со своей доставкой commit/PR/отчёт); в forge-пайплайне заменён `forgefix`. Живой артефакт — общий `scripts/check_coverage.py`, его зовут все ветки | check_coverage.py |
 | defect-analyzer | @team | 2026-12 | анализ дефекта | — |
 | bugfix-developer | @team | 2026-12 | минимальный фикс | — |
 | brd-interview | @team | 2026-12 | сбор требований интервью | — |

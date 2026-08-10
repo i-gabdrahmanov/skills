@@ -98,6 +98,20 @@
       }
     },
 
+    "forgefix": {
+      "dir": ".gigacode/skills/forgefix",
+      "skill_md": ".gigacode/skills/forgefix/SKILL.md",
+      "references": {
+        "manifest_steps_json": ".gigacode/skills/forgefix/references/manifest-steps.json",
+        "fix_delta_template_md": ".gigacode/skills/forgefix/references/fix-delta-template.md"
+      },
+      "scripts": {
+        "check_fix_scope": ".gigacode/skills/forgefix/scripts/check_fix_scope.py",
+        "find_spec_anchor": ".gigacode/skills/forgefix/scripts/find_spec_anchor.py",
+        "check_fix_delta": ".gigacode/skills/forgefix/scripts/check_fix_delta.py"
+      }
+    },
+
     "minor-defect-fix": {
       "dir": ".gigacode/skills/minor-defect-fix",
       "skill_md": ".gigacode/skills/minor-defect-fix/SKILL.md",

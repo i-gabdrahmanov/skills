@@ -226,11 +226,31 @@
       "id": "pipeline.mode",
       "file": "pipeline",
       "path": "pipeline.mode",
-      "type": "enum", "enum": ["lite", "full"], "default": "",
+      "type": "enum", "enum": ["fix", "lite", "full"], "default": "",
       "category": "pipeline", "sensitive": false,
       "title": "Режим пайплайна (выбранный путь)",
-      "description": "Выбранный путь: lite (готовая Jira-подзадача, forgelite) | full (фича с нуля, feature-pipeline). Записывает router — для аудита и headless-предзаписи выбора. Хуком НЕ гейтится (сам путь кодирует namespace активного манифеста); required_decisions форсит sources.spec/криктичность, а не mode.",
-      "aliases": ["режим", "путь", "mode", "lite/full"]
+      "description": "Выбранный путь: fix (минорный дефект, forgefix — спека правится точечно) | lite (готовая Jira-подзадача по существующей спеке, forgelite) | full (фича с нуля, feature-pipeline). Записывает router — для аудита и headless-предзаписи выбора. Хуком НЕ гейтится (сам путь кодирует namespace активного манифеста); required_decisions форсит sources.spec/криктичность, а не mode.",
+      "aliases": ["режим", "путь", "mode", "fix/lite/full", "lite/full"]
+    },
+    {
+      "id": "sources.story",
+      "file": "pipeline",
+      "path": "sources.story",
+      "type": "string", "default": "",
+      "category": "pipeline", "sensitive": false,
+      "title": "Основная стори бага (fix-путь)",
+      "description": "Ключ стори, по которой пришёл баг (напр. STOR-100). Самый дешёвый способ связать баг со спекой: человек стори помнит, а ID требований мастера — нет. Передаётся в find_spec_anchor.py --story: сужает кандидатов до требований этой стори (через провенанс [from:] и её собственную дельту sdd.md). Не гейтится — если стори неизвестна, якорь ищется по связям Jira и изменённым файлам.",
+      "aliases": ["стори", "story", "слаг стори", "основная стори", "по какой стори"]
+    },
+    {
+      "id": "sources.spec_anchor",
+      "file": "pipeline",
+      "path": "sources.spec_anchor",
+      "type": "string", "default": "",
+      "category": "pipeline", "sensitive": false,
+      "title": "Якорь требования для дельты фикса",
+      "description": "Какое требование мастер-спеки чинит баг: ID (REQ-0007), название требования дословно либо 'none' (поведение в спеке не описано — заведём новое требование). Кандидатов находит детерминированно forgefix/scripts/find_spec_anchor.py по провенансу [from: <стори>] в мастере, старым task-plan'ам (кто заводил изменённые файлы) и связям Jira бага; неоднозначность разрешает пользователь. required_decisions для фазы fix-spec (gate-guard блокирует запись дельты без него), сверяется гейтом check_fix_delta.py --anchor.",
+      "aliases": ["якорь", "требование", "anchor", "spec_anchor"]
     },
     {
       "id": "sources.spec",

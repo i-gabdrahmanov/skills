@@ -240,19 +240,22 @@ def main() -> int:
     # ── Проверка RED-теста в manifest ──
     steps = R.manifest_status(root)
 
-    # Lite-ветка (forgelite): плоский RED-шаг 'lite-red'. Есть в манифесте → это lite-прогон;
-    # блок src/main пока lite-red не completed. (Full-манифест его не содержит → пропуск ниже.)
-    lite_red = steps.get("lite-red")
-    if lite_red is not None:
-        if lite_red != "completed":
-            # test-exempt: все задачи lite-фичи не требуют RED (миграция/data-holder/no_test) — не блокируем
+    # Плоские ветки forge: lite (forgelite) и fix (forgefix) — один RED-шаг на прогон.
+    # Есть в манифесте → это её прогон; блок src/main, пока RED-шаг не completed.
+    # (Full-манифест их не содержит → пропуск ниже, к per-task логике 04-build-<id>.)
+    for flat_red in ("lite-red", "fix-red"):
+        status = steps.get(flat_red)
+        if status is None:
+            continue
+        if status != "completed":
+            # test-exempt: все задачи не требуют RED (миграция/data-holder/no_test) — не блокируем
             if _all_tasks_exempt(_load_active_task_plan(root), cfg):
-                print("[tdd-guard] INFO: lite-задача(и) test-exempt (no_test_layers/no_test) — RED пропущен.",
-                      file=sys.stderr)
+                print(f"[tdd-guard] INFO: задача(и) прогона test-exempt (no_test_layers/no_test) — "
+                      f"RED ({flat_red}) пропущен.", file=sys.stderr)
                 return 0
             return _block(
-                f"RED-шаг lite-red не завершён (status={lite_red}). "
-                f"Сначала падающие тесты (src/test/), затем код (src/main/)."
+                f"RED-шаг {flat_red} не завершён (status={status}). "
+                f"Сначала падающий тест (src/test/), затем код (src/main/)."
             )
         return 0
 

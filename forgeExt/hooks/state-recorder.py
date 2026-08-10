@@ -110,7 +110,7 @@ def _status_from(obj: dict) -> str:
 
 def _resolve_active(root: Path) -> tuple[str, str]:
     """(skill, feature) активной фичи = самый свежий manifest.json в ground/statements/*/*/
-    ПО ВСЕМ skill-namespace (feature-pipeline И forgelite) — один control-plane на обе ветки.
+    ПО ВСЕМ skill-namespace (feature-pipeline, forgelite, forgefix) — один control-plane на все ветки.
     Fallback (SKILL, 'pipeline')."""
     base = root / "ground" / "statements"
     best, bm = None, -1.0

@@ -45,7 +45,8 @@ except Exception:  # pragma: no cover
 # best-effort импорт + inline-fallback (как в update.py), чтобы переименование префикса
 # в одном месте не отключало enforcement молча.
 _SUBAGENT_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
-                      "lite-design", "lite-red", "lite-green", "lite-verify")
+                      "lite-design", "lite-red", "lite-green", "lite-verify",
+                      "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec")
 try:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "feature-pipeline" / "scripts"))
     import pipeline_phases as _pp
@@ -125,7 +126,8 @@ def _is_phase_work(step_id: str, tool_name: str, tool_input: dict) -> str | None
         if _CONTROL_BASH_RE.search(norm):
             return None
         if step_id.startswith(("04-test", "04-build", "05-tests",
-                               "lite-red", "lite-green", "lite-verify")) and re.search(BUILD_CMD_RE, norm):
+                               "lite-red", "lite-green", "lite-verify",
+                               "fix-red", "fix-green", "fix-verify")) and re.search(BUILD_CMD_RE, norm):
             return f"запуск сборки/тестов ({BUILD_CMD_RE})"
         return None
 
@@ -161,6 +163,22 @@ def _is_phase_work(step_id: str, tool_name: str, tool_input: dict) -> str | None
     elif step_id.startswith("lite-verify"):
         if "src/" in norm:
             return "правка src/ в фазе прогона тестов"
+    # Fix-ветка (forgefix): минорный дефект.
+    elif step_id.startswith("fix-diag"):
+        if re.search(r"(^|/)(fix-plan\.md|task-plan\.json)$", norm):
+            return "запись fix-plan.md / task-plan.json"
+    elif step_id.startswith("fix-red"):
+        if "src/test/" in norm:
+            return "запись RED-теста в src/test/"
+    elif step_id.startswith("fix-green"):
+        if "src/main/" in norm or norm.endswith(".java"):
+            return "запись кода фикса в src/main/ (*.java)"
+    elif step_id.startswith("fix-verify"):
+        if "src/" in norm:
+            return "правка src/ в фазе прогона тестов"
+    elif step_id.startswith("fix-spec"):
+        if re.search(r"(^|/)sdd\.md$", norm):
+            return "запись дельты спеки (sdd.md)"
     return None
 
 

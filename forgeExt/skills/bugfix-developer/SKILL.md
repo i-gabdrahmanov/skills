@@ -189,8 +189,10 @@ return email.toLowerCase();
 - `java-spring-dev` — справочник по конвенциям Java/Spring (Lombok, layer-first
   packaging, паттерны entity/DTO/service). При необходимости загрузи скилл
   `java-spring-dev` — но не для багфикс-принципов, только за конвенциями.
-- `minor-defect-fix` — оркестратор. Вызывает bugfix-developer после одобренного
-  пользователем плана.
+- `forgefix` — оркестратор fix-ветки forge. Вызывает bugfix-developer субагентом на шаге
+  `fix-green`: RED-тест уже написан и падает, задача — минимальным изменением его позеленить.
+- `minor-defect-fix` — legacy-оркестратор (со своей доставкой). Вызывал bugfix-developer
+  после одобренного пользователем плана.
 
 ---
 

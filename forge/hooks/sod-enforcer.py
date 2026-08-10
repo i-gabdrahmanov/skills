@@ -103,6 +103,13 @@ STEP_ROLE = {
     "lite-red": "test",
     "lite-green": "dev",
     "lite-verify": "test",
+    # Fix-ветка (forgefix): плоские шаги fix-*. fix-diag играет роль дизайна (мини-план),
+    # fix-spec — роль спецадаптера (правит только дельту спеки, не код).
+    "fix-diag": "design",
+    "fix-red": "test",
+    "fix-green": "dev",
+    "fix-verify": "test",
+    "fix-spec": "spec",
 }
 
 

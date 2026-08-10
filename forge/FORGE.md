@@ -13,7 +13,7 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 Модель **проектная**: разворачивается в `<project>/.gigacode/` (см. [docs/deployment.md](docs/deployment.md)).
 
 - `hooks/` — control-plane (см. `hooks/DEPLOY.md` — полный ростер, порядок, диагностика).
-- `skills/` — пайплайн-скиллы: вход `router` → `feature-pipeline` (full) или `forgelite` (lite) + фазовые (см. «Router + режимы full/lite»).
+- `skills/` — пайплайн-скиллы: вход `router` → `forgefix` (fix), `forgelite` (lite) или `feature-pipeline` (full) + фазовые (см. «Router + режимы fix/lite/full»).
 - `deploy.sh` — установщик: разворачивает Forge в указанный проект одной командой
   (co-location hooks+skills + доки, мерж hooks-блока с бэкапом).
 - `uninstall.sh` — деинсталлятор (зеркало `deploy.sh`, те же аргументы): снимает блок hooks и
@@ -32,12 +32,36 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
 **Ключевой принцип:** Правила качества форсит сам рантайм (хуки), а не «добрая воля» модели —
 пропустить тесты, выкатить без проверок или сделать рискованное «молча» нельзя.
 
-## Router + режимы full / lite (одна обвязка, две ветки)
+## Router + режимы fix / lite / full (одна обвязка, три ветки)
 
-Точка входа — скилл `router` (`skills/router/SKILL.md`). ПЕРВЫМ действием он спрашивает
-пользователя, каким путём вести работу, и делегирует на общий control-plane (один `.gigacode`,
-одни хуки):
+Точка входа — скилл `router` (`skills/router/SKILL.md`). ПЕРВЫМ действием он классифицирует
+задачу (и при неоднозначности спрашивает пользователя), каким путём вести работу, и делегирует
+на общий control-plane (один `.gigacode`, одни хуки):
 
+- **fix** → `forgefix` (`skills/forgefix/SKILL.md`) — МИНОРНЫЙ ДЕФЕКТ: диагностика (root cause +
+  мини-план из одной задачи) → RED-тест, воспроизводящий баг → минимальный фикс → прогон с
+  регрессом и покрытием → **точечная дельта-правка спеки**. Плоские шаги `fix-*`
+  (`fix-intake/fix-diag/fix-red/fix-green/fix-verify/fix-spec`), стейт в namespace `forgefix`.
+  Ни BRD, ни SDD с нуля, ни `tech-design.md`, ни задач в Jira, ни eval-плана: спека не пишется
+  заново, а правится — дельта `sdd.md` несёт только затронутые требования (названия дословно из
+  мастера, чтобы `/forge-spec merge` дал `~ modify`), и её гейт `check_fix_delta.py` валит
+  «переписал спеку» (лимит требований/строк) и потерю сценариев мастера. Вход гейтит
+  `check_fix_scope.py`: фича, Epic/Story или Blocker в fix-путь не проходят.
+  **«К какой стори относится баг» — сначала спросить, потом выводить** (`find_spec_anchor.py`,
+  шаг `fix-diag`). Самый дешёвый вход — `--story <KEY>`: человек помнит стори, а ID требований
+  мастера — нет, поэтому при неоднозначности оркестратор задаёт СНАЧАЛА простой вопрос «по какой
+  стори баг?» (ответ живёт в `sources.story`), и лишь потом — выбор из оставшихся требований.
+  Названная стори это и сильнейшее свидетельство (вес 6), и фильтр: кандидаты чужих стори
+  отбрасываются, а её собственная дельта `docs/feature-pipeline/<стори>/sdd.md` даёт прямое
+  сопоставление «стори → её требования» даже если провенанс в мастере потёрли руками.
+  Остальное ранжируется по машинным свидетельствам — провенанс `[from: <стори>]`
+  (мастер помнит все стори, правившие требование), старые `task-plan.json` (`artifacts`/`reuses` →
+  какая стори заводила изменённые фиксом файлы) и связи Jira бага (parent/issuelinks/epic).
+  Один максимум — якорь; несколько (зрелая стори трогала несколько требований) или ноль — это
+  **решение пользователя**, а не догадка. Решение фиксируется в `sources.spec_anchor`
+  (`required_decisions` → `gate-guard` не даст писать дельту без него) и сверяется гейтом
+  `check_fix_delta.py --anchor`: дельта обязана править именно то требование, на которое
+  договорились. Тай-брейк между требованиями одной стори даёт `sdd_ref` задачи, чей файл правит фикс.
 - **full** → `feature-pipeline` — фича с нуля (BRD→…→document), вокабуляр шагов `04-test-<id>`/
   `04-build-<id>`, стейт в namespace `feature-pipeline`.
 - **lite** → `forgelite` (`skills/forgelite/SKILL.md`) — исполнение УЖЕ ПОДГОТОВЛЕННОЙ подзадачи
@@ -51,19 +75,21 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
   `autonomy.auto_max_risk=R2`, `criticality=medium`,
   `quality.eval_enabled=false` (через `config-helper`).
 
-**Почему форк не нужен.** Хуки — **dual-vocabulary**: понимают оба набора префиксов и резолвят
+**Почему форк не нужен.** Хуки — **multi-vocabulary**: понимают все наборы префиксов и резолвят
 активный skill/feature по САМОМУ СВЕЖЕМУ манифесту в `ground/statements/*/*/` (не по фикс-namespace).
-`tdd-guard` (блок `src/main` до RED: `04-test-<id>` ИЛИ `lite-red`), `sod-enforcer`
-(`STEP_ROLE` c `lite-*`), `inline-phase-guard`/`pipeline_phases.SUBAGENT_PHASE_PREFIXES`
-(+`lite-red/green/verify`), `state-recorder`/`risk_ladder` (newest-manifest across skills). Lite-ids
-намеренно НЕ пересекаются с масками `judges-registry` и с `PREFIX_PHASE` full-пути → lite не тянет
-судей и фазовые артефакты full. `eval-guard` для lite сам fail-open (нет `04-build-<id>` +
-`eval_enabled=false`). Инвариант «каждая subagent-фаза покрыта хуком» пинится
-`test_phase_enforcement_coverage.py` (включая `lite-*`).
+`tdd-guard` (блок `src/main` до RED: `04-test-<id>` ИЛИ плоский `lite-red`/`fix-red`), `sod-enforcer`
+(`STEP_ROLE` c `lite-*`/`fix-*`), `inline-phase-guard`/`pipeline_phases.SUBAGENT_PHASE_PREFIXES`
+(+`lite-red/green/verify`, +`fix-diag/red/green/verify/spec`), `state-recorder`/`risk_ladder`
+(newest-manifest across skills). Lite/fix-ids намеренно НЕ пересекаются с масками
+`judges-registry` и с `PREFIX_PHASE` full-пути → лёгкие ветки не тянут судей и фазовые артефакты
+full; их пол — evidence детерминированных гейтов (`GATE_RESULT_PREFIXES` покрывает `fix-*`
+целиком, включая инлайн-скоуп-чек `fix-intake`). `eval-guard` для них fail-open (нет
+`04-build-<id>` + `eval_enabled=false`). Инвариант «каждая subagent-фаза покрыта хуком» пинится
+`test_phase_enforcement_coverage.py` (включая `lite-*` и `fix-*`).
 
-Установка и запуск — те же: `bash deploy.sh <project>` (router+forgelite едут в `skills/`),
-затем `gigacode --experimental-hooks -p "..."`. Отдельного lite-инсталлятора нет; коллизии
-`.gigacode` нет — харнес один.
+Установка и запуск — те же: `bash deploy.sh <project>` (router+forgelite+forgefix едут в
+`skills/`), затем `gigacode --experimental-hooks -p "..."`. Отдельных инсталляторов для веток
+нет; коллизии `.gigacode` нет — харнес один.
 
 ### Хуки (control-plane)
 
@@ -130,15 +156,19 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
   grounding-выжимка BRD живёт в `ground/brd-grounding/`, не рядом с самим BRD.
 - **Короткая точка входа `forge` / `/forge`** (2026-07-20). Пайплайн зовётся коротким именем **forge**.
   Два механизма:
-  - **Слово `forge`** — синонимы в `description` скилла `feature-pipeline` («forge», «запусти forge»,
-    «прогони forge», «forge <фича>»). Активация идёт по описанию, деплоится вместе со скиллом, контекст
-    не пухнет. Аргумент после `forge` (ключ Jira/описание) — вход BRD-фазы.
-  - **Команды `/forge` и `/forge-lite`** — `commands/*.md` (Markdown+frontmatter — актуальный формат
-    qwen-code; минимальные prompt-делегаты, `{{args}}` прокидывает хвост; БЕЗ старого `!{cat all skills}`
-    — раздувания контекста нет). `/forge` → `feature-pipeline` (full-путь, BRD→код). `/forge-lite` →
-    `forgelite` (lite-путь: готовая задача Jira → grounding → tech-design по спеке → TDD; минуя router,
-    ровно чтобы не упираться в выбор пути). Первый токен аргумента `/forge-lite` — ключ Jira, остальное —
-    уточнение. `deploy.sh` (шаг 3b) копирует ВСЕ `commands/*.md` в `<target>/.gigacode/commands/` — рядом
+  - **Слово `forge`** — синонимы в `description` скилла **`router`** («запусти forge», «прогони forge»,
+    «forge <задача>»). Активация идёт по описанию, деплоится вместе со скиллом, контекст не пухнет.
+    Аргумент после `forge` (ключ Jira/описание) — вход выбранной ветки.
+    **Исправлено 2026-08-10:** раньше эти синонимы висели на `feature-pipeline`, и любой «forge <баг>»
+    активировал full-путь напрямую, мимо router — спека переписывалась с нуля вместо точечной правки.
+    Теперь описание feature-pipeline явно отказывается от голого «forge».
+  - **Команды `/forge`, `/forge-lite`, `/forge-fix`** — `commands/*.md` (Markdown+frontmatter —
+    актуальный формат qwen-code; минимальные prompt-делегаты, `{{args}}` прокидывает хвост; БЕЗ старого
+    `!{cat all skills}` — раздувания контекста нет). `/forge` → **`router`** (классификация fix/lite/full;
+    раньше вело прямо в `feature-pipeline`, из-за чего багфикс с ключом Jira заводил НОВУЮ фичу и
+    переписывал спеку — 2026-08-10). `/forge-lite` → `forgelite`, `/forge-fix` → `forgefix` — обе минуя
+    router, ровно чтобы не упираться в выбор уже известного пути. Первый токен аргумента `/forge-lite` —
+    ключ Jira, остальное — уточнение; `/forge-fix` принимает ключ Jira ЛИБО описание дефекта. `deploy.sh` (шаг 3b) копирует ВСЕ `commands/*.md` в `<target>/.gigacode/commands/` — рядом
     с `hooks/` и `skills/`, в единый `.gigacode`-корень, откуда GigaCode-рантайм читает конфиг. TOML-команды
     qwen-code депрекейтнул: при `*.toml` в `commands/` рантайм показывает окно миграции на КАЖДОМ старте —
     поэтому формат сразу Markdown, а deploy/uninstall снимают устаревший `forge.toml`, если он остался.
