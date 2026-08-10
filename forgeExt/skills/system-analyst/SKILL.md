@@ -476,15 +476,22 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/verify_coverage.py \
 ## 5.1 Требования-мастер (specs/) — co-located скрипты
 
 Кроме системного обзора (`system-analysis/`), этот скилл co-located несёт скрипты
-**требований-мастера** (OpenSpec-style `specs/<cap>/spec.md`), которые вызываются оркестратором
-на фазе `06-document` при `docs.master.enabled` (см. бриф `06-document.md`, а не этот воркфлоу):
+**требований-мастера** (`specs/<cap>/spec.md`). Их зовёт **пользователь по запросу** через
+команды `/forge-spec` и `/forge-merge`, а не пайплайн: фаза `06-document` мастер не пишет, она
+лишь показывает расхождение (`spec_cli.py status`).
 
-- `scripts/merge_delta_to_master.py` — вливает принятую дельту (`sdd.md` фичи) в `specs/<cap>/spec.md`
-  мастера (апсерт сценариев/требований с провенансом `[from: <feature> <date>]`, идемпотентно,
-  создаёт из `references/master-spec-template.md`). Пишет в рабочее дерево клона мастер-репо,
+- `scripts/spec_cli.py` — пользовательский вход: `status` (что в мастере + какие дельты не слиты
+  или разошлись), `diff <slug>` (план операций без записи), `merge <slug>|--all` (слияние),
+  `remove <ID> --reason` (снять требование), `check`, `migrate` (плоский легаси-мастер → ID).
+  Весь разбор аргументов здесь, слэш-команда — тонкая обёртка.
+- `scripts/merge_delta_to_master.py` — движок под `spec_cli`: разбор мастера и дельты, план
+  операций (`add` / `modify` / `same`), применение, снятие требования. Единица мастера —
+  `### <PREFIX>-NNNN: <название>` с утверждением и вложенными сценариями; тождество держит ID,
+  поэтому переименование не рвёт связь. Пишет только в рабочее дерево клона мастер-репо,
   **коммит/push — на пользователе** (forge-no-delivery).
-- `scripts/check_master_spec.py` — валидатор состава мастер-спеки (та же политика `sdd.security_gate`);
-  вшит в spec-judge (`run_judge spec`).
+- `scripts/check_master_spec.py` — валидатор состава мастер-спеки (та же политика `sdd.security_gate`)
+  плюс пол сценариев (`spec.scenario_floor`: у каждого требования ≥1 Given-When-Then);
+  вшит в spec-judge (`run_judge spec`) и доступен как `/forge-spec check`.
 - `references/master-spec-template.md` — обязательный состав мастер-спеки.
 - `scripts/check_adr.py` + `references/adr-template.md` — ADR (Architecture Decision Records,
   «почему так решили»: rationale+статус). ADR-файлы живут в `<master_base>/adr/`, автор — фаза

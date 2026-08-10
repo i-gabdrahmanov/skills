@@ -10,6 +10,12 @@
 
 ## 1. Убрать дрейф — ОБЯЗАТЕЛЬНО, если forge уже деплоился раньше
 
+Старая раскладка не удаляется сама и **побеждает** extension в двух местах сразу: хуки
+складываются (1.1), а скиллы и команды прямо перекрываются (1.2). `preflight.py` проверяет оба
+пункта: 1.2 — жёсткая ошибка (exit 1), 1.1 — предупреждение.
+
+### 1.1 Хуки в `settings.json`
+
 Extension несёт свои хуки в `hooks/hooks.json` и рантайм грузит их **поверх** `settings.json`
 (они не заменяют, а складываются). Если те же forge-хуки уже прописаны в `~/.qwen/settings.json`
 (старый `deploy.sh`), они **задвоятся**. `link`/`install` сам это НЕ чистит — settings.json не трогается.
@@ -42,6 +48,33 @@ cp ~/.qwen/settings.json ~/.qwen/settings.json.bak   # бэкап
 # затем вручную удалить forge-записи из "hooks" (или удалить блок целиком, если он весь форжевый)
 ```
 
+### 1.2 Скиллы и команды старого деплоя — ГЛАВНАЯ ловушка
+
+Скилл рантайм резолвит в порядке **project > user > extension**, а одноимённую слэш-команду
+extension'а — переименовывает. Значит любой оставшийся от `deploy.sh` каталог
+(`~/.qwen/skills/feature-pipeline`, `<project>/.gigacode/skills/...`) **молча подменяет** брифы
+фаз версией годичной давности. Снаружи это выглядит непонятно: хуки-то новые и preflight их
+видит зелёными, но оркестратор идёт по мёртвым путям старого SKILL.md
+(`python3 ~/.gigacode/hooks/preflight.py`) и валится на первом шаге.
+
+Найти пересечение (проверяются `.qwen`, `.gigacode`, `.agents` — на уровне проекта и `$HOME`):
+
+```bash
+python3 <ext>/hooks/preflight.py --project .   # ошибка «старые копии перекрывают extension»
+```
+
+Убрать **только форж-своё**: в тех же каталогах лежат самописные скиллы оператора
+(`pptx`, `pdf`, `skill-creator`, …) — их не трогать. Безопаснее не удалять, а отложить:
+
+```bash
+mkdir -p ~/forge-legacy-backup
+for s in $(ls <ext>/skills); do
+  [ -d ~/.qwen/skills/"$s" ] && mv ~/.qwen/skills/"$s" ~/forge-legacy-backup/
+done
+```
+
+Затем перезапустить сессию — `qwen` кэширует список скиллов на старте.
+
 ## 2. Установить
 
 **Вариант A — `link` (разработка, живые правки).** Копий не делает: пишет указатель на папку,
@@ -63,7 +96,7 @@ qwen extensions install /Users/iskandergabdrahmanov/Documents/dev/skills/forgeEx
 ## 3. Проверить
 
 ```bash
-qwen extensions list      # → ✓ Forge (1.0.0), команды /forge, /forge-lite
+qwen extensions list      # → ✓ Forge (1.0.0), команды /forge, /forge-fix, /forge-lite, /forge-spec, /forge-merge
 ```
 
 Если `/forge` не виден в текущей сессии — перезапустить `qwen`.

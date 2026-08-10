@@ -226,11 +226,31 @@
       "id": "pipeline.mode",
       "file": "pipeline",
       "path": "pipeline.mode",
-      "type": "enum", "enum": ["lite", "full"], "default": "",
+      "type": "enum", "enum": ["fix", "lite", "full"], "default": "",
       "category": "pipeline", "sensitive": false,
       "title": "Режим пайплайна (выбранный путь)",
-      "description": "Выбранный путь: lite (готовая Jira-подзадача, forgelite) | full (фича с нуля, feature-pipeline). Записывает router — для аудита и headless-предзаписи выбора. Хуком НЕ гейтится (сам путь кодирует namespace активного манифеста); required_decisions форсит sources.spec/криктичность, а не mode.",
-      "aliases": ["режим", "путь", "mode", "lite/full"]
+      "description": "Выбранный путь: fix (минорный дефект, forgefix — спека правится точечно) | lite (готовая Jira-подзадача по существующей спеке, forgelite) | full (фича с нуля, feature-pipeline). Записывает router — для аудита и headless-предзаписи выбора. Хуком НЕ гейтится (сам путь кодирует namespace активного манифеста); required_decisions форсит sources.spec/криктичность, а не mode.",
+      "aliases": ["режим", "путь", "mode", "fix/lite/full", "lite/full"]
+    },
+    {
+      "id": "sources.story",
+      "file": "pipeline",
+      "path": "sources.story",
+      "type": "string", "default": "",
+      "category": "pipeline", "sensitive": false,
+      "title": "Основная стори бага (fix-путь)",
+      "description": "Ключ стори, по которой пришёл баг (напр. STOR-100). Самый дешёвый способ связать баг со спекой: человек стори помнит, а ID требований мастера — нет. Передаётся в find_spec_anchor.py --story: сужает кандидатов до требований этой стори (через провенанс [from:] и её собственную дельту sdd.md). Не гейтится — если стори неизвестна, якорь ищется по связям Jira и изменённым файлам.",
+      "aliases": ["стори", "story", "слаг стори", "основная стори", "по какой стори"]
+    },
+    {
+      "id": "sources.spec_anchor",
+      "file": "pipeline",
+      "path": "sources.spec_anchor",
+      "type": "string", "default": "",
+      "category": "pipeline", "sensitive": false,
+      "title": "Якорь требования для дельты фикса",
+      "description": "Какое требование мастер-спеки чинит баг: ID (REQ-0007), название требования дословно либо 'none' (поведение в спеке не описано — заведём новое требование). Кандидатов находит детерминированно forgefix/scripts/find_spec_anchor.py по провенансу [from: <стори>] в мастере, старым task-plan'ам (кто заводил изменённые файлы) и связям Jira бага; неоднозначность разрешает пользователь. required_decisions для фазы fix-spec (gate-guard блокирует запись дельты без него), сверяется гейтом check_fix_delta.py --anchor.",
+      "aliases": ["якорь", "требование", "anchor", "spec_anchor"]
     },
     {
       "id": "sources.spec",
@@ -329,7 +349,7 @@
       "type": "bool", "default": false,
       "category": "docs", "sensitive": false,
       "title": "Требования-мастер (specs/<cap>/spec.md)",
-      "description": "Вести требования-мастер spec.md и сливать в неё принятые требования дельт (sdd.md) на фазе 06 (merge_delta_to_master). Выключено → работает только grounding-мастер (system-analysis)",
+      "description": "Вести требования-мастер spec.md (требования с ID + сценарии). Обновляется ПО ЗАПРОСУ командой /forge-spec merge, пайплайн в него не пишет — фаза 06 лишь показывает расхождение. Выключено → работает только grounding-мастер (system-analysis)",
       "aliases": ["мастер спека", "master spec", "требования мастер", "specs", "мастер enabled"]
     },
     {
@@ -351,6 +371,36 @@
       "title": "Подпапка ADR",
       "description": "Имя подпапки под master-базой для ADR-файлов (<master_base>/adr)",
       "aliases": ["adr subdir", "папка adr", "каталог решений"]
+    },
+    {
+      "id": "spec.drift",
+      "file": "pipeline",
+      "path": "spec.drift",
+      "type": "string", "default": "warn",
+      "category": "docs", "sensitive": false,
+      "title": "Реакция на неслитую дельту",
+      "description": "Что делает spec-judge на 06, если дельта фичи не слита в требования-мастер: warn (дефолт) — предупреждение со ссылкой на /forge-spec merge, фазу не блокирует; off — молчит. Пайплайн мастер не пишет в любом случае",
+      "aliases": ["дрейф спеки", "spec drift", "напоминание про мастер", "не слито"]
+    },
+    {
+      "id": "spec.scenario_floor",
+      "file": "pipeline",
+      "path": "spec.scenario_floor",
+      "type": "bool", "default": true,
+      "category": "docs", "sensitive": false,
+      "title": "Пол сценариев в мастере",
+      "description": "Каждое требование мастера (### REQ-NNNN) обязано нести минимум один сценарий Given-When-Then, иначе check_master_spec валит гейт. Требование без сценария непроверяемо. Дефолт включено",
+      "aliases": ["сценарий на требование", "scenario floor", "пол сценариев"]
+    },
+    {
+      "id": "spec.id_prefix",
+      "file": "pipeline",
+      "path": "spec.id_prefix",
+      "type": "string", "default": "REQ",
+      "category": "docs", "sensitive": false,
+      "title": "Префикс ID требований мастера",
+      "description": "Префикс стабильных идентификаторов требований в мастере (### REQ-0007: <название>). ID присваивает /forge-spec merge, вручную их не выдумывают",
+      "aliases": ["префикс требований", "id prefix", "req prefix"]
     },
     {
       "id": "adr.enabled",

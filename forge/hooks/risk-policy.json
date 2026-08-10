@@ -77,7 +77,8 @@
 
   "required_decisions": {
     "_comment": "Fail-closed решения: активная фаза (по префиксу id шага) требует записанных решений — dot-path ключей pipeline.json. Пустое значение → gate-guard блокирует ПРОДУКТИВНУЮ запись (Write/Edit) этой фазы. Интерактивно заполняет ask_user_question + config.py set; headless — предзапись ДО прогона. Универсально для обоих режимов.",
-    "lite-design": ["sources.spec"]
+    "lite-design": ["sources.spec"],
+    "fix-spec": ["sources.spec_anchor"]
   },
 
   "level_requirements": {

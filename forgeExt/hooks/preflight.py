@@ -14,7 +14,8 @@ Pre-flight check для feature-pipeline.
 («хуки не задеплоены»), хотя харнес был поднят.
 
 Exit 0 — харнес активен, можно продолжать.
-Exit 1 — ENFORCEMENT OFF (essential-хук не подключён / settings / risk-policy).
+Exit 1 — ENFORCEMENT OFF (essential-хук не подключён / settings / risk-policy) либо рантайм
+         грузит НЕ этот код (старые копии скиллов/команд перекрывают extension).
          Стоп-и-предупреди: сначала deploy/установка extension'а, потом заново.
 Exit 2 — конфиг не инициализирован (ground/pipeline.json нет/неполон). Нормальный
          первый запуск: инициализируй конфиг и перезапусти preflight до exit 0.
@@ -45,6 +46,12 @@ PLUGIN_ROOT_VAR = "${CLAUDE_PLUGIN_ROOT}"
 # Каталоги рантаймов: .gigacode (форк GigaCode, прод) и .qwen (dev/тест).
 _RUNTIME_DIRS = (".gigacode", ".qwen")
 _EXT_MANIFESTS = ("gigacode-extension.json", "qwen-extension.json")
+
+# Каталоги-провайдеры скиллов и слэш-команд рантайма (в qwen-code —
+# SKILL_PROVIDER_CONFIG_DIRS = [".qwen", ".agents"], на форке GigaCode — ".gigacode").
+# Скиллы резолвятся project > user > extension, команды при конфликте имён рантайм
+# переименовывает — extension проигрывает обоим уровням.
+_SKILL_PROVIDER_DIRS = (".gigacode", ".qwen", ".agents")
 
 
 def _home() -> Path:
@@ -327,6 +334,60 @@ def _legacy_settings_drift(base: Path, project_root) -> list[str]:
     return hits
 
 
+def _named_entries(d: Path, marker: str | None) -> dict:
+    """Имя → путь для каталога скиллов (`marker="SKILL.md"`) либо команд (`marker=None`, *.md)."""
+    out: dict = {}
+    try:
+        children = sorted(d.iterdir())
+    except OSError:
+        return out
+    for entry in children:
+        if marker is None:
+            if entry.is_file() and entry.suffix == ".md":
+                out[entry.stem] = entry
+        elif entry.is_dir() and (entry / marker).exists():
+            out[entry.name] = entry
+    return out
+
+
+def _shadowing_copies(base: Path, project_root) -> list[str]:
+    """Скиллы/команды extension'а, перекрытые одноимёнными копиями user/project-уровня.
+
+    Рантайм резолвит скилл в порядке project > user > extension, а одноимённую слэш-команду
+    extension'а переименовывает — в обоих случаях выигрывает НЕ extension. Каталог, оставшийся
+    от старого deploy.sh (`~/.qwen/skills/feature-pipeline`, `<project>/.gigacode/skills/…`),
+    поэтому молча подменяет брифы фаз старой версией: хуки-то грузятся из extension'а и preflight
+    их видит зелёными, а оркестратор идёт по мёртвым путям вида `~/.gigacode/hooks/preflight.py`
+    и валится на первом же шаге. Снаружи это выглядит как «preflight ждёт старую раскладку».
+
+    Пути сравниваем через resolve(): симлинк каталога рантайма на сам extension — не подмена.
+    Отчёт группируем ПО КАТАЛОГАМ, а не по именам: перекрытых сущностей бывает полтора десятка,
+    и плоский список пришлось бы обрезать — ровно на том каталоге, который и грузит рантайм.
+    """
+    hits: list[str] = []
+    roots = [Path(project_root) / p for p in _SKILL_PROVIDER_DIRS]
+    roots += [_home() / p for p in _SKILL_PROVIDER_DIRS]
+    for kind, subdir, marker in (("скиллы", "skills", "SKILL.md"), ("команды", "commands", None)):
+        own = _named_entries(base / subdir, marker)
+        if not own:
+            continue
+        for root in roots:
+            names = []
+            for name, path in _named_entries(root / subdir, marker).items():
+                if name not in own:
+                    continue
+                try:
+                    if path.resolve() == own[name].resolve():
+                        continue
+                except OSError:
+                    pass
+                names.append(name)
+            if names:
+                shown = ", ".join(names[:6]) + ("…" if len(names) > 6 else "")
+                hits.append(f"{root / subdir} — {kind} ({len(names)}): {shown}")
+    return hits
+
+
 def _check_extension_layout(base: Path, project_root, errors: list[str],
                             warnings: list[str]) -> None:
     """Раскладка extension: код рядом с этим файлом, wiring — hooks/hooks.json."""
@@ -376,6 +437,16 @@ def _check_extension_layout(base: Path, project_root, errors: list[str],
 
     for msg in _legacy_settings_drift(base, project_root):
         warnings.append(msg)
+
+    shadowed = _shadowing_copies(base, project_root)
+    if shadowed:
+        errors.append(
+            "старые копии перекрывают extension — рантайм грузит НЕ его код: "
+            + "; ".join(shadowed)
+            + ". Это остатки прежнего deploy.sh: скилл резолвится project > user > extension, "
+              "одноимённую команду рантайм переименовывает. Убери форж-своё из этих каталогов "
+              "(чужие скиллы оператора рядом не трогай) и перезапусти сессию — INSTALL.md §1."
+        )
 
 
 def _check_project_layout(base: Path, project_root, errors: list[str],

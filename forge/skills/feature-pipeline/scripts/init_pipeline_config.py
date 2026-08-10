@@ -316,6 +316,15 @@ def build_config(root):
             "enabled": False,             # гейтить ADR на 02-design (check_adr в design-judge)
             "enforce_couplings": False,   # новая связка модулей требует accepted ADR (05-verify)
         },
+        "spec": {
+            # ПОВЕДЕНИЕ требований-мастера specs/<cap>/spec.md. ГДЕ он лежит и ведётся ли —
+            # в docs.master (mode/repo_path/enabled/capability); тут только как он проверяется.
+            # Мастер обновляется ПО ЗАПРОСУ командой /forge-spec merge, пайплайн в него не пишет.
+            "id_prefix": "REQ",           # префикс стабильных ID требований (### REQ-0007: ...)
+            "drift": "warn",              # off | warn — реакция spec-judge на неслитую дельту
+            "scenario_floor": True,       # каждое требование обязано иметь ≥1 Given-When-Then
+            "profile": "forge",           # состав разделов мастера (forge = разделы с ДКБ)
+        },
         "jira": {
             "enabled": None,                  # TODO: true/false
             "project_key": None,              # TODO: напр. "KIDPPRB"

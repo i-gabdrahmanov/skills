@@ -1,0 +1,8 @@
+[
+  {"id": "fix-intake", "title": "Вход (Jira/описание) + скоуп-чек «минорный дефект»",     "depends_on": []},
+  {"id": "fix-diag",   "title": "Диагностика: root cause + мини-план (task-plan.json)",   "depends_on": ["fix-intake"]},
+  {"id": "fix-red",    "title": "RED: тест воспроизводит баг (компилируется и падает)",   "depends_on": ["fix-diag"]},
+  {"id": "fix-green",  "title": "GREEN: минимальный фикс зеленит тест",                   "depends_on": ["fix-red"]},
+  {"id": "fix-verify", "title": "Прогон + регресс затронутых модулей + покрытие",         "depends_on": ["fix-green"]},
+  {"id": "fix-spec",   "title": "Дельта-правка спеки (точечная, не заново)",              "depends_on": ["fix-verify"]}
+]

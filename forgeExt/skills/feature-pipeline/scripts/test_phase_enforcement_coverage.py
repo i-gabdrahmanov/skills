@@ -47,6 +47,12 @@ REPRESENTATIVE = {
     "lite-red":    ("lite-red",    "Write", {"file_path": "src/test/java/XTest.java"}),
     "lite-green":  ("lite-green",  "Write", {"file_path": "src/main/java/X.java"}),
     "lite-verify": ("lite-verify", "Bash",  {"command": "./gradlew test"}),
+    # Fix-ветка (forgefix): плоские subagent-фазы минорного дефекта.
+    "fix-diag":    ("fix-diag",    "Write", {"file_path": "docs/feature-pipeline/f/task-plan.json"}),
+    "fix-red":     ("fix-red",     "Write", {"file_path": "src/test/java/XTest.java"}),
+    "fix-green":   ("fix-green",   "Write", {"file_path": "src/main/java/X.java"}),
+    "fix-verify":  ("fix-verify",  "Bash",  {"command": "./gradlew test"}),
+    "fix-spec":    ("fix-spec",    "Write", {"file_path": "docs/feature-pipeline/f/sdd.md"}),
 }
 
 
