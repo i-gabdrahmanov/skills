@@ -34,11 +34,17 @@ description: >
 ## 1. Выбор пути (ПЕРВОЕ действие)
 
 > **Путь — это ОБЯЗАТЕЛЬНОЕ решение (`pipeline.mode`), а не догадка.** Порядок: (1) если
-> `pipeline.mode` уже записан в `pipeline.json` (headless-предзапись) — используй его, не
-> переспрашивай; (2) иначе спроси `ask_user_question`; (3) если вопрос не отрендерился (headless/
-> форк — пустой ответ), НЕ угадывай и НЕ уходи в full по названию харнеса: остановись и попроси
-> предзапись `config.py set pipeline.mode fix|lite|full` + перезапуск. «feature pipeline» в
-> промпте ≠ full.
+> `pipeline.mode` записан **и** `pipeline.mode_task` совпадает с текущей задачей (тот же ключ
+> Jira/слаг) — это предзапись для ЭТОГО прогона, используй её и не переспрашивай; (2) иначе
+> спроси `ask_user_question`; (3) если вопрос не отрендерился (headless/форк — пустой ответ),
+> НЕ угадывай и НЕ уходи в full по названию харнеса: остановись и попроси предзапись
+> `config.py set pipeline.mode fix|lite|full` + `set pipeline.mode_task <KEY|slug>` +
+> перезапуск. «feature pipeline» в промпте ≠ full.
+>
+> ⚠️ **Чужой `pipeline.mode` не наследуется.** `pipeline.json` живёт в проекте и переживает
+> прогоны: записанный вчера `fix` — это решение по вчерашнему багу, а не по сегодняшней фиче.
+> Поэтому режим считается действующим только вместе с `mode_task`. Не совпало (или `mode_task`
+> пуст) — **спроси заново**, даже если `pipeline.mode` заполнен.
 
 Спроси пользователя (`ask_user_question`) — до любого субагента/агента:
 
@@ -72,20 +78,28 @@ description: >
 
 ### Выбран **fix**
 1. Выстави fix-конфиг (один общий `.gigacode`; `--project` ДО `set`; `auto_max_risk` sensitive → `--confirm`).
-   **`pipeline.mode` — записать первым** (артефакт решения о пути, universal-режим fail-closed):
+   **`pipeline.mode` + `pipeline.mode_task` — записать первыми** (артефакт решения о пути и о том,
+   ДЛЯ КАКОЙ задачи оно принято; universal-режим fail-closed):
    ```
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set pipeline.mode fix
+   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set pipeline.mode_task <KEY|slug>
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set autonomy.auto_max_risk R2 --confirm
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set autonomy.criticality medium
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set quality.eval_enabled false
    ```
-2. Прочитай и строго следуй: `read_file("<project>/.gigacode/skills/forgefix/SKILL.md")`.
-   Дальше веди дефект по нему (стейт в namespace `forgefix`).
+2. Пользователь назвал стори («баг по STOR-100») — запиши сразу, это снимет вопрос на `fix-intake`:
+   ```
+   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set sources.story <STORY>
+   ```
+3. Прочитай и строго следуй: `read_file("<project>/.gigacode/skills/forgefix/SKILL.md")`.
+   Дальше веди дефект по нему (стейт в namespace `forgefix`). У fix два обязательных вопроса
+   пользователю: стори бага (§2.1) и утверждение мини-плана фикса (§3.1) — оба форсятся хуками.
 
 ### Выбран **lite**
 1. Выстави lite-конфиг (те же правила вызова config.py):
    ```
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set pipeline.mode lite
+   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set pipeline.mode_task <JIRA-KEY>
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set autonomy.auto_max_risk R2 --confirm
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set autonomy.criticality medium
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set quality.eval_enabled false
@@ -98,6 +112,7 @@ description: >
 1. Запиши путь и не переопределяй autonomy — у full свой гейт критичности (после SDD):
    ```
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set pipeline.mode full
+   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set pipeline.mode_task <KEY|slug>
    ```
 2. Прочитай и строго следуй: `read_file("<project>/.gigacode/skills/feature-pipeline/SKILL.md")`.
    Дальше веди фичу по нему (стейт в namespace `feature-pipeline`).

@@ -7,17 +7,20 @@
 начнёт двоиться. Самый дешёвый источник — **сказать слаг стори**: человек его обычно знает, а какое требование
 мастера за ней стоит — нет. Поэтому `--story <KEY>` (повторяемый) — свидетельство наивысшего веса,
 и он же включает прямое сопоставление: у стори есть СВОЯ дельта `<docs>/feature-pipeline/<KEY>/
-sdd.md`, чьи `###`-заголовки ровно и стали требованиями мастера. Это работает, даже если
-провенанс `[from:]` в мастере кто-то потёр руками.
+sdd.md`, чьи `###`-заголовки ровно и стали требованиями мастера. Туда же смотрят дельты её
+ПРОШЛЫХ фиксов (`<KEY>/fixes/<баг>/sdd.md`) — фикс живёт внутри папки своей стори, и требование,
+которое он правил, принадлежит стори. Это работает, даже если провенанс `[from:]` в мастере
+кто-то потёр руками.
 
 Остальное выводится машинно из того, что форж уже пишет сам:
 
   1. **Провенанс мастера.** Каждое требование несёт `[from: <slug> <date>]`, где `<slug>` — ключ
      Jira той фичи/стори, что его завела или правила (при `modify` теги НАКАПЛИВАЮТСЯ). Значит
      требование помнит все стори, которые его трогали.
-  2. **Старые task-plan'ы.** `<docs>/feature-pipeline/<slug>/task-plan.json` перечисляет
-     `artifacts` (созданные файлы) и `reuses` (изменённые классы). Файл, который правит фикс,
-     находит стори, которая этот файл создала/трогала, — а через её slug и требования мастера.
+  2. **Старые task-plan'ы.** `<docs>/feature-pipeline/<slug>/task-plan.json` (и планы её прошлых
+     фиксов `<slug>/fixes/<баг>/task-plan.json`) перечисляют `artifacts` (созданные файлы) и
+     `reuses` (изменённые классы). Файл, который правит фикс, находит стори, которая этот файл
+     создала/трогала, — а через её slug и требования мастера.
   3. **Связи Jira самого бага.** `parent`, `issuelinks`, Epic Link, упоминания ключей в тексте.
 
 Кандидаты ранжируются по сумме весов свидетельств. Один максимум — якорь найден; несколько или
@@ -168,43 +171,64 @@ def stories_from_changed_files(root: Path, changed: list[str]) -> dict[str, dict
     if not base.is_dir():
         return out
     for d in sorted(p for p in base.iterdir() if p.is_dir()):
-        plan_path = d / "task-plan.json"
-        if not plan_path.exists():
-            continue
-        try:
-            plan = json.loads(plan_path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
-            continue
-        for t in plan.get("tasks") or []:
-            for entry in list(t.get("artifacts") or []) + list(t.get("reuses") or []):
-                hit = _matches_file(entry, changed)
-                if not hit:
-                    continue
-                slot = out.setdefault(d.name, {"weight": 0, "why": [], "sdd_refs": []})
-                slot["weight"] = W_FILE  # один файл-хит достаточен; не суммируем по каждому
-                why = f"task-plan:{d.name}/{t.get('id', '?')} ← {hit}"
-                if why not in slot["why"]:
-                    slot["why"].append(why)
-                ref = t.get("sdd_ref")
-                if ref and ref not in slot["sdd_refs"]:
-                    slot["sdd_refs"].append(ref)
+        # План стори + планы её прошлых фиксов (<стори>/fixes/<баг>/task-plan.json). Файл,
+        # который уже чинили внутри этой стори, — такое же свидетельство её авторства.
+        plans = [(d / "task-plan.json", d.name)]
+        fixes = d / "fixes"
+        if fixes.is_dir():
+            plans += [(f / "task-plan.json", f"{d.name}/fixes/{f.name}")
+                      for f in sorted(p for p in fixes.iterdir() if p.is_dir())]
+        for plan_path, origin in plans:
+            if not plan_path.exists():
+                continue
+            try:
+                plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                continue
+            for t in plan.get("tasks") or []:
+                for entry in list(t.get("artifacts") or []) + list(t.get("reuses") or []):
+                    hit = _matches_file(entry, changed)
+                    if not hit:
+                        continue
+                    # Кандидат — всегда СТОРИ (d.name), даже если файл трогал её фикс:
+                    # требование мастера принадлежит стори, а не багу.
+                    slot = out.setdefault(d.name, {"weight": 0, "why": [], "sdd_refs": []})
+                    slot["weight"] = W_FILE  # один файл-хит достаточен; не суммируем по каждому
+                    why = f"task-plan:{origin}/{t.get('id', '?')} ← {hit}"
+                    if why not in slot["why"]:
+                        slot["why"].append(why)
+                    ref = t.get("sdd_ref")
+                    if ref and ref not in slot["sdd_refs"]:
+                        slot["sdd_refs"].append(ref)
     return out
 
 
 def titles_from_story_delta(root: Path, slug: str) -> list[str]:
-    """Заголовки требований из СОБСТВЕННОЙ дельты стори (<docs>/feature-pipeline/<slug>/sdd.md).
+    """Заголовки требований из дельт стори: её собственной (<docs>/feature-pipeline/<slug>/sdd.md)
+    и дельт её прошлых фиксов (<slug>/fixes/*/sdd.md).
 
     Прямая связь «стори → её требования»: именно эти `###`-заголовки merge и апсертил в мастер.
     Работает, даже если провенанс [from:] в мастере кто-то потёр руками.
     """
-    sdd = _feature_docs_dir(root) / slug / "sdd.md"
-    if not sdd.exists() or _engine is None:
+    if _engine is None:
         return []
-    try:
-        return [c["title"] for c in _engine.parse_delta(sdd.read_text(encoding="utf-8"))
-                if (c.get("title") or "").strip()]
-    except Exception:  # noqa: BLE001
-        return []
+    story_dir = _feature_docs_dir(root) / slug
+    sdds = [story_dir / "sdd.md"]
+    fixes = story_dir / "fixes"
+    if fixes.is_dir():
+        sdds += [f / "sdd.md" for f in sorted(p for p in fixes.iterdir() if p.is_dir())]
+    titles: list[str] = []
+    for sdd in sdds:
+        if not sdd.exists():
+            continue
+        try:
+            for c in _engine.parse_delta(sdd.read_text(encoding="utf-8")):
+                title = (c.get("title") or "").strip()
+                if title and title not in titles:
+                    titles.append(title)
+        except Exception:  # noqa: BLE001
+            continue
+    return titles
 
 
 def rank(master_reqs: list[dict], jira_stories: dict, file_stories: dict,

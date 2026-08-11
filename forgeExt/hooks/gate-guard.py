@@ -57,7 +57,7 @@ def _required_decisions_missing(root: Path) -> str | None:
         policy = R.load_policy().get("required_decisions") or {}
         if not policy:
             return None
-        step = R.active_step_id(root)
+        step = R.current_step_id(root)
         if not step:
             return None
         for prefix, keys in policy.items():
@@ -79,6 +79,40 @@ def _approval_valid(root: Path, key: str) -> bool:
     он как-то просочился мимо state-write-guard."""
     d = _read_json(root / "ground" / "approvals" / f"{key}.json")
     return isinstance(d, dict) and d.get("produced_by") == "record_approval"
+
+
+def _safe_key(key: str) -> str:
+    """Нормализация ключа approval — ровно как в record_approval.safe_key (иначе гейт искал бы
+    маркер под именем, которого скрипт никогда не создаст)."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", str(key)).strip("-")
+
+
+def _phase_approval_missing(root: Path) -> tuple[str, str] | None:
+    """(approval-key, step_id), если активная фаза требует ПОДТВЕРЖДЕНИЯ ЧЕЛОВЕКОМ, а валидного
+    маркера нет; иначе None. Карта phase_approvals в risk-policy.json: префикс id шага → шаблон
+    ключа ({feature} = слаг активной фичи).
+
+    Зачем. Точки «покажи план и спроси» жили только прозой в брифах — на fix-ветке это давало
+    прогон, где модель после диагностики молча уходила писать код. Здесь тот же класс гейта,
+    что у R4-оверрайдов: без ground/approvals/<key>.json с провенансом record_approval
+    продуктивная запись фазы не проходит."""
+    try:
+        policy = R.load_policy().get("phase_approvals") or {}
+        if not policy:
+            return None
+        step = R.current_step_id(root)
+        if not step:
+            return None
+        for prefix, template in policy.items():
+            if prefix.startswith("_") or not isinstance(template, str):
+                continue
+            if step.startswith(prefix):
+                feature = R.active_feature_name(root) or "pipeline"
+                key = _safe_key(template.replace("{feature}", feature))
+                return None if _approval_valid(root, key) else (key, step)
+    except Exception:
+        return None
+    return None
 
 
 def check_phase_gate(tool_name: str, tool_input: dict, agent_type: str | None,
@@ -358,6 +392,24 @@ def main() -> int:
                     f"фаза требует решения '{miss}', которого нет в pipeline.json (fail-closed). "
                     f"Запиши: config.py set {miss} <value> (интерактивно — ответь на вопрос "
                     f"оркестратора; headless — предзапись ДО прогона), затем повтори."
+                )
+
+            # ── Гейт подтверждения плана человеком (phase_approvals) ──────────
+            need = _phase_approval_missing(root)
+            if need:
+                key, step = need
+                prov_note = (" Маркер есть, но БЕЗ провенанса record_approval — рукописный "
+                             "маркер не считается согласием. "
+                             if R.approval_exists(root, key) else " ")
+                return _block(
+                    f"фаза '{step}' требует ЯВНОГО подтверждения плана пользователем; нет "
+                    f"approval-маркера ground/approvals/{key}.json.{prov_note}"
+                    f"Порядок: (1) покажи план (что сломано → как чиним, где правим, риск "
+                    f"регресса, какое требование спеки затронуто) и спроси «делаем так или "
+                    f"правки?»; (2) ТОЛЬКО после явного «да» — pipeline-state/scripts/"
+                    f"record_approval.py --key {key} --approved-by user --reason \"<кто/почему>\" "
+                    f"(прямая запись в approvals/ заблокирована state-write-guard); (3) повтори "
+                    f"действие. Правки — верни фазу плана на доработку, маркер не выписывай."
                 )
 
         # R0/R1 (или ниже порога критичности фичи) — авто. Не вмешиваемся.

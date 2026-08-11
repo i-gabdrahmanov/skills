@@ -162,6 +162,53 @@ def active_step_id(root: Path) -> str | None:
     return None
 
 
+_DONE = ("completed", "skipped")
+
+
+def _phase_key(step_id: str) -> str:
+    """Фаза шага без суффикса задачи: '04-build-T1' → '04-build', 'fix-red' → 'fix-red'.
+    Нужна только для сравнения кандидатов между собой (одна фаза или разные)."""
+    sid = str(step_id or "")
+    return sid.rsplit("-", 1)[0] if sid.count("-") >= 2 else sid
+
+
+def current_step_id(root: Path) -> str | None:
+    """Шаг, работа над которым идёт ПРЯМО СЕЙЧАС — для фазовых гейтов (required_decisions,
+    phase_approvals).
+
+    Почему не `active_step_id`: статус `in_progress` в реальном прогоне НЕ проставляется никем —
+    `update.py` переводит шаг pending → completed, а промежуточную пометку брифы не делают. Из-за
+    этого гейты, привязанные к «активной фазе», молчали на живых прогонах (fail-open) — включая
+    fail-closed решения вроде sources.spec/sources.spec_anchor.
+
+    Резолв: (1) явный in_progress, если он есть; иначе (2) ПЕРВЫЙ незакрытый шаг, у которого
+    выполнены depends_on. Если таких «готовых к работе» шагов несколько и они из РАЗНЫХ фаз
+    (напр. 04-build-T1 и 04-test-T2 на параллельных задачах) — возвращаем None: гейт остаётся
+    fail-open, а не блокирует работу по угаданной фазе. Шаги одной фазы (04-test-T1/04-test-T2)
+    неоднозначности не создают — фаза у них общая."""
+    explicit = active_step_id(root)
+    if explicit:
+        return explicit
+    p = active_manifest(root)
+    if not p:
+        return None
+    try:
+        man = json.loads(p.read_text(encoding="utf-8"))
+        steps = man.get("steps", []) or []
+        status = {s.get("id"): s.get("status") for s in steps}
+        ready = [s.get("id") for s in steps
+                 if s.get("status") not in _DONE
+                 and all(status.get(d) in _DONE for d in (s.get("depends_on") or []))]
+        ready = [s for s in ready if s]
+        if not ready:
+            return None
+        if len({_phase_key(s) for s in ready}) > 1:
+            return None
+        return ready[0]
+    except Exception:
+        return None
+
+
 def project_root(cwd: str) -> Path:
     try:
         out = subprocess.run(
@@ -285,6 +332,14 @@ def manifest_status(root: Path) -> dict:
 
 def manifest_exists(root: Path) -> bool:
     return active_manifest(root) is not None
+
+
+def active_feature_name(root: Path) -> str | None:
+    """Слаг активной фичи (каталог самого свежего манифеста ПО ВСЕМ namespace).
+    В отличие от _project.active_feature смотрит все ветки (fix/lite/full), а не только
+    feature-pipeline — им пользуются гейты, привязывающие approval-маркер к фиче."""
+    p = active_manifest(root)
+    return p.parent.name if p else None
 
 
 def approval_exists(root: Path, key: str) -> bool:

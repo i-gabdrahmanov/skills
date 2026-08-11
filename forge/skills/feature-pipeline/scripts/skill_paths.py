@@ -207,6 +207,33 @@ def feature_docs_dir(project_root: Path, cfg: Optional[dict] = None) -> Path:
     return docs_base(project_root, cfg) / _clean_subdir(docs.get("feature_subdir"), "feature-pipeline")
 
 
+def is_story_slug(story) -> bool:
+    """Назван ли реальный слаг стори. 'none'/'-'/пусто = «стори неизвестна» (осознанный ответ
+    пользователя, а не пропуск вопроса)."""
+    return isinstance(story, str) and story.strip().lower() not in ("", "none", "-", "нет")
+
+
+def fix_docs_dir(project_root: Path, bug: str, story=None, cfg: Optional[dict] = None) -> Path:
+    """Каталог артефактов ФИКСА: <feature-docs>/<story>/fixes/<bug>.
+
+    Фикс не заводит собственную «фичу»: он чинит поведение, которое уже описано стори, и живёт
+    ВНУТРИ её папки. Раньше артефакты фикса ложились в <feature-docs>/<bug> — рядом с фичами, и
+    в docs/feature-pipeline баги стояли в одном ряду со стори, а связь «этот фикс к этой фиче»
+    нигде не выражалась. Стори неизвестна (`none`) — фолбэк на плоскую папку <feature-docs>/<bug>.
+    """
+    base = feature_docs_dir(project_root, cfg)
+    bug_slug = safe_slug(bug)
+    if is_story_slug(story):
+        return base / safe_slug(story.strip()) / "fixes" / bug_slug
+    return base / bug_slug
+
+
+def fix_delta_slug(bug: str, story=None) -> str:
+    """Слаг дельты фикса для /forge-spec (merge/diff): 'STOR-100/fixes/BUG-512' либо 'BUG-512'."""
+    bug_slug = safe_slug(bug)
+    return f"{safe_slug(story.strip())}/fixes/{bug_slug}" if is_story_slug(story) else bug_slug
+
+
 def _master_base(project_root: Path, cfg: Optional[dict] = None) -> Path:
     """База МАСТЕРА (system-analysis + specs/). По умолчанию = docs_base (там же, где дельты),
     но `docs.master.{mode,repo_path}` позволяет держать мастер в ОТДЕЛЬНОМ (в т.ч. удалённом)
@@ -292,6 +319,7 @@ def master_adr_path(project_root: Path, adr_id: str, cfg: Optional[dict] = None)
 _CLI_TARGETS = {
     "docs-base": docs_base,
     "feature-docs": feature_docs_dir,
+    "fix-docs": None,          # особый: нужны --feature (баг) и --story
     "master-base": _master_base,
     "master-specs": master_specs_dir,
     "master-spec": master_spec_path,
@@ -305,10 +333,23 @@ def _cli() -> int:
         description="Печатает резолвнутый путь из docs.* (ground/pipeline.json).")
     ap.add_argument("target", choices=sorted(_CLI_TARGETS), help="какой путь напечатать")
     ap.add_argument("--project", default=".", help="корень репо кода (по умолчанию cwd)")
-    ap.add_argument("--feature", help="слаг/Jira-ключ: для feature-docs добавит подкаталог фичи")
+    ap.add_argument("--feature", help="слаг/Jira-ключ: для feature-docs/fix-docs — подкаталог")
+    ap.add_argument("--story", help="fix-docs: слаг стори, к которой относится баг "
+                                    "('none' — стори неизвестна, папка будет плоской)")
+    ap.add_argument("--print-slug", action="store_true",
+                    help="fix-docs: вместо пути напечатать слаг дельты для /forge-spec merge")
     args = ap.parse_args()
 
     root = Path(args.project).resolve()
+    if args.target == "fix-docs":
+        if not args.feature:
+            print("fix-docs: нужен --feature <ключ бага>", file=sys.stderr)
+            return 2
+        if args.print_slug:
+            print(fix_delta_slug(args.feature, args.story))
+        else:
+            print(fix_docs_dir(root, args.feature, args.story))
+        return 0
     path = _CLI_TARGETS[args.target](root)
     if args.feature and args.target == "feature-docs":
         path = path / safe_slug(args.feature)
