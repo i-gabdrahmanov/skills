@@ -249,6 +249,31 @@ class TestFindSpecAnchor(unittest.TestCase):
             self.assertEqual(r.returncode, 3)
             self.assertEqual(json.loads(r.stdout)["master_requirements"], 0)
 
+    # ── прошлые фиксы стори (<стори>/fixes/<баг>/) — такое же свидетельство ────────────
+    def test_past_fix_plan_of_story_counts_as_file_evidence(self):
+        """Файл уже чинили внутри STOR-100 — кандидат СТОРИ, а не баг: требование за стори."""
+        plan = json.loads(json.dumps(PLAN_100))
+        plan["feature_slug"] = "BUG-500"
+        td, root = _project(plans={"STOR-100/fixes/BUG-500": plan})
+        with td:
+            r = _run(root, issue=_bug(),
+                     changed=["service/src/main/java/com/x/claim/ClaimService.java"])
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            v = json.loads(r.stdout)
+            self.assertEqual(v["anchor"]["id"], "REQ-0007")
+            self.assertTrue(any("STOR-100/fixes/BUG-500" in e
+                                for e in v["candidates"][0]["evidence"]))
+
+    def test_past_fix_delta_titles_belong_to_story(self):
+        """Провенанс мастера потёрли, собственной дельты у стори нет — связь даёт дельта её фикса."""
+        master_no_tags = MASTER.replace("  [from: STOR-100 2026-01-01]", "")
+        td, root = _project(master=master_no_tags,
+                            deltas={"STOR-100/fixes/BUG-500": STORY_DELTA})
+        with td:
+            r = _run(root, issue=_bug(), story=["STOR-100"])
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(json.loads(r.stdout)["anchor"]["id"], "REQ-0007")
+
 
 if __name__ == "__main__":
     unittest.main()

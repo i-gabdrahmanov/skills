@@ -28,6 +28,7 @@ import json
 import posixpath
 import re
 import sys
+from pathlib import Path
 
 WRITE_TOOLS = ("Write", "WriteFile", "Edit", "edit", "write_file", "NotebookEdit", "notebook_edit")
 BASH_TOOLS = ("Bash", "run_shell_command")
@@ -50,6 +51,59 @@ _CP_PATTERNS = [
     r"(?<![\w-])ground/phases(?:/|\b)",
 ]
 _CP_RE = re.compile("|".join(_CP_PATTERNS))
+
+# ── Каталог САМОГО ХАРНЕСА (код форжа) — тоже control-plane ───────────────────────────
+# Артефакты фазы (sdd.md, task-plan.json, fix-plan.md) должны идти в docs-каталог ПРОЕКТА
+# (`docs.*` → skill_paths.feature_docs_dir). Но брифы подставляют путь через плейсхолдер, и
+# нерезолвнутый плейсхолдер уводит запись «рядом со SKILL.md» — т.е. в skills/ харнеса. В
+# extension-раскладке это вообще ОБЩИЙ каталог на все проекты: артефакт одной задачи оседает
+# в коде форжа, едет в следующий проект и подменяет бриф фазы. Поэтому во время прогона любая
+# запись внутрь корня харнеса — deny.
+#
+# Корень определяем от самого хука (hooks/state-write-guard.py → parents[1]), поэтому правило
+# не зависит от раскладки: legacy `<project>/.gigacode`, установленный extension или слинкованный
+# каталог-исходник. Гейт активен ТОЛЬКО при активном пайплайне (есть манифест): разработка
+# самого форжа (правка skills/ руками вне прогона) не блокируется.
+_HARNESS_ROOT = Path(__file__).resolve().parent.parent
+_HARNESS_HINT_DIRS = ("skills", "hooks", "commands", "references")
+
+
+def _in_harness(target: str) -> bool:
+    """Указывает ли путь внутрь корня харнеса (кода форжа)."""
+    if not target:
+        return False
+    try:
+        p = Path(target)
+        if not p.is_absolute():
+            p = Path.cwd() / p
+        p = Path(posixpath.normpath(str(p).replace("\\", "/")))
+        return p == _HARNESS_ROOT or _HARNESS_ROOT in p.parents
+    except (OSError, ValueError):
+        return False
+
+
+def _pipeline_active(cwd: str) -> bool:
+    """Идёт ли прогон (есть манифест). Вне прогона харнес-гейт не вмешивается."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import risk_ladder as _R
+        return bool(_R.manifest_exists(_R.project_root(cwd or ".")))
+    except Exception:  # noqa: BLE001 — резолвер недоступен: не блокируем (fail-open)
+        return False
+
+
+def _harness_hint(target: str) -> str:
+    return (
+        f"[state-write-guard] DENY: запись в каталог ХАРНЕСА '{target}' запрещена во время "
+        f"прогона. Это код форжа ({'/'.join(_HARNESS_HINT_DIRS)}), а в extension-раскладке — "
+        f"общий каталог на все проекты, а не место для артефактов задачи.\n"
+        f"  Артефакты фазы (sdd.md, tech-design.md, task-plan.json, fix-plan.md) пишутся в "
+        f"docs-каталог ПРОЕКТА. Узнай его точный путь одной командой (не подставляй плейсхолдер "
+        f"и не пиши рядом со SKILL.md):\n"
+        f"  python3 {_HARNESS_ROOT}/skills/feature-pipeline/scripts/skill_paths.py "
+        f"feature-docs --project <toplevel> --feature <slug>\n"
+        f"  Правка самого форжа — отдельная задача вне прогона пайплайна."
+    )
 
 # Токены записи в shell-команде (редирект/копирование/inline-python).
 _WRITE_TOKEN_RE = re.compile(
@@ -109,6 +163,9 @@ def main() -> int:
             if target and _CP_RE.search(target):
                 print(_hint(target), file=sys.stderr)
                 return 2
+            if target and _in_harness(target) and _pipeline_active(str(data.get("cwd") or "")):
+                print(_harness_hint(target), file=sys.stderr)
+                return 2
             return 0
 
         if tn in BASH_TOOLS:
@@ -129,6 +186,12 @@ def main() -> int:
                 m = _CP_RE.search(cmd_cp)
                 print(_hint(m.group(0) if m else "ground/*"), file=sys.stderr)
                 return 2
+            if _WRITE_TOKEN_RE.search(cmd):
+                harness = str(_HARNESS_ROOT).replace("\\", "/")
+                for tok in re.findall(r"[^\s'\"|;&><]+", cmd_cp):
+                    if tok.startswith(harness) and _pipeline_active(str(data.get("cwd") or "")):
+                        print(_harness_hint(tok), file=sys.stderr)
+                        return 2
             return 0
     except Exception:
         return 0

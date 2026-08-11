@@ -78,7 +78,14 @@
   "required_decisions": {
     "_comment": "Fail-closed решения: активная фаза (по префиксу id шага) требует записанных решений — dot-path ключей pipeline.json. Пустое значение → gate-guard блокирует ПРОДУКТИВНУЮ запись (Write/Edit) этой фазы. Интерактивно заполняет ask_user_question + config.py set; headless — предзапись ДО прогона. Универсально для обоих режимов.",
     "lite-design": ["sources.spec"],
+    "fix-diag": ["sources.story"],
     "fix-spec": ["sources.spec_anchor"]
+  },
+
+  "phase_approvals": {
+    "_comment": "Гейт ПОДТВЕРЖДЕНИЯ ПЛАНА ЧЕЛОВЕКОМ по фазе: активная фаза (по префиксу id шага) не может делать продуктивную запись, пока нет approval-маркера ground/approvals/<key>.json с провенансом record_approval. {feature} подставляется слагом активной фичи. Появилось из-за fix-ветки: тех-решение минорного дефекта (мини-план фикса) утверждалось только прозой брифа, и прогон уходил писать RED-тест и код, ничего не спросив. Гейт стоит на фазах ПОСЛЕ плана (fix-red/fix-green), а не на самой fix-diag: план сначала надо написать, чтобы было что показывать.",
+    "fix-red": "fix-plan-{feature}",
+    "fix-green": "fix-plan-{feature}"
   },
 
   "level_requirements": {

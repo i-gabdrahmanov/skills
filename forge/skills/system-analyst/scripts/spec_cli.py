@@ -52,7 +52,12 @@ def _prefix(opts: dict, cli: "str | None") -> str:
 
 
 def _features(root: Path) -> list[tuple[str, Path]]:
-    """Дельты фич: [(slug, sdd.md)] из <docs_base>/feature-pipeline/*/sdd.md."""
+    """Дельты: [(slug, sdd.md)] из <docs_base>/feature-pipeline/.
+
+    Два уровня, потому что фикс живёт ВНУТРИ папки своей стори:
+      • дельта фичи   — <feature>/sdd.md            → slug 'STOR-100'
+      • дельта фикса  — <feature>/fixes/<bug>/sdd.md → slug 'STOR-100/fixes/BUG-512'
+    Фикс без известной стори лежит плоско (<bug>/sdd.md) и попадает в первый случай."""
     try:
         base = _skill_paths().feature_docs_dir(root)
     except Exception:  # noqa: BLE001
@@ -64,7 +69,23 @@ def _features(root: Path) -> list[tuple[str, Path]]:
         sdd = d / "sdd.md"
         if sdd.exists():
             out.append((d.name, sdd))
+        fixes = d / "fixes"
+        if fixes.is_dir():
+            for f in sorted(p for p in fixes.iterdir() if p.is_dir()):
+                fix_sdd = f / "sdd.md"
+                if fix_sdd.exists():
+                    out.append((f"{d.name}/fixes/{f.name}", fix_sdd))
     return out
+
+
+def _provenance(slug: str) -> str:
+    """Строка провенанса `[from: …]` для мастера. У дельты фикса первым токеном обязана стоять
+    СТОРИ: провенанс парсится до первого пробела (find_spec_anchor._FROM_SLUG), и по нему потом
+    ищется якорь следующего бага. 'STOR-100/fixes/BUG-512' → 'STOR-100 fix/BUG-512'."""
+    if "/fixes/" in slug:
+        story, bug = slug.split("/fixes/", 1)
+        return f"{story} fix/{bug}"
+    return slug
 
 
 def _master_text(spec_path: Path) -> str:
@@ -134,7 +155,7 @@ def cmd_status(args) -> int:
 
 def _run_merge(args, slug: str, sdd: Path, spec_path: Path, capability: str,
                prefix: str, dry: bool) -> dict:
-    return engine.merge(sdd, spec_path, engine.default_template(), slug, capability,
+    return engine.merge(sdd, spec_path, engine.default_template(), _provenance(slug), capability,
                         prefix=prefix, dry_run=dry, allow_modify=args.allow_modify,
                         modify_ids=set(args.modify or []))
 
@@ -179,10 +200,19 @@ def _targets(root: Path, args) -> "list[tuple[str, Path]] | None":
     for s, p in feats:
         if s == slug:
             return [(s, p)]
+    # Дельту фикса зовут по ключу бага ('BUG-512'), а лежит она внутри стори
+    # ('STOR-100/fixes/BUG-512') — принимаем короткое имя, пока оно однозначно.
+    short = [(s, p) for s, p in feats if s.endswith(f"/fixes/{slug}")]
+    if len(short) == 1:
+        return short
+    if len(short) > 1:
+        print(f"✗ «{slug}» неоднозначен — найден в нескольких стори: "
+              f"{', '.join(s for s, _ in short)}. Укажи полный слаг.", file=sys.stderr)
+        return None
     if args.sdd:
         return [(slug, Path(args.sdd))]
-    print(f"✗ дельта фичи «{slug}» не найдена (ожидался <docs>/feature-pipeline/{slug}/sdd.md)",
-          file=sys.stderr)
+    print(f"✗ дельта «{slug}» не найдена (ожидался <docs>/feature-pipeline/{slug}/sdd.md "
+          f"либо <docs>/feature-pipeline/<стори>/fixes/{slug}/sdd.md)", file=sys.stderr)
     return None
 
 

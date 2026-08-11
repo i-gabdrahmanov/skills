@@ -21,25 +21,30 @@ forgeExt/
 │   └── forge-merge.md      # /forge-merge → ярлык слияния дельты в мастер
 ├── skills/<20 скиллов>/SKILL.md
 ├── FORGE.md                # справочная дока (НЕ авто-контекст — см. ниже)
+├── cleanup-legacy.sh       # снять остатки СТАРОЙ раскладки (deploy.sh), которые перекрывают extension
+├── test_cleanup_legacy.py  # пины к нему (план не трогает файлы, операторское не сносится)
 └── sync-from-forge.sh      # регенерация из ../forge (пока forge/ = source of truth)
 ```
 
 ## Установка
 
+Боевой рантайм — **GigaCode** (`gigacode`, база `~/.gigacode`); на дев-машине те же команды
+даёт стоковый `qwen`. Подробности и чистка старой раскладки — `INSTALL.md`.
+
 ```bash
 # локальная разработка (живой симлинк — правки в forgeExt сразу видны):
-qwen extensions link /path/to/forgeExt
+gigacode extensions link /path/to/forgeExt
 
 # из репозитория:
-qwen extensions install <git-url|owner/repo>
+gigacode extensions install <git-url|owner/repo>
 
 # управление:
-qwen extensions update forge
-qwen extensions disable forge   # временно выключить (все хуки/скиллы гаснут)
-qwen extensions uninstall forge
+gigacode extensions update forge
+gigacode extensions disable forge   # временно выключить (все хуки/скиллы гаснут)
+gigacode extensions uninstall forge
 ```
 
-После `link`/`install` — перезапустить сессию qwen, если extension не виден сразу.
+После `link`/`install` — перезапустить сессию рантайма, если extension не виден сразу.
 
 ## Ключевые отличия от deploy.sh (что переписано)
 
@@ -75,8 +80,8 @@ qwen extensions uninstall forge
   вероятно, останется тонким merge в `settings.json`. Подтвердить на боевом бинаре.
 - **GigaCode-нейминг.** На форке возможно `.gigacode/extensions` + `gigacode-extension.json`
   (вместо `.qwen`/`qwen-extension.json`) — проверить на боевом бинаре GigaCode.
-- **Дрейф глобальных хуков.** Если те же forge-хуки уже прописаны в `~/.qwen/settings.json`,
-  они будут срабатывать ДВАЖДЫ (из settings и из extension). При переходе на extension —
-  снять их из глобального `settings.json`.
+- ~~**Дрейф глобальных хуков.**~~ Закрыто: `bash cleanup-legacy.sh` снимает и задвоенные хуки из
+  `settings.json`, и старые копии скиллов/команд, которые перекрывают extension. По умолчанию —
+  план; `--apply` переносит форж-своё в `forge-legacy-backup-<TS>/`, операторское не трогает.
 - **Живой блок через модель** не прогнан: локальная модель падает на лимите контекста
   (`n_ctx 19968 < n_keep`), к хукам отношения не имеет.

@@ -195,5 +195,70 @@ class SpecCliTest(unittest.TestCase):
         self.assertIn("миграция не нужна", out)
 
 
+# Дельта ФИКСА лежит внутри папки своей стори (<стори>/fixes/<баг>/sdd.md): фикс не заводит
+# отдельную «фичу». Пины ниже держат три свойства этой раскладки: дельта видна CLI, слаг бага
+# сам по себе достаточен для merge/diff, а в мастер правка уходит с провенансом СТОРИ —
+# иначе find_spec_anchor следующего бага потеряет связь «это требование стори STOR-100».
+FIX_DELTA = """# SDD: Экспорт отчёта по заявкам
+
+## 1. Назначение и результат (Purpose & Outcomes)
+Оператор получает отчёт по заявкам за период.
+
+## 3. Функциональные требования (Given-When-Then)
+- **Given** есть заявки **When** оператор запросил отчёт **Then** отчёт сформирован
+- **Given** заявок за период нет **When** оператор запросил отчёт **Then** отчёт пуст, ошибки нет
+"""
+
+
+class FixDeltaInsideStoryTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        (self.root / "ground").mkdir()
+        (self.root / "ground" / "pipeline.json").write_text(
+            json.dumps(PIPELINE, ensure_ascii=False), encoding="utf-8")
+        story = self.root / "docs" / "feature-pipeline" / "report-export"
+        story.mkdir(parents=True)
+        (story / "sdd.md").write_text(SDD_A, encoding="utf-8")
+        d = story / "fixes" / "BUG-512"
+        d.mkdir(parents=True)
+        (d / "sdd.md").write_text(FIX_DELTA, encoding="utf-8")
+        self.spec = self.root / "docs" / "specs" / "claims" / "spec.md"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _r(self, *argv):
+        return run("--project-root", str(self.root), *argv)
+
+    def test_nested_fix_delta_is_discovered(self):
+        rc, out = self._r("status", "--json")
+        self.assertEqual(rc, 0)
+        self.assertIn("report-export/fixes/BUG-512", json.loads(out)["new"])
+
+    def test_merge_by_short_bug_key(self):
+        rc, out = self._r("diff", "BUG-512")
+        self.assertEqual(rc, 0)
+        self.assertIn("report-export/fixes/BUG-512", out)
+
+    def test_master_provenance_keeps_story_first(self):
+        self._r("merge", "report-export", "-y")
+        rc, _ = self._r("merge", "BUG-512", "--allow-modify", "-y")
+        self.assertEqual(rc, 0)
+        text = self.spec.read_text(encoding="utf-8")
+        # первый токен провенанса — стори (его и парсит find_spec_anchor), баг рядом
+        self.assertIn("[from: report-export fix/BUG-512", text)
+        self.assertIn("отчёт пуст, ошибки нет", text)
+
+    def test_ambiguous_short_key_is_refused(self):
+        d = self.root / "docs" / "feature-pipeline" / "audit-log" / "fixes" / "BUG-512"
+        d.mkdir(parents=True)
+        (d / "sdd.md").write_text(FIX_DELTA, encoding="utf-8")
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = spec_cli.main(["--project-root", str(self.root), "diff", "BUG-512"])
+        self.assertEqual(rc, 2)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -221,5 +221,133 @@ class TRequiredDecisions(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
 
 
+def _mk_fix_state(td: str, steps: list[dict], cfg: dict | None = None, feature: str = "BUG-512"):
+    """Манифест fix-ветки + pipeline.json. steps — [{"id":..., "status":...}, ...]."""
+    d = Path(td) / "ground" / "statements" / "forgefix" / feature
+    d.mkdir(parents=True)
+    (d / "manifest.json").write_text(json.dumps({"steps": steps}), encoding="utf-8")
+    base = {"autonomy": {"criticality": "medium", "auto_max_risk": "R2"}}
+    base.update(cfg or {})
+    (Path(td) / "ground" / "pipeline.json").write_text(json.dumps(base), encoding="utf-8")
+    return d
+
+
+def _approval(td: str, key: str, provenance: bool = True):
+    p = Path(td) / "ground" / "approvals"
+    p.mkdir(parents=True, exist_ok=True)
+    rec = {"key": key, "approved_by": "user", "reason": "ok"}
+    if provenance:
+        rec["produced_by"] = "record_approval"
+    (p / f"{key}.json").write_text(json.dumps(rec), encoding="utf-8")
+
+
+class TCurrentStepResolver(unittest.TestCase):
+    """Фазовые гейты обязаны работать БЕЗ статуса in_progress.
+
+    Его никто не проставляет: update.py ведёт шаг pending → completed, промежуточную пометку
+    брифы не делают. Пока гейты смотрели только на in_progress, весь слой «активная фаза»
+    (required_decisions, phase_approvals) молчал на живых прогонах — фикс уходил писать код,
+    не спросив ни стори, ни утверждения плана."""
+
+    FIX_PLAN = "docs/feature-pipeline/STOR-100/fixes/BUG-512/fix-plan.md"
+
+    def test_required_decision_fires_without_in_progress(self):
+        with tempfile.TemporaryDirectory() as td:
+            _mk_fix_state(td, [{"id": "fix-intake", "status": "completed"},
+                               {"id": "fix-diag", "status": "pending",
+                                "depends_on": ["fix-intake"]}])
+            r = _write_run(self.FIX_PLAN, td)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("sources.story", r.stderr)
+
+    def test_passes_when_story_recorded(self):
+        with tempfile.TemporaryDirectory() as td:
+            _mk_fix_state(td, [{"id": "fix-intake", "status": "completed"},
+                               {"id": "fix-diag", "status": "pending",
+                                "depends_on": ["fix-intake"]}],
+                          cfg={"sources": {"story": "STOR-100"}})
+            r = _write_run(self.FIX_PLAN, td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_explicit_in_progress_still_wins(self):
+        with tempfile.TemporaryDirectory() as td:
+            _mk_fix_state(td, [{"id": "fix-intake", "status": "in_progress"},
+                               {"id": "fix-diag", "status": "pending",
+                                "depends_on": ["fix-intake"]}])
+            # активна fix-intake (у неё требований нет) — запись не блокируется
+            r = _write_run(self.FIX_PLAN, td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_parallel_phases_stay_fail_open(self):
+        """Готовы к работе шаги РАЗНЫХ фаз (параллельные задачи full-пути) — фазу не угадываем."""
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td) / "ground" / "statements" / "forgelite" / "f1"
+            d.mkdir(parents=True)
+            (d / "manifest.json").write_text(json.dumps({"steps": [
+                {"id": "lite-design", "status": "pending"},
+                {"id": "lite-red", "status": "pending"},
+            ]}), encoding="utf-8")
+            (Path(td) / "ground" / "pipeline.json").write_text(
+                json.dumps({"autonomy": {"criticality": "medium", "auto_max_risk": "R2"}}),
+                encoding="utf-8")
+            r = _write_run("docs/feature-pipeline/f1/tech-design.md", td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+
+class TPhaseApproval(unittest.TestCase):
+    """Гейт утверждения плана человеком: без approval-маркера фазы fix-red/fix-green не пишут.
+    Раньше «покажи план и спроси» жило только в брифе — и прогон уходил писать код молча."""
+
+    STEPS = [{"id": "fix-intake", "status": "completed"},
+             {"id": "fix-diag", "status": "completed", "depends_on": ["fix-intake"]},
+             {"id": "fix-red", "status": "pending", "depends_on": ["fix-diag"]}]
+    CFG = {"sources": {"story": "STOR-100", "spec_anchor": "REQ-0007"}}
+    TEST_FILE = "src/test/java/com/acme/ReportServiceTest.java"
+
+    def test_red_write_blocked_without_approval(self):
+        with tempfile.TemporaryDirectory() as td:
+            _mk_fix_state(td, self.STEPS, self.CFG)
+            r = _write_run(self.TEST_FILE, td)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("fix-plan-BUG-512.json", r.stderr)
+
+    def test_red_write_passes_with_approval(self):
+        with tempfile.TemporaryDirectory() as td:
+            _mk_fix_state(td, self.STEPS, self.CFG)
+            _approval(td, "fix-plan-BUG-512")
+            r = _write_run(self.TEST_FILE, td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_handwritten_marker_without_provenance_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            _mk_fix_state(td, self.STEPS, self.CFG)
+            _approval(td, "fix-plan-BUG-512", provenance=False)
+            r = _write_run(self.TEST_FILE, td)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("провенанса", r.stderr)
+
+    def test_green_code_write_blocked_without_approval(self):
+        with tempfile.TemporaryDirectory() as td:
+            _mk_fix_state(td, [{"id": "fix-red", "status": "completed"},
+                               {"id": "fix-green", "status": "pending",
+                                "depends_on": ["fix-red"]}], self.CFG)
+            r = _write_run("src/main/java/com/acme/ReportService.java", td)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("fix-plan-BUG-512.json", r.stderr)
+
+    def test_approval_of_other_feature_does_not_unlock(self):
+        with tempfile.TemporaryDirectory() as td:
+            _mk_fix_state(td, self.STEPS, self.CFG)
+            _approval(td, "fix-plan-BUG-999")
+            r = _write_run(self.TEST_FILE, td)
+            self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_gate_is_inert_outside_fix_phases(self):
+        with tempfile.TemporaryDirectory() as td:
+            _mk_fix_state(td, [{"id": "fix-spec", "status": "pending"}], self.CFG)
+            r = _write_run("docs/feature-pipeline/STOR-100/fixes/BUG-512/sdd.md", td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

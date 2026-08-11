@@ -47,6 +47,22 @@ pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; s
   мастера, чтобы `/forge-spec merge` дал `~ modify`), и её гейт `check_fix_delta.py` валит
   «переписал спеку» (лимит требований/строк) и потерю сценариев мастера. Вход гейтит
   `check_fix_scope.py`: фича, Epic/Story или Blocker в fix-путь не проходят.
+  **Два обязательных вопроса пользователю, оба enforced.** (1) На `fix-intake` — «к какой стори
+  относится баг?»: ответ идёт в `sources.story` (`required_decisions` фазы `fix-diag` → без него
+  `gate-guard` не даст фазе писать; `none` — честный ответ «стори неизвестна»). (2) После
+  диагностики — **гейт фикс-плана** (§3.1 брифа): мини-план это тех-решение по дефекту, и его
+  утверждает человек, как `Гейт 2` утверждает `tech-design.md` на full-пути. Согласие фиксируется
+  `record_approval.py --key fix-plan-<KEY|slug>`, а `phase_approvals` в risk-policy заставляет
+  `gate-guard` блокировать запись фаз `fix-red`/`fix-green` без этого маркера: уйти писать
+  RED-тест и код, ничего не спросив, нельзя.
+  **Фикс живёт ВНУТРИ папки своей стори:** артефакты (`fix-plan.md`, `task-plan.json`, дельта
+  `sdd.md`) идут в `<docs>/feature-pipeline/<стори>/fixes/<баг>/` — путь резолвит
+  `skill_paths.py fix-docs --feature <баг> --story <стори>` (`--print-slug` даёт слаг дельты для
+  `/forge-spec merge <стори>/fixes/<баг>`, короткого ключа бага тоже достаточно). Фикс не заводит
+  «фичу»: он правит поведение, которое стори уже описала. В мастер правка уходит с провенансом
+  `[from: <стори> fix/<баг>]` — требование остаётся за стори, а прошлые фиксы стори работают
+  как свидетельство при поиске якоря следующего бага. Стори неизвестна (`none`) — фолбэк на
+  плоскую папку `<docs>/feature-pipeline/<баг>/`.
   **«К какой стори относится баг» — сначала спросить, потом выводить** (`find_spec_anchor.py`,
   шаг `fix-diag`). Самый дешёвый вход — `--story <KEY>`: человек помнит стори, а ID требований
   мастера — нет, поэтому при неоднозначности оркестратор задаёт СНАЧАЛА простой вопрос «по какой
@@ -87,6 +103,15 @@ full; их пол — evidence детерминированных гейтов (
 `04-build-<id>` + `eval_enabled=false`). Инвариант «каждая subagent-фаза покрыта хуком» пинится
 `test_phase_enforcement_coverage.py` (включая `lite-*` и `fix-*`).
 
+**Артефакты — в docs ПРОЕКТА, не в харнесе** (2026-08-10). Брифы веток писали путь плейсхолдером
+(`<docs>/feature-pipeline/<slug>/`), и нерезолвнутый плейсхолдер уводил запись «рядом со SKILL.md» —
+в `skills/` харнеса; в extension-раскладке это общий каталог на все проекты, так что артефакт одной
+задачи уезжал в следующий. Теперь: `skill_paths.py feature-docs --project <root> --feature <slug>`
+печатает абсолютный путь (in-repo/separate-repo), брифы fix/lite обязаны резолвить его ДО фаз и
+подставлять субагентам целиком, а `state-write-guard` блокирует запись внутрь корня харнеса, пока
+идёт прогон (корень определяется от самого хука, поэтому правило работает во всех раскладках;
+разработка форжа вне прогона не блокируется).
+
 Установка и запуск — те же: `bash deploy.sh <project>` (router+forgelite+forgefix едут в
 `skills/`), затем `gigacode --experimental-hooks -p "..."`. Отдельных инсталляторов для веток
 нет; коллизии `.gigacode` нет — харнес один.
@@ -102,7 +127,7 @@ full; их пол — evidence детерминированных гейтов (
 | `destructive-blocker.py` | PreToolUse `run_shell_command` | чёрный список (`rm -rf /`, force-push, DROP…) | exit 2 |
 | `fork-syntax-guard.py` | PreToolUse `run_shell_command` | инструктивный блок синтаксиса, который режет нативный сейфти форка (`$(...)`, backticks, `find -exec`, `ls -R`) — вместо молчаливого deny объясняет замену (Glob/Grep/Read) | exit 2 |
 | `pii-boundary.py` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
-| `state-write-guard.py` | PreToolUse Write/Edit/Bash | запрет прямой записи моделью в control-plane-файлы (`manifest.json`, `_origins`, `gates`, `overrides`, `judges`, `approvals`, `pipeline.json`, `ground/phases/`) — мутация только через санкц. скрипты | exit 2 |
+| `state-write-guard.py` | PreToolUse Write/Edit/Bash | запрет прямой записи моделью в control-plane-файлы (`manifest.json`, `_origins`, `gates`, `overrides`, `judges`, `approvals`, `pipeline.json`, `ground/phases/`) — мутация только через санкц. скрипты; плюс запрет писать артефакты фазы в КАТАЛОГ ХАРНЕСА (корень резолвится от самого хука, гейт активен только при активном манифесте) | exit 2 |
 | `inline-phase-guard.py` | PreToolUse Bash/Write/Edit | actor-guard: главный агент не производит артефакты/код/билд subagent-фазы inline (по `agent_type`) | exit 2 |
 | `grounding-evidence.py` | PreToolUse Read | пишет `read_grounding` в `agent-evidence.jsonl` при чтении grounding-index — по нему `gate-guard` снимает блок фазы `01-grounding` | нет |
 | `prompt-guard.py` | UserPromptSubmit + PostToolUse(read/fetch) | детект prompt-injection → additionalContext | нет |
@@ -653,6 +678,24 @@ dual-vocabulary, контракты pipeline-state, payload-схема snake_cas
       HEAD-коммита в `evidence-enforcer` на push: запрет `Co-Authored-By`, для forgelite —
       обязательный ключ Jira. Пины: `test_gate_result.py` (lite-гейты), `test_run_judge_ingest.py`
       (полы ингеста), `test_tautology_floor.py`, `test_evidence-enforcer.py` (commit-msg).
+- [x] **Thrust 6 — фазовые гейты ожили + утверждение плана на fix (2026-08-10, по прогону багфикса).**
+      Прогон ушёл писать код, не спросив ни стори, ни утверждения тех-решения. Причина оказалась
+      системной: **статус `in_progress` не проставляет НИКТО** (`update.py` ведёт шаг
+      pending → completed), а весь слой «активная фаза» смотрел только на него — значит
+      `required_decisions` (`sources.spec`, `sources.spec_anchor`) молчали на живых прогонах.
+      (1) `risk_ladder.current_step_id`: явный `in_progress`, иначе ПЕРВЫЙ незакрытый шаг с
+      выполненными `depends_on`; несколько готовых шагов РАЗНЫХ фаз (параллельные задачи full-пути) →
+      `None` (фазу не угадываем, fail-open). Гейты `gate-guard` переведены на него.
+      (2) Новый класс `phase_approvals` в risk-policy: «покажи план и спроси» перестало быть прозой —
+      фазы `fix-red`/`fix-green` не пишут без approval-маркера `fix-plan-<feature>` (провенанс
+      `record_approval`, как у R4-оверрайдов). (3) `sources.story` — `required_decisions` фазы
+      `fix-diag`: без ответа пользователя фикс не начинает диагностику, а артефакты идут в папку
+      стори (`<стори>/fixes/<баг>`), а не заводят «фичу» под слагом бага. (4) `pipeline.mode`
+      перестал быть липким: действует только в паре с `pipeline.mode_task` (та же задача), иначе
+      роутер спрашивает путь заново — записанный вчера `fix` уводил в fix-ветку все следующие
+      прогоны в проекте. Пины: `test_gate-guard.py` (`TCurrentStepResolver`, `TPhaseApproval`),
+      `test_fix_docs_layout.py`, `test_spec_cli.py` (`FixDeltaInsideStoryTest`),
+      `test_find_spec_anchor.py` (вложенные фиксы как свидетельство).
 > **ВАЖНО (эксплуатация):** всё это работает, только если хуки РЕАЛЬНО срабатывают — т.е. после
 > `deploy.sh` (матчеры→канон, BLOCKER-0) и запуска с `--experimental-hooks`. На форке проверь
 > firing-smoke: рисковое действие даёт `DENY`. Без этого новые гейты — тоже труп.

@@ -189,3 +189,82 @@ class TContract(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+HARNESS = Path(__file__).resolve().parent.parent  # корень харнеса (forge/)
+
+
+def _run_in(project: Path, tool_name: str, tool_input: dict):
+    """Прогон хука с cwd конкретного проекта (для харнес-гейта важен активный манифест)."""
+    payload = json.dumps({"hook_event_name": "PreToolUse", "cwd": str(project),
+                          "tool_name": tool_name, "tool_input": tool_input})
+    return subprocess.run([sys.executable, str(HOOK)], input=payload,
+                          capture_output=True, text=True, timeout=30)
+
+
+def _project(td: str, *, with_manifest: bool) -> Path:
+    """Временный проект; with_manifest=True — «идёт прогон»."""
+    root = Path(td).resolve()
+    (root / "ground").mkdir(parents=True, exist_ok=True)
+    if with_manifest:
+        d = root / "ground/statements/forgefix/STOR-1"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "manifest.json").write_text(json.dumps({"steps": []}), encoding="utf-8")
+    return root
+
+
+class THarnessDir(unittest.TestCase):
+    """Артефакты фазы не должны падать в каталог самого харнеса (в extension-раскладке он
+    ОБЩИЙ на все проекты — артефакт задачи оседает в коде форжа и едет в следующий проект)."""
+
+    def test_block_artifact_written_into_skills_dir(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            proj = _project(td, with_manifest=True)
+            r = _run_in(proj, "write_file",
+                        {"file_path": str(HARNESS / "skills/forgefix/STOR-1/sdd.md")})
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("каталог ХАРНЕСА", r.stderr)
+            self.assertIn("skill_paths.py", r.stderr)  # подсказка, как узнать верный путь
+
+    def test_block_write_into_hooks_dir(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            proj = _project(td, with_manifest=True)
+            r = _run_in(proj, "write_file", {"file_path": str(HARNESS / "hooks/evil.py")})
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+
+    def test_block_bash_redirect_into_harness(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            proj = _project(td, with_manifest=True)
+            r = _run_in(proj, "run_shell_command",
+                        {"command": f"echo x > {HARNESS}/skills/forgefix/notes.md"})
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+
+    def test_pass_docs_dir_of_project(self):
+        """Легитимный путь артефакта — docs/ ПРОЕКТА."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            proj = _project(td, with_manifest=True)
+            r = _run_in(proj, "write_file",
+                        {"file_path": str(proj / "docs/feature-pipeline/STOR-1/sdd.md")})
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_pass_harness_write_outside_pipeline(self):
+        """Разработка самого форжа (нет активного манифеста) не блокируется."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            proj = _project(td, with_manifest=False)
+            r = _run_in(proj, "write_file",
+                        {"file_path": str(HARNESS / "skills/forgefix/SKILL.md")})
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_pass_reading_harness_scripts_via_bash(self):
+        """Вызов скриптов харнеса (без токена записи) — не запись, не блокируем."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            proj = _project(td, with_manifest=True)
+            r = _run_in(proj, "run_shell_command",
+                        {"command": f"python3 {HARNESS}/skills/pipeline-state/scripts/read.py --list"})
+            self.assertEqual(r.returncode, 0, r.stderr)
