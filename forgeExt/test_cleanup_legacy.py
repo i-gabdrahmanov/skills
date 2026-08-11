@@ -124,6 +124,24 @@ class CleanupLegacy(unittest.TestCase):
         # то, что доступно, всё равно снято
         self.assertFalse((self.proj / ".gigacode" / "hooks" / "tdd-guard.py").exists())
 
+    def test_backup_dir_redirects_and_unblocks_readonly_base(self):
+        """Корп-контур: в $HOME писать нельзя, но чистить надо — бэкап уводится в доступное
+        место, и базы не смешиваются (home/ и <проект>/ раздельно)."""
+        bak = self.root / "elsewhere"
+        bak.mkdir()
+        self.home.chmod(0o500)                   # в сам $HOME класть бэкап нельзя
+        try:
+            r = subprocess.run(["bash", str(SCRIPT), "--home", str(self.home), str(self.proj),
+                                "--apply", "--backup-dir", str(bak)],
+                               capture_output=True, text=True, timeout=120)
+        finally:
+            self.home.chmod(0o700)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        root = next(bak.glob("forge-legacy-backup-*"))
+        self.assertTrue((root / "home" / ".gigacode" / "skills" / FORGE_SKILL / "SKILL.md").exists())
+        self.assertTrue((root / self.proj.name / ".gigacode" / "deploy-local.sh").exists())
+        self.assertFalse((self.home / ".gigacode" / "skills" / FORGE_SKILL).exists())
+
     def test_unwritable_base_is_skipped(self):
         """Некуда положить бэкап — базу не трогаем вовсе, а не роняем прогон на первом mv."""
         self.home.chmod(0o500)

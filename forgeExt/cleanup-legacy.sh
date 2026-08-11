@@ -34,6 +34,8 @@
 #   bash cleanup-legacy.sh /path/repo                        # + legacy-раскладка проекта (план)
 #   bash cleanup-legacy.sh /path/repo --apply --purge-state  # + ground/ и refs/forge/*
 #   bash cleanup-legacy.sh --home /tmp/fakehome --apply      # другая база (тест/другой пользователь)
+#   bash cleanup-legacy.sh --apply --backup-dir /tmp/forge-bak  # бэкап в другое место — для
+#       корп-контура, где писать в $HOME или в каталог проекта не дают
 #
 set -euo pipefail
 
@@ -42,6 +44,7 @@ EXT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # корень extension'�
 # ── аргументы ────────────────────────────────────────────────────────────────
 APPLY=0
 PURGE_STATE=0
+BACKUP_DIR=""      # куда складывать снятое; пусто → рядом с самой базой
 HOME_BASE="${HOME:-}"
 PROJECTS=()
 
@@ -54,9 +57,11 @@ while [ $# -gt 0 ]; do
                    PROJECTS+=("$2"); shift 2 ;;
     --home)        [ $# -ge 2 ] || { echo "cleanup-legacy.sh: --home без пути" >&2; exit 2; }
                    HOME_BASE="$2"; shift 2 ;;
+    --backup-dir)  [ $# -ge 2 ] || { echo "cleanup-legacy.sh: --backup-dir без пути" >&2; exit 2; }
+                   BACKUP_DIR="$2"; shift 2 ;;
     -h|--help)     sed -n '2,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)            echo "cleanup-legacy.sh: неизвестный аргумент: $1" >&2
-                   echo "  Usage: bash cleanup-legacy.sh [<проект>…] [--apply] [--purge-state] [--home <путь>]" >&2
+                   echo "  Usage: bash cleanup-legacy.sh [<проект>…] [--apply] [--purge-state] [--backup-dir <путь>]" >&2
                    echo "  Путь к проекту можно передать позиционно или через --project (флаг повторяем)." >&2
                    exit 2 ;;
     *)             PROJECTS+=("$1"); shift ;;   # позиционный путь = проект (как target у forge/uninstall.sh)
@@ -113,8 +118,16 @@ owned() {  # $1=список  $2=имя → 0, если имя в списке
 MOVED=0; KEPT=0; STRIPPED=0; FAILED=0
 BACKUP_ROOT=""   # создаётся лениво: в режиме плана каталогов не появляется
 
-backup_root_for() {  # $1=база (HOME или проект) → путь бэкапа
-  echo "$1/forge-legacy-backup-$TS"
+backup_root_for() {  # $1=база (HOME или проект) → корень бэкапа для неё
+  if [ -n "$BACKUP_DIR" ]; then
+    # Явное место (корп-контур: в $HOME/проект писать нельзя). Базы не смешиваем —
+    # раскладываем по подпапкам, иначе одноимённые skills/ из разных баз наложатся.
+    local label
+    if [ "$1" = "$HOME_BASE" ]; then label="home"; else label="$(basename "$1")"; fi
+    echo "$BACKUP_DIR/forge-legacy-backup-$TS/$label"
+  else
+    echo "$1/forge-legacy-backup-$TS"
+  fi
 }
 
 # macOS без Full Disk Access отдаёт EPERM на ~/Documents|Desktop|Downloads и внешних томах —
@@ -137,7 +150,10 @@ move_item() {  # $1=что  $2=база-бэкапа  $3=относительн�
   fi
   # Ошибку одного элемента не превращаем в обрыв всей чистки (set -e убил бы прогон на середине,
   # оставив половину раскладки снятой): сообщаем причину, считаем и идём дальше.
-  if ! err="$( { mkdir -p "$(dirname "$dest")" && rm -rf "$dest" && mv "$src" "$dest"; } 2>&1 )"; then
+  # mv может не пройти политикой корп-контура или через границу ФС — тогда copy+remove.
+  if ! err="$( { mkdir -p "$(dirname "$dest")" && rm -rf "$dest" \
+                 && { mv "$src" "$dest" 2>/dev/null || { cp -a "$src" "$dest" && rm -rf "$src"; } }
+               } 2>&1 )"; then
     echo "    ✗ НЕ перенесено: $label"
     echo "      причина: ${err:-неизвестна}"
     tcc_hint "$src"
@@ -264,11 +280,14 @@ PY
 
 # Предполётно: в apply-режиме база бэкапа обязана быть записываемой — иначе первый же mv
 # упрётся в EPERM уже после того, как часть работы сделана.
-check_writable() {  # $1=база
+check_writable() {  # $1=база (проверяем каталог, куда ляжет бэкап этой базы)
   [ "$APPLY" -eq 1 ] || return 0
-  [ -w "$1" ] && return 0
-  echo "!! нет прав на запись в $1 — бэкап туда не положить, пропускаю эту базу" >&2
-  tcc_hint "$1/x"
+  local target="${BACKUP_DIR:-$1}"
+  [ -d "$target" ] || mkdir -p "$target" 2>/dev/null || true
+  [ -w "$target" ] && return 0
+  echo "!! нет прав на запись в $target — бэкап туда не положить, пропускаю эту базу" >&2
+  echo "   в корп-контуре укажи доступное место: --backup-dir /tmp/forge-bak" >&2
+  tcc_hint "$target/x"
   return 1
 }
 

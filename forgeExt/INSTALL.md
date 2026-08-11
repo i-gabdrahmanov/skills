@@ -25,8 +25,12 @@
 ```bash
 bash <ext>/cleanup-legacy.sh                                  # план: что будет снято
 bash <ext>/cleanup-legacy.sh --apply                          # $HOME: .gigacode/.qwen/.agents
-bash <ext>/cleanup-legacy.sh --apply --project /path/repo     # + legacy-раскладка в проекте
+bash <ext>/cleanup-legacy.sh --apply /path/repo                # + legacy-раскладка в проекте
 ```
+
+Корпоративный контур, где писать в `$HOME` или в каталог проекта не дают: увести бэкап в
+доступное место — `--backup-dir /tmp/forge-bak`. Отказ доступа на отдельном файле прогон не
+роняет: скрипт называет файл и причину, снимает остальное и возвращает 1 — повтор безопасен.
 
 Затем **перезапустить сессию** (рантайм кэширует список скиллов на старте) и проверить
 `preflight.py` — ошибок «старые копии перекрывают extension» быть не должно.
