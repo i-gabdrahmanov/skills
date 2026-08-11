@@ -106,6 +106,53 @@ class CleanupLegacy(unittest.TestCase):
         self.assertIn(str(self.proj), r.stdout)
         self.assertIn(".gigacode/deploy-local.sh", r.stdout)   # дошёл до проектных артефактов
 
+    # ── отказы доступа (EPERM/EACCES) ─────────────────────────────────────
+    def test_item_failure_is_reported_not_fatal(self):
+        """Один недоступный элемент не обрывает чистку на середине: причина названа,
+        остальное снято, код возврата 1 — «сделано частично, повтори»."""
+        locked = self.home / ".gigacode" / "skills"
+        locked.chmod(0o500)                      # mv из этого каталога не пройдёт
+        try:
+            r = subprocess.run(["bash", str(SCRIPT), "--home", str(self.home),
+                                str(self.proj), "--apply"],
+                               capture_output=True, text=True, timeout=120)
+        finally:
+            locked.chmod(0o700)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("НЕ перенесено", r.stdout)
+        self.assertIn("Частично", r.stdout)
+        # то, что доступно, всё равно снято
+        self.assertFalse((self.proj / ".gigacode" / "hooks" / "tdd-guard.py").exists())
+
+    def test_backup_dir_redirects_and_unblocks_readonly_base(self):
+        """Корп-контур: в $HOME писать нельзя, но чистить надо — бэкап уводится в доступное
+        место, и базы не смешиваются (home/ и <проект>/ раздельно)."""
+        bak = self.root / "elsewhere"
+        bak.mkdir()
+        self.home.chmod(0o500)                   # в сам $HOME класть бэкап нельзя
+        try:
+            r = subprocess.run(["bash", str(SCRIPT), "--home", str(self.home), str(self.proj),
+                                "--apply", "--backup-dir", str(bak)],
+                               capture_output=True, text=True, timeout=120)
+        finally:
+            self.home.chmod(0o700)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        root = next(bak.glob("forge-legacy-backup-*"))
+        self.assertTrue((root / "home" / ".gigacode" / "skills" / FORGE_SKILL / "SKILL.md").exists())
+        self.assertTrue((root / self.proj.name / ".gigacode" / "deploy-local.sh").exists())
+        self.assertFalse((self.home / ".gigacode" / "skills" / FORGE_SKILL).exists())
+
+    def test_unwritable_base_is_skipped(self):
+        """Некуда положить бэкап — базу не трогаем вовсе, а не роняем прогон на первом mv."""
+        self.home.chmod(0o500)
+        try:
+            r = subprocess.run(["bash", str(SCRIPT), "--home", str(self.home), "--apply"],
+                               capture_output=True, text=True, timeout=120)
+        finally:
+            self.home.chmod(0o700)
+        self.assertIn("нет прав на запись", r.stderr)
+        self.assertTrue((self.home / ".gigacode" / "skills" / FORGE_SKILL).exists())
+
     def test_unknown_flag_still_errors_with_usage(self):
         r = subprocess.run(["bash", str(SCRIPT), "--home", str(self.home), "--nope"],
                            capture_output=True, text=True, timeout=120)
