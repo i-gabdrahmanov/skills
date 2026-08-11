@@ -36,10 +36,13 @@
 #   bash cleanup-legacy.sh --home /tmp/fakehome --apply      # другая база (тест/другой пользователь)
 #   bash cleanup-legacy.sh --apply --backup-dir /tmp/forge-bak  # бэкап в другое место — для
 #       корп-контура, где писать в $HOME или в каталог проекта не дают
+#   bash cleanup-legacy.sh --ext ~/.gigacode/extensions/forge --apply  # скрипт лежит отдельно
+#       (скопирован в ~/bin и т.п.) — эталон состава надо показать явно
 #
 set -euo pipefail
 
-EXT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # корень extension'а = источник эталона имён
+EXT_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # каталог самого скрипта
+EXT=""                                                      # корень extension'а (резолвится ниже)
 
 # ── аргументы ────────────────────────────────────────────────────────────────
 APPLY=0
@@ -59,6 +62,8 @@ while [ $# -gt 0 ]; do
                    HOME_BASE="$2"; shift 2 ;;
     --backup-dir)  [ $# -ge 2 ] || { echo "cleanup-legacy.sh: --backup-dir без пути" >&2; exit 2; }
                    BACKUP_DIR="$2"; shift 2 ;;
+    --ext)         [ $# -ge 2 ] || { echo "cleanup-legacy.sh: --ext без пути" >&2; exit 2; }
+                   EXT="$2"; shift 2 ;;
     -h|--help)     sed -n '2,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)            echo "cleanup-legacy.sh: неизвестный аргумент: $1" >&2
                    echo "  Usage: bash cleanup-legacy.sh [<проект>…] [--apply] [--purge-state] [--backup-dir <путь>]" >&2
@@ -78,10 +83,55 @@ if command -v python3 >/dev/null 2>&1; then PY=python3
 elif command -v python >/dev/null 2>&1; then PY=python
 fi
 
+# ── где лежит extension (эталон «что форжевое») ───────────────────────────────
+# Скрипт можно скопировать куда угодно (~/bin, /usr/local/bin) — но списки скиллов/команд/хуков
+# он берёт из КАТАЛОГА EXTENSION'А. Без него чистка сняла бы только «снятые» артефакты и
+# оставила раскладку полуразобранной (хуже, чем не запускать вовсе), поэтому корень
+# либо резолвится, либо скрипт останавливается.
+is_ext_root() {  # $1=каталог → 0, если это похоже на forgeExt
+  [ -d "$1/hooks" ] || return 1
+  ls "$1"/hooks/*.py >/dev/null 2>&1 || return 1
+  ls "$1"/skills/*/SKILL.md >/dev/null 2>&1 || return 1
+  return 0
+}
+
+link_source_of() {  # $1=каталог установленного extension'а → путь-источник из install-маркера
+  local marker
+  for marker in "$1"/.*-extension-install.json; do
+    [ -f "$marker" ] || continue
+    sed -n 's/.*"source"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$marker" | head -1
+    return 0
+  done
+}
+
+resolve_ext() {
+  local cand src b
+  if [ -n "$EXT" ]; then                       # явный --ext
+    EXT="$(cd "$EXT" 2>/dev/null && pwd)" || { echo "cleanup-legacy.sh: нет каталога --ext" >&2; exit 2; }
+    is_ext_root "$EXT" && return 0
+    echo "cleanup-legacy.sh: --ext $EXT не похож на forge-extension (нет skills/*/SKILL.md и hooks/*.py)" >&2
+    exit 2
+  fi
+  is_ext_root "$EXT_SELF" && { EXT="$EXT_SELF"; return 0; }
+  for b in $BASES; do                          # установленный extension рядом с рантаймом
+    cand="$HOME_BASE/$b/extensions/forge"
+    [ -d "$cand" ] || continue
+    is_ext_root "$cand" && { EXT="$cand"; return 0; }
+    src="$(link_source_of "$cand")"            # link → источник указан в install-маркере
+    if [ -n "${src:-}" ] && is_ext_root "$src"; then EXT="$(cd "$src" && pwd)"; return 0; fi
+  done
+  echo "cleanup-legacy.sh: не нашёл каталог extension'а — а без него не понять, что форжевое," >&2
+  echo "  и чистка сняла бы лишь часть (это хуже, чем ничего). Скрипт лежит в $EXT_SELF." >&2
+  echo "  Укажи корень явно: --ext <путь>/forgeExt (или ~/.gigacode/extensions/forge)," >&2
+  echo "  либо запускай скрипт из самого каталога extension'а." >&2
+  exit 2
+}
 TS="$(date +%Y%m%d-%H%M%S)"
 # Каталоги-провайдеры скиллов/команд — те же, что проверяет preflight._SKILL_PROVIDER_DIRS.
 # Боевой рантайм — GigaCode (.gigacode); .qwen — дев-машина, .agents — общий каталог агентов.
 BASES=".gigacode .qwen .agents"
+
+resolve_ext
 
 # ── что считается форж-своим ─────────────────────────────────────────────────
 # Живое — по составу extension'а (не хардкод: добавили скилл → чистка узнает о нём сама).
