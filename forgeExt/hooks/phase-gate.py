@@ -34,21 +34,13 @@ def main() -> int:
         mp = R.active_manifest(root)  # активная фича (newest манифест, кроме archived)
         dangling = []
 
+        # Манифест — единственный источник. Прежний фолбэк на gate.json снят вместе с самим
+        # кэшем: он был производной ЭТОГО же манифеста, и без манифеста давать он мог только
+        # устаревший ответ.
         if mp and mp.exists():
             manifest = json.loads(mp.read_text(encoding="utf-8"))
             dangling = [s.get("id") for s in manifest.get("steps", [])
                         if s.get("status") == "in_progress"]
-        else:
-            # Fallback на gate.json фичи если manifest не найден
-            from _project import active_feature, gate_file
-            gate_path = gate_file(root, active_feature(root))
-            if gate_path.exists():
-                try:
-                    gate = json.loads(gate_path.read_text(encoding="utf-8"))
-                    dangling = [p.get("id") for p in gate.get("phases", [])
-                                if p.get("status") == "in_progress"]
-                except Exception:
-                    pass
 
         if not dangling:
             return 0

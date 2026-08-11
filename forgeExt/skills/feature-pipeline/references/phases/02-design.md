@@ -66,7 +66,7 @@ agent(
 Gate (обязательно, перед завершением):
   python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py design <slug> --project-root <project>
   Должен быть PASS (check_taskplan + check_sdd-линковка; при adr.enabled — ещё check_adr: состав ADR
-  + резолв ссылок ADR-NNNN). Сохраняет вердикт в judges/design-judge.json.
+  + резолв ссылок ADR-NNNN). Сохраняет вердикт design-judge в журнал прогона (events.jsonl).
 
 Выходной JSON:
   {"step_id": "02-design", "status": "completed", "path": "...", "gates": {"design-judge": "PASS"}}
@@ -99,10 +99,9 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py design 
 `<project>/.gigacode/skills/feature-pipeline/scripts/add_steps.py --skill feature-pipeline
 --feature <slug> --steps '<...>'`
 (идемпотентно, манифест руками не правь). **Используй именно версию из
-`feature-pipeline/scripts/` — она безусловно пересобирает И `gate.json`, И `phase-defs.json`
-(фазовую машину). Версию из `pipeline-state/scripts/add_steps.py` здесь НЕ применяй: судей
-`required_judges` она проставляет (паритет), но `phase-defs.json` не пересобирает, а `gate.json`
-обновляет лишь при его наличии — для новой фичи этого недостаточно.**
+`feature-pipeline/scripts/`** — она знает маску `required_judges` фазовых шагов. Фазовую
+машину синхронизировать не нужно: состояние выводится из манифеста, новые шаги видны ей
+сразу.
 
 > **🚨 Сохраняй регистр task-id из task-plan в id шагов.** Если задача в `task-plan.json` —
 > `T1`, то шаги должны быть `04-test-T1`, `04-build-T1` (а не `...-t1`).

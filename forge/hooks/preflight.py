@@ -589,7 +589,7 @@ def _run_doctor(base: Path, project_root, errors: list[str], warnings: list[str]
 
 
 # Минимальная версия Python (копия doctor.MIN_PYTHON; пинится test_doctor). Скрипты/хуки
-# используют синтаксис 3.10+ (PEP604 `X | None`, match); на 3.9 phase_sync падал.
+# используют синтаксис 3.10+ (PEP604 `X | None`, match).
 MIN_PYTHON = (3, 10)
 
 

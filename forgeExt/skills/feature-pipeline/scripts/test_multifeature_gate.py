@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""C1: две фичи в работе одновременно не затирают gate друг друга.
+"""C1: две фичи в работе одновременно не затирают фазовое состояние друг друга.
 
-Раньше gate.json был глобальным (ground/phases/gate.json) — вторая фича пересобирала
-его из своего манифеста, стирая прогресс первой. Теперь gate под фичу
-(ground/phases/<feature>/gate.json).
+История: сперва gate.json был глобальным (ground/phases/gate.json) — вторая фича
+пересобирала его из своего манифеста, стирая прогресс первой; потом кэш развели по
+фичам. Сейчас кэша нет вовсе — состояние ВЫЧИСЛЯЕТСЯ из манифеста фичи, и изоляция
+следует из того, что манифест у каждой фичи свой. Тест проверяет именно инвариант
+изоляции, а не наличие файлов.
 """
 from __future__ import annotations
 
@@ -18,6 +20,9 @@ REPO = Path(__file__).resolve().parents[3]
 INIT = REPO / "skills/pipeline-state/scripts/init.py"
 UPDATE = REPO / "skills/pipeline-state/scripts/update.py"
 ADD = REPO / "skills/feature-pipeline/scripts/add_steps.py"
+
+sys.path.insert(0, str(REPO / "skills/feature-pipeline/scripts"))
+import pipeline_phases as _pp  # noqa: E402
 
 STATIC = [
     {"id": "00-brd", "depends_on": []},
@@ -80,7 +85,11 @@ class MultiFeatureGate(unittest.TestCase):
             {"modules": [{"name": "svc"}], "entities": [{"name": "Foo"}]}), encoding="utf-8")
 
     def _gate(self, feat):
-        return json.loads((self.proj / "ground/phases" / feat / "gate.json").read_text(encoding="utf-8"))
+        """Фазовое состояние фичи — деривация из её манифеста (pipeline_phases.live_state)."""
+        manifest = json.loads(
+            (self.proj / "ground/statements/feature-pipeline" / feat / "manifest.json")
+            .read_text(encoding="utf-8"))
+        return _pp.live_phase_decision(manifest)
 
     def _close_all(self, feat):
         odir = self.proj / "ground/statements/feature-pipeline" / feat / "_origins"
@@ -104,9 +113,8 @@ class MultiFeatureGate(unittest.TestCase):
         self._setup_feature("KID-1")
         self._setup_feature("KID-2")
 
-        # отдельные gate-файлы
-        self.assertTrue((self.proj / "ground/phases/KID-1/gate.json").exists())
-        self.assertTrue((self.proj / "ground/phases/KID-2/gate.json").exists())
+        # Кэша фазовой машины на диске нет вообще — ни общего, ни пофичного.
+        self.assertEqual(list(self.proj.glob("ground/phases/**/gate.json")), [])
 
         # завершаем KID-1 полностью
         self._close_all("KID-1")
@@ -114,13 +122,13 @@ class MultiFeatureGate(unittest.TestCase):
 
         # KID-2 не затронута настройкой KID-1
         self.assertNotEqual(self._gate("KID-2")["current_phase"], "",
-                            "gate KID-2 затёрт работой KID-1 (C1 регресс)")
+                            "фазовое состояние KID-2 затронуто работой KID-1 (C1 регресс)")
 
         # завершаем KID-2 — KID-1 остаётся завершённой
         self._close_all("KID-2")
         self.assertEqual(self._gate("KID-2")["current_phase"], "")
         self.assertEqual(self._gate("KID-1")["current_phase"], "",
-                         "после работы KID-2 gate KID-1 изменился (C1 регресс)")
+                         "после работы KID-2 состояние KID-1 изменилось (C1 регресс)")
 
 
 if __name__ == "__main__":

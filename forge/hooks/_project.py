@@ -15,6 +15,7 @@ Usage:
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -66,25 +67,39 @@ def resolve_hook_path(hook_name: str) -> Path:
     return hooks_dir() / f"{hook_name}.py"
 
 
+# Критерии корня проекта, СТРОГО по убыванию приоритета. Каждый критерий проверяется по
+# ВСЕЙ цепочке предков, и только потом берётся следующий.
+#
+# Порядок обхода тут — не косметика. Раньше цикл шёл по уровням и проверял все три критерия
+# на каждом, то есть уровень побеждал приоритет: в мульти-модульном Gradle-репо путь
+# <repo>/module-a/src отдавал <repo>/module-a (там build.gradle) вместо <repo> (там .git),
+# и ground/ заводился внутри модуля. Сторона скриптов (skill_paths) build.gradle не смотрела
+# вовсе и отдавала <repo> — хуки и скрипты расходились в том, где лежат ДАННЫЕ пайплайна.
+_ROOT_MARKERS = (
+    lambda p: (p / ".git").exists(),
+    lambda p: (p / "build.gradle").exists() or (p / "settings.gradle").exists()
+    or (p / "pom.xml").exists(),
+    lambda p: (p / "ground" / "pipeline.json").exists(),
+)
+
+
 def find_project_root(cwd: Optional[Path] = None) -> Path:
-    """Ищет корень проекта от cwd вверх.
+    """Корень проекта для ДАННЫХ (ground/, docs/): вверх от cwd.
 
-    Критерии (по убыванию приоритета):
-    1. Содержит .git
-    2. Содержит build.gradle или settings.gradle или pom.xml
-    3. Содержит ground/pipeline.json
-
-    Возвращает первый совпавший, начиная от cwd.
+    Критерии по убыванию приоритета: .git → build.gradle/settings.gradle/pom.xml →
+    ground/pipeline.json. Ничего не найдено — сам cwd.
     """
-    cwd = cwd or Path.cwd()
-    for parent in [cwd] + list(cwd.parents):
-        if (parent / ".git").exists():
-            return parent
-        if (parent / "build.gradle").exists() or (parent / "settings.gradle").exists():
-            return parent
-        if (parent / "ground" / "pipeline.json").exists():
-            return parent
-    return cwd
+    start = Path(cwd) if cwd is not None else Path.cwd()
+    # Относительный путь ('.') не имеет предков — резолвим. Абсолютный не трогаем:
+    # resolve() разворачивал бы симлинки (macOS /var → /private/var) и менял ответ.
+    if not start.is_absolute():
+        start = start.resolve()
+    chain = [start] + list(start.parents)
+    for matches in _ROOT_MARKERS:
+        for parent in chain:
+            if matches(parent):
+                return parent
+    return start
 
 
 # ── Конкурентно-безопасный append ────────────────────────────────────────────
@@ -136,11 +151,113 @@ def append_locked(path, text: str) -> None:
                 pass
 
 
+# ── Пути control-plane (ground/) — ЕДИНЫЙ резолвер ───────────────────────────
+# Раньше каждый писатель и читатель складывал путь руками (`project / "ground" /
+# "statements" / skill / feature / ...`) — 60+ мест. Расхождение писателя и читателя тут
+# не падает, а молча теряет evidence: гейт не находит маркер и либо блокирует прогон,
+# либо (хуже) считает, что проверять нечего. Прецедент — approvals: record_approval писал
+# имя через safe_key, а update._approval_marker_valid читал сырой ключ.
+#
+# Поэтому и имя компонента пути, и сам путь берутся отсюда — обеими сторонами.
+
+GROUND = "ground"
+
+
+def safe_component(value) -> str:
+    """Имя файла/каталога из произвольного id (step_id, ключ approval, компонент git-ref).
+
+    ЕДИНСТВЕННАЯ реализация: писатель и читатель обязаны санитайзить одинаково, иначе
+    evidence пишется под одним именем, а ищется под другим. Пустой результат → 'x'
+    (иначе получался бы файл вида '.json').
+    """
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", str(value)).strip("-") or "x"
+
+
+def ground_dir(root: Path) -> Path:
+    """<project>/ground — корень control-plane."""
+    return Path(root) / GROUND
+
+
+def statements_dir(root: Path, skill: str) -> Path:
+    """ground/statements/<skill>/ — все прогоны скилла."""
+    return ground_dir(root) / "statements" / skill
+
+
+def state_dir(root: Path, skill: str, feature: str) -> Path:
+    """ground/statements/<skill>/<feature>/ — состояние одного прогона."""
+    return statements_dir(root, skill) / feature
+
+
+def archived_dir(root: Path, skill: str) -> Path:
+    """ground/statements/<skill>/archived/ — прогоны, вытесненные --force."""
+    return statements_dir(root, skill) / "archived"
+
+
+def manifest_path(root: Path, skill: str, feature: str) -> Path:
+    return state_dir(root, skill, feature) / "manifest.json"
+
+
+def step_output_path(root: Path, skill: str, feature: str, step_id: str) -> Path:
+    """<step-id>.json — содержательный выход субагента."""
+    return state_dir(root, skill, feature) / f"{safe_component(step_id)}.json"
+
+
+def origins_dir(root: Path, skill: str, feature: str) -> Path:
+    """_origins/ — evidence «фазу закрыл реальный SubagentStop» (пишет state-recorder)."""
+    return state_dir(root, skill, feature) / "_origins"
+
+
+def origin_path(root: Path, skill: str, feature: str, step_id: str) -> Path:
+    return origins_dir(root, skill, feature) / f"{safe_component(step_id)}.json"
+
+
+def gates_dir(root: Path, skill: str, feature: str) -> Path:
+    """gates/ — evidence «детерминированный гейт шага реально прошёл» (пишет record_gate)."""
+    return state_dir(root, skill, feature) / "gates"
+
+
+def gate_result_path(root: Path, skill: str, feature: str, step_id: str) -> Path:
+    return gates_dir(root, skill, feature) / f"{safe_component(step_id)}.json"
+
+
+def judges_dir(root: Path, skill: str, feature: str) -> Path:
+    """judges/ — вердикты судей (пишет run_judge)."""
+    return state_dir(root, skill, feature) / "judges"
+
+
+def judge_path(root: Path, skill: str, feature: str, judge: str) -> Path:
+    return judges_dir(root, skill, feature) / f"{safe_component(judge)}.json"
+
+
+def overrides_dir(root: Path, skill: str, feature: str) -> Path:
+    """overrides/ — ручные снятия блокировок (R4, пишет override_judge)."""
+    return state_dir(root, skill, feature) / "overrides"
+
+
+def override_path(root: Path, skill: str, feature: str, name: str) -> Path:
+    return overrides_dir(root, skill, feature) / f"{safe_component(name)}.json"
+
+
+def journal_path(root: Path, skill: str, feature: str) -> Path:
+    """journal/files.jsonl — журнал изменённых файлов (пишет file-journal)."""
+    return state_dir(root, skill, feature) / "journal" / "files.jsonl"
+
+
+def approvals_dir(root: Path) -> Path:
+    """ground/approvals/ — маркеры человеческого «да» (пишет record_approval).
+    Не привязаны к фиче в пути: ключ уже несёт слаг (<doc>-approved-<feature>)."""
+    return ground_dir(root) / "approvals"
+
+
+def approval_path(root: Path, key: str) -> Path:
+    return approvals_dir(root) / f"{safe_component(key)}.json"
+
+
 def active_feature(root: Path, skill: str = "feature-pipeline") -> str:
     """Активная фича = самый свежий manifest.json в ground/statements/<skill>/<feature>/.
     'pipeline' (back-compat), если ни одного манифеста нет. Должна совпадать с
     pipeline_phases.active_feature (проверяется тестом)."""
-    base = Path(root) / "ground" / "statements" / skill
+    base = statements_dir(root, skill)
     if not base.is_dir():
         return "pipeline"
     best, best_mtime = None, -1.0
@@ -159,34 +276,9 @@ def active_feature(root: Path, skill: str = "feature-pipeline") -> str:
     return best or "pipeline"
 
 
-def phases_dir(root: Path, feature: str) -> Path:
-    """Каталог фазовой машины фичи: ground/phases/<feature>/."""
-    return Path(root) / "ground" / "phases" / feature
-
-
-def gate_file(root: Path, feature: str) -> Path:
-    """gate.json фичи; при отсутствии — legacy ground/phases/gate.json (back-compat чтения)."""
-    per = phases_dir(root, feature) / "gate.json"
-    if per.exists():
-        return per
-    legacy = Path(root) / "ground" / "phases" / "gate.json"
-    return legacy if legacy.exists() else per
-
-
-def defs_file(root: Path, feature: str) -> Path:
-    per = phases_dir(root, feature) / "phase-defs.json"
-    if per.exists():
-        return per
-    legacy = Path(root) / "ground" / "phases" / "phase-defs.json"
-    return legacy if legacy.exists() else per
-
-
-def evidence_file(root: Path, feature: str) -> Path:
-    per = phases_dir(root, feature) / "agent-evidence.jsonl"
-    if per.exists():
-        return per
-    legacy = Path(root) / "ground" / "phases" / "agent-evidence.jsonl"
-    return legacy if legacy.exists() else per
+def pipeline_config_path(root: Path) -> Path:
+    """ground/pipeline.json — конфиг проекта (единственный файл ground/, живущий в репо)."""
+    return ground_dir(root) / "pipeline.json"
 
 
 def load_pipeline_config(root: Optional[Path] = None) -> dict:
@@ -195,7 +287,7 @@ def load_pipeline_config(root: Optional[Path] = None) -> dict:
     Возвращает dict или {} (с дефолтами). Никогда не бросает.
     """
     root = Path(root) if root else find_project_root()
-    cfg_path = root / "ground" / "pipeline.json"
+    cfg_path = pipeline_config_path(root)
     try:
         if cfg_path.exists():
             return json.loads(cfg_path.read_text(encoding="utf-8"))
@@ -209,14 +301,12 @@ def load_pipeline_config(root: Optional[Path] = None) -> dict:
 # system_analysis_dir/scan_dir/grounding_excerpt_path). Синхронность пинится
 # test_docs_resolver_consistency.py. См. ground/pipeline.json секцию `docs`.
 
-import re as _re
-
 # Сегменты-директории, считающиеся «тестовыми» (PII/код можно, гейты пропускают).
 _TEST_DIR_SEGMENTS = {"test", "tests", "__tests__", "fixtures", "fixture", "testfixtures", "spec", "specs"}
 # Имя файла теста. Явные формы — case-insensitive; CamelCase-суффикс Java (FooTest) —
 # СТРОГО case-sensitive, иначе "Contest.java"/"Latest.java" ложно ловятся как тесты.
-_TEST_FILE_RE = _re.compile(r"(?i)(?:^test_.+\.py$|_test\.(?:py|go)$|\.(?:test|spec)\.[a-z0-9]+$)")
-_TEST_FILE_CAMEL = _re.compile(r"(?:[a-z0-9]Tests?|[a-z0-9]IT|ITCase)\.[a-z]+$")
+_TEST_FILE_RE = re.compile(r"(?i)(?:^test_.+\.py$|_test\.(?:py|go)$|\.(?:test|spec)\.[a-z0-9]+$)")
+_TEST_FILE_CAMEL = re.compile(r"(?:[a-z0-9]Tests?|[a-z0-9]IT|ITCase)\.[a-z]+$")
 
 
 def is_test_path(path) -> bool:
@@ -256,7 +346,7 @@ def _clean_subdir(val, default: str) -> str:
     if _is_safe_segment(val):
         return val
     if val is not None and val != default:
-        print(f"[_project] docs: небезопасное имя подпапки {val!r} → '{default}'", file=sys.stderr)
+        print(f"[forge-paths] docs: небезопасное имя подпапки {val!r} → '{default}'", file=sys.stderr)
     return default
 
 
@@ -265,9 +355,9 @@ def _clean_rel(val, root: Path, default: str) -> Path:
         s = val.strip()
         if not s.startswith(("/", "~")) and ".." not in Path(s).parts:
             return Path(root) / s
-        print(f"[_project] docs: путь {val!r} выходит за проект → '{default}'", file=sys.stderr)
+        print(f"[forge-paths] docs: путь {val!r} выходит за проект → '{default}'", file=sys.stderr)
     elif val is not None:
-        print(f"[_project] docs: путь не строка ({val!r}) → '{default}'", file=sys.stderr)
+        print(f"[forge-paths] docs: путь не строка ({val!r}) → '{default}'", file=sys.stderr)
     return Path(root) / default
 
 

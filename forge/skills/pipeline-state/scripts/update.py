@@ -23,13 +23,13 @@ Paths are normalized to be relative to project root.
 import argparse
 import json
 import os
-import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from _util import load_pipeline_config, repo_root, safe_load_json
-from phase_sync import sync_gate_from_manifest
+from _util import (gate_result_path, judges_dir, load_pipeline_config, origins_dir,
+                   overrides_dir, repo_root, safe_load_json)
+import forge_events as FE  # журнал evidence (импорт _util уже положил hooks/ в sys.path)
 
 # Соглашение «какие фазы обязаны идти через субагента» — ЕДИНЫЙ источник pipeline_phases
 # (co-located feature-pipeline). best-effort импорт + inline-fallback, чтобы переименование
@@ -84,37 +84,24 @@ def _override_hint(judge: str, feature: str, step_id: str, why_ph: str = "<об�
     )
 
 
-def _judges_dir(project: Path, skill: str, feature: str) -> Path:
-    """Путь к каталогу вердиктов судей."""
-    return project / "ground" / "statements" / skill / feature / "judges"
-
-
-def _overrides_dir(project: Path, skill: str, feature: str) -> Path:
-    """Путь к каталогу ручных override-файлов."""
-    return project / "ground" / "statements" / skill / feature / "overrides"
-
-
-def _origins_dir(project: Path, skill: str, feature: str) -> Path:
-    """Каталог evidence-маркеров происхождения шага. Маркер <step_id>.json пишет ТОЛЬКО
-    state-recorder на реальном SubagentStop — поэтому его наличие доказывает, что шаг
-    выполнен субагентом, а не подделан флагом --closed-by."""
-    return project / "ground" / "statements" / skill / feature / "_origins"
+# Пути control-plane — из общего резолвера (_util → hooks/_project): писатель evidence
+# (state-recorder / record_gate / record_approval) и читатель-верификатор обязаны складывать
+# имя одинаково, иначе гейт ищет маркер не там, где он записан.
+_judges_dir = judges_dir
+_overrides_dir = overrides_dir
+_origins_dir = origins_dir
 
 
 def _has_origin_marker(project: Path, skill: str, feature: str, step_id: str) -> bool:
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(step_id)).strip("-") or "x"
-    return (_origins_dir(project, skill, feature) / f"{safe}.json").exists()
+    """Evidence «шаг закрыл реальный SubagentStop» пишет ТОЛЬКО state-recorder —
+    поэтому его наличие доказывает, что шаг выполнен субагентом, а не подделан
+    флагом --closed-by. Переоткрытие шага это evidence обнуляет."""
+    return FE.origin(project, skill, feature, step_id) is not None
 
 
 def _load_override(project: Path, skill: str, feature: str, judge_name: str) -> dict | None:
-    """Читает override-файл судьи, если существует. None — нет override."""
-    path = _overrides_dir(project, skill, feature) / f"{judge_name}.json"
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
+    """Ручное снятие блокировки (override_judge, R4), если оно есть. None — нет."""
+    return FE.override(project, skill, feature, judge_name)
 
 
 def _check_judges(step: dict, project: Path, skill: str, feature: str):
@@ -122,7 +109,7 @@ def _check_judges(step: dict, project: Path, skill: str, feature: str):
     Детерминированная блокировка: если шаг помечен completed, но не все его
     required_judges пройдены — выкинуть исключение.
 
-    Исключение: если для судьи есть ручной override-файл (overrides/<judge>.json),
+    Исключение: если для судьи есть ручной override (запись override с target=<judge>),
     блокировка снимается и факт отклонения фиксируется в manifest-step как предупреждение.
     Создание override — R4-класс: gate-guard пропускает override_judge.py только при
     approval-маркере ground/approvals/gate-override-<judge>.json (после явного «да»
@@ -132,15 +119,18 @@ def _check_judges(step: dict, project: Path, skill: str, feature: str):
     if not required:
         return
 
-    judges_dir = _judges_dir(project, skill, feature)
+    events = FE.read_events(project, skill, feature)
     blocking = []
     overridden = []
 
     for judge_name in required:
-        verdict_path = judges_dir / f"{judge_name}.json"
+        # Вердикт — из журнала прогона (kind:"judge", produced_by:"run_judge"); при его
+        # отсутствии — из старой раскладки judges/<name>.json (прогон до миграции).
+        verdict = FE.judge(project, skill, feature, judge_name, events=events)
 
-        # 1. Нет вердикта вообще
-        if not verdict_path.exists():
+        # 1. Вердикта нет: судья не запускался, либо запись/файл нечитаемы, либо провенанс
+        # чужой (подделка не отличается от отсутствия — и в обоих случаях шаг не закрыть).
+        if verdict is None:
             ov = _load_override(project, skill, feature, judge_name)
             if ov:
                 overridden.append(
@@ -149,40 +139,25 @@ def _check_judges(step: dict, project: Path, skill: str, feature: str):
                 )
                 continue
             blocking.append(
-                f"❌ Вердикт '{judge_name}.json' не найден — судья не запускался.\n"
+                f"❌ Вердикт '{judge_name}' не найден — судья не запускался "
+                f"(или запись повреждена / без провенанса run_judge).\n"
                 + _override_hint(judge_name, feature, step["id"], "<объяснение>")
             )
             continue
 
-        # 2. Вердикт есть, но повреждён
-        try:
-            verdict = json.loads(verdict_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as e:
-            ov = _load_override(project, skill, feature, judge_name)
-            if ov:
-                overridden.append(
-                    f"⚠️  '{judge_name}' повреждён — пропущен вручную. "
-                    f"Причина: {ov.get('reason', '?')}"
-                )
-                continue
-            blocking.append(f"❌ Вердикт '{judge_name}.json' повреждён: {e}")
-            continue
-
-        # 2b. Схема-санити + ПРОВЕНАНС: настоящий вердикт run_judge несёт produced_by:"run_judge",
-        # passed:bool И один из verdict/checks/summary/step_id. Рукописный/поддельный (в т.ч. голый
-        # {"passed":true} или дописанный руками) → блок: «перезапусти судью, не правь файл руками».
-        if (not isinstance(verdict, dict) or verdict.get("produced_by") != "run_judge"
-                or not isinstance(verdict.get("passed"), bool)
+        # 2. Схема-санити: настоящий вердикт несёт passed:bool И один из
+        # verdict/checks/summary/step_id. Голый {"passed":true} — не вердикт.
+        if (not isinstance(verdict.get("passed"), bool)
                 or not any(k in verdict for k in ("verdict", "checks", "summary", "step_id"))):
             ov = _load_override(project, skill, feature, judge_name)
             if ov:
-                overridden.append(f"⚠️  '{judge_name}' схема/провенанс невалидны — пропущен вручную. "
+                overridden.append(f"⚠️  '{judge_name}' схема невалидна — пропущен вручную. "
                                   f"Причина: {ov.get('reason', '?')}")
                 continue
             blocking.append(
-                f"❌ Вердикт '{judge_name}.json' не похож на вывод run_judge "
-                f"(нужно produced_by:'run_judge' + passed:bool + verdict/checks/summary). "
-                f"Перезапусти судью (run_judge.py), не правь файл руками."
+                f"❌ Вердикт '{judge_name}' не похож на вывод run_judge "
+                f"(нужно passed:bool + verdict/checks/summary). "
+                f"Перезапусти судью (run_judge.py), не правь состояние руками."
             )
             continue
 
@@ -227,11 +202,11 @@ def _check_subagent_origin(step: dict, closed_by: str, project: Path, skill: str
     Раньше это пытался форсить subagent-enforcer (PreToolUse), но PreToolUse срабатывает и
     ВНУТРИ субагента → он заблокировал бы сам субагент. Проверку перенесли на закрытие шага, но
     она доверяла флагу --closed-by: оркестратор мог передать --closed-by subagent inline и
-    подделать происхождение. Теперь проверяется НАЛИЧИЕ evidence-маркера _origins/<step_id>.json,
+    подделать происхождение. Теперь проверяется НАЛИЧИЕ evidence-записи origin в журнале прогона,
     который пишет ТОЛЬКО state-recorder на реальном SubagentStop (рантайм-событие, не тул модели).
     Флаг --closed-by больше не является доказательством.
 
-    Escape-hatch: overrides/subagent-origin.json (как у судей) — снимает блок с предупреждением
+    Escape-hatch: override subagent-origin (как у судей) — снимает блок с предупреждением
     (для деградации, когда agent() реально недоступен).
     """
     step_id = step.get("id", "")
@@ -248,19 +223,26 @@ def _check_subagent_origin(step: dict, closed_by: str, project: Path, skill: str
             step["override_warnings"].append(msg)
         print(f"  {msg}", file=sys.stderr)
         return
-    origins_dir = project / DATA_DIR / "statements" / skill / feature / "_origins"
-    no_markers_at_all = not origins_dir.exists() or not any(origins_dir.glob("*.json"))
+    # «Ни одной origin-записи вообще» = SubagentStop-хук не срабатывает (харнес не армлен).
+    # Считаем по журналу И по старой раскладке: проверка только каталога _origins давала бы
+    # ложную диагностику на любом мигрированном проекте — каталога там нет по определению.
+    odir = origins_dir(project, skill, feature)
+    no_markers_at_all = (
+        not any(r.get("kind") == "origin" for r in FE.read_events(project, skill, feature))
+        and not (odir.is_dir() and any(odir.glob("*.json")))
+    )
     arming_hint = ""
     if no_markers_at_all:
         arming_hint = (
-            "\n   ДИАГНОСТИКА: ни одного _origins-маркера у фичи нет — вероятно харнес не армлен "
+            "\n   ДИАГНОСТИКА: ни одной origin-записи у фичи нет — вероятно харнес не армлен "
             "(SubagentStop-хук не срабатывает). Прогони `python3 .gigacode/hooks/preflight.py "
             "--project .` — он должен вернуть exit 0; если ругается на settings.json/hooks — "
             "сначала deploy. Override уместен только когда agent() реально недоступен."
         )
     raise RuntimeError(
         f"Шаг {step_id} нельзя закрыть: нет evidence, что фаза прошла через субагента "
-        f"(_origins/{step_id}.json от SubagentStop отсутствует; флаг --closed-by теперь не "
+        f"(записи origin от SubagentStop нет — либо её не было, либо шаг переоткрыт откатом; "
+        f"флаг --closed-by "
         f"считается доказательством). Прогони фазу через agent(subagent_type=...) — "
         f"state-recorder запишет evidence и закроет шаг сам. Если agent() реально недоступен:\n"
         + _override_hint("subagent-origin", feature, step_id, "<почему inline допустимо>")
@@ -274,15 +256,12 @@ _DOC_APPROVAL_STEPS = (("00-brd", "brd"), ("02-sdd", "sdd"))
 
 
 def _approval_marker_valid(project: Path, key: str) -> bool:
-    """Маркер ground/approvals/<key>.json засчитывается ТОЛЬКО с провенансом record_approval
-    и совпадающим key внутри (переименованный чужой маркер не считается)."""
-    path = project / "ground" / "approvals" / f"{key}.json"
-    try:
-        d = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return False
-    return isinstance(d, dict) and d.get("produced_by") == "record_approval" \
-        and d.get("key") == key
+    """Согласие человека по ключу засчитывается ТОЛЬКО с провенансом record_approval
+    и совпадающим key внутри (переименованная чужая запись не считается).
+
+    Источник — ground/approvals.jsonl, при отсутствии записи — старый файл-маркер
+    ground/approvals/<key>.json (прогон, начатый до миграции)."""
+    return FE.approval(project, key) is not None
 
 
 def _check_doc_approval(step: dict, project: Path, skill: str, feature: str):
@@ -291,7 +270,7 @@ def _check_doc_approval(step: dict, project: Path, skill: str, feature: str):
     Закрыть 00-brd/02-sdd можно только при маркере <doc>-approved-<feature> (record_approval
     после явного «да» пользователя). На прогонах модель не задавала вопросов
     вообще — теперь без утверждения фаза не закрывается детерминированно.
-    Escape-hatch: overrides/doc-approved-<step_id>.json (создание — R4 через override_judge)."""
+    Escape-hatch: override doc-approved-<step_id> (создание — R4 через override_judge)."""
     step_id = step.get("id", "")
     doc = next((d for p, d in _DOC_APPROVAL_STEPS if step_id.startswith(p)), None)
     if doc is None:
@@ -346,7 +325,7 @@ def _check_grounding_substance(step: dict, project: Path, skill: str, feature: s
     («так себе»). Теперь шаг 01-grounding нельзя закрыть, пока выжимка не содержит ХОТЯ БЫ один
     модуль ИЛИ entity — детерминированный аналог check_brd_doc/_check_doc_approval для grounding
     (enforcement > guidance: гейт в update.py, а не только в брифе).
-    Escape-hatch: overrides/grounding-substance-<step_id>.json (R4, через override_judge)."""
+    Escape-hatch: override grounding-substance-<step_id> (R4, через override_judge)."""
     step_id = step.get("id", "")
     if not step_id.startswith(_GROUNDING_STEP_PREFIX):
         return
@@ -385,9 +364,7 @@ def _check_grounding_substance(step: dict, project: Path, skill: str, feature: s
     )
 
 
-def _gate_result_path(project: Path, skill: str, feature: str, step_id: str) -> Path:
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(step_id)).strip("-") or "x"
-    return project / "ground" / "statements" / skill / feature / "gates" / f"{safe}.json"
+_gate_result_path = gate_result_path
 
 
 def _check_gate_result(step: dict, project: Path, skill: str, feature: str):
@@ -395,30 +372,23 @@ def _check_gate_result(step: dict, project: Path, skill: str, feature: str):
 
     Для build/verify-шагов (04-test/04-build/05-tests, lite-red/green/verify) слово субагента
     («status: completed» в его JSON) — не доказательство: слабая модель возвращает completed
-    при упавшей сборке. Требуем gates/<step_id>.json с провенансом produced_by:"record_gate"
-    и passed:true — его пишет record_gate.py по фактическому exit-коду команды гейта.
-    Escape-hatch: overrides/gate-result-<step_id>.json.
+    при упавшей сборке. Требуем evidence с провенансом record_gate и passed:true — его пишет
+    record_gate.py по фактическому exit-коду команды гейта.
+    Escape-hatch: override gate-result-<step_id>.
     """
     step_id = step.get("id", "")
     if not _requires_gate_result(step_id):
         return
-    gp = _gate_result_path(project, skill, feature, step_id)
+    rec = FE.gate(project, skill, feature, step_id)
     problem = None
-    if not gp.exists():
-        problem = f"артефакт гейта gates/{gp.name} не найден — гейт шага не запускался через record_gate.py"
-    else:
-        try:
-            rec = json.loads(gp.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as e:
-            rec = None
-            problem = f"артефакт гейта повреждён: {e}"
-        if rec is not None:
-            if not isinstance(rec, dict) or rec.get("produced_by") != "record_gate" \
-                    or not isinstance(rec.get("passed"), bool):
-                problem = ("артефакт гейта не похож на вывод record_gate.py "
-                           "(нужно produced_by:'record_gate' + passed:bool) — не пиши его руками")
-            elif rec.get("passed") is not True:
-                problem = f"гейт шага НЕ пройден (passed:false): {rec.get('reason', 'exit code != 0')}"
+    if rec is None:
+        problem = ("evidence гейта нет — гейт шага не запускался через record_gate.py "
+                   "(либо запись повреждена/без провенанса record_gate)")
+    elif not isinstance(rec.get("passed"), bool):
+        problem = ("evidence гейта не похож на вывод record_gate.py (нужно passed:bool) — "
+                   "не пиши его руками")
+    elif rec.get("passed") is not True:
+        problem = f"гейт шага НЕ пройден (passed:false): {rec.get('reason', 'exit code != 0')}"
     if problem is None:
         return
     ov = _load_override(project, skill, feature, f"gate-result-{step_id}")
@@ -460,7 +430,7 @@ def _check_reopen_limit(step: dict, project: Path, skill: str, feature: str):
     (completed|failed → pending|in_progress) считается в step["reopens"]; при исчерпании
     quality.max_step_reopens транзишен блокируется с exit 3 (ESCALATE — «стоп-и-спроси»),
     а не молча продолжает цикл. Прозаические «лимит 3» в SKILL.md модель не держит —
-    держит этот счётчик. Escape-hatch: overrides/step-reopen-<step_id>.json."""
+    держит этот счётчик. Escape-hatch: override step-reopen-<step_id>."""
     step_id = step.get("id", "")
     reopens = step.get("reopens", 0)
     limit = _max_step_reopens(project)
@@ -526,7 +496,7 @@ def _check_failure_limit(step: dict, project: Path, skill: str, feature: str) ->
 def _check_required_skip(step: dict, project: Path, skill: str, feature: str):
     """Обязательный шаг (REQUIRED_STEP_PREFIXES) нельзя тихо пропустить (status=skipped) — иначе
     fallback «не смог спросить → пропущу фазу» молча выкидывает качество-гейты. Для обязательной
-    фазы пропуск = ОСТАНОВКА (Thrust 1: fallback=STOP). Escape: overrides/step-skip-<step_id>.json
+    фазы пропуск = ОСТАНОВКА (Thrust 1: fallback=STOP). Escape: override step-skip-<step_id>
     (создание — R4 через override_judge + approval-маркер). Иначе exit 3 ESCALATE."""
     step_id = step.get("id", "")
     if not _requires_no_silent_skip(step_id):
@@ -710,12 +680,6 @@ def main():
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
     os.replace(tmp, manifest_path)
-
-    # Синхронизация gate.json из manifest.json
-    try:
-        sync_gate_from_manifest(str(project), args.feature, args.skill)
-    except Exception as e:
-        print(f"WARNING: phase_sync failed: {e}", file=sys.stderr)
 
     print(json.dumps({
         "status": "updated",

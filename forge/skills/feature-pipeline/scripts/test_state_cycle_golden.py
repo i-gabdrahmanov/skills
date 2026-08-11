@@ -24,6 +24,9 @@ INIT = REPO / "skills/pipeline-state/scripts/init.py"
 UPDATE = REPO / "skills/pipeline-state/scripts/update.py"
 ADD_STEPS_FP = REPO / "skills/feature-pipeline/scripts/add_steps.py"
 
+sys.path.insert(0, str(REPO / "skills/feature-pipeline/scripts"))
+import pipeline_phases as _pp  # noqa: E402
+
 SLUG = "KID-1"  # Jira-ключ: init.py гейтит feature-pipeline на формат ключа
 
 STATIC_STEPS = [
@@ -131,8 +134,9 @@ class GoldenStateCycle(unittest.TestCase):
         self.assertTrue(all(v == "completed" for v in statuses.values()),
                         f"не все шаги completed: {statuses}")
 
-        # 6. фазовая машина дошла до конца (gate под фичу — C1)
-        gate = json.loads((self.proj / "ground/phases" / SLUG / "gate.json").read_text(encoding="utf-8"))
+        # 6. фазовая машина дошла до конца (состояние выводится из манифеста, кэша нет)
+        manifest_now = json.loads((self._state_dir() / "manifest.json").read_text(encoding="utf-8"))
+        gate = _pp.live_phase_decision(manifest_now)
         self.assertEqual(gate["current_phase"], "",
                          f"gate застрял на '{gate['current_phase']}' (P0-2?)")
         # 6a. фазы в каноническом порядке (динамическая 04-tdd не в конце)

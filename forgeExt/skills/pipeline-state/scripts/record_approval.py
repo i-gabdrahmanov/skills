@@ -24,22 +24,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from _util import repo_root
+from _util import approval_path, repo_root, safe_component  # noqa: F401
+import forge_events as FE
 
 PRODUCED_BY = "record_approval"
 
-
-def safe_key(key: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", str(key)).strip("-")
-
-
-def approval_path(project: Path, key: str) -> Path:
-    return project / "ground" / "approvals" / f"{safe_key(key)}.json"
+# Санитайзер имени — общий с читателем (update._approval_marker_valid): своя копия здесь
+# и отсутствие санитайза там уже расходились, маркер писался не туда, где его искали.
+safe_key = safe_component
 
 
 def main() -> int:
@@ -70,11 +66,13 @@ def main() -> int:
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
-    out = approval_path(project, key)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, out)
+    # Согласие — строкой в проектный журнал ground/approvals.jsonl (раньше: файл на ключ).
+    # Лог проектный, а не пофичный: часть ключей к фиче не привязана (human-approval,
+    # security-review, change-advisory).
+    record.pop("produced_by", None)
+    record.pop("key", None)
+    FE.append_approval(project, key, **record)
+    out = FE.approvals_path(project)
 
     print(f"[record_approval] approval '{key}' зафиксирован (approved_by={args.approved_by}) → {out}")
     print("[record_approval] ⚠️ это согласие должно было прозвучать от пользователя ЯВНО. "

@@ -60,7 +60,8 @@ _WRITE_TOKEN_RE = re.compile(
     r"|\bopen\s*\([^)]*['\"][^'\"]+['\"]\s*,\s*['\"][aw]|\.write(?:_text)?\s*\(|\btruncate\b"
 )
 
-# Маппинг префиксов шагов → фазы (копия state-recorder/init_phase_gate; lite-шаги — как есть).
+# Маппинг префиксов шагов → фазы (инлайн-копия pipeline_phases.PREFIX_PHASE — хук на горячем
+# пути, импорт скиллов не тянем; синхронность пинит test_phase_consistency).
 _PREFIX_PHASE = {
     "00-": "00-brd",
     "01-": "01-grounding",

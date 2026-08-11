@@ -26,7 +26,8 @@ from pathlib import Path
 
 # Используем _project.py для стабильного разрешения путей
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _project import skills_dir, resolve_skill_path, gate_file as _gate_file, active_feature as _active_feature
+from _project import skills_dir, resolve_skill_path, active_feature as _active_feature
+import forge_events as FE
 
 SKILL = "feature-pipeline"
 SKILLS_DIR = skills_dir()
@@ -162,7 +163,6 @@ def main() -> int:
             # SubagentStop вызывается отдельным процессом на каждый шаг — буферизация
             # между вызовами невозможна (была мёртвая абстракция FlushGate). Пишем напрямую.
             _direct_update(root, skill, feature, step_id, status, obj)
-            _update_gate_phase(root, feature, step_id, status)
             return 0
 
         # нет step_id — не угадываем и не логируем (пост-событие вне контракта пайплайна,
@@ -174,22 +174,20 @@ def main() -> int:
 
 
 def _write_origin_marker(root: Path, skill: str, feature: str, step_id: str, data: dict) -> None:
-    """Записать evidence-маркер _origins/<step_id>.json — доказательство, что шаг закрыл
-    реальный SubagentStop. update._check_subagent_origin требует его наличия для subagent-фаз.
-    Никогда не роняет прогон (хук пост-событийный)."""
+    """Записать evidence «шаг закрыл реальный SubagentStop» — строкой в журнал прогона.
+    update._check_subagent_origin требует его для subagent-фаз.
+
+    Раньше это был отдельный файл _origins/<step_id>.json — по файлу на шаг, содержимое
+    которого читатель не смотрел вовсе (чистый .exists()). Теперь одна строка с провенансом,
+    и свёртка её проверяет. Никогда не роняет прогон (хук пост-событийный)."""
     try:
-        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(step_id)).strip("-") or "x"
-        d = root / "ground" / "statements" / skill / feature / "_origins"
-        d.mkdir(parents=True, exist_ok=True)
-        (d / f"{safe}.json").write_text(json.dumps({
-            "step_id": step_id,
-            "agent_id": data.get("agent_id"),
-            "agent_type": data.get("agent_type"),
-            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "agent_transcript_path": data.get("agent_transcript_path"),
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        FE.append_event(root, skill, feature, "origin",
+                        step_id=step_id,
+                        agent_id=data.get("agent_id"),
+                        agent_type=data.get("agent_type"),
+                        agent_transcript_path=data.get("agent_transcript_path"))
     except Exception as e:
-        print(f"[state-recorder] не удалось записать origin-маркер для '{step_id}': {e}",
+        print(f"[state-recorder] не удалось записать origin-evidence для '{step_id}': {e}",
               file=sys.stderr)
 
 
@@ -225,79 +223,6 @@ def _direct_update(root: Path, skill: str, feature: str, step_id: str, status: s
         except Exception as e:
             print(f"[state-recorder] update.py error for step '{step_id}': {e}",
                   file=sys.stderr)
-
-
-def _update_gate_phase(root: Path, feature: str, step_id: str, status: str) -> None:
-    """Обновить gate.json фичи при завершении шага: пометить фазу и переключить current_phase.
-
-    Никогда не роняет прогон — ошибки логирует через stderr, exit всегда 0.
-    """
-    try:
-        gate_path = _gate_file(root, feature)
-        if not gate_path.exists():
-            return
-
-        gate = json.loads(gate_path.read_text(encoding="utf-8"))
-
-        # Маппинг префиксов шагов → фазы (синхронизировано с init_phase_gate.py)
-        PREFIX_PHASE = {
-            "00-": "00-brd",
-            "01-": "01-grounding",
-            "02-sdd": "02-sdd",
-            "02-eval-plan": "02-eval-plan",
-            "02-": "02-design",
-            "03-": "03-jira",
-            "04-": "04-tdd",
-            "05-": "05-verify",
-            "06-": "06-document",
-        }
-
-        # Определяем фазу по step_id
-        phase_id = step_id  # сначала точное совпадение
-        for prefix, pid in sorted(PREFIX_PHASE.items(), key=lambda x: -len(x[0])):
-            if step_id.startswith(prefix):
-                phase_id = pid
-                break
-
-        target = None
-        for phase in gate.get("phases", []):
-            if phase["id"] == phase_id:
-                target = phase
-                break
-
-        if not target:
-            return  # фаза не найдена — ничего не делаем
-
-        target["status"] = status
-
-        # Если шаг завершён (completed или skipped) — переключаем current_phase на следующую
-        if status in ("completed", "skipped"):
-            phases = gate["phases"]
-            found = False
-            for i, phase in enumerate(phases):
-                if phase["status"] == "in_progress":
-                    break
-                if phase["status"] == "pending":
-                    # Проверяем зависитмости
-                    deps_ok = True
-                    for dep_id in phase.get("depends_on", []):
-                        dep = next((p for p in phases if p["id"] == dep_id), None)
-                        if dep and dep.get("status") not in ("completed", "skipped"):
-                            deps_ok = False
-                            break
-                    if deps_ok:
-                        gate["current_phase"] = phase["id"]
-                        phase["status"] = "in_progress"
-                        found = True
-                        break
-            if not found:
-                # Все фазы завершены
-                gate["current_phase"] = ""
-
-        gate_path.write_text(json.dumps(gate, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    except Exception as e:
-        print(f"[state-recorder] _update_gate_phase error: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

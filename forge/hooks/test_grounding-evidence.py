@@ -2,9 +2,11 @@
 """test_grounding-evidence.py — хук пишет read_grounding ТОЛЬКО на чтении grounding-index.
 
 Гейт 01-grounding снимается по evidence-записи read_grounding (её читает gate-guard).
-Пины: (1) чтение grounding-index → одна запись read_grounding в agent-evidence.jsonl нужной
+Пины: (1) чтение grounding-index → одна запись kind:"grounding" в журнал прогона нужной
 фичи; (2) чтение прочего кода → evidence не пишется (не лог чтений); (3) пустой stdin →
-exit 0 без падения.
+exit 0 без падения. Раньше запись жила отдельным файлом ground/phases/<feature>/
+agent-evidence.jsonl рядом с производным кэшем фазовой машины; кэш снят, evidence
+переехало к остальным фактам о прогоне.
 """
 from __future__ import annotations
 
@@ -16,6 +18,9 @@ import unittest
 from pathlib import Path
 
 HOOK = Path(__file__).resolve().parent / "grounding-evidence.py"
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import forge_events as FE  # noqa: E402
 
 
 def _run(payload, cwd) -> int:
@@ -41,21 +46,24 @@ class TestGroundingEvidence(unittest.TestCase):
             root = _mk_project(Path(td))
             rc = _run({"cwd": str(root), "tool_name": "Read",
                        "tool_input": {"file_path": "docs/system-analysis/grounding-index.json"}}, root)
-            ev = root / "ground" / "phases" / "pipeline" / "agent-evidence.jsonl"
             self.assertEqual(rc, 0)
-            self.assertTrue(ev.exists(), "evidence-файл должен появиться")
-            text = ev.read_text(encoding="utf-8")
-            self.assertIn("read_grounding", text)
-            self.assertIn("grounding-index", text)
+            self.assertTrue(FE.grounding_read(root, "feature-pipeline", "pipeline"),
+                            "grounding-evidence не записано в журнал прогона")
+            rec = FE.read_events(root, "feature-pipeline", "pipeline")[-1]
+            self.assertEqual(rec["kind"], "grounding")
+            self.assertEqual(rec["produced_by"], "grounding-evidence")
+            self.assertIn("grounding-index", rec["path"])
+            self.assertEqual(list(root.glob("ground/phases/**/*.jsonl")), [],
+                             "кэш-каталог фазовой машины вернулся")
 
     def test_non_grounding_read_writes_nothing(self):
         with tempfile.TemporaryDirectory() as td:
             root = _mk_project(Path(td))
             rc = _run({"cwd": str(root), "tool_name": "Read",
                        "tool_input": {"file_path": "src/main/java/Foo.java"}}, root)
-            ev = root / "ground" / "phases" / "pipeline" / "agent-evidence.jsonl"
             self.assertEqual(rc, 0)
-            self.assertFalse(ev.exists(), "на не-grounding чтение evidence писаться не должен")
+            self.assertFalse(FE.grounding_read(root, "feature-pipeline", "pipeline"),
+                             "на не-grounding чтение evidence писаться не должен")
 
     def test_empty_stdin_is_safe(self):
         with tempfile.TemporaryDirectory() as td:

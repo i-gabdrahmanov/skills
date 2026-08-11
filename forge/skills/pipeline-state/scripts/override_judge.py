@@ -31,18 +31,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from _util import repo_root
+from _util import override_path, overrides_dir, repo_root  # noqa: F401
+import forge_events as FE
 
 
 SCHEMA = "pipeline/judge-override@1"
-
-
-def overrides_dir(project: Path, skill: str, feature: str) -> Path:
-    return project / "ground" / "statements" / skill / feature / "overrides"
-
-
-def override_path(project: Path, skill: str, feature: str, judge: str) -> Path:
-    return overrides_dir(project, skill, feature) / f"{judge}.json"
 
 
 def iso_now() -> str:
@@ -54,9 +47,6 @@ def cmd_create(args, project: Path) -> int:
         print("ERROR: --reason обязателен при создании override", file=sys.stderr)
         return 1
 
-    odir = overrides_dir(project, args.skill, args.feature)
-    odir.mkdir(parents=True, exist_ok=True)
-
     record = {
         "$schema": SCHEMA,
         "judge": args.judge,
@@ -66,9 +56,11 @@ def cmd_create(args, project: Path) -> int:
         "reason": args.reason,
         "approved_by": "user",
     }
-
-    path = override_path(project, args.skill, args.feature, args.judge)
-    path.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
+    # target — ключ, по которому override ищет update._load_override (имя судьи либо
+    # синтетическое gate-result-<step>/doc-approved-<step>/step-skip-<step>).
+    FE.append_event(project, args.skill, args.feature, "override",
+                    target=args.judge, **record)
+    path = FE.events_path(project, args.skill, args.feature)
 
     if args.json:
         print(json.dumps({"status": "created", "path": str(path), "record": record},
@@ -86,43 +78,38 @@ def cmd_create(args, project: Path) -> int:
 
 
 def cmd_list(args, project: Path) -> int:
-    odir = overrides_dir(project, args.skill, args.feature)
-    files = sorted(odir.glob("*.json")) if odir.exists() else []
+    records = FE.overrides(project, args.skill, args.feature)
 
     if args.json:
-        records = []
-        for f in files:
-            try:
-                records.append(json.loads(f.read_text(encoding="utf-8")))
-            except Exception:
-                records.append({"path": str(f), "error": "invalid JSON"})
         print(json.dumps(records, ensure_ascii=False, indent=2))
     else:
-        if not files:
+        if not records:
             print(f"Нет активных overrides для {args.feature}")
         else:
             print(f"Активные overrides ({args.feature}):")
-            for f in files:
-                try:
-                    r = json.loads(f.read_text(encoding="utf-8"))
-                    print(f"  • {r['judge']:25s} шаг={r.get('step_id','?'):20s} "
-                          f"дата={r.get('override_at','?')[:10]}")
-                    print(f"    причина: {r.get('reason','')[:100]}")
-                except Exception:
-                    print(f"  • {f.name} (повреждён)")
+            for r in records:
+                name = r.get("judge") or r.get("target", "?")
+                print(f"  • {name:25s} шаг={r.get('step_id','?'):20s} "
+                      f"дата={r.get('override_at','?')[:10]}")
+                print(f"    причина: {r.get('reason','')[:100]}")
     return 0
 
 
 def cmd_remove(args, project: Path) -> int:
-    path = override_path(project, args.skill, args.feature, args.judge)
-    if not path.exists():
-        print(f"Override не найден: {path.relative_to(project)}", file=sys.stderr)
+    """Отзыв override. Раньше удалял файл; теперь дописывает запись revoked:true —
+    снятие гейта и его отмена остаются в истории прогона, а не исчезают с диска."""
+    if FE.override(project, args.skill, args.feature, args.judge) is None:
+        print(f"Override не найден (или уже отозван): {args.judge}", file=sys.stderr)
         return 1
-    path.unlink()
+    # Файл старой раскладки не трогаем: запись отзыва перекрывает его при чтении
+    # (FE.override), а история снятия и его отмены остаётся полной.
+    FE.append_event(project, args.skill, args.feature, "override",
+                    target=args.judge, judge=args.judge, revoked=True,
+                    revoked_at=iso_now())
     if args.json:
         print(json.dumps({"status": "removed", "judge": args.judge}))
     else:
-        print(f"🗑  Override удалён: {args.judge}")
+        print(f"🗑  Override отозван: {args.judge}")
     return 0
 
 

@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-"""Регрессия: preflight пересинхронизирует устаревший gate.json из manifest.
+"""Фазовая машина preflight: решение следует за манифестом, кэша нет.
 
-Баг: gate.json создавался один раз и держался актуальным только через
-update.py→sync_gate_from_manifest. Если тот sync падал (на Python 3.9 в phase_sync)
-или был пропущен, gate.json устаревал, и preflight давал ложное «несоответствие
-стадий» (_check_gate_phase блокировал легальный следующий шаг).
+История бага: gate.json создавался один раз и держался актуальным только через
+update.py→sync_gate_from_manifest. Если тот sync падал или был пропущен, gate.json
+устаревал, и preflight давал ложное «несоответствие стадий» — блокировал легальный
+следующий шаг. Сначала это лечили пересинхронизацией в preflight._ensure_phases.
 
-Фикс: preflight._ensure_phases всегда пересинхронизирует существующий gate из
-manifest перед проверкой. Manifest — источник истины.
+Теперь кэш снят совсем: состояние ВЫЧИСЛЯЕТСЯ из манифеста, и рассинхрон невозможен
+структурно, а не потому что где-то не забыли вызвать sync. Тесты пинят это свойство
+(файла кэша нет; решение меняется сразу за манифестом) и то, что снятие кэша не
+ослабило сам guard — пропуск фазы по-прежнему блокируется.
 
 Тест интеграционный: гоняет реальные init.py / update.py / preflight-validate.py.
 """
@@ -25,6 +27,9 @@ PS = FP.parents[1] / "pipeline-state" / "scripts"        # pipeline-state/script
 INIT = PS / "init.py"
 UPDATE = PS / "update.py"
 PREFLIGHT = FP / "preflight-validate.py"
+
+sys.path.insert(0, str(FP))
+import pipeline_phases as _pp  # noqa: E402
 
 BASE_STEPS = [
     {"id": "00-brd", "title": "BRD", "depends_on": []},
@@ -67,7 +72,9 @@ class TestPreflightResync(unittest.TestCase):
         self._tmp.cleanup()
 
     def _gate(self) -> dict:
-        return json.loads((self.proj / "ground" / "phases" / self.feature / "gate.json").read_text(encoding="utf-8"))
+        """Фазовое решение — деривация из манифеста (то же, что видит preflight)."""
+        manifest = json.loads((self.sd / "manifest.json").read_text(encoding="utf-8"))
+        return _pp.live_phase_decision(manifest)
 
     def _pass_judge(self, name: str):
         jd = self.sd / "judges"
@@ -88,33 +95,32 @@ class TestPreflightResync(unittest.TestCase):
                      "--feature", self.feature, "--step-id", step_id, "--status",
                      "completed", "--output-json", json.dumps({"step_id": step_id})]).returncode
 
-    def test_preflight_creates_gate(self):
+    def test_preflight_needs_no_cache_file(self):
+        """preflight работает, ничего не создавая: фазовое состояние выводится из манифеста."""
+        self.assertEqual(self._preflight("00-brd"), 0)
+        self.assertEqual(self._gate()["current_phase"], "00-brd")
+        self.assertEqual(list(self.proj.glob("ground/phases/**/*.json")), [],
+                         "кэш фазовой машины вернулся на диск")
+
+    def test_decision_follows_manifest_without_sync_step(self):
+        """Закрыли шаг — решение сместилось СРАЗУ, без промежуточной синхронизации.
+
+        Это и есть замена «самоисцелению устаревшего gate»: рассинхрону неоткуда взяться,
+        потому что второго носителя состояния больше нет.
+        """
         self.assertEqual(self._preflight("00-brd"), 0)
         self.assertEqual(self._gate()["current_phase"], "00-brd")
 
-    def test_stale_gate_self_heals(self):
-        """Главная регрессия: устаревший gate → preflight чинит, легальный шаг проходит."""
-        self.assertEqual(self._preflight("00-brd"), 0)   # создаёт gate
         self._pass_judge("brd-judge")
         self.assertEqual(self._complete("00-brd"), 0)
 
-        # Искусственно устариваем gate: откатываем на 00-brd
-        gp = self.proj / "ground" / "phases" / self.feature / "gate.json"
-        g = json.loads(gp.read_text(encoding="utf-8"))
-        g["current_phase"] = "00-brd"
-        for ph in g["phases"]:
-            if ph["id"] == "00-brd":
-                ph["status"] = "in_progress"
-        gp.write_text(json.dumps(g), encoding="utf-8")
-
-        # preflight следующего легального шага должен ПРОЙТИ (самоисцеление)
-        self.assertEqual(self._preflight("01-grounding"), 0,
-                         "preflight должен пересинхронизировать устаревший gate и пропустить 01-grounding")
         self.assertEqual(self._gate()["current_phase"], "01-grounding",
-                         "gate должен быть пересинхронизирован на 01-grounding")
+                         "решение не сместилось за манифестом")
+        self.assertEqual(self._preflight("01-grounding"), 0,
+                         "следующий легальный шаг должен проходить сразу после закрытия предыдущего")
 
     def test_skip_ahead_still_blocked(self):
-        """Фикс не должен ослаблять guard: пропуск фазы по-прежнему блокируется."""
+        """Снятие кэша не ослабило guard: пропуск фазы по-прежнему блокируется."""
         self.assertEqual(self._preflight("00-brd"), 0)
         # 01-grounding и 02-design ещё pending → прыжок на 02-design запрещён
         self.assertNotEqual(self._preflight("02-design"), 0,

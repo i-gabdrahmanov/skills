@@ -123,7 +123,7 @@ prompt:
 
 Gate (только когда написал sdd.md, перед завершением):
   python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py sdd <slug> --project-root <project>
-  Должен быть PASS. Сохраняет вердикт в judges/sdd-judge.json.
+  Должен быть PASS. Сохраняет вердикт sdd-judge в журнал прогона (events.jsonl).
 
 Выходной JSON (ТОЛЬКО его, без текста sdd.md в теле):
   - Есть неясности — **БЕЗ поля `step_id`** (иначе хук закроет шаг раньше времени; шаг
@@ -428,7 +428,7 @@ structure.md). **НЕ редактируй `*/sdd.md`, `*/brd.md`, `*/tech-desig
 шаг закрывается в pipeline-state. Каждый судья возвращает JSON-вердикт. Если `passed: false` —
 главный агент **блокирует** переход к следующей фазе и показывает blocking_issues пользователю.
 
-Вердикты сохраняются в: `ground/statements/feature-pipeline/<feature>/judges/<judge-name>.json`
+Вердикты сохраняются строкой в журнал прогона: `ground/statements/feature-pipeline/<feature>/events.jsonl` (kind:"judge")
 
 ---
 

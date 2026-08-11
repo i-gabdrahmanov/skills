@@ -90,6 +90,6 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py eval <s
 к Build (RED) и предотвращает ситуацию «eval'ы есть, но никто не проверил их качество»
 (дефект #5 из KIDPPRB-8639).
 
-Вердикт сохраняется в `ground/statements/feature-pipeline/<slug>/judges/eval-judge.json`.
+Вердикт eval-judge сохраняется строкой в `ground/statements/feature-pipeline/<slug>/events.jsonl`.
 
 ---

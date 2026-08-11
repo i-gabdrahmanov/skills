@@ -24,7 +24,7 @@ REPO = SCRIPTS.parents[2]  # …/skills/feature-pipeline/scripts → repo root
 sys.path.insert(0, str(SCRIPTS))
 
 # Минимальная версия Python — ЕДИНЫЙ источник (скрипты/хуки используют PEP604 `X | None`
-# и match; на 3.9 phase_sync падал → ложное «несоответствие стадий»). preflight.py пинит копию.
+# и match). preflight.py пинит копию.
 MIN_PYTHON = (3, 10)
 
 
@@ -52,7 +52,6 @@ def run_checks(project_root: Path | None = None) -> dict:
 
     pp = _load(SCRIPTS / "pipeline_phases.py", "pp_doctor")
     rj = _load(SCRIPTS / "run_judge.py", "rj_doctor")
-    ps = _load(REPO / "skills/pipeline-state/scripts/phase_sync.py", "ps_doctor")
     pm = _load(REPO / "skills/pipeline-state/scripts/patch_manifest_judges.py", "pm_doctor")
     asfp = _load(SCRIPTS / "add_steps.py", "asfp_doctor")
     pv = _load(SCRIPTS / "preflight-validate.py", "pv_doctor")
@@ -81,8 +80,10 @@ def run_checks(project_root: Path | None = None) -> dict:
         ok("judge-writer")
 
     # 3. Константы идентичны во всех копиях
+    # (phase_sync выбыл вместе с кэшем gate.json — фазовое состояние теперь считается
+    # из манифеста, синхронизировать нечего)
     const_ok = True
-    for mod in (ps, asfp, pv):
+    for mod in (asfp, pv):
         if mod.PREFIX_PHASE != pp.PREFIX_PHASE or mod.MAIN_PHASES != pp.MAIN_PHASES:
             fail("phase-constants-consistent", f"{mod.__name__} расходится с pipeline_phases")
             const_ok = False
@@ -154,7 +155,7 @@ def run_checks(project_root: Path | None = None) -> dict:
     else:
         ok("no-hardcoded-home-paths")
 
-    # 8. Версия Python зафиксирована (скрипты требуют >= MIN_PYTHON; на 3.9 phase_sync падал).
+    # 8. Версия Python зафиксирована (скрипты требуют >= MIN_PYTHON).
     #    Средовой совет (warn), а не integrity-fail: doctor может гоняться и на старом интерпретаторе.
     if sys.version_info[:2] < MIN_PYTHON:
         have = f"{sys.version_info.major}.{sys.version_info.minor}"

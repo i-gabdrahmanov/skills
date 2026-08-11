@@ -9,8 +9,10 @@
 Матчеры: вешать на `^Bash$` и `(Write|Edit|WriteFile|NotebookEdit)`. Блок: exit 2 + stderr.
 Separation of duties: если действие выше cap роли (agent_type) — deny.
 
-Дополнительно: **phase-lock state machine** — проверка последовательности фаз пайплайна
-через ground/phases/gate.json + phase-defs.json. Три проверки:
+Дополнительно: **phase-lock state machine** — проверка последовательности фаз пайплайна.
+Фазовое состояние ВЫЧИСЛЯЕТСЯ из manifest.json (pipeline_phases.live_state), а не читается
+из ground/phases/gate.json: тот был персистентным кэшем этого же расчёта и умел устаревать.
+Три проверки:
   1. Скилл соответствует allowed_skills текущей фазы
   2. Read/Grep/Glob в src/ заблокированы, пока grounding не завершён
   3. depends_on фазы выполнены
@@ -25,7 +27,30 @@ import sys
 from pathlib import Path
 
 import risk_ladder as R
-from _project import active_feature, gate_file, defs_file, evidence_file
+from _project import active_feature, approval_path, safe_component
+import forge_events as FE
+
+# Фазовая машина считается из манифеста (pipeline_phases — единственная реализация
+# деривации «шаги → фазы»). Импорт мягкий: он и раньше был мягким у tdd-guard/eval-guard,
+# а отсутствие фазового состояния и раньше означало fail-open (нет gate.json → не блокируем).
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "feature-pipeline" / "scripts"))
+    import pipeline_phases as _pp
+except Exception:  # pragma: no cover — бандл повреждён
+    _pp = None
+
+
+def _live_state(root: Path):
+    """(gate, defs_map) активного прогона. ({}, {}) — пайплайна нет либо деривация недоступна."""
+    if _pp is None:
+        return {}, {}
+    mp = R.active_manifest(root)
+    if mp is None:
+        return {}, {}
+    manifest = _read_json(mp)
+    if not manifest:
+        return {}, {}
+    return _pp.live_state(manifest)
 
 
 def _block(reason: str) -> int:
@@ -77,14 +102,13 @@ def _approval_valid(root: Path, key: str) -> bool:
     """approval-маркер засчитывается ТОЛЬКО с провенансом produced_by:"record_approval"
     (BLOCKER-1): рукописный/самовыписанный маркер без провенанса не снимает гейт, даже если
     он как-то просочился мимо state-write-guard."""
-    d = _read_json(root / "ground" / "approvals" / f"{key}.json")
+    d = _read_json(approval_path(root, key))
     return isinstance(d, dict) and d.get("produced_by") == "record_approval"
 
 
-def _safe_key(key: str) -> str:
-    """Нормализация ключа approval — ровно как в record_approval.safe_key (иначе гейт искал бы
-    маркер под именем, которого скрипт никогда не создаст)."""
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", str(key)).strip("-")
+# Нормализация ключа approval — общий санитайзер с record_approval (иначе гейт искал бы
+# маркер под именем, которого скрипт никогда не создаст).
+_safe_key = safe_component
 
 
 def _phase_approval_missing(root: Path) -> tuple[str, str] | None:
@@ -119,19 +143,12 @@ def check_phase_gate(tool_name: str, tool_input: dict, agent_type: str | None,
                      root: Path) -> bool:
     """Трёхуровневая проверка последовательности фаз пайплайна.
     Возвращает True (пропустить) или False (блокировать — сообщение уже в stderr)."""
-    feat = active_feature(root)
-    gate_path = gate_file(root, feat)
-    defs_path = defs_file(root, feat)
-
-    gate = _read_json(gate_path)
+    # Фазовое состояние считается из манифеста на месте. Раньше читались gate.json и
+    # phase-defs.json — персистентные копии этого же расчёта, которые умели устаревать
+    # (sync пропущен/упал → гейт решал по протухшему снимку).
+    gate, defs_map = _live_state(root)
     if not gate:
         return True  # вне пайплайна — не блокируем
-
-    defs_list = _read_json(defs_path)
-    defs_map = {}
-    if defs_list:
-        for p in defs_list.get("phases", []):
-            defs_map[p["id"]] = p
 
     current_phase_id = gate.get("current_phase", "")
     phase = next((p for p in gate.get("phases", []) if p["id"] == current_phase_id), None)
@@ -184,20 +201,11 @@ def check_phase_gate(tool_name: str, tool_input: dict, agent_type: str | None,
             if "/test/" in file_path or "/Test" in file_path:
                 return True
 
-        # Проверяем, прочитал ли агент grounding-index (через evidence-лог)
-        ev_path = evidence_file(root, feat)
-        has_grounding = False
-        if ev_path.exists():
-            try:
-                for line in ev_path.read_text(encoding="utf-8").splitlines():
-                    if "grounding-index" in line and "read_grounding" in line:
-                        has_grounding = True
-                        break
-            except Exception:
-                pass
-
+        # Прочитал ли агент grounding-index — из журнала прогона (kind:"grounding");
+        # прогон до миграции дочитывается со старого agent-evidence.jsonl.
         if current_phase_id == "01-grounding" and phase_status != "completed":
-            if has_grounding:
+            mp = R.active_manifest(root)
+            if mp is not None and FE.grounding_read(root, mp.parent.parent.name, mp.parent.name):
                 return True  # grounding прочитан — снимаем блокировку
 
         _block(

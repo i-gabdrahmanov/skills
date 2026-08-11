@@ -16,6 +16,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 RJ = REPO / "skills/feature-pipeline/scripts/run_judge.py"
+sys.path.insert(0, str(REPO / "hooks"))
+import forge_events as FE  # noqa: E402  — вердикты живут в журнале прогона, не в judges/*.json
 
 
 def _run(args, cwd, stdin=None):
@@ -32,16 +34,16 @@ class Ingest(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _verdict_path(self, judge):
-        return self.proj / "ground/statements/feature-pipeline/feat/judges" / f"{judge}.json"
+    def _verdict(self, judge):
+        return FE.judge(self.proj, "feature-pipeline", "feat", judge)
 
     def test_ingest_then_recheck_passes(self):
         vf = self.proj / "verdict.json"
         vf.write_text(json.dumps({"passed": True, "blocking_issues": [], "summary": "ok"}), encoding="utf-8")
         r = _run(["build", "feat", "--from-output", str(vf), "--project-root", self.proj], self.proj)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue(self._verdict_path("build-judge").exists())
-        saved = json.loads(self._verdict_path("build-judge").read_text(encoding="utf-8"))
+        saved = self._verdict("build-judge")
+        self.assertIsNotNone(saved, "вердикт не попал в журнал прогона")
         self.assertTrue(saved["passed"])
         # recheck подтверждает
         r2 = _run(["build", "feat", "--recheck", "--project-root", self.proj], self.proj)
@@ -55,7 +57,7 @@ class Ingest(unittest.TestCase):
         r = _run(["build", "feat", "--from-output", "-", "--project-root", self.proj],
                  self.proj, stdin=json.dumps({"passed": False, "blocking_issues": ["stub left"]}))
         self.assertEqual(r.returncode, 1)
-        saved = json.loads(self._verdict_path("build-judge").read_text(encoding="utf-8"))
+        saved = self._verdict("build-judge")
         self.assertFalse(saved["passed"])
         # errors.json накоплен
         self.assertTrue((self.proj / "ground/statements/feature-pipeline/feat/judges/errors.json").exists())
@@ -103,8 +105,7 @@ class BrdIngestFloor(unittest.TestCase):
         self._tmp.cleanup()
 
     def _verdict(self):
-        p = self.proj / "ground/statements/feature-pipeline/feat/judges/brd-judge.json"
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+        return FE.judge(self.proj, "feature-pipeline", "feat", "brd-judge")
 
     def _ingest_llm_pass(self):
         return _run(["brd", "feat", "--from-output", "-", "--project-root", self.proj],
@@ -169,8 +170,7 @@ class HybridIngestFloor(unittest.TestCase):
         self._tmp.cleanup()
 
     def _verdict(self, judge):
-        p = self.proj / "ground/statements/feature-pipeline/feat/judges" / f"{judge}.json"
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+        return FE.judge(self.proj, "feature-pipeline", "feat", judge)
 
     def _ingest(self, phase):
         return _run([phase, "feat", "--from-output", "-", "--project-root", self.proj],

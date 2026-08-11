@@ -28,7 +28,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -36,21 +35,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import junit_report
-from _util import repo_root
+from _util import gate_result_path, gates_dir, repo_root, safe_component  # noqa: F401
+import forge_events as FE
 
 PRODUCED_BY = "record_gate"
 
-
-def safe_step(step_id: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", str(step_id)).strip("-") or "x"
-
-
-def gates_dir(project: Path, skill: str, feature: str) -> Path:
-    return project / "ground" / "statements" / skill / feature / "gates"
-
-
-def gate_result_path(project: Path, skill: str, feature: str, step_id: str) -> Path:
-    return gates_dir(project, skill, feature) / f"{safe_step(step_id)}.json"
+# Общий санитайзер с читателем (update._check_gate_result) — см. _project.safe_component.
+safe_step = safe_component
 
 
 def _run(cmd: str, cwd: Path, timeout: int) -> tuple[int, str]:
@@ -127,11 +118,11 @@ def main() -> int:
         record["passed"] = rc == 0
         record["output_tail"] = tail
 
-    out = gate_result_path(project, args.skill, args.feature, args.step_id)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, out)
+    # Evidence — строкой в журнал прогона (раньше: файл gates/<step_id>.json на каждый шаг).
+    # produced_by проставляет сам журнал по kind, подделать записью мимо скрипта нельзя.
+    record.pop("produced_by", None)
+    FE.append_event(project, args.skill, args.feature, "gate", **record)
+    out = FE.events_path(project, args.skill, args.feature)
 
     verdict = "PASSED" if record["passed"] else "FAILED"
     print(f"[record_gate] {args.step_id}: {verdict} → {out}")
