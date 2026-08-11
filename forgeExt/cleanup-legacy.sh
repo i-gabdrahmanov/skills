@@ -28,11 +28,11 @@
 #   • Родительский каталог убираем только `rmdir` — опустел, значит уйдёт; осталось чужое, выживет.
 #   • ground/ (BRD/SDD/манифесты/evidence/approvals) — только по --purge-state, и тоже в бэкап.
 #
-# Usage:
+# Usage (путь к проекту — позиционно ИЛИ через --project; и то и другое повторяемо):
 #   bash cleanup-legacy.sh                                   # план по $HOME (ничего не меняет)
 #   bash cleanup-legacy.sh --apply                           # выполнить
-#   bash cleanup-legacy.sh --project /path/repo              # + legacy-раскладка проекта (повторяемо)
-#   bash cleanup-legacy.sh --apply --project /path/repo --purge-state   # + ground/ и refs/forge/*
+#   bash cleanup-legacy.sh /path/repo                        # + legacy-раскладка проекта (план)
+#   bash cleanup-legacy.sh /path/repo --apply --purge-state  # + ground/ и refs/forge/*
 #   bash cleanup-legacy.sh --home /tmp/fakehome --apply      # другая база (тест/другой пользователь)
 #
 set -euo pipefail
@@ -54,8 +54,12 @@ while [ $# -gt 0 ]; do
                    PROJECTS+=("$2"); shift 2 ;;
     --home)        [ $# -ge 2 ] || { echo "cleanup-legacy.sh: --home без пути" >&2; exit 2; }
                    HOME_BASE="$2"; shift 2 ;;
-    -h|--help)     sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *)             echo "cleanup-legacy.sh: неизвестный аргумент: $1" >&2; exit 2 ;;
+    -h|--help)     sed -n '2,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*)            echo "cleanup-legacy.sh: неизвестный аргумент: $1" >&2
+                   echo "  Usage: bash cleanup-legacy.sh [<проект>…] [--apply] [--purge-state] [--home <путь>]" >&2
+                   echo "  Путь к проекту можно передать позиционно или через --project (флаг повторяем)." >&2
+                   exit 2 ;;
+    *)             PROJECTS+=("$1"); shift ;;   # позиционный путь = проект (как target у forge/uninstall.sh)
   esac
 done
 
