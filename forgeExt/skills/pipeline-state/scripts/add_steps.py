@@ -106,7 +106,6 @@ def main():
         existing_ids.add(s["id"])
         added.append(s["id"])
 
-    gate_synced = False
     if added:
         manifest["last_update"] = iso_now()
         tmp = manifest_path.with_suffix(".json.tmp")
@@ -114,17 +113,8 @@ def main():
             json.dump(manifest, f, indent=2, ensure_ascii=False)
         os.replace(tmp, manifest_path)
 
-        # Паритет с feature-pipeline/add_steps: если у фичи уже есть gate — пересобрать его,
-        # чтобы новые шаги не остались невидимыми для фазовой машины.
-        if pp is not None and pp.gate_path(project, args.feature).exists():
-            try:
-                gate = pp.build_gate(manifest.get("steps", []), manifest)
-                out = pp.gate_dir(project, args.feature) / "gate.json"
-                out.parent.mkdir(parents=True, exist_ok=True)
-                out.write_text(json.dumps(gate, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-                gate_synced = True
-            except Exception as e:
-                print(f"WARNING: gate sync failed: {e}", file=sys.stderr)
+        # Синхронизировать нечего: фазовое состояние выводится из манифеста
+        # (pipeline_phases.live_state), кэша gate.json на диске больше нет.
 
     print(json.dumps({
         "status": "updated",

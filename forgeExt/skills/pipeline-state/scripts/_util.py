@@ -7,7 +7,57 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+
+# ── Резолв путей — ЕДИНАЯ реализация в hooks/_project.py ──────────────────────
+# Здесь лежала своя копия docs-резолвера: pipeline-state деплоился отдельно от
+# feature-pipeline и hooks/, поэтому co-located импорт был невозможен. В extension-модели
+# бандл едет целиком (skills/ и hooks/ — соседи в корне), и копия стала чистым риском:
+# три реализации расходились бы молча, а гейты читали бы не те пути.
+#
+# Имена ре-экспортируются, чтобы `from _util import safe_slug, feature_docs_dir, …`
+# у вызывающих продолжал работать без правок.
+
+
+def _hooks_dir() -> Path:
+    """Каталог hooks/ бандла: forge/ (source) или <project>/.gigacode (deploy)."""
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "hooks" / "_project.py").is_file():
+            return parent / "hooks"
+    raise ImportError("forge: hooks/_project.py не найден — бандл повреждён")
+
+
+# append (не insert): sys.path[0] — каталог вызывающего скрипта, и он должен побеждать.
+# Иначе одноимённые модули (hooks/test_update.py vs pipeline-state/scripts/test_update.py)
+# перекрыли бы друг друга.
+_H = str(_hooks_dir())
+if _H not in sys.path:
+    sys.path.append(_H)
+
+from _project import (  # noqa: E402
+    GROUND,
+    approval_path,
+    approvals_dir,
+    archived_dir,
+    docs_base,
+    feature_docs_dir,
+    gate_result_path,
+    gates_dir,
+    ground_dir,
+    judge_path,
+    judges_dir,
+    load_pipeline_config,
+    manifest_path,
+    origin_path,
+    origins_dir,
+    override_path,
+    overrides_dir,
+    pipeline_config_path,
+    safe_component,
+    safe_slug,
+    state_dir,
+    statements_dir,
+    step_output_path,
+)
 
 
 def safe_load_json(path, *, what: str = "JSON-файл", exit_code: int = 4) -> dict:
@@ -35,58 +85,6 @@ def repo_root() -> str:
     return os.getcwd()
 
 
-# ── Резолв базы docs (ОБЩИЙ контракт с skill_paths.py / _project.py) ──────────
-# pipeline-state деплоится глобально (отдельно от feature-pipeline), поэтому держит
-# собственную копию резолвера. Синхронность пинится test_docs_resolver_consistency.py.
-
-def load_pipeline_config(project_root: Path) -> dict:
-    p = Path(project_root) / "ground" / "pipeline.json"
-    try:
-        if p.exists():
-            return json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        pass
-    return {}
-
-
-def _docs_cfg(cfg: Optional[dict], project_root: Path) -> dict:
-    cfg = cfg if cfg is not None else load_pipeline_config(project_root)
-    docs = cfg.get("docs") if isinstance(cfg, dict) else None
-    return docs if isinstance(docs, dict) else {}
-
-
-def _is_safe_segment(name) -> bool:
-    return (isinstance(name, str) and name not in ("", ".", "..")
-            and "/" not in name and "\\" not in name and ".." not in name
-            and not name.startswith(("~", "/")))
-
-
-def _clean_subdir(val, default: str) -> str:
-    if _is_safe_segment(val):
-        return val
-    if val is not None and val != default:
-        print(f"[_util] docs: небезопасное имя подпапки {val!r} → '{default}'", file=sys.stderr)
-    return default
-
-
-def _clean_rel(val, project_root: Path, default: str) -> Path:
-    if isinstance(val, str) and val.strip():
-        s = val.strip()
-        if not s.startswith(("/", "~")) and ".." not in Path(s).parts:
-            return Path(project_root) / s
-        print(f"[_util] docs: путь {val!r} выходит за проект → '{default}'", file=sys.stderr)
-    elif val is not None:
-        print(f"[_util] docs: путь не строка ({val!r}) → '{default}'", file=sys.stderr)
-    return Path(project_root) / default
-
-
-def safe_slug(slug) -> str:
-    """Валидный слаг фичи (один компонент пути). ValueError на traversal/разделителях."""
-    if not _is_safe_segment(slug):
-        raise ValueError(f"небезопасный feature-slug: {slug!r} (запрещены '/', '..', '~', абсолютный, пустой)")
-    return slug
-
-
 # Jira issue key вида PROJ-123: project-key начинается с буквы, затем буквы/цифры (≥2 симв.),
 # дефис, номер. Согласован с прозой feature-pipeline/SKILL.md §2 ([A-Z]+-\d+), но допускает
 # цифры в project-key.
@@ -96,24 +94,3 @@ JIRA_KEY_RE = re.compile(r"[A-Z][A-Z0-9]+-\d+")
 def is_jira_key(s) -> bool:
     """True, если s — Jira issue key вида PROJ-123 (полное совпадение)."""
     return isinstance(s, str) and bool(JIRA_KEY_RE.fullmatch(s))
-
-
-def docs_base(project_root: Path, cfg: Optional[dict] = None) -> Path:
-    project_root = Path(project_root)
-    docs = _docs_cfg(cfg, project_root)
-    if docs.get("mode") == "separate-repo":
-        rp = docs.get("repo_path")
-        if isinstance(rp, str) and rp.strip():
-            p = Path(rp.strip()).expanduser()
-            return p if p.is_absolute() else (project_root / p)
-    return _clean_rel(docs.get("docs_path"), project_root, "docs")
-
-
-def feature_docs_dir(project_root: Path, cfg: Optional[dict] = None) -> Path:
-    project_root = Path(project_root)
-    docs = _docs_cfg(cfg, project_root)
-    legacy = docs.get("feature_docs_path")
-    if (isinstance(legacy, str) and legacy and docs.get("mode") != "separate-repo"
-            and not legacy.startswith(("/", "~")) and ".." not in Path(legacy).parts):
-        return project_root / legacy
-    return docs_base(project_root, cfg) / _clean_subdir(docs.get("feature_subdir"), "feature-pipeline")

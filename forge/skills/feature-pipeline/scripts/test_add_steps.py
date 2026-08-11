@@ -61,7 +61,7 @@ def check(name: str, cond: bool, detail: str = ""):
 
 
 def main() -> int:
-    # 1. Добавление новых шагов → added=2, gate_synced=True
+    # 1. Добавление новых шагов → added=2, фазы видны сразу (без ребилда кэша)
     with tempfile.TemporaryDirectory() as td:
         project = _project(td)
         rc, j, out = run(project, [
@@ -70,7 +70,6 @@ def main() -> int:
         ])
         check("exit 0", rc == 0, out)
         check("added=2", j.get("added") == 2, out)
-        check("gate_synced=True", j.get("gate_synced") is True, out)
         check("phase_count>0", j.get("phase_count", 0) > 0, out)
 
         # required_judges проставлены по маске: 04-build-* → содержит build-judge
@@ -80,9 +79,10 @@ def main() -> int:
         check("04-build-T1 включает build-judge",
               "build-judge" in build_step.get("required_judges", []), str(build_step))
 
-        # gate.json реально записан на диск
+        # Кэш фазовой машины на диск НЕ пишется: состояние выводится из манифеста.
         gate_files = list(project.glob("ground/**/gate.json"))
-        check("gate.json создан на диске", len(gate_files) == 1, str(gate_files))
+        check("gate.json на диск не пишется", gate_files == [], str(gate_files))
+        check("current_phase выведен из манифеста", bool(j.get("current_phase")), out)
 
         # 2. Идемпотентность: повторное добавление тех же id → added=0, skipped=2
         rc, j2, out2 = run(project, [

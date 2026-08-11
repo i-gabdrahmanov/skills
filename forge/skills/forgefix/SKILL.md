@@ -264,7 +264,7 @@ python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <to
      python3 <project>/.gigacode/skills/pipeline-state/scripts/record_approval.py --project <toplevel> --key fix-plan-<KEY|slug> --approved-by user --reason "<кратко: что утвердили>"
      ```
      (`<KEY|slug>` — ровно тот, что в `--feature`; ключ маркера строит `gate-guard` из активной
-     фичи. Прямая запись в `ground/approvals/` заблокирована `state-write-guard`.)
+     фичи. Прямая запись в `ground/approvals*` заблокирована `state-write-guard`.)
    - **«Правки»** — верни `fix-diag` субагенту с правками (переоткрытие шага считается,
      `quality.max_step_reopens`). Маркер НЕ выписывай, пока план не согласован.
    - **«Сменить путь»** — СТОП, это lite или full: новый прогон в другом namespace.
@@ -272,7 +272,7 @@ python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <to
    пользователя либо ответить, либо предзаписать согласие тем же `record_approval.py` до прогона.
 
 > Маркер — аудит-след согласия человека, а не формальность: `record_approval` штампует провенанс,
-> и рукописный `approvals/*.json` гейт не снимает.
+> и рукописная запись согласия без провенанса `record_approval` гейт не снимает.
 
 ## 4. RED: тест воспроизводит баг → `fix-red`
 

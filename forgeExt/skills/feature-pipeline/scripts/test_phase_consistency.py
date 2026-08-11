@@ -33,7 +33,8 @@ def _src(rel: str) -> str:
 
 
 PP = _load("skills/feature-pipeline/scripts/pipeline_phases.py", "pipeline_phases")
-PS = _load("skills/pipeline-state/scripts/phase_sync.py", "ps_phase_sync")
+# phase_sync снят вместе с кэшем gate.json: фазовое состояние выводится из
+# манифеста, синхронизировать нечего — и копии констант в нём больше нет.
 PM = _load("skills/pipeline-state/scripts/patch_manifest_judges.py", "ps_patch")
 AS_FP = _load("skills/feature-pipeline/scripts/add_steps.py", "fp_add_steps")
 PV = _load("skills/feature-pipeline/scripts/preflight-validate.py", "fp_preflight")
@@ -45,7 +46,7 @@ RP = _load("skills/feature-pipeline/scripts/resolve_phases.py", "fp_resolve_phas
 class CanonicalSource(unittest.TestCase):
     """pipeline_phases — единственный источник; остальные модули используют его значения."""
     def test_modules_reuse_pp_constants(self):
-        for mod in (PS, AS_FP, PV):
+        for mod in (AS_FP, PV):
             self.assertEqual(mod.PREFIX_PHASE, PP.PREFIX_PHASE, f"{mod.__name__}.PREFIX_PHASE")
             self.assertEqual(mod.MAIN_PHASES, PP.MAIN_PHASES, f"{mod.__name__}.MAIN_PHASES")
         self.assertEqual(AS_FP.REQUIRED_JUDGES_MASK, PP.REQUIRED_JUDGES_MASK)
@@ -102,24 +103,28 @@ class TestMaskConsistency(unittest.TestCase):
 
 class TestPrefixPhase(unittest.TestCase):
     def test_06_maps_to_document_everywhere(self):
-        for mod in (PS, AS_FP, PV):
+        for mod in (AS_FP, PV):
             self.assertEqual(mod.PREFIX_PHASE.get("06-"), "06-document",
                              f"{mod.__name__}: '06-' должен маппиться в '06-document' (P0-2).")
-        # state-recorder держит PREFIX_PHASE inline — проверяем исходник
-        sr = _src("hooks/state-recorder.py")
-        self.assertIn('"06-": "06-document"', sr, "state-recorder: '06-doc' не исправлен (P0-2).")
-        self.assertNotIn('"06-doc"', sr)
+        # Инлайновые копии карты префиксов остались там, где импорт pipeline_phases не
+        # оправдан (хук на горячем пути + fallback-ветка отката). state-recorder свою копию
+        # потерял вместе с синхронизацией gate.json — он больше не резолвит фазы вообще.
+        for rel in ("hooks/file-journal.py", "skills/pipeline-state/scripts/rollback.py"):
+            src = _src(rel)
+            self.assertIn('"06-": "06-document"', src, f"{rel}: '06-doc' не исправлен (P0-2).")
+            self.assertNotIn('"06-doc"', src)
+        self.assertNotIn("PREFIX_PHASE", _src("hooks/state-recorder.py"),
+                         "state-recorder снова резолвит фазы сам — это была копия деривации")
 
     def test_eval_plan_key_present(self):
-        for mod in (PS, AS_FP, PV):
+        for mod in (AS_FP, PV):
             self.assertEqual(mod.PREFIX_PHASE.get("02-eval-plan"), "02-eval-plan",
                              f"{mod.__name__}: нет ключа '02-eval-plan' в PREFIX_PHASE (P2-6).")
 
 
 class TestMainPhases(unittest.TestCase):
     def test_main_phases_identical(self):
-        self.assertEqual(PS.MAIN_PHASES, AS_FP.MAIN_PHASES)
-        self.assertEqual(PS.MAIN_PHASES, PV.MAIN_PHASES)
+        self.assertEqual(AS_FP.MAIN_PHASES, PV.MAIN_PHASES)
 
 
 class TestStepIdConventions(unittest.TestCase):

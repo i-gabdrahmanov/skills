@@ -52,7 +52,7 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_brd_doc.py \
 
 > Этот же структурный слой ВШИТ в судью (`run_judge.py brd`): и ингест LLM-вердикта
 > (`--from-output`), и `--recheck` пересчитывают его детерминированно и AND-ят с вердиктом —
-> `judges/brd-judge.json` не получит `passed:true` на структурно-мусорном БТ, даже если
+> вердикт brd-judge не получит `passed:true` на структурно-мусорном БТ, даже если
 > прямой прогон `check_brd_doc.py` пропущен. Ручной прогон выше — для быстрой обратной
 > связи ДО запуска судьи, а не единственная линия защиты.
 
@@ -70,7 +70,7 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py brd <sl
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py brd <slug> \
   --recheck --project-root <project>
 ```
-Оба должны быть PASS (exit 0). Вердикт — в `judges/brd-judge.json`.
+Оба должны быть PASS (exit 0). Вердикт brd-judge — строкой в журнал прогона `events.jsonl`.
 
 **FAIL → ре-итерация** (раздел 0.6): ошибки в `errors.json`, верни BRD-скилл на доработку
 (перепиши требования языком бизнеса, удали код-детали — они идут в SDD/`tech-design`, не в BRD).

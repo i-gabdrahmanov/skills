@@ -37,8 +37,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from _util import repo_root, safe_load_json, safe_slug
-from phase_sync import sync_gate_from_manifest
 import checkpoint
+import forge_events as FE
 
 # Динамические шаги / фазы — единый источник pipeline_phases (best-effort, как в update.py).
 _DYNAMIC_PREFIXES = ("04-test-", "04-build-")
@@ -86,14 +86,9 @@ def _approval_key(feature: str, target: str) -> str:
 
 
 def _approval_marker_valid(project: Path, key: str) -> bool:
-    """Как update._approval_marker_valid: засчитывается ТОЛЬКО провенанс record_approval."""
-    path = project / DATA_DIR / "approvals" / f"{key}.json"
-    try:
-        d = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return False
-    return isinstance(d, dict) and d.get("produced_by") == "record_approval" \
-        and d.get("key") == key
+    """Как update._approval_marker_valid: засчитывается ТОЛЬКО провенанс record_approval.
+    Согласие, уже потраченное на прошлый откат, не засчитывается повторно."""
+    return FE.approval(project, key) is not None
 
 
 def _parse_ts(ts: str) -> datetime | None:
@@ -253,8 +248,15 @@ def _archive_move(src: Path, dest_root: Path, rel: str, moved: list[str]) -> Non
 
 def archive_evidence(project: Path, skill: str, feature: str, reset_steps: list[dict],
                      archive_ts: str, approval_key: str) -> list[str]:
-    """Перемещает (не удаляет) evidence reset-шагов в rollbacks/<ts>/ — иначе повторное
-    закрытие прошло бы по старым доказательствам. Возвращает список перемещённого."""
+    """Снимает evidence reset-шагов — иначе повторное закрытие прошло бы по старым
+    доказательствам. Возвращает список снятого.
+
+    Два механизма, потому что две раскладки:
+      • журнал прогона — запись kind:"reopen" на каждый reset-шаг (со списками судей и
+        overrides, которые она обнуляет): evidence остаётся на диске, но свёртка его
+        больше не видит. Это и есть аудит отката;
+      • старые файлы-маркеры (прогон начат до миграции) — переезжают в rollbacks/<ts>/.
+    """
     fdir = _feature_dir(project, skill, feature)
     dest = fdir / "rollbacks" / archive_ts
     moved: list[str] = []
@@ -267,17 +269,26 @@ def archive_evidence(project: Path, skill: str, feature: str, reset_steps: list[
         judges.update(step.get("required_judges") or [])
         if sid.startswith("02-eval-plan"):
             reset_has_eval_plan = True
+        step_overrides = [f"{kind}-{sid}" for kind in
+                          ("gate-result", "step-reopen", "step-skip", "doc-approved")]
+        # Граница в журнале: origin/gate этого шага + его overrides + судьи фазы.
+        FE.append_event(project, skill, feature, "reopen", step_id=sid,
+                        judges=sorted(step.get("required_judges") or []),
+                        overrides=step_overrides, archive_ts=archive_ts)
+        moved.append(f"reopen:{sid}")
+
         _archive_move(fdir / "_origins" / f"{safe}.json", dest, f"_origins/{safe}.json", moved)
         _archive_move(fdir / "gates" / f"{safe}.json", dest, f"gates/{safe}.json", moved)
         out_name = step.get("output_file") or f"{sid}.json"
         _archive_move(fdir / out_name, dest, f"outputs/{out_name}", moved)
-        for kind in ("gate-result", "step-reopen", "step-skip", "doc-approved"):
-            name = f"{kind}-{sid}.json"
+        for name in (f"{o}.json" for o in step_overrides):
             _archive_move(fdir / "overrides" / name, dest, f"overrides/{name}", moved)
         # doc-approvals: утверждение дока снимается вместе с откатом его фазы
         for prefix, doc in (("00-brd", "brd"), ("02-sdd", "sdd")):
             if sid.startswith(prefix):
                 for marker in (f"{doc}-approved-{feature}", f"{doc}-review-{feature}"):
+                    FE.revoke_approval(project, marker, reason=f"откат шага {sid}")
+                    moved.append(f"approval-revoked:{marker}")
                     _archive_move(project / DATA_DIR / "approvals" / f"{marker}.json",
                                   dest, f"approvals/{marker}.json", moved)
 
@@ -289,6 +300,8 @@ def archive_evidence(project: Path, skill: str, feature: str, reset_steps: list[
     if reset_has_eval_plan:
         _archive_move(fdir / "evals.json", dest, "evals.json", moved)
     # потребить approval-маркер отката: одно согласие = один откат
+    FE.revoke_approval(project, approval_key, reason="согласие потрачено на этот откат")
+    moved.append(f"approval-revoked:{approval_key}")
     _archive_move(project / DATA_DIR / "approvals" / f"{approval_key}.json",
                   dest, f"approvals/{approval_key}.json", moved)
     return moved
@@ -503,12 +516,6 @@ def main() -> int:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
     os.replace(tmp, manifest_path)
-
-    # 3. gate.json пересобирается из манифеста
-    try:
-        sync_gate_from_manifest(str(project), args.feature, args.skill)
-    except Exception as e:
-        print(f"WARNING: phase_sync failed: {e}", file=sys.stderr)
 
     # 4. Откат кода
     code_errors: list[str] = []

@@ -83,16 +83,19 @@
 
 ```
 ground/statements/feature-pipeline/<slug>/
-├── manifest.json
-├── steps.json
-├── judges/
-│   ├── brd-judge.json
-│   ├── eval-judge.json
-│   ├── red-judge.json
-│   ├── build-judge.json
-│   ├── reuse-judge.json
-│   └── spec-judge.json
+├── manifest.json        # состояние шагов
+├── events.jsonl         # ЖУРНАЛ EVIDENCE: вердикты судей, origin, гейты, overrides
+├── <step-id>.json       # содержательные выходы субагентов
+└── journal/files.jsonl  # изменённые файлы (для отката)
+ground/approvals.jsonl   # согласия человека (проектные, не пофичные)
 ```
+
+Вердикты судей — строки журнала вида
+`{"kind":"judge","judge":"brd-judge","produced_by":"run_judge","passed":true,…}`.
+Отдельных файлов `judges/<name>.json` больше нет: факт-на-файл давал ~30 файлов на прогон,
+а провенанс проверялся неровно. Пишет строки `run_judge.py`, читает свёртка
+(`hooks/forge_events.py`); запись без ожидаемого `produced_by` не засчитывается.
+Прогоны, начатые до миграции, дочитываются со старой раскладки автоматически.
 
 ## 6. Порядок интеграции в пайплайн
 

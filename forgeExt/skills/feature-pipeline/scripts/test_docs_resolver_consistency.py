@@ -2,18 +2,21 @@
 """test_docs_resolver_consistency.py — пины целостности резолва расположения docs.
 
 Контракт резолва (где живут brd/sdd/tech-design/task-plan + system-analysis/grounding)
-ДУБЛИРУЕТСЯ в трёх местах из-за топологии деплоя (скрипты, хуки и pipeline-state
-деплоятся раздельно):
-  • skills/feature-pipeline/scripts/skill_paths.py   (сторона скриптов)
-  • hooks/_project.py                                 (сторона хуков)
-  • skills/pipeline-state/scripts/_util.py            (pipeline-state, глобальный деплой)
+раньше ДУБЛИРОВАЛСЯ в трёх местах — скрипты, хуки и pipeline-state деплоились раздельно,
+co-located импорт был невозможен, и синхронность держалась property-based тестом на
+эквивалентность. В extension-модели бандл едет целиком, копии сняты; реализация одна:
+  • hooks/_project.py                                 — ЕДИНСТВЕННАЯ реализация
+  • skills/feature-pipeline/scripts/skill_paths.py    — ре-экспорт
+  • skills/pipeline-state/scripts/_util.py            — ре-экспорт
 
-Часть A: все три копии обязаны давать ОДИНАКОВЫЙ результат на матрице docs-конфигов
-         (in-repo / custom base / separate-repo / legacy). Рассинхрон → fail.
+Часть A: имена в трёх модулях — ОДИН И ТОТ ЖЕ объект (пин строже прежнего сравнения
+         результатов: ловит саму попытку завести локальную копию, а не только её дрейф).
+Часть A1: резолв даёт правильные пути на матрице docs-конфигов (in-repo / custom base /
+         separate-repo / legacy / docs.master) — это уже про корректность, не про синхрон.
 Часть B: продакшн-скрипты/хуки НЕ строят docs-путь хардкодом в обход резолвера
          (кроме явных fallback-веток и самих определений резолвера).
 
-Exit: 0 — ок, 1 — рассинхрон или новый хардкод.
+Exit: 0 — ок, 1 — копия резолвера вернулась, ошибка резолва или новый хардкод.
 """
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ import io
 import itertools
 import random
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -69,6 +73,83 @@ CASES = {
         {"mode": "separate-repo", "repo_path": EXT, "master": {"mode": "in-repo"}},
         Path(EXT) / "feature-pipeline", Path(EXT) / "system-analysis"),
 }
+
+
+class TestSingleImplementation(unittest.TestCase):
+    """Часть A: три модуля отдают ОДИН объект, а не три совпадающие реализации."""
+
+    # Имена, которые skill_paths и _util обязаны ре-экспортировать из _project.
+    SHARED = ("docs_base", "feature_docs_dir", "load_pipeline_config", "safe_slug",
+              "safe_component", "ground_dir", "state_dir", "manifest_path",
+              "origin_path", "gate_result_path", "judge_path", "approval_path")
+    # Мастер-резолв нужен стороне скриптов; pipeline-state им не пользуется.
+    SHARED_SCRIPTS_ONLY = ("system_analysis_dir", "scan_dir", "grounding_excerpt_path",
+                           "master_specs_dir", "master_spec_path", "master_adr_dir",
+                           "master_capability", "_master_base", "find_project_root")
+
+    def test_skill_paths_reexports_project(self):
+        for name in self.SHARED + self.SHARED_SCRIPTS_ONLY:
+            with self.subTest(name=name):
+                self.assertIs(getattr(skill_paths, name), getattr(_project, name),
+                              f"skill_paths.{name} — не тот же объект, что _project.{name}: "
+                              f"похоже, копия резолвера вернулась")
+
+    def test_util_reexports_project(self):
+        for name in self.SHARED:
+            with self.subTest(name=name):
+                self.assertIs(getattr(_util, name), getattr(_project, name),
+                              f"_util.{name} — не тот же объект, что _project.{name}: "
+                              f"похоже, копия резолвера вернулась")
+
+    def test_no_local_docs_resolver_definitions(self):
+        """В шимах не должно быть СВОИХ def для общих имён (ре-экспорт, а не переопределение)."""
+        import ast
+        for mod_path in (SCRIPTS / "skill_paths.py", PSTATE / "_util.py"):
+            defined = {n.name for n in ast.parse(mod_path.read_text("utf-8")).body
+                       if isinstance(n, ast.FunctionDef)}
+            clash = defined & set(self.SHARED + self.SHARED_SCRIPTS_ONLY)
+            self.assertEqual(clash, set(),
+                             f"{mod_path.name} переопределяет общие имена {sorted(clash)} — "
+                             f"это возврат к трём копиям резолвера")
+
+
+class TestFindProjectRoot(unittest.TestCase):
+    """Корень ДАННЫХ (ground/, docs/) — критерии по приоритету, а не по уровню вложенности."""
+
+    def test_git_root_beats_nested_gradle_module(self):
+        """Мульти-модульный Gradle: корень — репо (.git), а не модуль с build.gradle.
+
+        Регрессия: цикл шёл по уровням и проверял все критерии на каждом, поэтому
+        <repo>/module-a (build.gradle) побеждал <repo> (.git) — ground/ заводился внутри
+        модуля, и сторона хуков расходилась со стороной скриптов.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            (repo / "module-a" / "src").mkdir(parents=True)
+            (repo / ".git").mkdir()
+            (repo / "settings.gradle").touch()
+            (repo / "module-a" / "build.gradle").touch()
+            self.assertEqual(skill_paths.find_project_root(repo / "module-a" / "src"), repo)
+
+    def test_gradle_root_when_no_git(self):
+        """Без .git корнем становится gradle/maven-проект (следующий критерий)."""
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td) / "proj"
+            (proj / "src" / "main").mkdir(parents=True)
+            (proj / "build.gradle").touch()
+            self.assertEqual(skill_paths.find_project_root(proj / "src" / "main"), proj)
+
+    def test_pipeline_json_is_last_resort(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td) / "proj"
+            (proj / "ground").mkdir(parents=True)
+            (proj / "ground" / "pipeline.json").write_text("{}", encoding="utf-8")
+            (proj / "sub").mkdir()
+            self.assertEqual(skill_paths.find_project_root(proj / "sub"), proj)
+
+    def test_fallback_is_start_itself(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(skill_paths.find_project_root(Path(td)), Path(td))
 
 
 class TestResolverConsistency(unittest.TestCase):
@@ -167,12 +248,12 @@ class TestNoBypassHardcode(unittest.TestCase):
                          f"docs_base):\n  " + "\n  ".join(offenders))
 
 
-# ── Часть A+: property-based эквивалентность трёх копий ───────────────────────
-# Три копии резолвера (skill_paths / _project / _util) живут раздельно из-за топологии
-# деплоя (pipeline-state — user-global, может быть не co-located с hooks/scripts проекта).
-# Слить их в один импорт нельзя, поэтому P1-5 закрывается ИНАЧЕ: исчерпывающим тестом
-# эквивалентности по полной матрице docs-конфигов — любой расхождение на любом (в т.ч.
-# не вписанном вручную) кейсе валит сборку В ИСХОДНИКЕ, до деплоя.
+# ── Часть A+: property-based устойчивость единственной реализации ─────────────
+# Эта матрица конфигов родилась как проверка эквивалентности трёх копий резолвера: слить их
+# в один импорт было нельзя (раздельный деплой), поэтому синхронность держали генератором.
+# Копии сняты (TestSingleImplementation), сравнение стало тавтологией — матрица переиспользована
+# под настоящий оракул: на любом, в т.ч. мусорном, docs-конфиге резолвер не падает и не
+# выпускает путь за пределы проекта (кроме осознанного separate-repo, который наружу и целится).
 
 # Домены значений каждого поля docs-конфига (валидные, дефолтные и зловредные).
 _MODE = [None, "in-repo", "separate-repo", "garbage", 0]
@@ -208,53 +289,44 @@ def _rand_docs(rng: random.Random):
     return d
 
 
-class TestPropertyBasedConsistency(unittest.TestCase):
-    """Три копии обязаны давать ОДИНАКОВЫЙ результат на любом docs-конфиге."""
+class TestPropertyBasedRobustness(unittest.TestCase):
+    """Резолвер не падает и не выпускает путь из проекта на любом docs-конфиге."""
 
-    def _assert_agree(self, cfg):
-        # docs_base — все три
-        bases = {
-            "skill_paths": str(skill_paths.docs_base(PROJ, cfg)),
-            "_project": str(_project.docs_base(PROJ, cfg)),
-            "_util": str(_util.docs_base(PROJ, cfg)),
-        }
-        self.assertEqual(len(set(bases.values())), 1,
-                         f"docs_base рассинхрон на cfg={cfg}: {bases}")
-        # feature_docs_dir — все три
-        fds = {
-            "skill_paths": str(skill_paths.feature_docs_dir(PROJ, cfg)),
-            "_project": str(_project.feature_docs_dir(PROJ, cfg)),
-            "_util": str(_util.feature_docs_dir(PROJ, cfg)),
-        }
-        self.assertEqual(len(set(fds.values())), 1,
-                         f"feature_docs_dir рассинхрон на cfg={cfg}: {fds}")
-        # system_analysis_dir — skill_paths и _project (у _util его нет)
-        sas = {
-            "skill_paths": str(skill_paths.system_analysis_dir(PROJ, cfg)),
-            "_project": str(_project.system_analysis_dir(PROJ, cfg)),
-        }
-        self.assertEqual(len(set(sas.values())), 1,
-                         f"system_analysis_dir рассинхрон на cfg={cfg}: {sas}")
+    def _assert_sane(self, cfg):
+        docs = cfg.get("docs") if isinstance(cfg, dict) else None
+        # separate-repo (и любой docs.master) целится НАРУЖУ проекта осознанно — там
+        # проверяем только «не падает и без traversal», без привязки к корню.
+        outward = isinstance(docs, dict) and (docs.get("mode") == "separate-repo"
+                                              or isinstance(docs.get("master"), dict))
+        for fn in (skill_paths.docs_base, skill_paths.feature_docs_dir,
+                   skill_paths.system_analysis_dir):
+            p = fn(PROJ, cfg)  # не бросает ни на каком мусоре
+            self.assertIsInstance(p, Path, f"{fn.__name__} вернул не Path на cfg={cfg}")
+            self.assertNotIn("..", p.parts,
+                             f"{fn.__name__} → traversal в пути {p} (cfg={cfg})")
+            if not outward:
+                self.assertTrue(str(p).startswith(str(PROJ)),
+                                f"{fn.__name__} вышел за проект: {p} (cfg={cfg})")
 
     def test_exhaustive_core_matrix(self):
         """Полный декартов перебор ключевых полей (mode×docs_path×repo_path×feature_subdir)."""
-        with contextlib.redirect_stderr(io.StringIO()):  # глушим warning-спам резолверов
+        with contextlib.redirect_stderr(io.StringIO()):  # глушим warning-спам резолвера
             for mode, dp, rp, fs in itertools.product(_MODE, _DOCS_PATH, _REPO_PATH, _FEAT_SUB):
-                self._assert_agree({"docs": {"mode": mode, "docs_path": dp,
-                                             "repo_path": rp, "feature_subdir": fs}})
+                self._assert_sane({"docs": {"mode": mode, "docs_path": dp,
+                                            "repo_path": rp, "feature_subdir": fs}})
 
     def test_randomized_fuzz(self):
         """3000 псевдослучайных конфигов с фиксированным seed (воспроизводимо)."""
         rng = random.Random(20260620)
         with contextlib.redirect_stderr(io.StringIO()):
             for _ in range(3000):
-                self._assert_agree({"docs": _rand_docs(rng)})
+                self._assert_sane({"docs": _rand_docs(rng)})
 
     def test_cfg_none_and_missing_docs(self):
-        """cfg=None и cfg без docs — тоже согласованы (берётся pipeline.json/{} единообразно)."""
+        """cfg=None и cfg без docs — дефолт (docs/ под проектом), без падений."""
         with contextlib.redirect_stderr(io.StringIO()):
             for cfg in (None, {}, {"docs": None}, {"other": 1}):
-                self._assert_agree(cfg)
+                self._assert_sane(cfg)
 
 
 class TestSafeSlug(unittest.TestCase):

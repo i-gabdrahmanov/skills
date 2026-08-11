@@ -21,6 +21,10 @@ HERE = Path(__file__).resolve().parent
 UPDATE = HERE / "update.py"
 RECORD = HERE / "record_gate.py"
 
+sys.path.insert(0, str(HERE))
+import _util  # noqa: E402,F401  — кладёт hooks/ в sys.path
+import forge_events as FE  # noqa: E402  — evidence гейтов живёт в журнале прогона
+
 SKILL = "forgelite"
 FEATURE = "KID-1"
 
@@ -63,8 +67,11 @@ def _record(tmp: Path, step_id: str, *extra: str) -> subprocess.CompletedProcess
     )
 
 
-def _gate_file(tmp: Path, step_id: str) -> Path:
-    return tmp / "ground" / "statements" / SKILL / FEATURE / "gates" / f"{step_id}.json"
+def _gate_rec(tmp: Path, step_id: str) -> dict:
+    """Evidence гейта из журнала прогона (раньше — файл gates/<step_id>.json)."""
+    rec = FE.gate(tmp, SKILL, FEATURE, step_id)
+    assert rec is not None, f"нет evidence гейта '{step_id}' в журнале {tmp}"
+    return rec
 
 
 def _junit_xml(cases: list[tuple[str, str]]) -> str:
@@ -96,7 +103,7 @@ class TestRecordGate(unittest.TestCase):
             tmp = Path(d)
             r = _record(tmp, "lite-green", "--cmd", "true")
             self.assertEqual(r.returncode, 0, r.stderr)
-            rec = json.loads(_gate_file(tmp, "lite-green").read_text(encoding="utf-8"))
+            rec = _gate_rec(tmp, "lite-green")
             self.assertTrue(rec["passed"])
             self.assertEqual(rec["produced_by"], "record_gate")
 
@@ -105,7 +112,7 @@ class TestRecordGate(unittest.TestCase):
             tmp = Path(d)
             r = _record(tmp, "lite-green", "--cmd", "false")
             self.assertEqual(r.returncode, 1)
-            self.assertFalse(json.loads(_gate_file(tmp, "lite-green").read_text(encoding="utf-8"))["passed"])
+            self.assertFalse(_gate_rec(tmp, "lite-green")["passed"])
 
     def test_red_gate_all_tests_red_passes(self):
         with tempfile.TemporaryDirectory() as d:
@@ -114,7 +121,7 @@ class TestRecordGate(unittest.TestCase):
             r = _record(tmp, "lite-red", "--expect", "red",
                         "--compile-cmd", "true", "--cmd", cmd)
             self.assertEqual(r.returncode, 0, r.stderr)
-            rec = json.loads(_gate_file(tmp, "lite-red").read_text(encoding="utf-8"))
+            rec = _gate_rec(tmp, "lite-red")
             self.assertTrue(rec["passed"])
             self.assertEqual(rec["tests_red"], 3)
             self.assertEqual(rec["tests_green"], 0)
@@ -128,7 +135,7 @@ class TestRecordGate(unittest.TestCase):
             r = _record(tmp, "lite-red", "--expect", "red",
                         "--compile-cmd", "true", "--cmd", cmd)
             self.assertEqual(r.returncode, 1, "1 red + 2 green — НЕ успех RED")
-            rec = json.loads(_gate_file(tmp, "lite-red").read_text(encoding="utf-8"))
+            rec = _gate_rec(tmp, "lite-red")
             self.assertFalse(rec["passed"])
             self.assertEqual(rec["tests_green"], 2)
             self.assertIn("ЗЕЛЁНЫЕ", rec["reason"])
@@ -141,7 +148,7 @@ class TestRecordGate(unittest.TestCase):
             r = _record(tmp, "lite-red", "--expect", "red",
                         "--compile-cmd", "true", "--cmd", "false")
             self.assertEqual(r.returncode, 1)
-            rec = json.loads(_gate_file(tmp, "lite-red").read_text(encoding="utf-8"))
+            rec = _gate_rec(tmp, "lite-red")
             self.assertIn("JUnit", rec["reason"])
 
     def test_red_gate_stale_reports_not_counted(self):
@@ -202,13 +209,39 @@ class TestGateResultCheck(unittest.TestCase):
             _record(tmp, "lite-green", "--cmd", "false")
             self.assertNotEqual(_close(tmp, "lite-green").returncode, 0)
 
-    def test_handwritten_artifact_blocked(self):
+    def test_handwritten_legacy_artifact_blocked(self):
+        """Старая раскладка читается как фолбэк, но провенанс с неё требуется тот же."""
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d); _make_manifest(tmp); _write_origin(tmp, "lite-green")
-            gf = _gate_file(tmp, "lite-green")
+            gf = tmp / "ground" / "statements" / SKILL / FEATURE / "gates" / "lite-green.json"
             gf.parent.mkdir(parents=True, exist_ok=True)
             gf.write_text(json.dumps({"passed": True}), encoding="utf-8")  # без провенанса
             self.assertNotEqual(_close(tmp, "lite-green").returncode, 0)
+
+    def test_handwritten_log_line_blocked(self):
+        """Дописанная руками строка журнала без produced_by не считается evidence.
+
+        Это главное, что даёт журнал против россыпи файлов: провенанс проверяется
+        свёрткой единообразно, а не «где-то проверяется, где-то .exists()»."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_manifest(tmp); _write_origin(tmp, "lite-green")
+            log = FE.events_path(tmp, SKILL, FEATURE)
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(json.dumps({"kind": "gate", "step_id": "lite-green",
+                                       "passed": True}) + "\n", encoding="utf-8")
+            self.assertIsNone(FE.gate(tmp, SKILL, FEATURE, "lite-green"))
+            self.assertNotEqual(_close(tmp, "lite-green").returncode, 0)
+
+    def test_forged_provenance_in_payload_blocked(self):
+        """record_gate не даёт вердикту самому назначить себе provenance."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_manifest(tmp)
+            FE.append_event(tmp, SKILL, FEATURE, "gate", step_id="lite-green",
+                            passed=True, produced_by="totally-legit")
+            rec = FE.gate(tmp, SKILL, FEATURE, "lite-green")
+            self.assertIsNotNone(rec)
+            self.assertEqual(rec["produced_by"], "record_gate",
+                             "payload перебил служебное поле записи")
 
     def test_override_allows_close(self):
         with tempfile.TemporaryDirectory() as d:

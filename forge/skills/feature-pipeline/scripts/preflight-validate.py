@@ -7,8 +7,7 @@ preflight-validate.py — проверка готовности шага к вы
 Запускается оркестратором ПЕРЕД каждым agent()-вызовом фазы (Design, Build, Verify, Document).
 
 Что проверяет:
-1. Если gate.json отсутствует — создаёт gate.json + phase-defs.json из manifest
-2. Жёсткая блокировка: step-id должен соответствовать current_phase в gate.json.
+2. Жёсткая блокировка: step-id должен соответствовать current_phase (из manifest).
    Если не соответствует — exit 1 (фаза пропущена или нарушен порядок).
 3. Проверяет, что output предыдущего шага содержит step_id (признак субагента)
 4. Проверяет, что все required_judges предыдущего шага пройдены
@@ -33,58 +32,6 @@ import pipeline_phases as pp
 PREFIX_PHASE = pp.PREFIX_PHASE
 MAIN_PHASES = pp.MAIN_PHASES
 _guess_phase = pp.guess_phase
-
-
-def _ensure_phases(project_root: str, feature: str, skill: str = "feature-pipeline") -> None:
-    """Создать ground/phases/<feature>/gate.json из manifest, если нет; иначе —
-    ПЕРЕСИНХРОНИЗИРОВАТЬ из manifest.
-
-    Manifest — источник истины. Раньше gate.json создавался один раз и держался
-    в актуальном состоянии только через update.py→sync_gate_from_manifest. Если тот
-    sync падал (например, на Python 3.9 в phase_sync) или был пропущен (update.py до
-    первого preflight — sync был no-op без gate.json), gate.json устаревал, и
-    _check_gate_phase давал ложное «несоответствие стадий». Поэтому здесь всегда
-    подтягиваем статусы фаз/current_phase из manifest перед проверкой.
-    """
-    phases_dir = str(pp.gate_dir(Path(project_root), feature))
-    # gate уже есть — пересинхронизируем из manifest (самоисцеление от устаревшего gate)
-    if pp.gate_path(Path(project_root), feature).exists():
-        try:
-            import phase_sync  # pipeline-state/scripts уже в sys.path (через pipeline_phases)
-            phase_sync.sync_gate_from_manifest(project_root, feature, skill)
-        except Exception as e:
-            print(f"preflight-validate: WARN — не удалось пересинхронизировать gate: {e}",
-                  file=sys.stderr)
-        return
-    gate_path = os.path.join(phases_dir, "gate.json")
-    manifest_path = os.path.join(
-        project_root, "ground", "statements", skill, feature, "manifest.json",
-    )
-    if not os.path.exists(manifest_path):
-        return
-    try:
-        with open(manifest_path, encoding="utf-8") as f:
-            manifest = json.load(f)
-    except Exception:
-        return
-    steps = manifest.get("steps", [])
-    if not steps:
-        return
-    os.makedirs(phases_dir, exist_ok=True)
-
-    # Единая реализация построения gate/defs — pipeline_phases.
-    gate = pp.build_gate(steps, manifest)
-    gate["feature"] = feature
-    with open(gate_path, "w", encoding="utf-8") as f:
-        json.dump(gate, f, indent=2, ensure_ascii=False)
-    print(f"preflight-validate: created {gate_path} (current={gate['current_phase']})",
-          file=sys.stderr)
-
-    defs_path = os.path.join(phases_dir, "phase-defs.json")
-    if not os.path.exists(defs_path):
-        with open(defs_path, "w", encoding="utf-8") as f:
-            json.dump(pp.build_defs(steps), f, indent=2, ensure_ascii=False)
-        print(f"preflight-validate: created {defs_path}", file=sys.stderr)
 
 
 def load_manifest(project_root: str, feature: str, skill: str = "feature-pipeline") -> dict | None:
@@ -249,9 +196,10 @@ def _check_gate_phase(project_root: str, step_id: str, feature: str = "pipeline"
                       manifest: dict | None = None) -> bool:
     """Жёсткая блокировка: step-id должен соответствовать current_phase.
 
-    Решение считаем из ЖИВОГО manifest (источник истины), а не из персистентного gate.json:
-    тот — лишь кэш и мог устареть, если sync был пропущен/упал (P1-4). Если manifest не передан
-    (нет данных) — мягкий fallback на gate.json с диска.
+    Решение считаем из ЖИВОГО manifest — он и есть источник истины. Персистентный
+    gate.json снят: он был кэшем этой же деривации и умел отставать, если sync
+    пропущен/упал (P1-4), давая ложное «несоответствие стадий». Манифест не передан —
+    не блокируем.
 
     Правила:
     - Точное совпадение step_id или его фазы с current_phase — разрешено.
@@ -261,16 +209,12 @@ def _check_gate_phase(project_root: str, step_id: str, feature: str = "pipeline"
       ТОЛЬКО если шаг относится к этой же фазе (не байпас через неё).
     - Во всех остальных случаях — БЛОКИРУЕМ (фаза пропущена).
     """
-    if manifest is not None:
-        decision = pp.live_phase_decision(manifest)
-        gate = {"current_phase": decision["current_phase"], "phases": decision["phases"]}
-    else:
-        gate_path = str(pp.gate_path(Path(project_root), feature))
-        if not os.path.exists(gate_path):
-            return True
-        gate = _safe_read_json(gate_path)
-        if gate is None:
-            return True
+    # Решение — только из живого манифеста. Дисковый gate.json снят: он был кэшем
+    # этой же деривации и мог отставать, давая ложное «несоответствие стадий».
+    if manifest is None:
+        return True  # манифеста нет — вне пайплайна, не блокируем
+    decision = pp.live_phase_decision(manifest)
+    gate = {"current_phase": decision["current_phase"], "phases": decision["phases"]}
 
     current_phase = gate.get("current_phase", "")
     expected_phase = _guess_phase(step_id)
@@ -329,7 +273,6 @@ def main():
     parser.add_argument("--skill", default="feature-pipeline", help="Имя скилла (для резолвинга путей к manifest)")
     args = parser.parse_args()
 
-    _ensure_phases(args.project, args.feature, skill=args.skill)
 
     manifest = load_manifest(args.project, args.feature, skill=args.skill)
     if manifest is None:

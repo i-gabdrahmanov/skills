@@ -46,7 +46,7 @@ agent(
 ### 8.3 Judge-gate coverage (обязательно, перед закрытием `05-tests`)
 
 После тестраннера запусти coverage-judge — он гоняет `check_coverage.py` (JaCoCo) и
-сохраняет вердикт в `judges/coverage-judge.json` (имя совпадает с `required_judges`
+сохраняет вердикт coverage-judge в журнал прогона `events.jsonl` (имя совпадает с `required_judges`
 шага `05-tests`, иначе `update.py` не даст закрыть шаг):
 ```bash
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py coverage <slug> --recheck

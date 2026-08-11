@@ -110,7 +110,7 @@ python3 <forge>/hooks/preflight.py --project .
 > **ЖЁСТКИЙ ГЕЙТ АРМИНГА.** Не вызывай **ни одного `agent()`**, пока `preflight.py` не вернул
 > **exit 0**. Хуки рантайм связывает при запуске сессии; если на старте было `enforcement off`,
 > ранние субагентные фазы (02-sdd, 02-design, 03-jira, build) пройдут **без записи**
-> `_origins/<step>.json` от SubagentStop → каждый шаг придётся закрывать через `override_judge.py`
+> origin-записи от SubagentStop → каждый шаг придётся закрывать через `override_judge.py`
 > (шторм override на прогоне №3). Сначала PASS — потом субагенты.
 
 - Текущая директория — корень репо кода (Java/Spring, Gradle/Maven).
@@ -305,7 +305,7 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
 Если любой judge (brd/eval/red/build/reuse/spec) вернул FAIL — **НЕ прави артефакты inline**
 в основном агенте. Используй **perpetual error store**:
 
-**Файл:** `ground/statements/feature-pipeline/<slug>/judges/errors.json`
+**Файл:** `ground/statements/feature-pipeline/<slug>/judges/errors.json` (накопитель ошибок — единственное, что осталось файлом: он мутабельный, а не append-only)
 
 Автоматически создаётся `run_judge.py` при каждом FAIL и удаляется при PASS.
 
@@ -367,18 +367,22 @@ R4, `gate-guard` требует approval-маркер `gate-override-step-reopen
 согласия пользователя**. Не предлагай override на первом FAIL — сначала чини.
 
 > **Снятие гейта — R4-класс и форсится рантаймом:** `gate-guard` блокирует запуск
-> `override_judge.py` (exit 2), пока нет approval-маркера
-> `ground/approvals/gate-override-<judge-name>.json`. Маркер фиксируется ТОЛЬКО после
-> явного «да» пользователя — молча снять гейт нельзя. `--list`/`--remove` не гейтятся
+> `override_judge.py` (exit 2), пока нет согласия под ключом
+> `gate-override-<judge-name>`. Согласие фиксируется ТОЛЬКО после явного «да»
+> пользователя — молча снять гейт нельзя. `--list`/`--remove` не гейтятся
 > (чтение и восстановление enforcement'а свободны).
 
 **Шаг 1.** Останови работу, покажи пользователю blocking issues и спроси. После явного
-«да» зафиксируй согласие approval-маркером (это аудит-след санкции):
+«да» зафиксируй согласие — ТОЛЬКО через `record_approval.py` (он штампует провенанс
+`produced_by:"record_approval"`, который проверяет `gate-guard`; прямая запись в
+`ground/approvals*` заблокирована `state-write-guard`, а рукописная запись без
+провенанса гейт не снимает):
 ```bash
-python3 -c "import json,os; os.makedirs('ground/approvals',exist_ok=True); json.dump({'approved_by':'user','reason':'<кто и почему разрешил>'},open('ground/approvals/gate-override-<judge-name>.json','w'),ensure_ascii=False)"
+python3 .gigacode/skills/pipeline-state/scripts/record_approval.py \
+  --key gate-override-<judge-name> --approved-by user --reason "<кто и почему разрешил>"
 ```
 
-**Шаг 2.** Создай override-файл (`--reason` обязателен — это аудит-след):
+**Шаг 2.** Создай override (`--reason` обязателен — это аудит-след):
 ```bash
 python3 <project>/.gigacode/skills/pipeline-state/scripts/override_judge.py --judge <judge-name> --feature <slug> --step-id <step-id> --reason "<почему пропуск допустим>"
 ```
@@ -395,7 +399,7 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/override_judge.py --fe
 python3 <project>/.gigacode/skills/pipeline-state/scripts/override_judge.py --judge <judge-name> --feature <slug> --remove
 ```
 
-> Override **не подделывает вердикт судьи** — FAIL остаётся в `judges/<judge>.json`. Override
+> Override **не подделывает вердикт судьи** — FAIL остаётся в журнале прогона. Override
 > лишь снимает блокировку закрытия шага и фиксирует, кто и почему её снял. Частичный случай:
 > если на шаге два судьи (напр. `build-judge`+`reuse-judge`), override нужен на каждый
 > упавший — без override любой оставшийся FAIL по-прежнему блокирует.

@@ -37,15 +37,22 @@ BASH_TOOLS = ("Bash", "run_shell_command")
 # shell-команды (после пробела/кавычки/`/`), но не в составе большего слова (myground/…).
 # judges/ — вердикты судей: подделанный Write с produced_by:"run_judge" проходил провенанс-
 # проверку update._check_judges (легитимный путь — только run_judge.py). ground/phases/ —
-# фазовая машина (gate.json/phase-defs.json/agent-evidence.jsonl), её читает phase-lock
-# gate-guard; пишут только init_phase_gate.py/phase_sync.py и хук grounding-evidence (не тул-вызовы).
+# фазовая машина ПРОШЛЫХ прогонов: сейчас состояние выводится из манифеста и на диск не
+# пишется, но старую раскладку читатели ещё дочитывают — значит, подделывать её тоже нельзя.
 # evals.json — кэш результатов EDD (eval-guard читает status:"passed" по нему): без защиты
 # прямой Write этого файла со всеми passed снимал eval-гейт целиком (тот же класс BLOCKER-1,
 # что judges/gates). Легитимный писатель — run_pending_evals.py (Bash→python, не тул Write).
+# events.jsonl / approvals.jsonl — журналы evidence (origin/gate/judge/override/approval),
+# пришедшие на смену россыпи маркеров. Это ГЛАВНАЯ цель гарда: одна дописанная строка с
+# нужным produced_by сняла бы гейт так же, как раньше подделанный judges/<name>.json.
+# Легитимные писатели дописывают их из скриптов и хуков (Bash→python), а не тул-вызовом.
+# Каталоги старой раскладки остаются в списке: прогоны, начатые до миграции, читаются с них.
 _CP_PATTERNS = [
     r"(?<![\w-])ground/pipeline\.json\b",
+    r"(?<![\w-])ground/approvals\.jsonl\b",
     r"(?<![\w-])ground/statements/[^/]+/[^/]+/manifest\.json\b",
     r"(?<![\w-])ground/statements/[^/]+/[^/]+/evals\.json\b",
+    r"(?<![\w-])ground/statements/[^/]+/[^/]+/events\.jsonl\b",
     r"(?<![\w-])ground/statements/[^/]+/[^/]+/(?:_origins|gates|overrides|judges|journal|rollbacks)(?:/|\b)",
     r"(?<![\w-])ground/approvals(?:/|\b)",
     r"(?<![\w-])ground/phases(?:/|\b)",
@@ -140,7 +147,7 @@ def _hint(target: str) -> str:
         f"  • шаги/manifest → pipeline-state/scripts/update.py (--feature ...)\n"
         f"  • gate-result → pipeline-state/scripts/record_gate.py\n"
         f"  • вердикт судьи → feature-pipeline/scripts/run_judge.py (--from-output / --recheck)\n"
-        f"  • фазовая машина (ground/phases) → init_phase_gate.py / phase_sync.py\n"
+        f"  • фазовая машина — не файл: выводится из manifest.json (шаги закрывает update.py)\n"
         f"  • снятие судьи → pipeline-state/scripts/override_judge.py\n"
         f"  • параметры pipeline.json → config-helper/scripts/config.py set\n"
         f"  • approval-маркер → pipeline-state/scripts/record_approval.py (ТОЛЬКО после явного "

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""grounding-evidence.py — фиксирует чтение grounding-index в agent-evidence.jsonl.
+"""grounding-evidence.py — фиксирует чтение grounding-index в журнале прогона.
 
 НЕ логгер. Единственная задача: когда агент читает `grounding-index.json`, дописать одну
-evidence-запись `read_grounding` в `ground/phases/<feature>/agent-evidence.jsonl`. Её читает
+evidence-запись `kind:"grounding"` в журнал прогона фичи (events.jsonl). Её читает
 `gate-guard`, чтобы снять блок фазы `01-grounding` (пока агент не сверился с grounding-index,
 чтение `src/` заблокировано).
 
@@ -20,7 +20,15 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from _project import active_feature, git_toplevel, phases_dir
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _project import git_toplevel  # noqa: E402
+import forge_events as FE  # noqa: E402
+
+try:
+    import risk_ladder as R  # noqa: E402
+except Exception:  # pragma: no cover — бандл повреждён
+    R = None
 
 
 def _agent_label(data: dict) -> str:
@@ -40,17 +48,17 @@ def _record_grounding_read(data: dict, root: str) -> None:
     if "grounding-index" not in file_path:
         return
 
-    ev_path = phases_dir(Path(root), active_feature(Path(root))) / "agent-evidence.jsonl"
-    ev_path.parent.mkdir(parents=True, exist_ok=True)
-    ev = {
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "event": "read_grounding",
-        "agent": _agent_label(data),
-        "agent_type": data.get("agent_type"),
-        "path": file_path,
-    }
-    with open(ev_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+    # Пишем в журнал прогона активной фичи. Раньше — в ground/phases/<feature>/
+    # agent-evidence.jsonl, рядом с производным кэшем фазовой машины; кэш снят.
+    # Фичу резолвим по самому свежему манифесту ПО ВСЕМ веткам (fix/lite/full), как
+    # это делает file-journal: гейт 01-grounding есть и у них.
+    mp = R.active_manifest(Path(root)) if R is not None else None
+    if mp is None:
+        return  # вне пайплайна — evidence не нужно
+    FE.append_event(Path(root), mp.parent.parent.name, mp.parent.name, "grounding",
+                    agent=_agent_label(data),
+                    agent_type=data.get("agent_type"),
+                    path=file_path)
 
 
 def main() -> int:

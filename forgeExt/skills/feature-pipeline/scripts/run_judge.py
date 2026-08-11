@@ -43,6 +43,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import skill_paths  # единый реестр путей (references/skill-paths.json)
+import forge_events as FE  # журнал evidence (skill_paths уже положил hooks/ в sys.path)
 import check_brd_doc as _brd_doc  # структурный слой судьи БТ (co-located, Thrust 3)
 import charset_hygiene  # чистота текста спеки: китайские/CJK-символы (co-located)
 import pipeline_phases as _pp  # мастер-флаг BRD_ENABLED (бизнес-анализ вкл/выкл)
@@ -112,13 +113,13 @@ def _find_judge_verdict(slug: str, judge_name: str) -> Path:
 
 
 def _save_verdict(slug: str, judge_name: str, verdict: dict) -> Path:
-    """Сохраняет вердикт судьи в ground/statements."""
-    path = _find_judge_verdict(slug, judge_name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(verdict, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-    return path
+    """Пишет вердикт судьи строкой в журнал прогона (раньше: judges/<name>.json на судью).
+
+    produced_by проставляет журнал по kind — поле из самого вердикта убираем, чтобы
+    провенанс нельзя было подделать содержимым."""
+    payload = {k: v for k, v in verdict.items() if k != "judge"}
+    FE.append_event(PROJECT_ROOT, SKILL_NAME, slug, "judge", judge=judge_name, **payload)
+    return FE.events_path(PROJECT_ROOT, SKILL_NAME, slug)
 
 
 def _find_errors_store(slug: str) -> Path:
@@ -969,7 +970,9 @@ def check_build(slug: str, feature_dir: Path | None) -> dict:
                              "detail": "Папка фичи не найдена", "severity": "error"}],
             floor_block + ["Папка фичи не найдена"], floor_warn, "Папка фичи не найдена"
         )
-    verdict = _load_json(_find_judge_verdict(slug, "build-judge"))
+    # Вердикт субагента — из журнала прогона (при отсутствии записи фолбэк на старый
+    # judges/build-judge.json делает сам FE.judge).
+    verdict = FE.judge(PROJECT_ROOT, SKILL_NAME, slug, "build-judge")
 
     if not verdict:
         return _make_verdict(
@@ -2082,10 +2085,10 @@ def main():
             sys.exit(0 if verdict["passed"] else 1)
 
         # Для остальных фаз — проверяем, что вердикт уже есть и passed=true
-        verdict_path = _find_judge_verdict(args.slug, f"{args.phase}-judge")
-        verdict = _load_json(verdict_path)
+        verdict = FE.judge(PROJECT_ROOT, SKILL_NAME, args.slug, f"{args.phase}-judge")
         if not verdict:
-            print(f"FAIL: Вердикт не найден: {verdict_path}", file=sys.stderr)
+            print(f"FAIL: Вердикт {args.phase}-judge не найден в "
+                  f"{FE.events_path(PROJECT_ROOT, SKILL_NAME, args.slug)}", file=sys.stderr)
             sys.exit(1)
         if not verdict.get("passed", False):
             print(f"FAIL: Вердикт не пройден ({verdict.get('summary', '')})", file=sys.stderr)

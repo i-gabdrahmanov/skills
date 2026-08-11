@@ -6,9 +6,9 @@
   • guess_phase / match_required_judges
   • метаданные фаз (allowed_skills / blocked_tools / blocked_paths / required_artifacts)
   • build_gate / build_defs — единственная реализация «manifest/steps → gate.json/phase-defs»
-  • active_feature / gate_dir — резолв per-feature стейта (для namespacing gate)
+  • active_feature — резолв активной фичи
 
-Все скрипты (add_steps, preflight-validate, phase_sync, init_phase_gate) импортируют отсюда,
+Все скрипты (add_steps, preflight-validate) и фазовые гейты хуков импортируют отсюда,
 чтобы PREFIX_PHASE/порядок фаз/маска судей не расходились между копиями (раньше так ловили
 06-doc и неканонический порядок фаз). Хуки (другая база деплоя) импортируют best-effort с
 inline-fallback, который пинится тестом test_phase_consistency.py.
@@ -81,7 +81,7 @@ def is_container_step(step_id: str) -> bool:
     """Container-шаг — main-phase placeholder, чей id ТОЧНО совпадает с фазой ('04-tdd').
     Его собственный статус не отражает завершённость динамических шагов фазы
     (04-test-T1/04-build-T1), поэтому при наличии динамических шагов он исключается из
-    расчёта завершённости фазы. ЕДИНОЕ определение — им же пользуется phase_sync."""
+    расчёта завершённости фазы."""
     return step_id in MAIN_PHASES
 
 
@@ -304,7 +304,7 @@ def build_gate(steps: list, manifest: Optional[dict] = None,
                 p["depends_on"].append(main_order[i - 1])
                 break
 
-    # Статусы из манифеста (ЕДИНАЯ семантика, ею же пользуется phase_sync): фаза completed,
+    # Статусы из манифеста (ЕДИНАЯ семантика фазовой машины): фаза completed,
     # если все её ДИНАМИЧЕСКИЕ шаги completed/skipped. Container-шаг (04-tdd и т.п.) не
     # учитывается, пока есть динамические; если динамических нет — смотрим по самому container.
     if step_status:
@@ -337,15 +337,28 @@ def build_gate(steps: list, manifest: Optional[dict] = None,
 
 
 def live_phase_decision(manifest: Optional[dict]) -> dict:
-    """Живой фазовый снимок из manifest (источник истины), без чтения gate.json с диска.
+    """Живой фазовый снимок из manifest — ЕДИНСТВЕННЫЙ источник фазового состояния.
 
-    gate.json — лишь кэш этого расчёта; его персистентный статус может устареть, если sync
-    был пропущен/упал. Поэтому решения фазовой машины (current_phase + статусы фаз) считаем
-    ОТСЮДА. Возвращает {"current_phase": str, "phases": [...]} — та же деривация, что build_gate.
+    Раньше рядом лежал ground/phases/<feature>/gate.json — персистентный кэш этого же
+    расчёта. Кэш требовал синхронизации (phase_sync при каждом закрытии шага, resync в
+    preflight, отдельная ветка в state-recorder) и умел устаревать, если sync пропущен или
+    упал: гейты решали по протухшему снимку. Снят — считаем на месте, расчёт копеечный.
+    Возвращает {"current_phase": str, "phases": [...]}.
     """
     steps = (manifest or {}).get("steps", [])
     gate = build_gate(steps, manifest)
     return {"current_phase": gate.get("current_phase", ""), "phases": gate.get("phases", [])}
+
+
+def live_state(manifest: Optional[dict]) -> tuple:
+    """(gate, defs_map) из манифеста — то, что фазовым гейтам нужно целиком.
+
+    defs_map: {phase_id: {allowed_skills, blocked_tools_until_complete, blocked_paths,
+    required_artifacts}} — бывший phase-defs.json, тоже чистая производная от списка шагов.
+    """
+    steps = (manifest or {}).get("steps", [])
+    defs_map = {p["id"]: p for p in build_defs(steps).get("phases", [])}
+    return live_phase_decision(manifest), defs_map
 
 
 def build_defs(steps: list) -> dict:
@@ -385,27 +398,3 @@ def active_feature(root: Path, skill: str = "feature-pipeline") -> str:
     return best or "pipeline"
 
 
-def gate_dir(root: Path, feature: str) -> Path:
-    """Каталог фазовой машины фичи: ground/phases/<feature>/."""
-    return Path(root) / "ground" / "phases" / feature
-
-
-def gate_path(root: Path, feature: str) -> Path:
-    """Путь к gate.json фичи; при отсутствии — legacy ground/phases/gate.json (back-compat)."""
-    per_feature = gate_dir(root, feature) / "gate.json"
-    if per_feature.exists():
-        return per_feature
-    legacy = Path(root) / "ground" / "phases" / "gate.json"
-    if legacy.exists():
-        return legacy
-    return per_feature  # для записи нового
-
-
-def defs_path(root: Path, feature: str) -> Path:
-    per_feature = gate_dir(root, feature) / "phase-defs.json"
-    if per_feature.exists():
-        return per_feature
-    legacy = Path(root) / "ground" / "phases" / "phase-defs.json"
-    if legacy.exists():
-        return legacy
-    return per_feature

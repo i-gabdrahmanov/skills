@@ -155,8 +155,8 @@ class TestOverrideJudge(unittest.TestCase):
     # override_judge.py CLI
     # ------------------------------------------------------------------
 
-    def test_create_override_file(self):
-        """override_judge создаёт файл с нужными полями."""
+    def test_create_override_record(self):
+        """override_judge пишет в журнал прогона запись с нужными полями."""
 
         class Args:
             judge = "red-judge"
@@ -171,12 +171,38 @@ class TestOverrideJudge(unittest.TestCase):
 
         rc = ov_mod.cmd_create(Args(), self.project)
         self.assertEqual(rc, 0)
-        path = ov_mod.override_path(self.project, self.skill, self.feature, "red-judge")
-        self.assertTrue(path.exists())
-        rec = json.loads(path.read_text(encoding="utf-8"))
+        rec = ov_mod.FE.override(self.project, self.skill, self.feature, "red-judge")
+        self.assertIsNotNone(rec, "override не найден в журнале прогона")
         self.assertEqual(rec["judge"], "red-judge")
         self.assertEqual(rec["reason"], "No DB in CI")
         self.assertEqual(rec["approved_by"], "user")
+        self.assertEqual(rec["produced_by"], "override_judge")
+
+    def test_remove_revokes_without_losing_history(self):
+        """Отзыв гасит override для гейтов, но сам факт снятия остаётся в журнале."""
+
+        class Args:
+            judge = "red-judge"
+            feature = self.feature
+            step_id = "04-test-T1"
+            reason = "No DB in CI"
+            project = str(self.project)
+            skill = self.skill
+            list = False
+            remove = False
+            json = False
+
+        self.assertEqual(ov_mod.cmd_create(Args(), self.project), 0)
+        self.assertEqual(ov_mod.cmd_remove(Args(), self.project), 0)
+        self.assertIsNone(ov_mod.FE.override(self.project, self.skill, self.feature, "red-judge"),
+                          "отозванный override не должен сниматься гейтами")
+        # …но обе записи (создание и отзыв) по-прежнему на диске — это аудит, а не удаление
+        log = ov_mod.FE.read_events(self.project, self.skill, self.feature)
+        kinds = [r for r in log if r.get("kind") == "override" and r.get("target") == "red-judge"]
+        self.assertEqual(len(kinds), 2, f"ожидались создание+отзыв, в журнале: {kinds}")
+        self.assertTrue(kinds[-1].get("revoked"))
+        # повторный отзыв — уже нечего отзывать
+        self.assertEqual(ov_mod.cmd_remove(Args(), self.project), 1)
 
     def test_create_requires_reason(self):
         """override_judge без --reason → rc=1."""
@@ -196,10 +222,16 @@ class TestOverrideJudge(unittest.TestCase):
         self.assertEqual(rc, 1)
 
     def test_remove_override(self):
-        """override_judge --remove удаляет файл."""
+        """override_judge --remove гасит override, в т.ч. лежащий файлом старой раскладки.
+
+        Проверяем ЭФФЕКТ (гейты его больше не видят), а не механику: раньше команда
+        удаляла файл, теперь дописывает запись отзыва — evidence не уничтожается.
+        """
         self._write_override("red-judge")
         path = ov_mod.override_path(self.project, self.skill, self.feature, "red-judge")
         self.assertTrue(path.exists())
+        self.assertIsNotNone(ov_mod.FE.override(self.project, self.skill, self.feature,
+                                                "red-judge"))
 
         class Args:
             judge = "red-judge"
@@ -210,7 +242,9 @@ class TestOverrideJudge(unittest.TestCase):
 
         rc = ov_mod.cmd_remove(Args(), self.project)
         self.assertEqual(rc, 0)
-        self.assertFalse(path.exists())
+        self.assertIsNone(ov_mod.FE.override(self.project, self.skill, self.feature, "red-judge"),
+                          "отозванный override всё ещё снимает гейт")
+        self.assertTrue(path.exists(), "файл-маркер не должен удаляться — это история")
 
     def test_remove_nonexistent_returns_1(self):
         """Удаление несуществующего override → rc=1."""
