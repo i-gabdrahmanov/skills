@@ -153,6 +153,40 @@ class CleanupLegacy(unittest.TestCase):
         self.assertIn("нет прав на запись", r.stderr)
         self.assertTrue((self.home / ".gigacode" / "skills" / FORGE_SKILL).exists())
 
+    # ── скрипт скопирован из extension'а (в ~/bin и т.п.) ─────────────────
+    def _copy_script(self) -> Path:
+        dst = self.root / "bin" / "cleanup-legacy.sh"
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(SCRIPT, dst)
+        return dst
+
+    def test_copy_without_extension_refuses(self):
+        """Списки «что форжевое» берутся из каталога extension'а. Вне него скрипт обязан
+        ОСТАНОВИТЬСЯ: иначе снял бы только снятые артефакты и оставил раскладку
+        полуразобранной — хуже, чем не запускать."""
+        r = subprocess.run(["bash", str(self._copy_script()), "--home", str(self.home)],
+                           capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("--ext", r.stderr)
+        self.assertTrue((self.home / ".gigacode" / "skills" / FORGE_SKILL).exists())
+
+    def test_copy_works_with_explicit_ext(self):
+        r = subprocess.run(["bash", str(self._copy_script()), "--home", str(self.home),
+                            "--ext", str(EXT)], capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(str(EXT), r.stdout)
+        self.assertIn("[план]", r.stdout)
+
+    def test_copy_autodetects_installed_extension(self):
+        """Установленный extension найдётся сам — в т.ч. link, у которого в каталоге рантайма
+        лежит только маркер с путём-источником."""
+        marker = self.home / ".gigacode" / "extensions" / "forge" / ".gigacode-extension-install.json"
+        _write(marker, json.dumps({"source": str(EXT), "type": "link"}))
+        r = subprocess.run(["bash", str(self._copy_script()), "--home", str(self.home)],
+                           capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(str(EXT), r.stdout)
+
     def test_unknown_flag_still_errors_with_usage(self):
         r = subprocess.run(["bash", str(SCRIPT), "--home", str(self.home), "--nope"],
                            capture_output=True, text=True, timeout=120)
