@@ -68,6 +68,7 @@ done
 HOME_BASE="$(cd "$HOME_BASE" && pwd)"
 
 PY=""
+HOME_BASE_RO=0
 if command -v python3 >/dev/null 2>&1; then PY=python3
 elif command -v python >/dev/null 2>&1; then PY=python
 fi
@@ -109,24 +110,41 @@ owned() {  # $1=список  $2=имя → 0, если имя в списке
 }
 
 # ── план/выполнение ──────────────────────────────────────────────────────────
-MOVED=0; KEPT=0; STRIPPED=0
+MOVED=0; KEPT=0; STRIPPED=0; FAILED=0
 BACKUP_ROOT=""   # создаётся лениво: в режиме плана каталогов не появляется
 
 backup_root_for() {  # $1=база (HOME или проект) → путь бэкапа
   echo "$1/forge-legacy-backup-$TS"
 }
 
+# macOS без Full Disk Access отдаёт EPERM на ~/Documents|Desktop|Downloads и внешних томах —
+# ошибка приходит от ОС, а не от прав каталога, поэтому подсказываем адресно.
+tcc_hint() {  # $1=путь
+  case "$1" in
+    "$HOME_BASE"/Documents/*|"$HOME_BASE"/Desktop/*|"$HOME_BASE"/Downloads/*|/Volumes/*)
+      echo "      подсказка: macOS ограничивает доступ к этому каталогу — выдай терминалу"
+      echo "      Full Disk Access (System Settings → Privacy & Security) и повтори" ;;
+  esac
+}
+
 move_item() {  # $1=что  $2=база-бэкапа  $3=относительная метка  $4=человекочитаемое имя
-  local src="$1" base="$2" rel="$3" label="$4" dest
+  local src="$1" base="$2" rel="$3" label="$4" dest err
   dest="$(backup_root_for "$base")/$rel"
   if [ "$APPLY" -eq 0 ]; then
     echo "    [план] перенести: $label"
-  else
-    mkdir -p "$(dirname "$dest")"
-    if [ -e "$dest" ]; then rm -rf "$dest"; fi   # повторный прогон в ту же секунду
-    mv "$src" "$dest"
-    echo "    ✓ перенесено: $label"
+    MOVED=$((MOVED + 1))
+    return 0
   fi
+  # Ошибку одного элемента не превращаем в обрыв всей чистки (set -e убил бы прогон на середине,
+  # оставив половину раскладки снятой): сообщаем причину, считаем и идём дальше.
+  if ! err="$( { mkdir -p "$(dirname "$dest")" && rm -rf "$dest" && mv "$src" "$dest"; } 2>&1 )"; then
+    echo "    ✗ НЕ перенесено: $label"
+    echo "      причина: ${err:-неизвестна}"
+    tcc_hint "$src"
+    FAILED=$((FAILED + 1))
+    return 0
+  fi
+  echo "    ✓ перенесено: $label"
   MOVED=$((MOVED + 1))
 }
 
@@ -244,6 +262,16 @@ PY
   case "$out" in *"HIT "*) STRIPPED=$((STRIPPED + 1)) ;; esac
 }
 
+# Предполётно: в apply-режиме база бэкапа обязана быть записываемой — иначе первый же mv
+# упрётся в EPERM уже после того, как часть работы сделана.
+check_writable() {  # $1=база
+  [ "$APPLY" -eq 1 ] || return 0
+  [ -w "$1" ] && return 0
+  echo "!! нет прав на запись в $1 — бэкап туда не положить, пропускаю эту базу" >&2
+  tcc_hint "$1/x"
+  return 1
+}
+
 # ── заголовок ────────────────────────────────────────────────────────────────
 if [ "$APPLY" -eq 0 ]; then
   echo "== ПЛАН: чистка старой раскладки forge (ничего не меняется) =="
@@ -257,15 +285,20 @@ echo
 
 # ── 1. user-уровень ($HOME/.gigacode|.qwen|.agents) ──────────────────────────
 echo "-- user-уровень: $HOME_BASE"
-for b in $BASES; do
-  base_dir="$HOME_BASE/$b"
-  [ -d "$base_dir" ] || continue
-  echo "  $b/"
-  clean_dir "$base_dir/skills"   skills   "$HOME_BASE" "$b/skills"
-  clean_dir "$base_dir/commands" commands "$HOME_BASE" "$b/commands"
-  clean_dir "$base_dir/hooks"    hooks    "$HOME_BASE" "$b/hooks"
-  clean_settings "$base_dir/settings.json"
-done
+check_writable "$HOME_BASE" || HOME_BASE_RO=1
+if [ "$HOME_BASE_RO" -eq 1 ]; then
+  echo "   пропущен (бэкап положить некуда)"
+else
+  for b in $BASES; do
+    base_dir="$HOME_BASE/$b"
+    [ -d "$base_dir" ] || continue
+    echo "  $b/"
+    clean_dir "$base_dir/skills"   skills   "$HOME_BASE" "$b/skills"
+    clean_dir "$base_dir/commands" commands "$HOME_BASE" "$b/commands"
+    clean_dir "$base_dir/hooks"    hooks    "$HOME_BASE" "$b/hooks"
+    clean_settings "$base_dir/settings.json"
+  done
+fi
 
 # ── 2. проекты (--project, повторяемо) ───────────────────────────────────────
 for proj in ${PROJECTS[@]+"${PROJECTS[@]}"}; do
@@ -276,6 +309,7 @@ for proj in ${PROJECTS[@]+"${PROJECTS[@]}"}; do
   proj="$(cd "$proj" && pwd)"
   echo
   echo "-- проект: $proj"
+  check_writable "$proj" || { echo "   пропущен"; continue; }
   for b in $BASES; do
     base_dir="$proj/$b"
     [ -d "$base_dir" ] || continue
@@ -322,6 +356,12 @@ if [ "$APPLY" -eq 0 ]; then
   echo "== ПЛАН: к переносу $MOVED, settings.json к правке $STRIPPED (операторского не тронуто: $KEPT) =="
   echo "   Ничего не изменено. Выполнить: те же аргументы + --apply"
   exit 0
+fi
+if [ "$FAILED" -gt 0 ]; then
+  echo "== Частично: перенесено $MOVED, НЕ перенесено $FAILED, settings.json поправлено $STRIPPED =="
+  echo "   Причины — выше по каждому элементу. Оставшееся продолжает перекрывать extension:"
+  echo "   почини доступ и повтори (скрипт идемпотентен, уже перенесённое не тронет)."
+  exit 1
 fi
 echo "== Готово: перенесено $MOVED, settings.json поправлено $STRIPPED (операторского не тронуто: $KEPT) =="
 echo "   Бэкап: $(backup_root_for "$HOME_BASE") (и <проект>/forge-legacy-backup-$TS/ для проектов)"
