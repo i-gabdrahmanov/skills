@@ -96,6 +96,22 @@ class CleanupLegacy(unittest.TestCase):
     def _snapshot(self) -> list[str]:
         return sorted(str(p.relative_to(self.root)) for p in self.root.rglob("*") if p.is_file())
 
+    # ── аргументы ─────────────────────────────────────────────────────────
+    def test_project_path_may_be_positional(self):
+        """У forge/uninstall.sh target позиционный — та же привычка обязана работать здесь,
+        иначе `cleanup-legacy.sh /path/repo` падает «неизвестный аргумент»."""
+        r = subprocess.run(["bash", str(SCRIPT), "--home", str(self.home), str(self.proj)],
+                           capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(str(self.proj), r.stdout)
+        self.assertIn(".gigacode/deploy-local.sh", r.stdout)   # дошёл до проектных артефактов
+
+    def test_unknown_flag_still_errors_with_usage(self):
+        r = subprocess.run(["bash", str(SCRIPT), "--home", str(self.home), "--nope"],
+                           capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("Usage", r.stderr)
+
     # ── план ──────────────────────────────────────────────────────────────
     def test_plan_changes_nothing(self):
         before = self._snapshot()
