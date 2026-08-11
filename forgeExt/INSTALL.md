@@ -1,11 +1,14 @@
 # Установка forge (extension)
 
-Проверено на `qwen 0.19.5`. Для форка GigaCode — см. раздел в конце.
+Боевой рантайм — **GigaCode**: бинарь `gigacode`, базовый каталог `~/.gigacode`, манифест
+`gigacode-extension.json`. Все команды ниже — про него. На дев-машине то же самое проверяется
+стоковым `qwen` (`~/.qwen`, `qwen-extension.json`) — механизм идентичный, отличаются только
+бинарь и базовый каталог (см. раздел в конце). Проверено на `qwen 0.19.5`.
 
 ## 0. Требования
 
-- Рантайм с поддержкой `extensions`: `qwen` (dev) или `gigacode` (prod).
-  Проверить: `qwen extensions --help` (должны быть `install/link/list/...`).
+- Рантайм с поддержкой `extensions`.
+  Проверить: `gigacode extensions --help` (должны быть `install/link/list/...`).
 - `python3` в `PATH` (хуки forge исполняются как `python3 …`).
 
 ## 1. Убрать дрейф — ОБЯЗАТЕЛЬНО, если forge уже деплоился раньше
@@ -14,10 +17,26 @@
 складываются (1.1), а скиллы и команды прямо перекрываются (1.2). `preflight.py` проверяет оба
 пункта: 1.2 — жёсткая ошибка (exit 1), 1.1 — предупреждение.
 
+**Делает это одна команда** — `cleanup-legacy.sh` (лежит рядом с манифестом). По умолчанию он
+только печатает план; форж-своё определяет по составу самого extension'а плюс списку снятых
+артефактов (`log-agent.py`, `evidence-enforcer.py`, `forge.toml`, …), а самописные скиллы
+оператора не трогает и ничего не удаляет безвозвратно — переносит в `forge-legacy-backup-<TS>/`:
+
+```bash
+bash <ext>/cleanup-legacy.sh                                  # план: что будет снято
+bash <ext>/cleanup-legacy.sh --apply                          # $HOME: .gigacode/.qwen/.agents
+bash <ext>/cleanup-legacy.sh --apply --project /path/repo     # + legacy-раскладка в проекте
+```
+
+Затем **перезапустить сессию** (рантайм кэширует список скиллов на старте) и проверить
+`preflight.py` — ошибок «старые копии перекрывают extension» быть не должно.
+
+Ниже — то же самое вручную, если скрипт запускать негде.
+
 ### 1.1 Хуки в `settings.json`
 
 Extension несёт свои хуки в `hooks/hooks.json` и рантайм грузит их **поверх** `settings.json`
-(они не заменяют, а складываются). Если те же forge-хуки уже прописаны в `~/.qwen/settings.json`
+(они не заменяют, а складываются). Если те же forge-хуки уже прописаны в `~/.gigacode/settings.json`
 (старый `deploy.sh`), они **задвоятся**. `link`/`install` сам это НЕ чистит — settings.json не трогается.
 
 Проверить, что там есть forge-хуки:
@@ -25,7 +44,7 @@ Extension несёт свои хуки в `hooks/hooks.json` и рантайм �
 ```bash
 python3 - <<'PY'
 import json, os
-p = os.path.expanduser("~/.qwen/settings.json")   # для GigaCode: ~/.gigacode/settings.json
+p = os.path.expanduser("~/.gigacode/settings.json")   # на дев-машине с qwen: ~/.qwen/settings.json
 d = json.load(open(p)); names=set()
 for arr in (d.get("hooks") or {}).values():
     for e in arr:
@@ -40,11 +59,13 @@ print("прочие (НЕ трогать):", sorted(names - forge))
 PY
 ```
 
+Смотреть надо на `command`, а не на `name`: запись может называться как угодно, а звать
+форжевый скрипт — так, `agent-logger` в старых деплоях указывает на снятый `log-agent.py`.
 Если пересечение непустое — сделать бэкап и убрать **только** forge-хуки из блока `hooks`
-(остальные, напр. свои `agent-logger`, оставить):
+(чужие оставить):
 
 ```bash
-cp ~/.qwen/settings.json ~/.qwen/settings.json.bak   # бэкап
+cp ~/.gigacode/settings.json ~/.gigacode/settings.json.bak   # бэкап
 # затем вручную удалить forge-записи из "hooks" (или удалить блок целиком, если он весь форжевый)
 ```
 
@@ -52,12 +73,12 @@ cp ~/.qwen/settings.json ~/.qwen/settings.json.bak   # бэкап
 
 Скилл рантайм резолвит в порядке **project > user > extension**, а одноимённую слэш-команду
 extension'а — переименовывает. Значит любой оставшийся от `deploy.sh` каталог
-(`~/.qwen/skills/feature-pipeline`, `<project>/.gigacode/skills/...`) **молча подменяет** брифы
+(`~/.gigacode/skills/feature-pipeline`, `<project>/.gigacode/skills/...`) **молча подменяет** брифы
 фаз версией годичной давности. Снаружи это выглядит непонятно: хуки-то новые и preflight их
 видит зелёными, но оркестратор идёт по мёртвым путям старого SKILL.md
 (`python3 ~/.gigacode/hooks/preflight.py`) и валится на первом шаге.
 
-Найти пересечение (проверяются `.qwen`, `.gigacode`, `.agents` — на уровне проекта и `$HOME`):
+Найти пересечение (проверяются `.gigacode`, `.qwen`, `.agents` — на уровне проекта и `$HOME`):
 
 ```bash
 python3 <ext>/hooks/preflight.py --project .   # ошибка «старые копии перекрывают extension»
@@ -69,11 +90,11 @@ python3 <ext>/hooks/preflight.py --project .   # ошибка «старые к�
 ```bash
 mkdir -p ~/forge-legacy-backup
 for s in $(ls <ext>/skills); do
-  [ -d ~/.qwen/skills/"$s" ] && mv ~/.qwen/skills/"$s" ~/forge-legacy-backup/
+  [ -d ~/.gigacode/skills/"$s" ] && mv ~/.gigacode/skills/"$s" ~/forge-legacy-backup/
 done
 ```
 
-Затем перезапустить сессию — `qwen` кэширует список скиллов на старте.
+Затем перезапустить сессию — рантайм кэширует список скиллов на старте.
 
 ## 2. Установить
 
@@ -81,14 +102,14 @@ done
 рантайм читает `forgeExt/` напрямую. Папку нельзя двигать/удалять.
 
 ```bash
-qwen extensions link /Users/iskandergabdrahmanov/Documents/dev/skills/forgeExt
+gigacode extensions link <путь>/forgeExt
 ```
 
 **Вариант B — `install` (копия-снимок, «поставить насовсем»).** Копирует папку в
-`~/.qwen/extensions/forge/`, живёт независимо от источника.
+`~/.gigacode/extensions/forge/`, живёт независимо от источника.
 
 ```bash
-qwen extensions install /Users/iskandergabdrahmanov/Documents/dev/skills/forgeExt --consent
+gigacode extensions install <путь>/forgeExt --consent
 ```
 
 Без `--consent` покажется trust-промпт со списком хуков/скиллов/команд — ответить `Y`.
@@ -96,38 +117,44 @@ qwen extensions install /Users/iskandergabdrahmanov/Documents/dev/skills/forgeEx
 ## 3. Проверить
 
 ```bash
-qwen extensions list      # → ✓ Forge (1.0.0), команды /forge, /forge-fix, /forge-lite, /forge-spec, /forge-merge
+gigacode extensions list  # → ✓ Forge (1.0.0), команды /forge, /forge-fix, /forge-lite, /forge-spec, /forge-merge
 ```
 
-Если `/forge` не виден в текущей сессии — перезапустить `qwen`.
+Если `/forge` не виден в текущей сессии — перезапустить рантайм.
 
 ## 4. Обновить
 
 - **`link`:** ничего не нужно. Поменял forge/ → `bash forgeExt/sync-from-forge.sh` → рестарт сессии.
-- **`install` (копия):** поднять `version` в `qwen-extension.json`, затем
-  `qwen extensions update forge`. Либо гарантированно: `uninstall` + `install` заново.
+- **`install` (копия):** поднять `version` в манифестах (`gigacode-extension.json` И
+  `qwen-extension.json` — они побайтово одинаковы), затем `gigacode extensions update forge`.
+  Либо гарантированно: `uninstall` + `install` заново.
 
 ## 5. Снять / сменить способ
 
 ```bash
-qwen extensions uninstall forge
+gigacode extensions uninstall forge
 ```
 
+Снимает только сам extension. Остатки СТАРОЙ раскладки (скиллы/команды/хуки прошлого `deploy.sh`
+в `~/.gigacode`, `~/.qwen`, `<project>/.gigacode`) это не трогает — они продолжат перекрывать
+любую следующую установку: чистить их отдельно, `bash <ext>/cleanup-legacy.sh` (§1).
+
 Смена копия ↔ link: имя `forge` уникально, поэтому сначала `uninstall`, потом `link`/`install` заново.
-Временно выключить без снятия: `qwen extensions disable forge` / `enable forge`.
+Временно выключить без снятия: `gigacode extensions disable forge` / `enable forge`.
 
-## GigaCode (prod, другая машина)
+## Стоковый qwen (дев-машина)
 
-Механизм тот же, отличия:
+Механизм тот же, отличия только в именах:
 
-- бинарь `gigacode`, каталог расширений `.gigacode/extensions/`, settings — `~/.gigacode/settings.json`;
-- манифест форка `gigacode-extension.json` уже в комплекте (побайтовая копия
-  `qwen-extension.json`) — копировать руками не нужно; при бампе `version` править **оба**
-  (`sync-from-forge.sh` манифесты не трогает);
-- шаг 1 (дрейф) делать в `~/.gigacode/settings.json`.
+- бинарь `qwen`, каталог расширений `~/.qwen/extensions/`, settings — `~/.qwen/settings.json`;
+- манифест `qwen-extension.json` (побайтовая копия `gigacode-extension.json`) уже в комплекте —
+  копировать руками не нужно; при бампе `version` править **оба** (`sync-from-forge.sh`
+  манифесты не трогает);
+- шаг 1 (дрейф) — тот же `cleanup-legacy.sh`: он проходит по всем базам (`.gigacode`, `.qwen`,
+  `.agents`), поэтому и дев-, и боевую раскладку чистит один вызов.
 
 ## Установка по git-URL — пока НЕ из этого репо
 
-`qwen extensions install <repo> --ref <branch>` ждёт манифест в **корне** репозитория, а forgeExt —
+`gigacode extensions install <repo> --ref <branch>` ждёт манифест в **корне** репозитория, а forgeExt —
 подкаталог `skills/forgeExt/`. Чтобы включить git-install: отдельный репо (корень = extension)
 либо orphan-ветка с содержимым forgeExt в корне. Пока — ставить локально из клона (`link`/`install <путь>`).
