@@ -1,8 +1,9 @@
 # Forge — нативный extension для qwen-code / GigaCode
 
-Упаковка forge (PDLC control-plane) как **нативного extension'а** рантайма qwen-code
-(форк = GigaCode) вместо императивного `deploy.sh`, который копировал файлы в
-`<target>/.gigacode/` и вручную мержил блок `hooks` в `settings.json`.
+PDLC control-plane для Java/Spring, упакованный как **нативный extension** рантайма qwen-code
+(форк = GigaCode). Этот каталог — **source-of-truth**: код, доки и тесты форжа живут здесь и
+отсюда же ставятся. Прежняя модель — императивный `deploy.sh`, копировавший файлы в
+`<target>/.gigacode/` и мерживший блок `hooks` в `settings.json`, — снята.
 
 ## Что внутри
 
@@ -11,20 +12,37 @@ forgeExt/
 ├── qwen-extension.json     # манифест (name: forge, version, displayName, description)
 ├── hooks/
 │   ├── hooks.json          # конфиг хуков (event → matcher → command), пути ${CLAUDE_PLUGIN_ROOT}
-│   ├── *.py                # 18 хук-скриптов + зависимости (_project.py, risk_ladder.py)
-│   └── risk-policy.json    # deny-политика
+│   ├── *.py                # хук-скрипты + зависимости (_project.py, risk_ladder.py, forge_events.py)
+│   ├── risk-policy.json    # deny-политика
+│   ├── DEPLOY.md           # полный ростер хуков: события, порядок, диагностика
+│   ├── test_*.py, tests/   # юнит-тесты control-plane
+│   ├── evals/run-evals.py  # eval-набор (поведенческие пины хуков)
+│   └── run-hook-tests.sh   # юнит-тесты + evals одной командой
 ├── commands/
 │   ├── forge.md            # /forge       → router (классификация fix | lite | full)
 │   ├── forge-fix.md        # /forge-fix   → forgefix (минорный дефект, спека правится точечно)
 │   ├── forge-lite.md       # /forge-lite  → forgelite (исполнение готовой задачи)
 │   ├── forge-spec.md       # /forge-spec  → требования-мастер: status/diff/merge/remove/check
 │   └── forge-merge.md      # /forge-merge → ярлык слияния дельты в мастер
-├── skills/<20 скиллов>/SKILL.md
+├── skills/
+│   ├── <20 скиллов>/SKILL.md
+│   ├── SKILLS-REGISTRY.md  # реестр скиллов с owner/validity/evals
+│   └── run_all_tests.py    # единый CI-вход: скиллы + хуки + корень
+├── docs/                   # user-guide, troubleshooting, pipeline-*, v2/ (исторический анализ)
 ├── FORGE.md                # справочная дока (НЕ авто-контекст — см. ниже)
+├── INSTALL.md              # установка, обновление, корп-контур, чистка legacy
 ├── cleanup-legacy.sh       # снять остатки СТАРОЙ раскладки (deploy.sh), которые перекрывают extension
-├── test_cleanup_legacy.py  # пины к нему (план не трогает файлы, операторское не сносится)
-└── sync-from-forge.sh      # регенерация из ../forge (пока forge/ = source of truth)
+└── test_cleanup_legacy.py  # пины к нему (план не трогает файлы, операторское не сносится)
 ```
+
+## Тесты
+
+```bash
+python3 skills/run_all_tests.py          # весь набор: скиллы + хуки + корень
+python3 skills/run_all_tests.py --skill hooks   # только control-plane
+bash hooks/run-hook-tests.sh             # юнит-тесты хуков + eval-набор
+```
+Требуется Python 3.10+ (скрипты используют PEP 604).
 
 ## Установка
 
@@ -52,6 +70,8 @@ gigacode extensions uninstall forge
   `python3 ${CLAUDE_PLUGIN_ROOT}/hooks/X.py`. `${CLAUDE_PLUGIN_ROOT}` — единственная
   переменная, которую рантайм подставляет в file-based хуках (= корень extension'а).
 - **`resolve_hook_paths.py` / `${PYTHON}`-shim выброшен** — интерпретатор зовётся напрямую.
+  Вместе с ним ушли `deploy.sh`, `deploy-local.sh`, `update.sh`, `uninstall.sh` и эталон
+  `settings.hooks.json`: проводка теперь одна — `hooks/hooks.json`.
 - **Никакого merge в `settings.json`** — рантайм сам грузит `hooks/hooks.json`, `commands/`,
   `skills/` из extension'а. Установка = одна команда.
 - **Резолвер путей не тронут.** `_project.gigacode_dir()` = `Path(__file__).resolve().parents[1]`

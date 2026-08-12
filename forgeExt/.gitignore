@@ -1,0 +1,18 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Runtime-артефакты пайплайна (живут в проекте-цели, не в репо extension'а)
+ground/
+**/settings.json.bak
+**/settings.json.*.bak
+
+# Локальный конфиг оператора (маппинг проект→спека с реальными путями машины).
+# В репо едет только config.json.example — supply-chain без личных путей.
+skills/minor-defect-fix/config.json

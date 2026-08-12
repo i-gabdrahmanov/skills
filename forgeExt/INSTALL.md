@@ -130,7 +130,8 @@ gigacode extensions list  # → ✓ Forge (1.0.0), команды /forge, /forge
 
 ## 4. Обновить
 
-- **`link`:** ничего не нужно. Поменял forge/ → `bash forgeExt/sync-from-forge.sh` → рестарт сессии.
+- **`link`:** ничего не нужно. Правишь этот каталог напрямую (он и есть source-of-truth) →
+  рестарт сессии.
 - **`install` (копия):** поднять `version` в манифестах (`gigacode-extension.json` И
   `qwen-extension.json` — они побайтово одинаковы), затем `gigacode extensions update forge`.
   Либо гарантированно: `uninstall` + `install` заново.
@@ -154,8 +155,7 @@ gigacode extensions uninstall forge
 
 - бинарь `qwen`, каталог расширений `~/.qwen/extensions/`, settings — `~/.qwen/settings.json`;
 - манифест `qwen-extension.json` (побайтовая копия `gigacode-extension.json`) уже в комплекте —
-  копировать руками не нужно; при бампе `version` править **оба** (`sync-from-forge.sh`
-  манифесты не трогает);
+  копировать руками не нужно; при бампе `version` править **оба** — они не генерируются;
 - шаг 1 (дрейф) — тот же `cleanup-legacy.sh`: он проходит по всем базам (`.gigacode`, `.qwen`,
   `.agents`), поэтому и дев-, и боевую раскладку чистит один вызов.
 
