@@ -8,18 +8,28 @@
 
 ## Что это
 
-Репозиторий Forge — source-of-truth e2e-обвязки для реализации фич в Java/Spring через feature
+Forge — source-of-truth e2e-обвязки для реализации фич в Java/Spring через feature
 pipeline. Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; skills = guidance**.
-Модель **проектная**: разворачивается в `<project>/.gigacode/` (см. [docs/deployment.md](docs/deployment.md)).
+Поставляется **нативным extension'ом** рантайма (qwen-code / форк GigaCode): один каталог,
+подключается `qwen extensions link`/`install`, ставится один раз и работает во всех проектах
+(см. [INSTALL.md](INSTALL.md)).
 
 - `hooks/` — control-plane (см. `hooks/DEPLOY.md` — полный ростер, порядок, диагностика).
+- `hooks/hooks.json` — проводка хуков: события, матчеры, порядок цепочек. Пути строятся от
+  `${CLAUDE_PLUGIN_ROOT}` — единственной переменной, которую рантайм подставляет в file-based
+  хуках (= корень extension'а), поэтому подстановка путей при установке не нужна.
 - `skills/` — пайплайн-скиллы: вход `router` → `forgefix` (fix), `forgelite` (lite) или `feature-pipeline` (full) + фазовые (см. «Router + режимы fix/lite/full»).
-- `deploy.sh` — установщик: разворачивает Forge в указанный проект одной командой
-  (co-location hooks+skills + доки, мерж hooks-блока с бэкапом).
-- `uninstall.sh` — деинсталлятор (зеркало `deploy.sh`, те же аргументы): снимает блок hooks и
-  удаляет обвязку; `ground/` и конфиг оператора остаются (`--purge-state` сносит и их).
-- `deploy-local.sh` — in-project фиксер путей в `settings.json` (живёт в `<project>/.gigacode/`).
+- `commands/` — слэш-команды `/forge`, `/forge-lite`, `/forge-fix`, `/forge-spec`, `/forge-merge`.
+- `qwen-extension.json` / `gigacode-extension.json` — манифест (имя, версия, описание). Два файла
+  на два рантайма; при бампе версии править **оба**.
 - `hooks/preflight.py` — диагностика готовности ДО прогона.
+- `cleanup-legacy.sh` — снимает раскладку прежнего проектного деплоя (`<project>/.gigacode/`),
+  если она перекрывает extension.
+
+> **Прежняя модель — проектная** (`deploy.sh` раскладывал `hooks/` + `skills/` в
+> `<project>/.gigacode/` и мержил блок hooks в `settings.json`). Она снята: установщика больше
+> нет, но `preflight.py` продолжает РАСПОЗНАВАТЬ такую раскладку — оставшаяся копия перекрывает
+> extension и задваивает цепочки хуков. Разбор и снятие — [INSTALL.md](INSTALL.md) §1.
 
 ## Архитектура (фазы feature-pipeline)
 
@@ -112,9 +122,9 @@ full; их пол — evidence детерминированных гейтов (
 идёт прогон (корень определяется от самого хука, поэтому правило работает во всех раскладках;
 разработка форжа вне прогона не блокируется).
 
-Установка и запуск — те же: `bash deploy.sh <project>` (router+forgelite+forgefix едут в
-`skills/`), затем `gigacode --experimental-hooks -p "..."`. Отдельных инсталляторов для веток
-нет; коллизии `.gigacode` нет — харнес один.
+Установка и запуск — те же: extension ставится один раз (см. [INSTALL.md](INSTALL.md);
+router+forgelite+forgefix едут в `skills/`), затем `gigacode --experimental-hooks -p "..."`.
+Отдельных инсталляторов для веток нет — харнес один.
 
 ### Хуки (control-plane)
 
@@ -129,7 +139,7 @@ full; их пол — evidence детерминированных гейтов (
 | `pii-boundary.py` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
 | `state-write-guard.py` | PreToolUse Write/Edit/Bash | запрет прямой записи моделью в control-plane-файлы (`manifest.json`, `_origins`, `gates`, `overrides`, `judges`, `approvals`, `pipeline.json`, `ground/phases/`) — мутация только через санкц. скрипты; плюс запрет писать артефакты фазы в КАТАЛОГ ХАРНЕСА (корень резолвится от самого хука, гейт активен только при активном манифесте) | exit 2 |
 | `inline-phase-guard.py` | PreToolUse Bash/Write/Edit | actor-guard: главный агент не производит артефакты/код/билд subagent-фазы inline (по `agent_type`) | exit 2 |
-| `grounding-evidence.py` | PreToolUse Read | пишет `read_grounding` в `agent-evidence.jsonl` при чтении grounding-index — по нему `gate-guard` снимает блок фазы `01-grounding` | нет |
+| `grounding-evidence.py` | PreToolUse Read | пишет evidence `kind:"grounding"` в журнал прогона (`statements/<skill>/<feature>/events.jsonl`) при чтении grounding-index — по нему `gate-guard` снимает блок фазы `01-grounding` | нет |
 | `prompt-guard.py` | UserPromptSubmit + PostToolUse(read/fetch) | детект prompt-injection → additionalContext | нет |
 | `file-journal.py` | PostToolUse Write/Edit/Bash | безусловный журнал изменённых файлов активной фичи (`journal/files.jsonl`, привязка к step_id) — скоуп восстановления кода для `rollback.py` | нет |
 | `state-recorder.py` | SubagentStop | авто-запись шага в pipeline-state по `step_id` | нет |
@@ -137,7 +147,7 @@ full; их пол — evidence детерминированных гейтов (
 | `phase-gate.py` | Stop | блок завершения с висящим `in_progress` | block |
 
 **Не-хуки рядом:** `preflight.py` (проверка «харнес активен?» ПЕРЕД пайплайном — ловит «0 hook entries»),
-`risk-policy.json` (policy-as-code, `risk_ladder.py` читает), `settings.hooks.json` (эталон).
+`risk-policy.json` (policy-as-code, `risk_ladder.py` читает), `hooks.json` (проводка хуков).
 
 ### Скиллы (pipeline)
 
@@ -193,21 +203,23 @@ full; их пол — evidence детерминированных гейтов (
     раньше вело прямо в `feature-pipeline`, из-за чего багфикс с ключом Jira заводил НОВУЮ фичу и
     переписывал спеку — 2026-08-10). `/forge-lite` → `forgelite`, `/forge-fix` → `forgefix` — обе минуя
     router, ровно чтобы не упираться в выбор уже известного пути. Первый токен аргумента `/forge-lite` —
-    ключ Jira, остальное — уточнение; `/forge-fix` принимает ключ Jira ЛИБО описание дефекта. `deploy.sh` (шаг 3b) копирует ВСЕ `commands/*.md` в `<target>/.gigacode/commands/` — рядом
-    с `hooks/` и `skills/`, в единый `.gigacode`-корень, откуда GigaCode-рантайм читает конфиг. TOML-команды
-    qwen-code депрекейтнул: при `*.toml` в `commands/` рантайм показывает окно миграции на КАЖДОМ старте —
-    поэтому формат сразу Markdown, а deploy/uninstall снимают устаревший `forge.toml`, если он остался.
+    ключ Jira, остальное — уточнение; `/forge-fix` принимает ключ Jira ЛИБО описание дефекта. В extension'е
+    `commands/*.md` лежат в корне пакета — рядом с `hooks/` и `skills/`; рантайм подхватывает их сам,
+    копировать никуда не нужно. TOML-команды qwen-code депрекейтнул: при `*.toml` в `commands/` рантайм
+    показывает окно миграции на КАЖДОМ старте — поэтому формат сразу Markdown, а `cleanup-legacy.sh`
+    снимает устаревший `forge.toml`, если он остался от прежней проектной раскладки.
   Про удаление 2026-06-04 (не повторять снос): из трёх прежних причин реальным дефектом был только
   `!{cat all skills}` (вливал тела ВСЕХ скиллов на старте → обрывы стрима) — он снят минимальным дизайном.
   «дублировали скилл» — оценочное (нам нужна короткая точка входа), «не деплоились» — просто не были
-  вписаны в отдельный ручной `deploy.sh` (теперь вписаны, шаг 3b).
+  вписаны в тогдашний ручной установщик. В extension'е вопрос снят конструктивно: `commands/` — часть
+  пакета, доставлять её отдельно нечем и незачем.
 - **TDD по умолчанию** (`quality.tdd:true`): per-task RED→GREEN. Тесты вперёд (service-unit+моки, валидные
   данные, избегать @DataJpaTest), затем стабы сигнатур → `check_tests_red.py` (компилируется+падает) →
   минимальная реализация до зелёного → `check_build` → coverage. Шаги манифеста `04-test-<id>`→`04-build-<id>`.
   **Форсится хуком** `tdd-guard`: запись в `src/main` блокируется, пока `04-test-<id>` ещё `pending`
   (на прогоне TDD не происходил — код писали первым; теперь нельзя). Тесты писать можно всегда.
-- **Pre-flight self-check харнеса** (`preflight.py`: `settings.hooks.json` + `pipeline.json`) — ловит
-  незадеплоенный харнес ДО старта; exit 1 → «ENFORCEMENT OFF, остановись».
+- **Pre-flight self-check харнеса** (`preflight.py`: проводка хуков + `pipeline.json`) — ловит
+  неподключённый харнес ДО старта; exit 1 → «ENFORCEMENT OFF, остановись».
 - **Субагент = явный вызов `agent`**, не inline. Всё, что помечено «субагент» — через `agent` (иначе
   теряется изоляция контекста и устойчивость к обрыву стрима).
 - **Блокировка хука = `exit 2` + причина в `stderr`.** Рантайм при exit 2 игнорирует stdout, читает stderr.
@@ -233,8 +245,8 @@ full; их пол — evidence детерминированных гейтов (
 7. `gate-guard` — risk ladder
 
 Любой блокирующий может остановить (exit 2) до действия.
-Точный блок — в `settings.hooks.json`. Эта секция пинится `hooks/test_docs_hooks_consistency.py`
-(дрейф «доки ↔ деплой» → fail). Изоляцию фаз держат два слоя: `inline-phase-guard` (PreToolUse,
+Точный блок — в `hooks/hooks.json`. Эта секция пинится `hooks/test_docs_hooks_consistency.py`
+(дрейф «доки ↔ проводка» → fail). Изоляцию фаз держат два слоя: `inline-phase-guard` (PreToolUse,
 по `agent_type`) не даёт ГЛАВНОМУ агенту производить артефакты/код subagent-фазы inline, а
 `update._check_subagent_origin` на закрытии шага требует реального `SubagentStop`-evidence
 (`_origins/<step_id>.json`), а не доверяет флагу `--closed-by`.
@@ -243,39 +255,40 @@ full; их пол — evidence детерминированных гейтов (
 
 | Каталог | Зачем |
 |---|---|
-| репо Forge (этот каталог) | **source-of-truth**: `hooks/` + `skills/` + `deploy.sh` |
-| `<project>/.gigacode/` | **цель деплоя**: задеплоенная копия hooks+skills, закоммичена в репо проекта |
+| этот каталог (extension) | **source-of-truth и одновременно поставка**: `hooks/` + `skills/` + `commands/` + манифест |
+| `~/.qwen/extensions/forge` (или `~/.gigacode/extensions/forge`) | куда рантайм ставит/линкует пакет |
+| `<project>/.gigacode/` | **legacy**: раскладка прежнего проектного деплоя. Если осталась — перекрывает extension |
 
-> **Гейты вызываются по `../skills/`** — в `<project>/.gigacode/` рядом с `hooks/` должны лежать
-> `skills/`. `deploy.sh` копирует И хуки И скиллы в один каталог (co-location). Привязки к
-> домашнему `~/.gigacode` нет: резолверы выводят базу из фактического расположения файла.
+> **Гейты вызываются по `../skills/`** — рядом с `hooks/` должны лежать `skills/`. В extension'е это
+> выполнено по построению: оба каталога в корне пакета. Привязки к домашнему `~/.gigacode` нет:
+> резолверы выводят базу из фактического расположения файла, поэтому одна и та же копия кода
+> обслуживает все проекты.
 
-## Деплой — ОДНОЙ КОМАНДОЙ (канонический путь)
+## Установка — ОДНОЙ КОМАНДОЙ (канонический путь)
 
-Модель **проектная**: разворачиваем в `<project>/.gigacode/`. Полное руководство —
-[docs/deployment.md](docs/deployment.md).
+Модель **extension'а**: ставим один раз, работает во всех проектах. Полное руководство —
+[INSTALL.md](INSTALL.md).
 
 ```bash
-# из склонированного репо Forge; целевая папка проекта обязательна
-cd <forge>
-bash deploy.sh /path/to/target-project
+# разработка: симлинк на этот каталог (правки видны после рестарта сессии)
+qwen extensions link /path/to/forgeExt
+# или установка копией
+qwen extensions install /path/to/forgeExt
 ```
 
-`deploy.sh` сам: (1) копирует `hooks/` И `skills/` в `<project>/.gigacode/` (co-location — иначе
-гейты не найдут `../skills`) + доки, (2) кладёт `deploy-local.sh` и доводит `settings.json`
-(merge блока `hooks` + бэкап старого, `permissions`/`mcpServers` сохраняются), (3) прогоняет
-`preflight.py`. Повторный деплой идемпотентен; settings уходит в вечный `.bak` + таймстемпы.
-Починить пути после переезда проекта — `bash <project>/.gigacode/deploy-local.sh`.
+Подстановки путей при установке нет: `hooks/hooks.json` ссылается на скрипты через
+`${CLAUDE_PLUGIN_ROOT}` — рантайм резолвит её в корень extension'а сам. Ни `settings.json`
+проекта, ни его бэкапов установка не трогает.
 
-Снять обвязку — `bash uninstall.sh /path/to/target-project` (те же аргументы, что у деплоя;
-`--dry-run` — план, `--purge-state` — снести ещё и `ground/` с git-чекпойнтами). Снимает блок
-hooks ПЕРЕД удалением файлов: обратный порядок оставил бы конфиг с хуками на удалённые скрипты,
-и рантайм падал бы на каждом вызове. `ground/`, `permissions`/`mcpServers`, чужие хуки и бэкапы
-переживают снятие. Детали — [docs/deployment.md](docs/deployment.md).
+Снять — `qwen extensions uninstall forge` (для `link` — просто удалить симлинк). `ground/` в
+проектах, `permissions`/`mcpServers` и чужие хуки к extension'у отношения не имеют и переживают
+снятие.
 
-> ⚠️ **Не копируй скиллы и хуки вручную по отдельности.** Если скиллы на проектном уровне,
-> а блок `hooks` в `settings.json` не влит → `[HOOK_REGISTRY] 0 hook entries`, весь control-plane
-> молчит. `deploy.sh` исключает этот класс ошибок.
+> ⚠️ **Не копируй скиллы и хуки вручную по отдельности.** Если скиллы разложены на проектном
+> уровне, а проводка хуков не подключена → `[HOOK_REGISTRY] 0 hook entries`, весь control-plane
+> молчит. Установка extension'ом исключает этот класс ошибок: код и проводка едут одним пакетом.
+> Обратный случай — оставшийся `<project>/.gigacode/` от прежнего деплоя: он грузится ПОВЕРХ
+> extension'а, цепочки хуков задваиваются. Ловит `preflight.py`, снимает `cleanup-legacy.sh`.
 
 ## Запуск рантайма (ОБЯЗАТЕЛЬНО с флагом хуков)
 
@@ -288,15 +301,16 @@ gigacode --experimental-hooks -p "<задача>"
 gigacode --experimental-hooks
 ```
 
-Флаг — это флаг **запуска бинаря**, его нельзя прописать в `settings.json`. `deploy.sh`/`doctor`
-его не ставят (не могут — это аргумент процесса); `preflight.py` ловит отсутствие по firing-evidence.
+Флаг — это флаг **запуска бинаря**, его нельзя прописать в `settings.json`. Ни установка
+extension'а, ни `doctor` его не ставят (не могут — это аргумент процесса); `preflight.py` ловит
+отсутствие по firing-evidence.
 
 **Перед каждым серьёзным прогоном — быстрый self-check, что контроль реально включён:**
 ```bash
-python3 <forge>/hooks/preflight.py --project <project>   # <forge> = <project>/.gigacode либо корень extension'а
+python3 <forge>/hooks/preflight.py --project <project>   # <forge> = корень extension'а
 ```
 - ✅ `exit 0` — можно работать
-- ❌ `exit 1` — ENFORCEMENT OFF, подними флаг/деплой
+- ❌ `exit 1` — ENFORCEMENT OFF, подними флаг/переустанови extension
 
 ## Разбор прогонов
 
@@ -314,8 +328,8 @@ python3 <forge>/hooks/preflight.py --project <project>   # <forge> = <project>/.
   Verify/Document + правило «субагент = вызов тула, не сделай сам».
 - 🟠 Grounding искался узко; BRD был с код-деталями.
 
-**Вывод:** всегда деплоить через `deploy.sh` и проверять `preflight` ДО прогона — это убирает
-класс ошибок «0 hook entries / skills не рядом».
+**Вывод:** ставить харнес одним пакетом (тогда — `deploy.sh`, сейчас — extension) и проверять
+`preflight` ДО прогона — это убирает класс ошибок «0 hook entries / skills не рядом».
 
 ### Прогон `autoclose-regular-tasks` / `KIDPPRB-8639` (2026-06-28) — незавершён, уроки
 Контекст: фича «ночное автозакрытие пустых регулярных задач» через `feature-pipeline` на форке
@@ -355,7 +369,7 @@ Verify — пайплайн НЕ дошёл до Document/Deliver.
 - [x] Ранний вопрос о критичности фичи после BRD → `autonomy.auto_max_risk`; форсится `gate-guard`.
 - [x] Тест-стратегия: `tdd-guard` блокирует `@DataJpaTest`/`@SpringBootTest` при `quality.test_layer=
       service-unit` (падали `initializationError`); escape-hatch `test_layer=mixed`.
-- [x] Pre-flight self-check харнеса в §0.0 (`preflight.py`: `settings.hooks.json` + `pipeline.json`) —
+- [x] Pre-flight self-check харнеса в §0.0 (`preflight.py`: проводка хуков + `pipeline.json`) —
       ловит «0 hook entries» (кейс `pprb-kid`) ДО старта; exit 1 → «ENFORCEMENT OFF, остановись».
 - [x] Политика отказа/эскалации + гигиена контекста + probe субагентов — секция «Устойчивость» в
       `feature-pipeline/SKILL.md` (лимит 3, failed+спросить, не `force-push`, не обходить, субагенты для
@@ -363,7 +377,7 @@ Verify — пайплайн НЕ дошёл до Document/Deliver.
 - [x] Аудит исходников: фикс `additionalContext`→`hookSpecificOutput`, context-injector без `agent_type`,
       SoD помечен неактивным, fail-open задокументирован, флаг `--experimental-hooks` (форк) — везде в командах.
 - [x] **Hardening-проход по аудиту обвязки (2026-06-21).** Закрыты дыры «задокументировано ≠
-      исполняется»: `eval-guard` подключён в `settings.hooks.json` и сделан read-only (тяжёлый прогон —
+      исполняется»: `eval-guard` подключён в проводку хуков и сделан read-only (тяжёлый прогон —
       execution-gate `run_pending_evals.py`); `preflight` проверяет РЕАЛЬНОЕ подключение essential-хуков в
       `settings.json` (не наличие файла) + парсинг `risk-policy.json`; `subagent-enforcer` (мёртвый
       PreToolUse-блок) удалён, гарантия «фаза закрыта субагентом» перенесена на закрытие шага
@@ -697,7 +711,7 @@ dual-vocabulary, контракты pipeline-state, payload-схема snake_cas
       `test_fix_docs_layout.py`, `test_spec_cli.py` (`FixDeltaInsideStoryTest`),
       `test_find_spec_anchor.py` (вложенные фиксы как свидетельство).
 > **ВАЖНО (эксплуатация):** всё это работает, только если хуки РЕАЛЬНО срабатывают — т.е. после
-> `deploy.sh` (матчеры→канон, BLOCKER-0) и запуска с `--experimental-hooks`. На форке проверь
+> установки extension'а (матчеры→канон, BLOCKER-0) и запуска с `--experimental-hooks`. На форке проверь
 > firing-smoke: рисковое действие даёт `DENY`. Без этого новые гейты — тоже труп.
 
 ## Известные ограничения (из аудита)
@@ -730,7 +744,7 @@ dual-vocabulary, контракты pipeline-state, payload-схема snake_cas
 - **Блокировки (exit 2 + stderr) работают надёжно — ТОЛЬКО если хук попал в execution-plan.**
   Попадание решает matcher против КАНОН-имени инструмента (`run_shell_command`/`write_file`/`edit`),
   не Claude-нотации. Матчер `^Bash$`/`Write|Edit` = хук не вызывается вовсе (была дыра BLOCKER-0,
-  2026-07-04). При апгрейде рантайма/правке `settings.hooks.json` сверять матчеры с канон-именами
+  2026-07-04). При апгрейде рантайма/правке `hooks/hooks.json` сверять матчеры с канон-именами
   (`test_matcher_canonical_names.py` / `preflight._check_matchers_canonical`). Subagent-события
   срабатывают для тула `agent`.
 - **Payload-схема хуков подтверждена по стоковому qwen-code 0.19.3** (верификация 2026-07-03):
@@ -741,8 +755,8 @@ dual-vocabulary, контракты pipeline-state, payload-схема snake_cas
   дампу hook-JSON из stdin (ключи snake_case; пустые/`null`-поля = схема/поставка payload сломана).
 - **User-level settings могут подключать УСТАРЕВШУЮ копию харнеса** (найдено на машине оператора:
   `~/.qwen/settings.json` вёл на `$HOME/.qwen/hooks/` со старым ростером без fork-syntax-guard/
-  sod/inline/eval-guard). Канон — проектный деплой `deploy.sh`; user-level блок hooks либо убрать,
-  либо держать синхронным, иначе локальные смоуки бегут на другом (старом) control-plane.
+  sod/inline/eval-guard). Канон — установленный extension; user-level блок hooks либо убрать, либо
+  держать синхронным, иначе локальные смоуки бегут на другом (старом) control-plane.
 
 ## Диагностика (перед прогоном)
 
@@ -750,7 +764,7 @@ dual-vocabulary, контракты pipeline-state, payload-схема snake_cas
 python3 <forge>/hooks/preflight.py --project <project>   # харнес активен? (<forge> — см. layout.base в выводе)
 
 # какие фичи в работе:
-python3 <project>/.gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
+python3 <forge>/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
 ```
 
 ## Состояние пайплайна (state)
@@ -760,22 +774,29 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/read.py --skill featur
 
 ## Поддерживаемая структура
 
-Репо Forge (source-of-truth):
+Extension Forge (source-of-truth и поставка — один каталог):
 ```bash
-forge/
-├── FORGE.md                  # этот файл
-├── SKILLS-REGISTRY.md        # реестр скиллов с owner/validity/evals
-├── deploy.sh                 # установщик (разворачивает в проект)
-├── deploy-local.sh           # in-project фиксер путей (копируется в .gigacode/)
-├── docs/                     # документация (deployment.md, user-guide.md, troubleshooting.md, …)
-├── hooks/                    # control-plane (~38 скриптов)
-│   ├── settings.hooks.json   # эталон блока hooks (${PROJECT_ROOT}, ${PYTHON})
-│   ├── resolve_hook_paths.py # подстановка путей + merge в settings.json
+forgeExt/
+├── qwen-extension.json       # манифест для qwen-code
+├── gigacode-extension.json   # манифест для форка GigaCode (тот же контент)
+├── FORGE.md                  # этот файл (справка; НЕ contextFileName — 95KB в сессию не инжектим)
+├── README.md                 # что это и как устроено
+├── INSTALL.md                # установка, обновление, снятие legacy-раскладки
+├── cleanup-legacy.sh         # снятие <project>/.gigacode от прежнего проектного деплоя
+├── test_cleanup_legacy.py    # его тесты (дискаверятся как --skill root)
+├── docs/                     # документация (user-guide.md, troubleshooting.md, v2/, …)
+├── commands/                 # слэш-команды (/forge, /forge-lite, /forge-fix, /forge-spec, /forge-merge)
+├── hooks/                    # control-plane
+│   ├── hooks.json            # проводка: события, матчеры, порядок (${CLAUDE_PLUGIN_ROOT})
 │   ├── risk-policy.json      # политика рисков
 │   ├── preflight.py          # self-check готовности
+│   ├── DEPLOY.md             # полный ростер хуков, порядок, диагностика
 │   ├── evals/                # eval-набор
+│   ├── tests/                # юнит-тесты общих модулей (_project, forge_events)
 │   └── test_*.py             # тесты хуков
-└── skills/                   # пайплайн-скиллы (16 шт)
+└── skills/                   # пайплайн-скиллы
+    ├── SKILLS-REGISTRY.md    # реестр скиллов с owner/validity/evals
+    ├── run_all_tests.py      # единый CI-вход (skills + hooks + корень)
     ├── feature-pipeline/     # оркестратор (SKILL.md — диспетчер; фазы — references/phases/*.md)
     ├── pipeline-state/       # состояние
     ├── system-analyst/       # grounding
@@ -784,15 +805,10 @@ forge/
     └── ...
 ```
 
-После `deploy.sh <project>` в целевом проекте:
+В проекте после установки не появляется НИЧЕГО от харнеса, кроме рантайм-состояния прогона:
 ```bash
-<project>/.gigacode/
-├── hooks/                    # копия control-plane
-├── skills/                   # копия скиллов (co-located)
-├── deploy-local.sh           # фиксер путей на месте
-├── settings.json             # конфиг рантайма с блоком hooks (+ .bak при обновлении)
-├── FORGE.md, SKILLS-REGISTRY.md   # доки для справки
-└── ...
+<project>/
+└── ground/                   # состояние пайплайна: manifest, statements/, journal/, approvals
 ```
 
 ## Решения на основе Claude Code (2026-06-13)
@@ -828,37 +844,38 @@ forge/
 
 ## Установка/дистрибуция
 
-- `deploy.sh <project>` — установщик из склонированного репо: копирует hooks+skills(+доки) в
-  `<project>/.gigacode/`, кладёт `deploy-local.sh`, доводит `settings.json` (merge + бэкап),
-  прогоняет `preflight.py`. Канал-агностично (работает из git clone / архива). Целевая папка
-  обязательна — без аргумента ничего не копируется.
-- `deploy-local.sh` — повторная доводка путей в `settings.json` на месте (после переезда проекта),
-  без копирования. Полное руководство — [docs/deployment.md](docs/deployment.md).
+- `qwen extensions link <путь>` / `install <путь>` — подключение пакета в рантайм. Ставится один
+  раз на машину, обслуживает все проекты; в самих проектах файлов харнеса не появляется.
+- Обновление — `git pull` в этом каталоге (при `link` правки видны после рестарта сессии) либо
+  повторный `install`. Подстановки путей нет: `hooks/hooks.json` резолвится рантаймом через
+  `${CLAUDE_PLUGIN_ROOT}`. Полное руководство — [INSTALL.md](INSTALL.md).
+- `cleanup-legacy.sh <project>` — снять раскладку прежнего проектного деплоя, если она осталась
+  и перекрывает extension (`--dry-run` — план, `--backup-dir` — копия перед удалением).
 
 ## Обслуживание
 
-- **`hooks/preflight.py`** — основная проверка готовности (settings + pipeline.json + пути хуков).
-  Сам зовёт `resolve_hook_paths.py --check` и `feature-pipeline/scripts/doctor.py` (advisory).
+- **`hooks/preflight.py`** — основная проверка готовности (проводка + pipeline.json + пути хуков).
+  Сам зовёт `feature-pipeline/scripts/doctor.py` (advisory).
   **Раскладко-осведомлён**: базу кода выводит из собственного расположения (`parents[1]`, как
   `hooks/_project.py`) и проверяет ТУ, что грузит рантайм — `extension` (wiring `hooks/hooks.json`
   через `${CLAUDE_PLUGIN_ROOT}` + факт установки в `~/.{qwen,gigacode}/extensions`) либо
-  `project` (legacy `deploy.sh`: `<project>/.gigacode` + `settings.json`). Раскладку и базу
+  `project` (legacy-деплой: `<project>/.gigacode` + `settings.json`). Раскладку и базу
   возвращает в `layout` — этим префиксом зовутся скрипты скиллов. Если найдены обе, побеждает
   та, из которой запущен сам preflight (устаревший `.gigacode` в репо больше не валит старт
   при живом extension'е; если же extension не установлен в рантайме — откат на деплой),
   вторая уходит в варнинг о задвоении цепочек (INSTALL.md §1).
-- **`hooks/resolve_hook_paths.py`** — merge блока hooks в `settings.json` с подстановкой путей;
-  `--check` валидирует, `--dry-run` показывает результат без записи.
-- При проблемах: `bash <project>/.gigacode/deploy-local.sh` (починка путей) или повторный
-  `deploy.sh` (полное обновление из исходника).
+- **Тесты.** `python3 skills/run_all_tests.py` — весь набор (скиллы + хуки + корень);
+  `bash hooks/run-hook-tests.sh` — control-plane целиком (юнит-тесты хуков + eval-набор).
+- При проблемах: `preflight.py --project <project>`, затем `cleanup-legacy.sh` (если preflight
+  ругается на задвоение) или переустановка extension'а.
 
 ## Связанное
 
-- `docs/deployment.md` — полное руководство по деплою (установщик, бэкапы, переезд проекта)
+- `INSTALL.md` — установка, обновление, снятие legacy-раскладки
 - `docs/user-guide.md` — руководство пользователя (установка, запуск, фазы)
 - `docs/troubleshooting.md` — разбор типовых проблем
 - `hooks/DEPLOY.md` — полный ростер хуков (какие события, порядок, диагностика)
-- `SKILLS-REGISTRY.md` — реестр скиллов с owner/validity/evals
+- `skills/SKILLS-REGISTRY.md` — реестр скиллов с owner/validity/evals
 - `hooks/risk-policy.json` — policy-as-code (R0–R5)
 
 > История — это git-история этого репозитория. Хочешь полноценный аудит изменений —

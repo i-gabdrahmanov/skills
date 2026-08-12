@@ -470,29 +470,20 @@ def master_adr_path(root: Optional[Path] = None, cfg: Optional[dict] = None,
     return master_adr_dir(root, cfg) / f"{safe_slug(adr_id)}.md"
 
 
-def load_settings_hooks() -> dict:
-    """Читает settings.hooks.json — эталонную конфигурацию хуков."""
-    path = hooks_dir() / "settings.hooks.json"
-    try:
-        if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        pass
-    return {"hooks": {}}
-
-
 def verify_environment() -> bool:
-    """Проверяет, что код проекта на месте (проектная база, не ~/.gigacode):
-    - Есть <project>/.gigacode/skills/
-    - Есть <project>/.gigacode/hooks/
-    - Есть settings.hooks.json
+    """Проверяет, что код форжа на месте: skills/ + hooks/ + проводка хуков.
+
+    Проводка — `hooks/hooks.json` (extension) либо `hooks/settings.hooks.json` (раскладка
+    прежнего deploy.sh). Проверять только legacy-имя нельзя: в extension'е его нет, и
+    функция всегда возвращала бы False.
     """
     base = gigacode_dir()
     return all([
         base.exists(),
         (base / "skills").exists(),
         (base / "hooks").exists(),
-        (base / "hooks" / "settings.hooks.json").exists(),
+        ((base / "hooks" / "hooks.json").exists()
+         or (base / "hooks" / "settings.hooks.json").exists()),
     ])
 
 
