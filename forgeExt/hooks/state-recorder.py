@@ -60,16 +60,22 @@ def _project_root(cwd: str) -> Path:
 
 
 def _extract_json(text: str) -> dict | None:
-    """Последний валидный JSON-объект из текста: сперва ```json```, потом голые {…}.
+    """ФИНАЛЬНЫЙ ответ субагента: последний JSON-объект верхнего уровня, отвечающий контракту
+    пайплайна (есть `step_id`); если такого нет — просто последний валидный объект.
 
-    Для голых объектов использует ручной парсинг с подсчётом фигурных скобок
-    (поддерживает любую глубину вложенности).
+    Раньше кандидаты сортировались ПО ДЛИНЕ и брался самый длинный. Субагенты печатают в ответе
+    не только контрактный JSON: вывод record_gate, отчёт покрытия, эхо task-plan. Любой из них
+    длиннее контрактного (тот короткий: step_id/status/пара полей) — и «финальным ответом»
+    становился он. `step_id` в нём нет → хук молча не делал НИЧЕГО: ни origin-evidence, ни
+    закрытия шага. Фаза оставалась открытой, хотя субагент отработал.
+
+    Вложенные объекты отбрасываются по СПАНУ (а не по длине): иначе `{"step_id": …,
+    "coverage": {…}}` мог отдать внутренний объект и потерять и step_id, и status.
     """
     if not text:
         return None
-    candidates: list[str] = []
-    candidates += re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
-    # голые объекты — ручной парсинг: найти все {…} на любой глубине
+    # все {…} на любой глубине — со спанами, чтобы отличить верхний уровень от вложенных
+    spans: list[tuple[int, int]] = []
     for m in re.finditer(r"\{", text):
         depth = 1
         for i in range(m.start() + 1, len(text)):
@@ -79,16 +85,23 @@ def _extract_json(text: str) -> dict | None:
             elif ch == "}":
                 depth -= 1
                 if depth == 0:
-                    candidates.append(text[m.start():i + 1])
+                    spans.append((m.start(), i + 1))
                     break
-    for cand in sorted(set(candidates), key=len, reverse=True):
+    # только верхний уровень: спан, вложенный в другой спан, отбрасываем
+    top = [(s, e) for s, e in spans
+           if not any(s2 <= s and e <= e2 and (s2, e2) != (s, e) for s2, e2 in spans)]
+    parsed: list[dict] = []
+    for s, e in sorted(top):
         try:
-            obj = json.loads(cand)
-            if isinstance(obj, dict):
-                return obj
+            obj = json.loads(text[s:e])
         except Exception:
             continue
-    return None
+        if isinstance(obj, dict):
+            parsed.append(obj)
+    if not parsed:
+        return None
+    contract = [o for o in parsed if o.get("step_id")]
+    return contract[-1] if contract else parsed[-1]
 
 
 def _read_transcript_tail(path: str, limit: int = 20000) -> str:

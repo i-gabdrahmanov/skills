@@ -164,5 +164,46 @@ class T(unittest.TestCase):
                              f"cwd=подкаталог должен резолвиться в toplevel; stderr: {r.stderr}")
 
 
+class PerTaskBindingWithoutInProgress(unittest.TestCase):
+    """Регресс: привязка блока к КОНКРЕТНОЙ задаче держалась на статусе `in_progress`, которого
+    на живых прогонах нет. Хук уходил в консервативный фолбэк «любой pending test-шаг блокирует
+    src/main» — то есть код задачи T1 (её RED закрыт) блокировался незакрытым RED задачи T2.
+    Ровно та ложная блокировка, которую привязка и должна была снять."""
+
+    STEPS = [{"id": "04-test-T1", "status": "completed"},
+             {"id": "04-build-T1", "status": "pending"},
+             {"id": "04-test-T2", "status": "pending"},
+             {"id": "04-build-T2", "status": "pending"}]
+    TASKS = [{"id": "T1", "layers": ["service"], "artifacts": ["src/main/java/A.java"]},
+             {"id": "T2", "layers": ["service"], "artifacts": ["src/main/java/B.java"]}]
+
+    def test_own_red_closed_allows_write(self):
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td).resolve()
+            _seed_full(project, self.STEPS)
+            _seed_taskplan(project, self.TASKS)
+            r = _run(_payload_path(project, "src/main/java/A.java"))
+            self.assertEqual(r.returncode, 0,
+                             f"код T1 заблокирован RED-шагом чужой задачи; stderr: {r.stderr}")
+
+    def test_other_task_red_pending_still_blocks_its_own_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td).resolve()
+            _seed_full(project, self.STEPS)
+            _seed_taskplan(project, self.TASKS)
+            r = _run(_payload_path(project, "src/main/java/B.java"))
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("04-test-T2", r.stderr)
+
+    def test_unknown_owner_stays_fail_closed(self):
+        """Файла нет ни в одном task-plan → владельца не определить → консервативный блок."""
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td).resolve()
+            _seed_full(project, self.STEPS)
+            _seed_taskplan(project, self.TASKS)
+            r = _run(_payload_path(project, "src/main/java/Unrelated.java"))
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

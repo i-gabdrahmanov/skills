@@ -74,7 +74,15 @@ python3 <forge>/hooks/preflight.py --project <toplevel>
 > (`<project>/.gigacode` при legacy-деплое либо корень extension'а). preflight печатает его в
 > `layout.base`; ниже любой путь `<project>/.gigacode/skills/...` читай как `<forge>/skills/...`.
 
-exit 0 — продолжаем; exit 1 — стоп, чинить деплой/установку extension'а. Заведи стейт (namespace forgelite):
+exit 0 — продолжаем; exit 1 — стоп, чинить деплой/установку extension'а. **exit 2 — конфиг не
+инициализирован** (первый прогон в проекте): выполни команду из поля `init_command` вывода preflight
+```
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.py --project <toplevel>
+```
+и повтори preflight до exit 0. Без `ground/pipeline.json` любой `config.py set` ниже вернёт exit 3,
+и решения прогона (в т.ч. `sources.spec`) молча не запишутся.
+
+Заведи стейт (namespace forgelite):
 ```
 python3 <project>/.gigacode/skills/pipeline-state/scripts/init.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --steps @<project>/.gigacode/skills/forgelite/references/manifest-steps.json
 ```
@@ -162,6 +170,11 @@ prompt:
    **Если путь не получить интерактивно** (вопрос не отрендерился — headless/форк): НЕ угадывай и
    НЕ пропускай `lite-design` (это обязательный шаг — `update.py` даст `exit 3`). Остановись и
    попроси предзапись `config.py set sources.spec <путь>` + перезапуск.
+   > **Имена файлов дизайна — контракт, а не оформление.** Ровно `tech-design.md` и
+   > `task-plan.json` в `<litedir>`: по этим именам их читают фазы `lite-red`/`lite-green`, и по
+   > ним же `update.py` не закроет `lite-design` (документ, названный по слагу задачи, для
+   > следующих фаз всё равно что не существует).
+
 2. **Субагентом** (`tech-design`) построй `<litedir>/tech-design.md` + `<litedir>/task-plan.json`
    ПО ЭТОЙ спеке (вход — `sources.spec`, а не свежий `sdd.md`; `<litedir>` — резолвнутый путь из §1.1,
    подставь его абсолютным). Главный агент tech-design.md/task-plan.json inline
@@ -187,10 +200,16 @@ prompt:
 Хук `tdd-guard` не даст писать `src/main/java/`, пока `lite-red` не закрыт (ресурсы —
 `src/main/resources`: liquibase changeset, yml — не гейтятся, RED для них не нужен).
 
-> **Задача не про код → БЕЗ `lite-red`.** Если все слои задачи ∈ `quality.no_test_layers`
+> **Задача не про код → RED пропускается ЯВНО.** Если все слои задачи ∈ `quality.no_test_layers`
 > (дефолт `migration`/`entity`/`dto`/`repository`) или у неё `no_test:true` в task-plan —
-> RED не пиши: **не заводи шаг `lite-red`**, иди сразу в `lite-green`. Без `lite-red` в
-> манифесте хук `tdd-guard` пропустит запись `src/main/java/` этой задачи (test-exempt).
+> падающий unit-тест не пишется. Манифест lite-ветки статический, поэтому шаг `lite-red` в нём
+> ЕСТЬ — закрой его как пропущенный:
+> ```
+> python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-red --status skipped
+> ```
+> `update.py` разрешает этот пропуск ДЕТЕРМИНИРОВАННО — сверяя task-plan тем же предикатом, что
+> и `tdd-guard` (который по нему же пропускает запись `src/main/java/`). Задача пишет код —
+> пропуск не пройдёт (exit 3), и это правильно. Оставлять шаг висеть в `pending` не нужно.
 
 ```
 description: "TDD RED tests for <JIRA-KEY>"
@@ -203,7 +222,12 @@ python3 <project>/.gigacode/skills/test-writer/scripts/analyze_tests.py --root <
 Напиши падающие unit-тесты (TDD RED) по acceptance criteria. НЕ трогай src/main/.
 Корень репо: <toplevel>. Сборка: <gradle|maven>.
 Задача: <summary> / AC: <acceptance criteria>. Grounding: <классы/соседние тесты>.
+УТВЕРЖДЁННЫЙ ДИЗАЙН — прочитай ЦЕЛИКОМ, тесты специфицируют именно его, а не твою версию решения:
+read_file("<litedir>/tech-design.md")   (§3 — слои, классы, сигнатуры, которые появятся)
+read_file("<litedir>/task-plan.json")   (задачи, acceptance, sdd_ref)
 Правила:
+0. Тесты ссылаются на классы/методы ИЗ ДИЗАЙНА (их ещё нет — это норма для RED). Дизайн кажется
+   неверным/неполным — НЕ решай сам: верни status:"failed" и что именно не сходится.
 1. Тесты только в src/test/, стиль соседних (JUnit5/Mockito, given/when/then).
 2. Каждый пункт AC — отдельным тестом + edge cases (null/пусто/граница). Без @Disabled.
 3. Тесты ДОЛЖНЫ компилироваться и ПАДАТЬ. Никакого production-кода/заглушек в src/main/.
@@ -232,7 +256,15 @@ prompt:
 Затем реализуй production-код, чтобы RED-тесты стали зелёными (TDD GREEN).
 Корень репо: <toplevel>. Задача: <summary> / AC: <acceptance criteria>.
 RED-тесты (пути): <из lite-red>. Конвенции: <из grounding>.
+УТВЕРЖДЁННЫЙ ДИЗАЙН — прочитай ЦЕЛИКОМ ПЕРЕД первой правкой кода и реализуй ЕГО:
+read_file("<litedir>/tech-design.md")   (§3 — раскладка по слоям: что переиспользуем, что
+                                         добавляем, какие классы/сигнатуры/миграции)
+read_file("<litedir>/task-plan.json")   (задачи, layers, artifacts, acceptance)
 Правила:
+0. Реализация идёт ПО ДИЗАЙНУ: те слои, те классы, те точки расширения. «Позеленить тесты как
+   угодно» — не цель. Дизайн не работает (сигнатура невозможна, слой не тот, нужен ещё один
+   класс) — НЕ отступай молча: верни status:"failed" с тем, что не сходится, чтобы дизайн
+   поправили. Отступление, о котором никто не узнал, — главный источник расхождения кода и спеки.
 1. Минимальное изменение под AC. Не рефактори соседнее, не вводи лишних абстракций.
 2. Конвенции проекта (Lombok, пакеты, слои) — как в java-spring-dev.
 3. Переиспользуй существующие util/библиотеки classpath — без велосипедов.
@@ -291,6 +323,10 @@ status:"completed" ТОЛЬКО если тесты зелёные И регре
 - Не пиши BRD и не пиши SDD с нуля, не ставь задачи в Jira (это full-путь feature-pipeline).
   Tech-design (`lite-design`) строй ТОЛЬКО по существующей спеке (`sources.spec`), а не заново.
   Спеку в отдельном репо не бери (это minor-defect-fix).
+- Не зови RED/GREEN, не вложив в промпт пути `<litedir>/tech-design.md` и `<litedir>/task-plan.json`:
+  субагент конфиг не читает и файлы сам не ищет — без путей он реализует СВОЮ версию решения,
+  а утверждённый дизайн остаётся бумажкой.
+- Не переименовывай артефакты фаз: `tech-design.md`/`task-plan.json` — фиксированные имена.
 
 ## Связь
 Ветка forge: вызывается роутером (`skills/router`) при выборе «готовая задача», full-путь —

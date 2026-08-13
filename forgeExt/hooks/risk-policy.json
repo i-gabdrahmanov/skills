@@ -82,6 +82,36 @@
     "fix-spec": ["sources.spec_anchor"]
   },
 
+  "gate_cmd_expect": {
+    "_comment": "Какой гейт ОБЯЗАН стоять в --cmd раннера record_gate для шага (префикс id → список допустимых токенов, достаточно ОДНОГО). Закрывает подделку СУБСТАНЦИИ: цепочка evidence проверяла провенанс (кто записал артефакт), но не то, что реально прогнали, — `record_gate --cmd \"true\"` давал валидный passed:true и закрывал любой шаг. Для RED-шагов токен ищется и в --compile-cmd. Нет записи для шага либо policy не загрузилась → проверка не применяется (пол держит сам гейт фазы).",
+    "fix-intake": ["check_fix_scope.py"],
+    "fix-diag": ["check_taskplan.py"],
+    "fix-red": ["gradlew", "mvn"],
+    "fix-green": ["gradlew", "mvn"],
+    "fix-verify": ["check_coverage.py"],
+    "fix-spec": ["check_fix_delta.py"],
+    "lite-jira": ["check_scope.py"],
+    "lite-design": ["check_taskplan.py"],
+    "lite-red": ["gradlew", "mvn"],
+    "lite-green": ["gradlew", "mvn"],
+    "lite-verify": ["check_coverage.py"],
+    "04-test": ["check_tests_red.py", "gradlew", "mvn"],
+    "04-build": ["check_build.py", "gradlew", "mvn"],
+    "05-tests": ["run_judge.py", "check_coverage.py", "gradlew", "mvn"]
+  },
+
+  "skip_judges": {
+    "_comment": "update.py --skip-judges снимает ВСЕ гейты закрытия шага (судьи, gate-result, subagent-origin, решения, артефакты) — это R4-класс, а не служебный флаг. Легитимный случай один: восстановление стейта после init --force. Требует approval-маркера ground/approvals/skip-judges-<feature>.json с провенансом record_approval (то есть явного «да» пользователя). Два слоя: gate-guard блокирует команду с флагом, update.py дополнительно валидирует маркер сам — гейт держится и при запуске мимо харнеса.",
+    "command_pattern": "update\\.py",
+    "arg_flag": "--skip-judges",
+    "approval_prefix": "skip-judges"
+  },
+
+  "required_decisions_on_close": {
+    "_comment": "То же fail-closed решение, но форсится в ТОЧКЕ ВОПРОСА: update.py не закроет шаг, пока ответ не записан в pipeline.json. required_decisions выше сторожит запись СЛЕДУЮЩЕЙ фазы — этого мало: на прогоне агент спросил «к какой стори относится баг», получил ответ и закрыл fix-intake, не выполнив config.py set (на свежем проекте pipeline.json ещё нет → set падает exit 3 незамеченным). Решение потерялось молча, папка фикса уехала плоской, find_spec_anchor остался без сильнейшего признака. Ключ шага — префикс id.",
+    "fix-intake": ["sources.story"]
+  },
+
   "phase_approvals": {
     "_comment": "Гейт ПОДТВЕРЖДЕНИЯ ПЛАНА ЧЕЛОВЕКОМ по фазе: активная фаза (по префиксу id шага) не может делать продуктивную запись, пока нет approval-маркера ground/approvals/<key>.json с провенансом record_approval. {feature} подставляется слагом активной фичи. Появилось из-за fix-ветки: тех-решение минорного дефекта (мини-план фикса) утверждалось только прозой брифа, и прогон уходил писать RED-тест и код, ничего не спросив. Гейт стоит на фазах ПОСЛЕ плана (fix-red/fix-green), а не на самой fix-diag: план сначала надо написать, чтобы было что показывать.",
     "fix-red": "fix-plan-{feature}",

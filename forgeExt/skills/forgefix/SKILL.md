@@ -81,7 +81,15 @@ python3 <forge>/hooks/preflight.py --project <toplevel>
 > при legacy-деплое либо корень extension'а). preflight печатает его в `layout.base`; ниже любой
 > путь `<project>/.gigacode/skills/...` читай как `<forge>/skills/...`.
 
-exit 0 — продолжаем; exit 1 — стоп, чинить деплой/установку. Заведи стейт (namespace forgefix):
+exit 0 — продолжаем; exit 1 — стоп, чинить деплой/установку. **exit 2 — конфиг не инициализирован**
+(первый прогон в проекте): выполни команду из поля `init_command` вывода preflight
+```
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.py --project <toplevel>
+```
+и повтори preflight до exit 0. Без `ground/pipeline.json` любой `config.py set` ниже вернёт exit 3
+и решение (в т.ч. `sources.story`) не запишется — прогон пойдёт дальше с потерянным ответом.
+
+Заведи стейт (namespace forgefix):
 ```
 python3 <project>/.gigacode/skills/pipeline-state/scripts/init.py --project <toplevel> --skill forgefix --feature <KEY|slug> --steps @<project>/.gigacode/skills/forgefix/references/manifest-steps.json
 ```
@@ -115,6 +123,10 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/skill_paths.py fix-d
 
 Туда и только туда пишутся: `fix-plan.md` + `task-plan.json` (шаг `fix-diag`) и `sdd.md` — дельта
 спеки (шаг `fix-spec`). Больше фикс ничего не производит.
+
+> **Имена файлов — контракт.** Ровно `fix-plan.md`, `task-plan.json`, `sdd.md`: по ним план читают
+> фазы `fix-red`/`fix-green`, а дельту — `/forge-merge` (он ищет строго `sdd.md`). Документ,
+> названный по ключу задачи, для них не существует; `update.py` такой шаг не закроет.
 
 > **Почему внутрь стори.** Фикс — не фича: он правит поведение, которое стори уже описала.
 > Папка `<STORY>/fixes/<баг>` держит эту связь явной (в `docs/feature-pipeline` баги не стоят в
@@ -163,9 +175,14 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --proje
 python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set sources.story <STORY|none>
 ```
 `none` — осознанный ответ «стори неизвестна» (папка будет плоской, якорь спеки ищется по коду и
-связям Jira). Пока ключ не записан, `gate-guard` не даст `fix-diag` писать (fail-closed) — не
-обходи это, а получи ответ. Вопрос не отрендерился (headless/форк) — остановись и попроси
-предзапись `config.py set sources.story <...>` + перезапуск.
+связям Jira). Вопрос не отрендерился (headless/форк) — остановись и попроси предзапись
+`config.py set sources.story <...>` + перезапуск.
+
+> **Проверь, что ответ РЕАЛЬНО записан — по exit-коду `set`, а не «по ощущению».** `0` = записано;
+> `3` = нет `ground/pipeline.json` (вернись к §1.1 и инициализируй конфиг, потом повтори `set`).
+> Это самый частый способ потерять ответ: вопрос задан, пользователь ответил, `set` тихо упал.
+> Форсится двумя гейтами: `update.py` не закроет `fix-intake` с незаписанным `sources.story`,
+> `gate-guard` не даст `fix-diag` писать (fail-closed). Не обходи их — получи и запиши ответ.
 
 Теперь резолвни `<fixdir>` (§1.1) — путь зависит от ответа.
 
@@ -277,8 +294,14 @@ python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <to
 ## 4. RED: тест воспроизводит баг → `fix-red`
 
 Хук `tdd-guard` не даст писать `src/main/java/`, пока `fix-red` не закрыт. Задача не про код
-(вся правка в `src/main/resources` — yml/changeset) — **не заводи шаг `fix-red`**, иди в
-`fix-green` (без шага в манифесте хук пропустит запись как test-exempt).
+(вся правка в `src/main/resources` — yml/changeset) — RED не пиши, но шаг в манифесте ЕСТЬ
+(манифест fix-ветки статический), поэтому закрой его как пропущенный:
+```
+python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py --project <toplevel> --skill forgefix --feature <KEY|slug> --step-id fix-red --status skipped
+```
+`update.py` разрешает пропуск ДЕТЕРМИНИРОВАННО — по task-plan (те же `no_test`/
+`quality.no_test_layers`, что смотрит `tdd-guard`). Задача пишет код — пропуск не пройдёт
+(exit 3). Оставлять шаг висеть в `pending` не нужно.
 
 ```
 description: "RED test reproducing defect <KEY>"
@@ -291,7 +314,12 @@ python3 <project>/.gigacode/skills/test-writer/scripts/analyze_tests.py --root <
 Корень репо: <toplevel>. Сборка: <gradle|maven>.
 Дефект: <symptom> / ожидаемое: <expected>. Root cause и место: <из fix-diag>.
 Соседние тесты (стиль, фикстуры): <из fix-diag>.
+УТВЕРЖДЁННЫЙ ПОЛЬЗОВАТЕЛЕМ ПЛАН ФИКСА — прочитай ЦЕЛИКОМ, тест воспроизводит именно ЭТОТ дефект:
+read_file("<fixdir>/fix-plan.md")     (что сломано → что должно быть, где правим, edge cases)
+read_file("<fixdir>/task-plan.json")  (acceptance: Given <условие бага> When … Then …)
 Правила:
+0. Регресс-тест = acceptance из плана, дословно по смыслу. Расходишься с планом — не переписывай
+   его молча: верни status:"failed" и что не сходится (план утверждён человеком).
 1. Тест — в существующий тест-класс затронутого кода, если он есть (не плоди новый класс без нужды).
 2. Один регресс-тест на симптом + edge cases из fix-diag. Без @Disabled. Не трогай src/main/.
 3. Не ослабляй и не переписывай соседние тесты, чтобы «стало зелено».
@@ -321,7 +349,12 @@ prompt:
 Нужны конвенции проекта (Lombok, пакеты, слои) — точечно: read_file("<project>/.gigacode/skills/java-spring-dev/SKILL.md").
 Реализуй фикс, чтобы RED-тест позеленел. Корень репо: <toplevel>.
 Дефект и root cause: <из fix-diag>. Место правки: <file:line>. RED-тесты: <из fix-red>.
+УТВЕРЖДЁННЫЙ ПОЛЬЗОВАТЕЛЕМ ПЛАН ФИКСА — прочитай ЦЕЛИКОМ ПЕРЕД первой правкой и следуй ему:
+read_file("<fixdir>/fix-plan.md")     (подход, где правим, edge cases, риск регресса, что НЕ трогаем)
+read_file("<fixdir>/task-plan.json")  (layers/artifacts — границы правки, acceptance)
 Правила:
+0. Чинишь ТЕМ подходом и ТАМ, где сказано в плане: человек утвердил именно его. Место/подход по
+   факту другие — верни status:"failed" с объяснением, а не «поправил иначе, зато зелено».
 1. Минимальное изменение под root cause. Не рефактори соседнее, не вводи абстракций,
    не добавляй логирование/try-catch «на всякий случай».
 2. Правь только src/main/. Тесты уже есть — не ослабляй их и не подгоняй под зелёное.
@@ -394,15 +427,20 @@ Diff фикса (только src/main): <git diff HEAD -- src/main>.
 
 ### 7.1. Итог пользователю (финал пайплайна)
 Покажи план слияния дельты в мастер — **сам не сливай** (merge правит рабочее дерево чужого
-репо и операция `~` требует решения человека). `<fixslug>` — слаг дельты из §1.1
-(`--print-slug`; со стори это `<STORY>/fixes/<KEY|slug>`):
+репо и операция `~` требует решения человека):
 ```
-python3 <project>/.gigacode/skills/system-analyst/scripts/spec_cli.py --project-root <toplevel> diff <fixslug>
+python3 <project>/.gigacode/skills/system-analyst/scripts/spec_cli.py --project-root <toplevel> diff <KEY|slug>
 ```
+**Зови дельту КЛЮЧОМ БАГА, а не полным слагом.** `<STORY>/fixes/<KEY>` — это про раскладку на
+диске; `diff`/`merge` принимают короткий ключ, пока он однозначен, и сами просят уточнить, если
+баг с таким ключом нашёлся в нескольких стори. Не заставляй пользователя набирать путь, который
+система и так знает. Полный слаг нужен только на такой коллизии (`--print-slug` в §1.1).
+
 Выведи итог: что сломано и как починено, изменённые файлы, тесты/покрытие, и строку-подсказку —
-дельта в мастер не слита, слить командой `/forge-spec merge <fixslug> --allow-modify` (операции
-`~` — это и есть точечная правка требований; точечно — `--modify <ID>`). Коммит, push, PR и
-комментарий в Jira пайплайн НЕ делает — их выполняет пользователь сам.
+дельта в мастер не слита, слить командой `/forge-merge <KEY|slug> --allow-modify` (операции `~` —
+это и есть точечная правка требований; точечно — `--modify <ID>`). Готовую строку печатает и сам
+`spec_cli` в конце `diff`/`status` — бери её как есть. Коммит, push, PR и комментарий в Jira
+пайплайн НЕ делает — их выполняет пользователь сам.
 
 > В мастере правка уедет с провенансом `[from: <STORY> fix/<KEY>]` — требование остаётся за
 > стори, а фикс виден как её правка. Короткого имени бага для `merge`/`diff` тоже достаточно,
@@ -420,6 +458,10 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/spec_cli.py --project-
 - Не уходить в RED/GREEN, не утвердив мини-план у пользователя (§3.1) — гейт форсит, но и по
   смыслу: «просто пошёл писать код» на дефекте = чиним не то и не там.
 - Не заводить фикс как новую фичу: артефакты идут в `<STORY>/fixes/<баг>`, а не рядом со стори.
+- Не звать RED/GREEN, не вложив в промпт пути `<fixdir>/fix-plan.md` и `<fixdir>/task-plan.json`:
+  субагент их сам не найдёт и починит по-своему — утверждённый пользователем план останется
+  бумажкой. Пересказ плана в промпте пересказом и остаётся: давай ПУТИ, а не только выжимку.
+- Не переименовывать артефакты: `fix-plan.md`/`task-plan.json`/`sdd.md` — фиксированные имена.
 - Не подставлять стори «по догадке»: `sources.story` — ответ пользователя (или честное `none`).
 - Не писать SDD с нуля, tech-design.md, BRD и не ставить задачи в Jira — это full-путь.
 - Не переписывать требования спеки заново: дельта = правка существующих (гейт форсит).

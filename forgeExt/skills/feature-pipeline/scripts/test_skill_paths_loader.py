@@ -49,20 +49,67 @@ class LoaderBehaviour(unittest.TestCase):
     def test_missing_key_uses_default(self):
         self._write_registry({"skills": {}})
         p = skill_paths.script(self.root, "minor-defect-fix", "check_coverage")
-        # либо project-база, либо ~/.gigacode-фоллбэк — суффикс одинаков
-        self.assertTrue(str(p).endswith(
-            ".gigacode/skills/minor-defect-fix/scripts/check_coverage.py"), p)
+        self.assertTrue(str(p).endswith("skills/minor-defect-fix/scripts/check_coverage.py"), p)
+        self.assertTrue(p.exists(), f"дефолт указывает на несуществующий файл: {p}")
 
     def test_no_registry_uses_default(self):
         # реестра нет вовсе
         p = skill_paths.script(self.root, "tech-design", "check_sdd")
-        self.assertTrue(str(p).endswith(
-            ".gigacode/skills/tech-design/scripts/check_sdd.py"), p)
+        self.assertTrue(str(p).endswith("skills/tech-design/scripts/check_sdd.py"), p)
+        self.assertTrue(p.exists(), f"дефолт указывает на несуществующий файл: {p}")
 
     def test_nested_resolve(self):
         self._write_registry({"docs": {"feature_pipeline_dir": "docs/feature-pipeline"}})
         p = skill_paths.resolve(self.root, "docs", "feature_pipeline_dir")
         self.assertEqual(p, self.root / "docs/feature-pipeline")
+
+
+class ExtensionLayout(unittest.TestCase):
+    """Регресс: в extension-раскладке (в проекте НЕТ `.gigacode/`) резолвер отдавал
+    `<project>/.gigacode/skills/...` — несуществующий путь. run_judge запускал по нему гейты,
+    и судьи sdd/design/coverage валились «can't open file», требуя R4-override на живом прогоне.
+
+    Контракт: путь скрипта, который реально исполняется, ОБЯЗАН существовать."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)     # проект без .gigacode и без реестра
+        skill_paths._CACHE.clear()
+
+    def tearDown(self):
+        skill_paths._CACHE.clear()
+        self._tmp.cleanup()
+
+    def test_gate_scripts_resolve_to_existing_files(self):
+        for skill, name in (("sdd", "check_sdd_doc"),
+                            ("tech-design", "check_taskplan"),
+                            ("tech-design", "check_sdd"),
+                            ("minor-defect-fix", "check_coverage"),
+                            ("system-analyst", "check_master_spec"),
+                            ("system-analyst", "check_adr")):
+            p = skill_paths.script(self.root, skill, name)
+            self.assertIsNotNone(p, f"{skill}/{name} не резолвится")
+            self.assertTrue(p.exists(), f"{skill}/{name} → {p} (файла нет)")
+
+    def test_bundle_registry_is_found(self):
+        reg = skill_paths.find_registry(self.root)
+        self.assertTrue(reg.exists(), f"реестр бандла не найден: {reg}")
+
+    def test_data_paths_stay_in_project(self):
+        """Пути ДАННЫХ (docs/ground) не должны уезжать в бандл: их каталогов может ещё не быть,
+        и фолбэк «нет в проекте → возьми из бандла» увёл бы артефакты в код форжа."""
+        p = skill_paths.resolve(self.root, "docs", "feature_pipeline_dir",
+                                default="docs/feature-pipeline")
+        self.assertEqual(p, self.root / "docs/feature-pipeline", p)
+
+    def test_project_copy_still_wins(self):
+        """Legacy-деплой: если `.gigacode/` в проекте есть — он приоритетнее бандла."""
+        tgt = self.root / ".gigacode/skills/tech-design/scripts"
+        tgt.mkdir(parents=True)
+        (tgt / "check_sdd.py").write_text("# local", encoding="utf-8")
+        skill_paths._CACHE.clear()
+        p = skill_paths.script(self.root, "tech-design", "check_sdd")
+        self.assertEqual(p, tgt / "check_sdd.py", p)
 
 
 class NoDuplicateLocators(unittest.TestCase):

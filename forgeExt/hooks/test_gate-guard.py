@@ -185,6 +185,56 @@ class TRollback(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
 
 
+class TSkipJudges(unittest.TestCase):
+    """Пин: `update.py --skip-judges` снимает ВСЕ гейты закрытия шага (судьи, gate-result,
+    subagent-origin, обязательные решения, артефакты) — R4-класс. Был bypass в одну опцию:
+    флаг задумывался под восстановление стейта после init --force, а работал как общий
+    выключатель enforcement'а. Второй слой — сам update.py валидирует маркер."""
+
+    CMD = ("python3 .gigacode/skills/pipeline-state/scripts/update.py "
+           "--skill forgefix --feature f1 --step-id fix-red --status completed --skip-judges")
+
+    def _approve(self, td: str, key: str, provenance: bool = True) -> None:
+        appr = Path(td) / "ground" / "approvals"
+        appr.mkdir(parents=True, exist_ok=True)
+        body = {"approved_by": "user", "reason": "restore after init --force"}
+        if provenance:
+            body["produced_by"] = "record_approval"
+        (appr / f"{key}.json").write_text(json.dumps(body), encoding="utf-8")
+
+    def test_without_approval_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = _run(self.CMD, td)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("skip-judges-f1.json", r.stderr)
+
+    def test_with_approval_passes(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._approve(td, "skip-judges-f1")
+            r = _run(self.CMD, td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_handwritten_marker_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._approve(td, "skip-judges-f1", provenance=False)
+            r = _run(self.CMD, td)
+            self.assertEqual(r.returncode, 2, "рукописный маркер без провенанса не снимает гейт")
+
+    def test_normal_update_without_flag_is_free(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = _run("python3 .gigacode/skills/pipeline-state/scripts/update.py "
+                     "--skill forgefix --feature f1 --step-id fix-red --status completed", td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_flag_inside_value_is_not_a_bypass(self):
+        # флаг, упомянутый в тексте значения, не должен считаться настоящим флагом
+        with tempfile.TemporaryDirectory() as td:
+            r = _run("python3 .gigacode/skills/pipeline-state/scripts/update.py "
+                     "--skill forgefix --feature f1 --step-id fix-red --status failed "
+                     "--error \"gate --skip-judges не помог\"", td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+
 def _write_run(file_path: str, cwd: str):
     payload = json.dumps({"hook_event_name": "PreToolUse", "cwd": cwd,
                           "tool_name": "write_file", "tool_input": {"file_path": file_path}})

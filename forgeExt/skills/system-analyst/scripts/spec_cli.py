@@ -78,6 +78,17 @@ def _features(root: Path) -> list[tuple[str, Path]]:
     return out
 
 
+def _short(slug: str, feats: list[tuple[str, Path]]) -> str:
+    """Как звать дельту в подсказке пользователю. У фикса полный слаг — `STOR-100/fixes/BUG-512`
+    (папка внутри стори), но `_targets` принимает и короткий ключ бага, пока он однозначен.
+    Печатали при этом длинный: команда мерджа выглядела громоздко, хотя достаточно `BUG-512`."""
+    if "/fixes/" not in slug:
+        return slug
+    bug = slug.rsplit("/fixes/", 1)[1]
+    collisions = sum(1 for s, _ in feats if s.endswith(f"/fixes/{bug}") or s == bug)
+    return bug if collisions == 1 else slug
+
+
 def _provenance(slug: str) -> str:
     """Строка провенанса `[from: …]` для мастера. У дельты фикса первым токеном обязана стоять
     СТОРИ: провенанс парсится до первого пробела (find_spec_anchor._FROM_SLUG), и по нему потом
@@ -149,7 +160,8 @@ def cmd_status(args) -> int:
         print(f"   актуально ({len(state['merged'])}): {', '.join(state['merged'])}")
     todo = state["new"] + state["drifted"]
     if todo:
-        print(f"   → /forge-spec merge {todo[0]}   (или merge --all)")
+        feats = _features(root)
+        print(f"   → /forge-merge {_short(todo[0], feats)}   (или /forge-merge --all)")
     return 0
 
 
@@ -178,8 +190,9 @@ def cmd_diff(args) -> int:
         for line in res["ops"] or ["   (в дельте нет требований)"]:
             print(f"   {line}")
         if res["blocked"]:
+            short = _short(slug, _features(root))
             print(f"   ! modify требует подтверждения: {', '.join(res['blocked'])}")
-            print(f"     → /forge-spec merge {slug} --allow-modify"
+            print(f"     → /forge-merge {short} --allow-modify"
                   f"  (или --modify {res['blocked'][0]})")
             rc = rc or 3
     return rc
@@ -254,12 +267,14 @@ def cmd_merge(args) -> int:
             print(f"   {line}")
         if res["blocked"]:
             # --all не валится целиком: конфликтную дельту пропускаем и перечисляем в конце
-            skipped.append(f"{slug} (modify: {', '.join(res['blocked'])})")
+            skipped.append(f"{_short(slug, _features(root))} "
+                           f"(modify: {', '.join(res['blocked'])})")
             rc = rc or 3
 
     if skipped:
         print(f"\n! пропущено: {'; '.join(skipped)}")
-        print("  modify применяется явно: --allow-modify (все) или --modify <ID> (точечно)")
+        print("  modify применяется явно: /forge-merge <слаг> --allow-modify (все) "
+              "или --modify <ID> (точечно)")
     _remind(spec_path)
     return rc
 

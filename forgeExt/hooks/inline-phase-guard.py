@@ -73,11 +73,40 @@ WRITE_TOOLS = ("Write", "WriteFile", "Edit", "edit", "write_file", "NotebookEdit
 BASH_TOOLS = ("Bash", "run_shell_command")
 
 
+def _candidate_step_ids(root: Path) -> list[str]:
+    """Шаги, работой которых может быть текущее действие.
+
+    Берём ВСЕ готовые к работе шаги, а не один: на full-пути с параллельными задачами
+    `current_step_id` намеренно отдаёт None (04-build-T1 и 04-test-T2 — разные фазы), и хук
+    снова оказался бы мёртвым ровно на build-фазе. Для actor-aware проверки неоднозначность не
+    мешает: «оркестратор делает продуктивную работу субагентной фазы» — ответ один при любом
+    кандидате."""
+    if _R is None:
+        return []
+    try:
+        if hasattr(_R, "ready_step_ids"):
+            return [s for s in _R.ready_step_ids(root) if s]
+    except Exception:
+        return []
+    sid = _active_step_id(root)
+    return [sid] if sid else []
+
+
 def _active_step_id(root: Path) -> str | None:
-    """id активного (in_progress) шага самого свежего манифеста активной фичи."""
+    """Шаг, работа над которым идёт сейчас — через ЕДИНЫЙ резолвер `risk_ladder.current_step_id`.
+
+    Раньше здесь искался шаг со статусом `in_progress` — и хук был МЁРТВЫМ на живых прогонах:
+    `in_progress` не проставляет никто (update.py ведёт шаг pending → completed, промежуточную
+    пометку брифы не делают). Резолвер возвращал None → fail-open → оркестратор мог писать
+    sdd.md/tech-design.md/код фазы inline, то есть ровно то, ради чего хук и существует. Тесты
+    этого не ловили: они выставляли `in_progress` руками. `gate-guard` был переведён на
+    `current_step_id` раньше — здесь та же правка (fallback на in_progress оставлен для случая,
+    когда резолвер недоступен)."""
     if _R is None:
         return None
     try:
+        if hasattr(_R, "current_step_id"):
+            return _R.current_step_id(root)
         mp = _R.active_manifest(root)
         if not mp or not mp.exists():
             return None
@@ -231,13 +260,17 @@ def main() -> int:
         return 0
 
     root = Path(_R.project_root(data.get("cwd", ""))) if _R else Path(data.get("cwd") or ".")
-    step_id = _active_step_id(root)
-    if not step_id or not _requires_subagent(step_id):
-        return 0  # вне subagent-only фазы — fail-open
-
-    what = _is_phase_work(step_id, tool_name, data.get("tool_input") or {})
+    tool_input = data.get("tool_input") or {}
+    step_id, what = None, None
+    for sid in _candidate_step_ids(root):
+        if not _requires_subagent(sid):
+            continue
+        w = _is_phase_work(sid, tool_name, tool_input)
+        if w:
+            step_id, what = sid, w
+            break
     if not what:
-        return 0  # действие не productive-работа фазы (control-plane, чтение и т.п.)
+        return 0  # вне subagent-фазы либо действие не её productive-работа (control-plane, чтение)
 
     skill, feature = _active_feature_skill(root)
     if _has_override(root, skill, feature, step_id):

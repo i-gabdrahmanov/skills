@@ -278,6 +278,45 @@ def check_gate_override(command: str, root: Path) -> str | None:
         return f"deny-first: ошибка проверки gate-override ({e})."
 
 
+def check_skip_judges(command: str, root: Path) -> str | None:
+    """R4-класс: `update.py --skip-judges` снимает ВСЕ гейты закрытия шага (судьи, gate-result,
+    subagent-origin, обязательные решения, артефакты) — bypass в одну опцию. Требует
+    approval-маркера `skip-judges-<feature>`. Возвращает причину блокировки или None.
+
+    Второй слой — сам `update.py` валидирует маркер (гейт держится и мимо харнеса). Ошибка
+    разбора → fail-CLOSED: снятие всех гейтов без ясности опаснее ложного блока."""
+    try:
+        policy = R.load_policy().get("skip_judges") or {}
+        pat = policy.get("command_pattern", r"update\.py")
+        flag = policy.get("arg_flag", "--skip-judges")
+        if not command or flag not in command or not re.search(pat, command):
+            return None
+        try:
+            toks = shlex.split(command)
+        except ValueError:
+            toks = command.split()
+        if flag not in toks:
+            return None                      # флаг лишь упомянут в строке-аргументе
+        m = re.search(r"--feature[\s=]+[\"']?([\w.-]+)", command)
+        feat = m.group(1) if m else ""
+        prefix = policy.get("approval_prefix", "skip-judges")
+        key = f"{prefix}-{feat}" if feat else f"{prefix}-<feature>"
+        if feat and _approval_valid(root, key):
+            return None
+        prov_note = (" Маркер есть, но БЕЗ провенанса record_approval — рукописный маркер не "
+                     "считается. " if feat and R.approval_exists(root, key) else " ")
+        return (
+            f"`--skip-judges` снимает ВСЕ гейты закрытия шага — R4-класс, нужен approval-маркер "
+            f"ground/approvals/{key}.json.{prov_note}Легитимный случай один: восстановление "
+            f"статусов после init.py --force. Порядок: (1) объясни пользователю, зачем обходить "
+            f"гейты, и спроси; (2) после явного «да» — pipeline-state/scripts/record_approval.py "
+            f"--key {key} --approved-by user --reason \"<зачем обход>\"; (3) повтори команду. "
+            f"Штатное закрытие шага этого флага НЕ требует — прогони гейт фазы."
+        )
+    except Exception as e:
+        return f"deny-first: ошибка проверки --skip-judges ({e})."
+
+
 def check_rollback(command: str, root: Path) -> str | None:
     """R4-класс: откат пайплайна к шагу (rollback.py) уничтожает рабочие результаты — код,
     evidence закрытых шагов — и порождает сирот в Jira/PR. Запуск требует approval-маркера
@@ -383,6 +422,11 @@ def main() -> int:
         # ── R4-класс: откат пайплайна (rollback.py) без approval ──
         # Тоже ДО auto-early-return: classify даёт скрипту default-R1 → прошёл бы авто.
         deny = check_rollback(command, root)
+        if deny:
+            return _block(deny)
+
+        # ── R4-класс: обход всех гейтов закрытия (update.py --skip-judges) без approval ──
+        deny = check_skip_judges(command, root)
         if deny:
             return _block(deny)
 

@@ -21,7 +21,9 @@ RED-гейт ПО-ТЕСТОВЫЙ: exit-кода раннера недоста�
 прогона (junit_report): нужны ≥1 выполненный тест и НОЛЬ зелёных — поэтому команду тестов
 скоупь на новые тест-классы (--tests / -Dtest).
 
-Exit: 0 — гейт пройден (артефакт passed:true); 1 — не пройден (артефакт passed:false).
+Exit: 0 — гейт пройден (артефакт passed:true); 1 — не пройден (артефакт passed:false);
+      2 — отказ записать evidence: в `--cmd` нет гейта этой фазы (risk-policy.gate_cmd_expect)
+          либо не хватает `--compile-cmd` для `--expect red`. Артефакт НЕ пишется.
 """
 from __future__ import annotations
 
@@ -42,6 +44,44 @@ PRODUCED_BY = "record_gate"
 
 # Общий санитайзер с читателем (update._check_gate_result) — см. _project.safe_component.
 safe_step = safe_component
+
+
+def _expected_tokens(step_id: str) -> list:
+    """Токены, один из которых ОБЯЗАН быть в команде гейта этого шага
+    (risk-policy.gate_cmd_expect). Пусто — проверка не применяется."""
+    try:
+        import risk_ladder as R
+        policy = (R.load_policy() or {}).get("gate_cmd_expect") or {}
+    except Exception:  # noqa: BLE001 — policy недоступна: не мешаем прогону
+        return []
+    best: list = []
+    best_len = -1
+    for prefix, tokens in policy.items():
+        if prefix.startswith("_") or not isinstance(tokens, list):
+            continue
+        if step_id.startswith(prefix) and len(prefix) > best_len:
+            best, best_len = tokens, len(prefix)
+    return best
+
+
+def _check_cmd_substance(step_id: str, cmd: str, compile_cmd: str = "") -> "str | None":
+    """Причина отказа, если в команде нет гейта этого шага; иначе None.
+
+    Провенанс (кто записал evidence) цепочка проверяла, а субстанцию — нет: `--cmd "true"`
+    давал валидный `passed:true` и закрывал шаг. Это фиксировало «гейт прошёл» без гейта."""
+    tokens = _expected_tokens(step_id)
+    if not tokens:
+        return None
+    haystack = f"{cmd} {compile_cmd}"
+    if any(str(t) in haystack for t in tokens):
+        return None
+    return (f"команда гейта шага '{step_id}' не содержит сам гейт "
+            f"(ожидается одно из: {', '.join(map(str, tokens))}).\n"
+            f"  Получено: --cmd {cmd!r}\n"
+            f"  record_gate фиксирует ФАКТ прохождения гейта фазы, а не любой успешной команды: "
+            f"evidence с посторонней командой — это закрытие шага без гейта. Возьми команду из "
+            f"брифа фазы. Гейт объективно неприменим — это решение пользователя (R4): "
+            f"override_judge --judge gate-result-{step_id} после approval-маркера.")
 
 
 def _run(cmd: str, cwd: Path, timeout: int) -> tuple[int, str]:
@@ -70,6 +110,12 @@ def main() -> int:
     args = p.parse_args()
 
     project = Path(args.project or repo_root()).resolve()
+
+    # Гейт субстанции — ДО запуска: evidence не пишется вовсе, если в команде нет гейта фазы.
+    why = _check_cmd_substance(args.step_id, args.cmd, args.compile_cmd or "")
+    if why:
+        print(f"[record_gate] ОТКАЗ: {why}", file=sys.stderr)
+        return 2
 
     record: dict = {
         "produced_by": PRODUCED_BY,

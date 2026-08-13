@@ -25,6 +25,18 @@ from pathlib import Path
 
 import risk_ladder as R
 
+
+def _runner_script() -> Path:
+    """Абсолютный путь к run_pending_evals.py (execution-gate).
+
+    Литерал `.gigacode/skills/...` в подсказке годился только для legacy-деплоя: в
+    extension-раскладке такого каталога в проекте нет, модель получала «can't open file» — и,
+    следуя тому же сообщению, выключала `quality.eval_enabled` вместо прогона гейта. Путь
+    выводится от расположения хука (как в `_project.resolve_skill_path`)."""
+    from _project import resolve_skill_path
+    return resolve_skill_path("feature-pipeline", "scripts", "run_pending_evals.py")
+
+
 # Соглашения об id шагов — ЕДИНЫЙ источник pipeline_phases (co-located с хуками в .gigacode).
 # best-effort импорт + inline-fallback (пинится test_phase_consistency), чтобы переименование
 # префикса '04-build-' в одном месте не отключало enforcement молча.
@@ -82,6 +94,18 @@ def _is_src_main(target_path: str | None) -> bool:
     return bool(re.search(r"(?:^|/)src/main/", target_path.replace("\\", "/")))
 
 
+def _task_of_target(task_plan_path: Path, target: str | None) -> str | None:
+    """Задача, которой принадлежит файл — по `artifacts` task-plan (единый предикат
+    pipeline_phases.task_of_artifact). None, если плана нет либо владелец неоднозначен."""
+    if not target or _pp is None or not hasattr(_pp, "task_of_artifact"):
+        return None
+    try:
+        plan = json.loads(Path(task_plan_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return _pp.task_of_artifact(plan, target)
+
+
 def _target_path(tool_name: str, tool_input: dict) -> str | None:
     # канон-имена рантайма (write_file/edit/notebook_edit) + Claude-алиасы — иначе на реальном
     # рантайме (tool_name=write_file/edit) target был бы None и eval-guard молча fail-open'ил.
@@ -124,7 +148,13 @@ def main() -> int:
         return 0
 
     manifest = json.loads(mp.read_text(encoding="utf-8"))
-    feature_slug = manifest.get("context", {}).get("feature", "")
+    # Слаг: top-level `feature` (его ВСЕГДА пишет init.py) → каталог стейта → context.feature.
+    # Раньше читался только `context.feature`, а `--context` у init.py опционален (дефолт `{}`):
+    # на любом прогоне, где бриф его не передал, слаг был пустым → путь к eval-plan.json не
+    # складывался → хук молча fail-open'ил, и EDD-гейта не существовало.
+    feature_slug = (manifest.get("feature")
+                    or (manifest.get("context") or {}).get("feature")
+                    or mp.parent.name or "")
 
     # 4. Ищем eval-plan.json (каталог фич резолвится по docs-конфигу: in-repo/separate-repo)
     import _project
@@ -137,13 +167,25 @@ def main() -> int:
     if not evals:
         return 0
 
-    # 5. Определяем текущую задачу по шагам манифеста (по соглашению build-шага)
+    # 5. Определяем задачу, к которой относится запись. Три источника по убыванию точности:
+    #    (1) единый резолвер фазы current_step_id → build-шаг → task-id;
+    #    (2) явный in_progress (его на живых прогонах не проставляют — раньше это был
+    #        ЕДИНСТВЕННЫЙ источник, поэтому EDD-гейта фактически не существовало);
+    #    (3) владелец самого файла по `artifacts` task-plan — на параллельных задачах
+    #        резолвер фазы намеренно отдаёт None, и без этого шага гейт снова молчал бы.
     current_task_id = None
-    for step in manifest.get("steps", []):
-        tid = _build_task_id(step.get("id", ""))
-        if tid and step.get("status") == "in_progress":
-            current_task_id = tid
-            break
+    if hasattr(R, "current_step_id"):
+        current_task_id = _build_task_id(R.current_step_id(root) or "")
+    if not current_task_id:
+        for step in manifest.get("steps", []):
+            tid = _build_task_id(step.get("id", ""))
+            if tid and step.get("status") == "in_progress":
+                current_task_id = tid
+                break
+    if not current_task_id:
+        # На параллельных задачах current_step_id намеренно отдаёт None — определяем задачу по
+        # самому файлу (её `artifacts` в task-plan), иначе EDD-гейт молча пропускает запись.
+        current_task_id = _task_of_target(eval_plan_path.parent / "task-plan.json", target)
     if not current_task_id:
         return 0
 
@@ -162,7 +204,7 @@ def main() -> int:
         return _block(
             f"Eval-Driven Development: для задачи {current_task_id} не пройдены (или не прогонялись) "
             f"eval'ы: {failed_evals}. Прогони execution-gate: "
-            f"python3 .gigacode/skills/feature-pipeline/scripts/run_pending_evals.py "
+            f"python3 {_runner_script()} "
             f"--project . --feature {feature_slug} --task {current_task_id}  "
             f"(или отключи quality.eval_enabled в pipeline.json)."
         )

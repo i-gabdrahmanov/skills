@@ -210,9 +210,12 @@ python <project>/.gigacode/skills/pipeline-state/scripts/update.py \
 `--artifacts` принимает JSON-объект string→string. Пути нормализуются
 относительно корня проекта. Сохранённые artifacts видны в `read.py`.
 
-Если нужно **восстановить статусы** после `init.py --force` (например, при
-сбросе пайплайна), используй `--skip-judges`, чтобы обойти проверку
-`required_judges`:
+Если нужно **восстановить статусы** после `init.py --force` (например, при сбросе пайплайна),
+используй `--skip-judges`. ⚠️ **Это R4, а не служебный флаг:** он снимает ВСЕ гейты закрытия
+шага сразу — судей, gate-result, subagent-origin, обязательные решения и канонические артефакты.
+Поэтому требуется approval-маркер `skip-judges-<feature>` (`record_approval.py` ТОЛЬКО после
+явного «да» пользователя); без него `update.py` вернёт exit 3, а `gate-guard` заблокирует саму
+команду. Для штатного закрытия шага флаг НЕ нужен — прогони гейт фазы через `record_gate.py`.
 
 ```bash
 python <project>/.gigacode/skills/pipeline-state/scripts/update.py \

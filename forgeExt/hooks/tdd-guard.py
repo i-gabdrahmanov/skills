@@ -126,6 +126,28 @@ def _load_active_task_plan(root: Path):
     return None
 
 
+def _task_of_target(plan, target: str) -> str | None:
+    """Задача task-plan, которой принадлежит файл. ЕДИНЫЙ предикат — pipeline_phases
+    (best-effort импорт + inline-фолбэк, как у остальных соглашений)."""
+    if _pp is not None and hasattr(_pp, "task_of_artifact"):
+        return _pp.task_of_artifact(plan, target)
+    if not plan:
+        return None
+    t = target.replace("\\", "/")
+    by_name: list[str] = []
+    for task in plan.get("tasks", []) or []:
+        tid = task.get("id")
+        if not tid:
+            continue
+        for a in task.get("artifacts", []) or []:
+            a_norm = str(a).replace("\\", "/").lstrip("./")
+            if a_norm and t.endswith(a_norm):
+                return tid
+            if a_norm and a_norm.rsplit("/", 1)[-1] == t.rsplit("/", 1)[-1]:
+                by_name.append(tid)
+    return by_name[0] if len(set(by_name)) == 1 else None
+
+
 def _task_exempt(plan, task_id: str, cfg: dict) -> bool:
     """Освобождена ли КОНКРЕТНАЯ задача task_id от RED (по единому предикату)."""
     if not plan or _pp is None:
@@ -137,9 +159,13 @@ def _task_exempt(plan, task_id: str, cfg: dict) -> bool:
 
 
 def _all_tasks_exempt(plan, cfg: dict) -> bool:
-    """Нет ни одной задачи, пишущей код и не освобождённой (для плоской lite-ветки)."""
+    """Нет ни одной задачи, пишущей код и не освобождённой (для плоских lite/fix-ветвей).
+    ЕДИНЫЙ предикат — pipeline_phases.all_tasks_test_exempt (его же зовёт update.py, разрешая
+    легальный `skipped` для RED-шага); inline-фолбэк — для повреждённого бандла."""
     if not plan or _pp is None:
         return False
+    if hasattr(_pp, "all_tasks_test_exempt"):
+        return _pp.all_tasks_test_exempt(plan, cfg)
     tasks = plan.get("tasks", [])
     if not tasks:
         return False
@@ -259,19 +285,28 @@ def main() -> int:
             )
         return 0
 
-    # Full-ветка (feature-pipeline): какую задачу строим? Активный build-шаг 04-build-<id> → задача.
+    # Full-ветка (feature-pipeline): какую задачу строим? Сначала единый резолвер фазы
+    # (in_progress на живых прогонах не проставляется), затем — владелец файла по task-plan,
+    # и лишь потом консервативный фолбэк ниже.
     active_task = None
-    for sid, st in steps.items():
-        tid = _build_task_id(sid)
-        if tid and st == "in_progress":
-            active_task = tid
-            break
+    if hasattr(R, "current_step_id"):
+        active_task = _build_task_id(R.current_step_id(root) or "")
+    if not active_task:
+        for sid, st in steps.items():
+            tid = _build_task_id(sid)
+            if tid and st == "in_progress":
+                active_task = tid
+                break
+    plan_for_target = None
+    if not active_task:
+        plan_for_target = _load_active_task_plan(root)
+        active_task = _task_of_target(plan_for_target, target_str)
 
     if active_task:
         # test-exempt задача (no_test / все слои в quality.no_test_layers) — RED не требуется,
         # даже если оркестратор не завёл 04-test-<id>. Хук считает освобождение сам (тем же
         # предикатом, что check_tests_red) — не полагаемся на отсутствие шага.
-        if _task_exempt(_load_active_task_plan(root), active_task, cfg):
+        if _task_exempt(plan_for_target or _load_active_task_plan(root), active_task, cfg):
             print(f"[tdd-guard] INFO: задача {active_task} test-exempt (no_test_layers/no_test) — RED пропущен.",
                   file=sys.stderr)
             return 0
@@ -285,15 +320,19 @@ def main() -> int:
             )
         return 0
 
-    # Нет активного build-шага — консервативный fallback: любой pending test-шаг блокирует код.
+    # Владельца файла определить не удалось — консервативный fail-closed: любой pending
+    # test-шаг блокирует код. Сообщение объясняет, чем снять неоднозначность, иначе на
+    # мульти-задачной фиче блок выглядит необъяснимым.
     has_red = any(
         s == "pending" and ("test" in step_id.lower() or "tdd" in step_id.lower())
         for step_id, s in steps.items()
     )
     if has_red:
         return _block(
-            "RED-тест для задачи ещё не завершён. "
-            "Напиши сначала тест (src/test/), потом код (src/main/)."
+            "RED-тест для задачи ещё не завершён. Напиши сначала тест (src/test/), потом код "
+            "(src/main/).\n  Если RED этой задачи уже закрыт, а блокирует чужой pending-шаг — "
+            "укажи файл в `artifacts` её задачи в task-plan.json: по нему хук привязывает "
+            "правку к задаче и смотрит ТОЛЬКО её RED-шаг."
         )
 
     return 0

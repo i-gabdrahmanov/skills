@@ -172,6 +172,31 @@ def _phase_key(step_id: str) -> str:
     return sid.rsplit("-", 1)[0] if sid.count("-") >= 2 else sid
 
 
+def ready_step_ids(root: Path) -> list[str]:
+    """ВСЕ шаги, работа над которыми может идти сейчас: явный in_progress, иначе все незакрытые
+    с выполненными depends_on.
+
+    Нужен там, где неоднозначность НЕ мешает решению. `current_step_id` на параллельных задачах
+    (04-build-T1 + 04-test-T2) намеренно отдаёт None — для ролевых гейтов это правильно (роли
+    конфликтуют), но для actor-aware проверки «оркестратор делает работу субагентной фазы»
+    ответ один при любом кандидате, и None означал бы дыру ровно на build-фазе."""
+    explicit = active_step_id(root)
+    if explicit:
+        return [explicit]
+    p = active_manifest(root)
+    if not p:
+        return []
+    try:
+        man = json.loads(p.read_text(encoding="utf-8"))
+        steps = man.get("steps", []) or []
+        status = {s.get("id"): s.get("status") for s in steps}
+        return [s.get("id") for s in steps
+                if s.get("id") and s.get("status") not in _DONE
+                and all(status.get(d) in _DONE for d in (s.get("depends_on") or []))]
+    except Exception:
+        return []
+
+
 def current_step_id(root: Path) -> str | None:
     """Шаг, работа над которым идёт ПРЯМО СЕЙЧАС — для фазовых гейтов (required_decisions,
     phase_approvals).

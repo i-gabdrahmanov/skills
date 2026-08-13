@@ -50,6 +50,34 @@ def _write_origin(tmp: Path, step_id: str) -> None:
     (d / f"{step_id}.json").write_text(json.dumps({"step_id": step_id}), encoding="utf-8")
 
 
+def _write_design_docs(tmp: Path) -> None:
+    """Артефакты lite-design под каноническими именами — без них шаг не закрывается
+    (по этим именам их читают lite-red/lite-green)."""
+    d = tmp / "docs" / "feature-pipeline" / FEATURE
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "tech-design.md").write_text("# design", encoding="utf-8")
+    (d / "task-plan.json").write_text("{}", encoding="utf-8")
+
+
+def _gradlew(tmp: Path, exit_code: int = 0) -> str:
+    """Команда сборки для --cmd: шим `./gradlew` с заданным исходом.
+
+    Нужен потому, что record_gate теперь сверяет СУБСТАНЦИЮ команды с risk-policy
+    (`gate_cmd_expect`): для сборочных шагов в команде обязан быть реальный раннер, а не
+    произвольное `true`. Тесты ниже проверяют механику record_gate, поэтому раннер — заглушка,
+    но вызывается он честно, как `./gradlew`."""
+    shim = tmp / "gradlew"
+    shim.write_text(f"#!/bin/sh\nexit {exit_code}\n", encoding="utf-8")
+    shim.chmod(0o755)
+    return "./gradlew build"
+
+
+def _stub_gate(tmp: Path, name: str, exit_code: int = 0) -> str:
+    """Команда гейта-заглушки с настоящим ИМЕНЕМ скрипта (его сверяет gate_cmd_expect)."""
+    (tmp / name).write_text(f"import sys\nsys.exit({exit_code})\n", encoding="utf-8")
+    return f'"{sys.executable}" {name}'
+
+
 def _close(tmp: Path, step_id: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(UPDATE), "--project", str(tmp), "--skill", SKILL,
@@ -88,20 +116,24 @@ def _mk_test_runner(tmp: Path, cases: list[tuple[str, str]], exit_code: int = 1)
     """Команда-«тест-раннер»: пишет JUnit XML текущего прогона и выходит с exit_code —
     как gradle test (отчёт в build/test-results независимо от исхода)."""
     (tmp / "report.xml").write_text(_junit_xml(cases), encoding="utf-8")
-    runner = tmp / "runner.py"
+    # раннер зовётся `./gradlew`: record_gate сверяет субстанцию команды с risk-policy
+    # (gate_cmd_expect), и для тест-шага в ней обязан быть настоящий раннер
+    runner = tmp / "gradlew"
     runner.write_text(
+        f"#!{sys.executable}\n"
         "import pathlib, shutil, sys\n"
         "d = pathlib.Path('build/test-results/test'); d.mkdir(parents=True, exist_ok=True)\n"
         "shutil.copy('report.xml', d / 'TEST-com.x.FooTest.xml')\n"
         f"sys.exit({exit_code})\n", encoding="utf-8")
-    return f'"{sys.executable}" runner.py'
+    runner.chmod(0o755)
+    return "./gradlew test"
 
 
 class TestRecordGate(unittest.TestCase):
     def test_success_gate_passed(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            r = _record(tmp, "lite-green", "--cmd", "true")
+            r = _record(tmp, "lite-green", "--cmd", _gradlew(tmp, 0))
             self.assertEqual(r.returncode, 0, r.stderr)
             rec = _gate_rec(tmp, "lite-green")
             self.assertTrue(rec["passed"])
@@ -110,7 +142,7 @@ class TestRecordGate(unittest.TestCase):
     def test_success_gate_failed(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            r = _record(tmp, "lite-green", "--cmd", "false")
+            r = _record(tmp, "lite-green", "--cmd", _gradlew(tmp, 1))
             self.assertEqual(r.returncode, 1)
             self.assertFalse(_gate_rec(tmp, "lite-green")["passed"])
 
@@ -146,7 +178,7 @@ class TestRecordGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             r = _record(tmp, "lite-red", "--expect", "red",
-                        "--compile-cmd", "true", "--cmd", "false")
+                        "--compile-cmd", "true", "--cmd", _gradlew(tmp, 1))
             self.assertEqual(r.returncode, 1)
             rec = _gate_rec(tmp, "lite-red")
             self.assertIn("JUnit", rec["reason"])
@@ -161,7 +193,7 @@ class TestRecordGate(unittest.TestCase):
             old = time.time() - 3600
             os.utime(rep, (old, old))
             r = _record(tmp, "lite-red", "--expect", "red",
-                        "--compile-cmd", "true", "--cmd", "false")
+                        "--compile-cmd", "true", "--cmd", _gradlew(tmp, 1))
             self.assertEqual(r.returncode, 1, "залежавшийся отчёт не доказывает RED")
 
     def test_red_gate_zero_executed_tests_fails(self):
@@ -184,7 +216,7 @@ class TestRecordGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             r = _record(tmp, "lite-red", "--expect", "red",
-                        "--compile-cmd", "false", "--cmd", "false")
+                        "--compile-cmd", "false", "--cmd", _gradlew(tmp, 1))
             self.assertEqual(r.returncode, 1)
 
 
@@ -199,14 +231,14 @@ class TestGateResultCheck(unittest.TestCase):
     def test_close_with_passed_artifact_ok(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d); _make_manifest(tmp); _write_origin(tmp, "lite-green")
-            self.assertEqual(_record(tmp, "lite-green", "--cmd", "true").returncode, 0)
+            self.assertEqual(_record(tmp, "lite-green", "--cmd", _gradlew(tmp, 0)).returncode, 0)
             r = _close(tmp, "lite-green")
             self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_close_with_failed_artifact_blocked(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d); _make_manifest(tmp); _write_origin(tmp, "lite-green")
-            _record(tmp, "lite-green", "--cmd", "false")
+            _record(tmp, "lite-green", "--cmd", _gradlew(tmp, 1))
             self.assertNotEqual(_close(tmp, "lite-green").returncode, 0)
 
     def test_handwritten_legacy_artifact_blocked(self):
@@ -270,16 +302,40 @@ class TestGateResultCheck(unittest.TestCase):
     def test_lite_design_with_passed_artifact_ok(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d); _make_manifest(tmp); _write_origin(tmp, "lite-design")
-            self.assertEqual(_record(tmp, "lite-design", "--cmd", "true").returncode, 0)
+            _write_design_docs(tmp)
+            self.assertEqual(_record(tmp, "lite-design", "--cmd", _stub_gate(tmp, "check_taskplan.py")).returncode, 0)
             r = _close(tmp, "lite-design")
             self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_lite_design_blocked_when_doc_named_by_task_slug(self):
+        """Гейт прошёл, но дизайн записан как <KEY>.md — для lite-red/lite-green его нет."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_manifest(tmp); _write_origin(tmp, "lite-design")
+            docs = tmp / "docs" / "feature-pipeline" / FEATURE
+            docs.mkdir(parents=True)
+            (docs / f"{FEATURE}.md").write_text("# design", encoding="utf-8")
+            (docs / "task-plan.json").write_text("{}", encoding="utf-8")
+            self.assertEqual(_record(tmp, "lite-design", "--cmd", _stub_gate(tmp, "check_taskplan.py")).returncode, 0)
+            r = _close(tmp, "lite-design")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("tech-design.md", r.stderr)
+
+    def test_record_gate_rejects_command_without_the_gate(self):
+        """Подделка СУБСТАНЦИИ: `--cmd "true"` давал валидный passed:true и закрывал шаг."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_manifest(tmp)
+            r = _record(tmp, "lite-design", "--cmd", "true")
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("check_taskplan.py", r.stderr)
+            self.assertIsNone(FE.gate(tmp, SKILL, FEATURE, "lite-design"),
+                              "evidence не должно записываться при отказе")
 
     def test_lite_jira_scope_gate_required(self):
         # скоуп-чек (check_scope) нельзя молча пропустить: без evidence lite-jira не закрыть
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d); _make_manifest(tmp)
             self.assertNotEqual(_close(tmp, "lite-jira").returncode, 0)
-            self.assertEqual(_record(tmp, "lite-jira", "--cmd", "true").returncode, 0)
+            self.assertEqual(_record(tmp, "lite-jira", "--cmd", _stub_gate(tmp, "check_scope.py")).returncode, 0)
             self.assertEqual(_close(tmp, "lite-jira").returncode, 0)
 
 

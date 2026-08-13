@@ -179,6 +179,49 @@ class TBashVector(unittest.TestCase):
         r = _bash("git update-ref refs/heads/tmp deadbeef")
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_block_dd_of_control_plane(self):
+        r = _bash("dd if=/dev/null of=ground/pipeline.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_sed_inplace_manifest(self):
+        r = _bash("sed -i.bak -e s/pending/completed/ "
+                  "ground/statements/feature-pipeline/f1/manifest.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_truncate_journal(self):
+        r = _bash("truncate -s 0 ground/statements/feature-pipeline/f1/journal/files.jsonl")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_clobber_redirect(self):
+        # `>|` (noclobber override) — тот же редирект
+        r = _bash("printf '{}' >| ground/pipeline.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_cp_over_manifest(self):
+        r = _bash("cp /tmp/fake.json ground/statements/feature-pipeline/f1/manifest.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_copy_with_trailing_redirect(self):
+        """Регресс: `> /dev/null` попадал в argv, и последним аргументом `cp` оказывался он —
+        настоящее назначение копии (control-plane) не проверялось вовсе."""
+        r = _bash("cp /tmp/fake.json ground/pipeline.json > /dev/null")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_install_with_redirects(self):
+        r = _bash("install -m 644 /tmp/x ground/approvals.jsonl >/dev/null 2>&1")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_pass_cp_from_control_plane(self):
+        # копия ИЗ control-plane наружу — чтение, а не подделка стейта
+        r = _bash("cp ground/statements/feature-pipeline/f1/manifest.json /tmp/backup.json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_pass_read_manifest_with_unrelated_redirect(self):
+        # `>` есть, но пишет он в /tmp — control-plane только читают
+        r = _bash("cat ground/statements/feature-pipeline/f1/manifest.json "
+                  "| python3 -c \"import sys;print(len(sys.stdin.read()))\" > /tmp/size.txt")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
 
 class TContract(unittest.TestCase):
     def test_failopen_empty_stdin(self):
@@ -268,3 +311,49 @@ class THarnessDir(unittest.TestCase):
             r = _run_in(proj, "run_shell_command",
                         {"command": f"python3 {HARNESS}/skills/pipeline-state/scripts/read.py --list"})
             self.assertEqual(r.returncode, 0, r.stderr)
+
+
+class TSanctionedScriptsNotBlocked(unittest.TestCase):
+    """Регресс на прогон: харнес-гейт глушил САНКЦИОНИРОВАННЫЕ скрипты стейта.
+
+    Достаточно было любого `>` в команде (`2>&1`, `>/dev/null`, стрелка внутри кавычек), и путь
+    к самому update.py/config.py/run_judge.py считался «записью в каталог харнеса» → deny.
+    Т.е. гард блокировал ровно тот путь записи pipeline-state, который сам же предписывает."""
+
+    def _bash_in_run(self, cmd: str):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            proj = _project(td, with_manifest=True)
+            return _run_in(proj, "run_shell_command", {"command": cmd})
+
+    def test_update_py_with_stderr_redirect(self):
+        r = self._bash_in_run(f"python3 {HARNESS}/skills/pipeline-state/scripts/update.py "
+                              "--skill forgefix --feature STOR-1 --step-id fix-diag "
+                              "--status completed 2>&1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_update_py_with_arrow_inside_quoted_arg(self):
+        r = self._bash_in_run(f"python3 {HARNESS}/skills/pipeline-state/scripts/update.py "
+                              "--feature STOR-1 --step-id fix-verify --status completed "
+                              "--context-summary \"покрытие > 0.80, RED -> GREEN\"")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_config_py_set_story_with_devnull(self):
+        # именно так теряется ответ на «к какой стори относится баг»
+        r = self._bash_in_run(f"python3 {HARNESS}/skills/config-helper/scripts/config.py "
+                              "--project . set sources.story STOR-100 2>/dev/null")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_record_gate_piped_to_tail(self):
+        r = self._bash_in_run(f"python3 {HARNESS}/skills/pipeline-state/scripts/record_gate.py "
+                              "--project . --skill forgefix --feature STOR-1 --step-id fix-green "
+                              "--cmd \"./gradlew build\" 2>&1 | tail -5")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_preflight_output_redirected_outside_harness(self):
+        r = self._bash_in_run(f"python3 {HARNESS}/hooks/preflight.py --project . > /tmp/pre.json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_still_blocks_cp_over_harness_file(self):
+        r = self._bash_in_run(f"cp /tmp/evil.md {HARNESS}/skills/forgefix/SKILL.md")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)

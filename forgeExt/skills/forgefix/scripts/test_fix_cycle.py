@@ -28,7 +28,11 @@ TDD_GUARD = REPO / "hooks/tdd-guard.py"
 INLINE_GUARD = REPO / "hooks/inline-phase-guard.py"
 
 SLUG = "STOR-1"
+STORY = "STOR-100"
 ORDER = ["fix-intake", "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec"]
+# Артефакты фаз под КАНОНИЧЕСКИМИ именами: по ним план читают fix-red/fix-green, а дельту —
+# /forge-merge. Документ, названный по ключу задачи, для них не существует.
+FIX_ARTIFACTS = {"fix-diag": ("fix-plan.md", "task-plan.json"), "fix-spec": ("sdd.md",)}
 
 
 def _run(args, cwd):
@@ -79,11 +83,34 @@ class FixCycle(unittest.TestCase):
                      "--step-id", step_id, "--status", "completed", "--closed-by", "subagent",
                      "--output-json", json.dumps({"step_id": step_id})], self.proj)
 
+    def _decide(self, key: str, value: str):
+        """Записанное решение прогона (то, что делает config.py set)."""
+        cfg = self.proj / "ground/pipeline.json"
+        data = json.loads(cfg.read_text(encoding="utf-8"))
+        cur = data.setdefault("sources", {})
+        cur[key] = value
+        cfg.write_text(json.dumps(data), encoding="utf-8")
+
+    def _fixdir(self, feature=SLUG, story=STORY) -> Path:
+        return self.proj / "docs/feature-pipeline" / story / "fixes" / feature
+
+    def _artifacts(self, step_id: str, feature=SLUG, story=STORY, *, name=None):
+        """Артефакты фазы. name=... — имитация записи под НЕканоническим именем."""
+        names = FIX_ARTIFACTS.get(step_id)
+        if not names:
+            return
+        d = self._fixdir(feature, story)
+        d.mkdir(parents=True, exist_ok=True)
+        for n in ([name] if name else names):
+            (d / n).write_text("x" if n.endswith(".md") else "{}", encoding="utf-8")
+
     # ── стейт-машина ──────────────────────────────────────────────────────────
     def test_full_fix_cycle_closes(self):
         self._init()
+        self._decide("story", STORY)          # ответ на «к какой стори относится баг» (§2.1)
         for step_id in ORDER:
             self._evidence(step_id)
+            self._artifacts(step_id)
             r = self._close(step_id)
             self.assertEqual(r.returncode, 0, f"{step_id} не закрылся: {r.stderr or r.stdout}")
         manifest = json.loads((self._state_dir() / "manifest.json").read_text(encoding="utf-8"))
@@ -108,6 +135,33 @@ class FixCycle(unittest.TestCase):
                   "--output-json", json.dumps({"step_id": "fix-spec"})], self.proj)
         self.assertNotEqual(r.returncode, 0,
                             "fix-spec закрылся без origin субагента — inline-дыра")
+
+    def test_intake_blocked_until_story_recorded(self):
+        """Ответ «к какой стори относится баг» обязан быть ЗАПИСАН, а не только получен.
+
+        Прогон: агент спросил, пользователь ответил, `config.py set sources.story` не выполнился
+        (на свежем проекте нет pipeline.json → set падает exit 3) — и шаг закрылся с потерянным
+        ответом: папка фикса уехала плоской, find_spec_anchor остался без сильнейшего признака."""
+        self._init("STOR-5")
+        self._evidence("fix-intake", "STOR-5")
+        r = self._close("fix-intake", "STOR-5")
+        self.assertNotEqual(r.returncode, 0, "fix-intake закрылся с незаписанным sources.story")
+        self.assertIn("sources.story", r.stderr)
+        self._decide("story", "none")     # осознанное «стори неизвестна» — тоже ответ
+        self.assertEqual(self._close("fix-intake", "STOR-5").returncode, 0)
+
+    def test_fix_spec_blocked_when_delta_misnamed(self):
+        """Дельта под именем ключа задачи выпадает из /forge-merge (он ищет строго sdd.md)."""
+        self._init("STOR-6")
+        self._decide("story", STORY)
+        self._evidence("fix-spec", "STOR-6")
+        self._decide("spec_anchor", "REQ-0007")
+        self._artifacts("fix-spec", "STOR-6", name="STOR-6.md")
+        r = self._close("fix-spec", "STOR-6")
+        self.assertNotEqual(r.returncode, 0, "дельта под чужим именем закрыла фазу")
+        self.assertIn("sdd.md", r.stderr)
+        self._artifacts("fix-spec", "STOR-6")
+        self.assertEqual(self._close("fix-spec", "STOR-6").returncode, 0)
 
     def test_required_step_cannot_be_silently_skipped(self):
         self._init("STOR-4")

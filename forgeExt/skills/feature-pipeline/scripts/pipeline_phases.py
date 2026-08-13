@@ -166,6 +166,20 @@ def task_is_test_exempt(task: dict, cfg: dict) -> bool:
     return all(lay in ntl for lay in layers)
 
 
+def all_tasks_test_exempt(plan: Optional[dict], cfg: dict) -> bool:
+    """Ни одной задачи, которая пишет код и НЕ освобождена от RED (для плоских lite/fix-ветвей).
+
+    ЕДИНЫЙ предикат: им пользуются и tdd-guard (пропустить запись src/main без RED-шага), и
+    update.py (разрешить `skipped` для RED-шага). Пустой/нечитаемый план → False (fail-closed).
+    """
+    if not isinstance(plan, dict):
+        return False
+    tasks = plan.get("tasks", []) or []
+    if not tasks:
+        return False
+    return not any(task_touches_code(t) and not task_is_test_exempt(t, cfg) for t in tasks)
+
+
 def task_touches_code(task: dict) -> bool:
     """Пишет ли задача реальный код — по java-слоям или артефакту под main/java.
 
@@ -180,6 +194,38 @@ def task_touches_code(task: dict) -> bool:
         if isinstance(a, str) and "main/java" in a.replace("\\", "/"):
             return True
     return any(lay in _JAVA_LAYERS for lay in (task.get("layers") or []))
+
+
+def task_of_artifact(plan: Optional[dict], target: str) -> Optional[str]:
+    """Задача task-plan, которой принадлежит файл (по её `artifacts`). None — не определить.
+
+    ЕДИНЫЙ источник для хуков (tdd-guard, eval-guard): «активная задача» через статус
+    `in_progress` не резолвится (его никто не проставляет), а `current_step_id` на параллельных
+    задачах намеренно отдаёт None. Без привязки по файлу оба хука либо ложно блокировали код
+    одной задачи незакрытым RED другой, либо молча fail-open'или EDD-гейт.
+
+    Совпадение по пути (артефакт — суффикс цели) однозначно; совпадение только по имени файла
+    принимается, лишь когда на него претендует РОВНО одна задача.
+    """
+    if not isinstance(plan, dict):
+        return None
+    t = str(target or "").replace("\\", "/")
+    if not t:
+        return None
+    by_name: list[str] = []
+    for task in plan.get("tasks", []) or []:
+        tid = task.get("id")
+        if not tid:
+            continue
+        for a in task.get("artifacts", []) or []:
+            a_norm = str(a).replace("\\", "/").lstrip("./")
+            if not a_norm:
+                continue
+            if t.endswith(a_norm):
+                return tid
+            if a_norm.rsplit("/", 1)[-1] == t.rsplit("/", 1)[-1]:
+                by_name.append(tid)
+    return by_name[0] if len(set(by_name)) == 1 else None
 
 
 def _task_id_after(step_id, prefix: str):
