@@ -45,11 +45,17 @@ _CACHE: dict[str, dict] = {}
 
 def find_registry(project_root: Path, skill: str = "feature-pipeline") -> Path:
     """Ищет skill-paths.json в стандартных местах; возвращает первый существующий
-    либо канонический путь по умолчанию."""
+    либо канонический путь по умолчанию.
+
+    Сначала — копии В ПРОЕКТЕ (оператор может переопределить пути под свою раскладку), затем
+    реестр САМОГО БАНДЛА. Последний кандидат появился с extension-моделью: код форжа больше не
+    копируется в `<project>/.gigacode`, поэтому в проекте реестра нет вовсе — `load()` возвращал
+    `{}`, и все пути уходили в `.gigacode/...`-дефолты, которых на диске не существует."""
     candidates = [
         project_root / ".gigacode" / "skills" / skill / "references" / "skill-paths.json",
         project_root / "references" / "skill-paths.json",
         project_root / ".gigacode" / "references" / "skill-paths.json",
+        code_base() / "skills" / skill / "references" / "skill-paths.json",
     ]
     for path in candidates:
         if path.exists():
@@ -82,21 +88,71 @@ def _dig(data: dict, keys: tuple[str, ...]):
     return node if isinstance(node, str) else None
 
 
+def code_base() -> Path:
+    """Корень БАНДЛА кода форжа: каталог, в котором лежат `hooks/` и `skills/`.
+
+    Extension — корень extension'а; legacy-деплой — `<project>/.gigacode`; source-репо — его
+    корень. Выводится от расположения этого файла (как `hooks/_project.gigacode_dir`), поэтому
+    не зависит от раскладки и от cwd."""
+    return _hooks_dir().parent
+
+
+def _bundle_path(rel: str) -> Optional[Path]:
+    """Реестровое значение → путь ВНУТРИ бандла. Ведущий `.gigacode/` — это префикс раскладки
+    проекта (legacy-деплой), внутри бандла его нет: `skills/...` лежит прямо в корне кода.
+
+    Фолбэк применяется ТОЛЬКО к путям КОДА харнеса (`skills/…`, `hooks/…`, `references/…`,
+    `commands/…`). Пути данных проекта (`docs/…`, `ground/…`) остаются проектными: их каталогов
+    может ещё не существовать, и «не нашлось в проекте → возьми из бандла» увело бы запись
+    артефактов в код форжа — ровно то, что сторожит state-write-guard."""
+    if not rel:
+        return None
+    r = str(rel).replace("\\", "/").lstrip("./")
+    for prefix in (".gigacode/", "gigacode/"):
+        if r.startswith(prefix):
+            r = r[len(prefix):]
+            break
+    if not r.startswith(("skills/", "hooks/", "references/", "commands/")):
+        return None
+    try:
+        return code_base() / r
+    except (OSError, ValueError):
+        return None
+
+
 def resolve(project_root: Path, *keys: str, default: Optional[str] = None,
             skill: str = "feature-pipeline") -> Optional[Path]:
-    """Резолвит вложенный ключ реестра в абсолютный Path относительно корня проекта.
+    """Резолвит вложенный ключ реестра в абсолютный Path.
 
     `keys` — путь по дереву JSON, напр. resolve(root, "skills", "tech-design",
     "scripts", "check_taskplan"). Если ключ не найден — используется `default`
-    (относительный путь). Всё резолвится ВНУТРИ проекта (project_root); зависимости
-    от ~/.gigacode нет. Возвращает None, если нет ни ключа, ни default.
+    (относительный путь). Возвращает None, если нет ни ключа, ни default.
+
+    Порядок резолва: (1) `project_root/<rel>` — если существует (legacy-деплой `.gigacode/` в
+    проекте либо путь к артефакту самого проекта); (2) тот же `<rel>` ВНУТРИ бандла кода —
+    extension-раскладка, где `.gigacode/` в проекте нет и скрипты живут рядом с этим файлом;
+    (3) первый вариант как есть, чтобы сообщение об ошибке показывало ожидаемое место.
+
+    Почему так: реестр записан в терминах legacy-раскладки (`.gigacode/skills/...`), а форж
+    ставится extension'ом. Голое `project_root / rel` отдавало несуществующий путь, и
+    `run_judge` запускал гейты по нему — судьи (sdd/design/coverage) падали с «can't open file»
+    и валили фазу, предлагая снять гейт override'ом.
     """
     rel = _dig(load(project_root, skill), keys)
+    from_registry = rel is not None
     if rel is None:
         rel = default
     if rel is None:
         return None
-    return project_root / rel
+    p = Path(project_root) / rel
+    if p.exists():
+        return p
+    b = _bundle_path(rel)
+    if b is not None and b.exists():
+        return b
+    # ничего не существует: реестровое значение показываем в проектных терминах (оператор так
+    # его и записал), дефолт — в бандловых (там его место в актуальной раскладке)
+    return p if from_registry else (b or p)
 
 
 def script(project_root: Path, skill_name: str, script_name: str,

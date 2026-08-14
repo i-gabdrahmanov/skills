@@ -660,6 +660,14 @@ def preflight(project_root: str, self_base=None) -> dict:
     }
     if init_needed:
         result["init_needed"] = init_needed
+        # Готовая команда, а не только диагноз. Без неё модель видела exit 2 (в брифах описаны
+        # были только 0 и 1), шла дальше — и КАЖДЫЙ последующий `config.py set` падал с exit 3
+        # «pipeline.json не найден». Так терялись записанные решения (sources.story,
+        # pipeline.mode): вопрос пользователю задан, ответ получен, а артефакта решения нет.
+        result["init_command"] = (
+            f"python3 {base}/skills/feature-pipeline/scripts/init_pipeline_config.py "
+            f"--project {project_root}"
+        )
     if warnings:
         result["warnings"] = warnings
     return result

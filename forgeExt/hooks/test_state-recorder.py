@@ -31,5 +31,54 @@ class T(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
 
 
+def _mod():
+    sys.path.insert(0, str(HOOK.parent))
+    spec = importlib.util.spec_from_file_location("sr_under_test", HOOK)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+class ExtractFinalJson(unittest.TestCase):
+    """Выбор ФИНАЛЬНОГО ответа субагента.
+
+    Регресс: кандидаты сортировались по ДЛИНЕ, и любой более длинный JSON в сообщении (вывод
+    record_gate, отчёт покрытия, эхо task-plan) вытеснял контрактный. `step_id` в нём нет →
+    хук молча не писал ни origin-evidence, ни закрытие шага: фаза оставалась открытой при
+    отработавшем субагенте."""
+
+    def setUp(self):
+        self.m = _mod()
+
+    def test_contract_wins_over_longer_gate_output(self):
+        gate = ('{"status":"ok","passed":true,"cmd":"./gradlew build",'
+                '"modules":["a","b"],"duration_ms":123456,"note":"' + "x" * 200 + '"}')
+        final = '{"step_id":"lite-green","status":"completed","build_ok":true}'
+        got = self.m._extract_json(f"Гейт:\n```json\n{gate}\n```\nИтог:\n```json\n{final}\n```")
+        self.assertEqual(got.get("step_id"), "lite-green", got)
+        self.assertEqual(got.get("status"), "completed", got)
+
+    def test_last_contract_json_wins_on_repeat(self):
+        a = '{"step_id":"fix-red","status":"failed"}'
+        b = '{"step_id":"fix-red","status":"completed","tests_failed":true}'
+        got = self.m._extract_json(f"{a}\nпереписал тест\n{b}")
+        self.assertEqual(got.get("status"), "completed", got)
+
+    def test_nested_object_does_not_shadow_outer(self):
+        # вложенный объект НЕ должен побеждать: иначе теряются step_id и status
+        final = ('{"step_id":"lite-verify","status":"completed",'
+                 '"coverage_gate":{"status":"ok","percent":0.91,"files":["A.java","B.java"]}}')
+        got = self.m._extract_json(f"Итог:\n{final}")
+        self.assertEqual(got.get("step_id"), "lite-verify", got)
+        self.assertEqual(self.m._status_from(got), "completed", got)
+
+    def test_no_contract_json_returns_last_object(self):
+        got = self.m._extract_json('{"a":1}\nтекст\n{"b":2}')
+        self.assertEqual(got, {"b": 2}, got)
+
+    def test_prose_braces_do_not_break(self):
+        self.assertIsNone(self.m._extract_json("используй {скобки} в тексте"))
+
+
 if __name__ == "__main__":
     unittest.main()

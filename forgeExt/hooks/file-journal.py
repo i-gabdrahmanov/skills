@@ -240,7 +240,11 @@ def main() -> int:
         else:
             return 0
 
-        step_id = R.active_step_id(root)
+        # current_step_id, а не active_step_id: `in_progress` на живых прогонах никто не
+        # проставляет, поэтому в журнале step_id/phase были null у ВСЕХ записей — атрибуция
+        # правок по фазам теряется (сам скоуп восстановления rollback считает по ts, поэтому
+        # это не ломало откат, но делало журнал бесполезным для разбора).
+        step_id = R.current_step_id(root) if hasattr(R, "current_step_id") else R.active_step_id(root)
         rec = {
             "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "session_id": data.get("session_id"),

@@ -46,6 +46,10 @@ pre-existing и НЕ будет считаться твоей виной (но �
 > и `tdd-guard` (пропускает запись exempt-задачи и любую запись в `src/main/resources`: liquibase/
 > yml). Настройка списка — через config-helper («не тестируй миграции и jpa-репо» →
 > `quality.no_test_layers`).
+>
+> Шаг `04-test-<id>` уже заведён (напр. план изменился после `add_steps`) — не оставляй его
+> висеть: `update.py --step-id 04-test-<id> --status skipped`. Для exempt-задачи пропуск
+> разрешён детерминированно (тот же предикат по task-plan); для задачи с кодом — нет.
 
 ### 7.1 Per-task: RED (субагент-тестописатель)
 

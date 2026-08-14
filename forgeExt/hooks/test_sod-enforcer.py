@@ -90,5 +90,46 @@ class TestSod(unittest.TestCase):
                 "tool_input": {"command": "git push origin main"}}), 0)
 
 
+def _make_real(tmp: Path, order: list[str], done_upto: str, slug: str = "feat") -> None:
+    """Манифест КАК НА ЖИВОМ ПРОГОНЕ: закрытые шаги + pending-хвост, БЕЗ in_progress."""
+    d = tmp / "ground" / "statements" / "forgefix" / slug
+    d.mkdir(parents=True, exist_ok=True)
+    idx = order.index(done_upto)
+    steps = [{"id": s, "status": "completed" if i <= idx else "pending",
+              "depends_on": [order[i - 1]] if i else []} for i, s in enumerate(order)]
+    (d / "manifest.json").write_text(json.dumps(
+        {"context": {"feature": slug}, "steps": steps}), encoding="utf-8")
+
+
+class RealManifestNoInProgress(unittest.TestCase):
+    """Регресс: роль резолвилась только по `in_progress`, которого на живых прогонах нет →
+    SoD молчал всегда, хотя числился активным enforcement'ом."""
+
+    FIX = ["fix-intake", "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec"]
+
+    def test_red_phase_blocks_src_main_without_in_progress(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_real(tmp, self.FIX, "fix-diag", slug="BUG-1")
+            self.assertEqual(_run(tmp, {"tool_name": "write_file", "tool_input": {
+                "file_path": str(tmp / "src/main/java/A.java")}}), 2)
+
+    def test_green_phase_allows_src_main(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_real(tmp, self.FIX, "fix-red", slug="BUG-1")
+            self.assertEqual(_run(tmp, {"tool_name": "write_file", "tool_input": {
+                "file_path": str(tmp / "src/main/java/A.java")}}), 0)
+
+    def test_verify_phase_hint_points_to_reopening_impl_step(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_real(tmp, self.FIX, "fix-green", slug="BUG-1")
+            r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(
+                {"cwd": str(tmp), "tool_name": "write_file",
+                 "tool_input": {"file_path": str(tmp / "src/main/java/A.java")}}),
+                capture_output=True, text=True)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("fix-green", r.stderr)      # куда вернуться легально
+            self.assertIn("max_step_reopens", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

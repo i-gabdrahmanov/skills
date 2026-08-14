@@ -237,6 +237,25 @@ def main():
               rc == 1 and v["status"] == "invalid"
               and any(i["id"] == "quality.coverage_threshold" for i in errs), out)
 
+    # 'none' как ОСОЗНАННЫЙ ОТВЕТ (none_is_value), а не «значение не задано».
+    # Регресс: 'none' коэрсился в null, а гейты решений отличают «ответили» от «не ответили»
+    # по непустому значению → документированный ответ «стори не знаю» давал ДЕДЛОК: config.py
+    # печатал "applied", а фаза продолжала требовать то же решение до R4-override.
+    with tempfile.TemporaryDirectory() as td:
+        project = Path(td)
+        seed_pipeline(project)
+        for key in ("sources.story", "sources.spec_anchor"):
+            rc, out, err = run(project, "set", key, "none")
+            cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
+            got = cfg.get("sources", {}).get(key.split(".", 1)[1])
+            check(f"set {key} none → строка 'none', а не null",
+                  rc == 0 and got == "none", f"rc={rc} got={got!r} {out}{err}")
+        # прочие string-параметры null-семантику сохраняют
+        rc, _, _ = run(project, "set", "jira.project_key", "none")
+        cfg = json.loads((project / "ground" / "pipeline.json").read_text(encoding="utf-8"))
+        check("set jira.project_key none → null (обычный string-параметр)",
+              cfg.get("jira", {}).get("project_key") is None, str(cfg.get("jira")))
+
     print(f"\n{PASSED} passed, {FAILED} failed")
     return 1 if FAILED else 0
 

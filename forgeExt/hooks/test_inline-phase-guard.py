@@ -155,5 +155,69 @@ class TestInlinePhaseGuard(unittest.TestCase):
                 "tool_input": {"command": "checkstyle -c config.xml src/main/java"}}), 2)
 
 
+def _make_real(tmp: Path, order: list[str], done_upto: str, slug: str = "feat") -> None:
+    """Манифест КАК НА ЖИВОМ ПРОГОНЕ: закрытые шаги + pending-хвост, БЕЗ in_progress.
+
+    `update.py` ведёт шаг pending → completed, промежуточную пометку брифы не делают."""
+    d = tmp / "ground" / "statements" / "feature-pipeline" / slug
+    d.mkdir(parents=True, exist_ok=True)
+    idx = order.index(done_upto)
+    steps = [{"id": s, "status": "completed" if i <= idx else "pending",
+              "depends_on": [order[i - 1]] if i else []} for i, s in enumerate(order)]
+    (d / "manifest.json").write_text(json.dumps(
+        {"context": {"feature": slug}, "steps": steps}), encoding="utf-8")
+
+
+class RealManifestNoInProgress(unittest.TestCase):
+    """Регресс: хук резолвил фазу ТОЛЬКО по `in_progress` — статусу, который на живых прогонах
+    не проставляет никто. Поэтому он молчал всегда, и оркестратор писал артефакты фаз inline
+    (без SubagentStop → без origin-evidence → шаг потом не закрывался, и путь «наружу» вёл в
+    R4-override). Тесты выше этого не ловили: они выставляют `in_progress` руками."""
+
+    FULL = ["01-grounding", "02-sdd", "02-design", "04-test-T1", "04-build-T1"]
+    FIX = ["fix-intake", "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec"]
+
+    def test_blocks_sdd_write_when_step_only_pending(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_real(tmp, self.FULL, "01-grounding")   # текущий шаг = 02-sdd
+            self.assertEqual(_run(tmp, {"tool_name": "Write", "tool_input": {
+                "file_path": str(tmp / "docs/feature-pipeline/feat/sdd.md")}}), 2)
+
+    def test_blocks_fix_plan_write_when_step_only_pending(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_real(tmp, self.FIX, "fix-intake", slug="BUG-1")
+            self.assertEqual(_run(tmp, {"tool_name": "write_file", "tool_input": {
+                "file_path": str(tmp / "docs/feature-pipeline/BUG-1/fix-plan.md")}}), 2)
+
+    def test_subagent_still_allowed(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_real(tmp, self.FIX, "fix-intake", slug="BUG-1")
+            self.assertEqual(_run(tmp, {"tool_name": "write_file", "agent_type": "general-purpose",
+                "tool_input": {
+                    "file_path": str(tmp / "docs/feature-pipeline/BUG-1/fix-plan.md")}}), 0)
+
+    def test_blocks_during_parallel_tasks(self):
+        """На full-пути с параллельными задачами готовых шагов несколько (04-build-T1 и
+        04-test-T2), и `current_step_id` намеренно отдаёт None — хук обязан всё равно ловить
+        inline-работу оркестратора, иначе дыра ровно на build-фазе."""
+        order = ["04-test-T1", "04-build-T1", "04-test-T2", "04-build-T2"]
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _make_real(tmp, order, "04-test-T1")     # готовы 04-build-T1 и 04-test-T2
+            self.assertEqual(_run(tmp, {"tool_name": "Write", "tool_input": {
+                "file_path": str(tmp / "src/main/java/A.java")}}), 2, "код фазы 04-build inline")
+            self.assertEqual(_run(tmp, {"tool_name": "Write", "tool_input": {
+                "file_path": str(tmp / "src/test/java/BTest.java")}}), 2, "тесты 04-test inline")
+            self.assertEqual(_run(tmp, {"tool_name": "Write", "agent_type": "general-purpose",
+                "tool_input": {"file_path": str(tmp / "src/main/java/A.java")}}), 0,
+                "субагенту — можно")
+
+    def test_all_steps_done_is_fail_open(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_real(tmp, self.FIX, "fix-spec", slug="BUG-1")
+            self.assertEqual(_run(tmp, {"tool_name": "write_file", "tool_input": {
+                "file_path": str(tmp / "docs/feature-pipeline/BUG-1/sdd.md")}}), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

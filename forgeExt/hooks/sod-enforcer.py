@@ -114,10 +114,17 @@ STEP_ROLE = {
 
 
 def _active_step_id(root: Path) -> str | None:
-    """id активного (in_progress) шага самого свежего манифеста активной фичи."""
+    """Шаг, работа над которым идёт сейчас — ЕДИНЫЙ резолвер `risk_ladder.current_step_id`.
+
+    Был поиск шага со статусом `in_progress`, а его на живых прогонах никто не проставляет
+    (update.py ведёт pending → completed). Роль не определялась → хук молчал ВСЕГДА, ровно как
+    до перевода на манифест: SoD числился активным enforcement'ом, но не срабатывал. Тот же
+    резолвер уже использует gate-guard. Fallback на in_progress — если резолвер недоступен."""
     if _R is None:
         return None
     try:
+        if hasattr(_R, "current_step_id"):
+            return _R.current_step_id(root)
         mp = _R.active_manifest(root)
         if not mp or not mp.exists():
             return None
@@ -166,6 +173,31 @@ def _block(reason: str) -> int:
     return 2
 
 
+# Фазы прогона тестов: правка src/main здесь — это «подгонка кода под зелёное» в обход
+# счётчика ре-итераций. Легальный путь — ПЕРЕОТКРЫТЬ шаг реализации (его считает
+# quality.max_step_reopens и на исчерпании даёт exit 3 «стоп-и-спроси»).
+_VERIFY_TO_IMPL = {"05-tests": "04-build-<taskId>", "lite-verify": "lite-green",
+                   "fix-verify": "fix-green"}
+
+
+def _how_to_proceed(step_id: str, role: str) -> str:
+    """Подсказка «как сделать это легально» — без неё блок выглядит тупиком, и модель уходит
+    в override вместо штатного пути."""
+    for prefix, impl in _VERIFY_TO_IMPL.items():
+        if step_id.startswith(prefix):
+            return (f"Причина падения в прод-коде — это НЕ правка на ходу: переоткрой шаг "
+                    f"реализации ('{impl}') через pipeline-state/scripts/update.py "
+                    f"--status pending и починИ его субагентом (переоткрытие считается, "
+                    f"quality.max_step_reopens). Тесты (src/test/) на этой фазе писать можно.")
+    if role == "test":
+        return ("Фаза RED пишет ТОЛЬКО тесты (src/test/). Прод-код — следующий шаг "
+                "(GREEN), его закрывает свой субагент.")
+    if role == "spec":
+        return ("Фаза спецификации правит только документы (docs/). Код на ней не меняется — "
+                "нужна правка кода, значит фаза выбрана неверно.")
+    return "Действие вне роли активной фазы — выполни его на своей фазе."
+
+
 def main() -> int:
     raw = sys.stdin.read()
     try:
@@ -207,11 +239,13 @@ def main() -> int:
         return 0
 
     norm = target.replace("\\", "/")
+    step_id = _active_step_id(root) or "<шаг>"
     for blocked_pattern in policy.get("blocked_paths", []):
         if blocked_pattern in norm:
             return _block(
-                f"роль '{role}' (фаза активного шага) не может писать в '{target}' "
-                f"(blocked_paths: {blocked_pattern})"
+                f"роль '{role}' (фаза '{step_id}') не может писать в '{target}' "
+                f"(blocked_paths: {blocked_pattern}).\n"
+                f"  {_how_to_proceed(step_id, role)}"
             )
 
     # 4. Проверка blocked_content_patterns для content, который пишется

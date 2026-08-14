@@ -19,6 +19,15 @@ state-recorder — они пишут через Bash→python→open(), т.е. �
 редиректа + Write-вектор). Bash-детект по природе best-effort (в shell тысяча способов записать
 файл); ловит частые векторы. Провенанс на approval-маркерах дополнительно форсит gate-guard.
 
+**Bash-детект работает по ЦЕЛЯМ записи, а не по «где-то в команде есть `>`».** Раньше блок давало
+совпадение «токен записи в команде» И «путь упомянут в команде» — и легальный вызов
+`python3 <harness>/skills/pipeline-state/scripts/update.py … 2>&1` попадал под харнес-гейт, потому
+что `2>&1` считался записью, а путь к самому скрипту — «записью в харнес». Так гард глушил ровно
+те санкционированные скрипты, ради которых он существует. Теперь из команды извлекаются реальные
+цели записи (`_write_targets`: редиректы, `tee`, `dd of=`, `sed -i`, `cp`/`mv`/`install`,
+`truncate`, литералы inline-python при `open(...,'w')`/`.write(`), и проверяются только они:
+путь исполняемого скрипта и `2>&1` целями не являются.
+
 fail-open на не-JSON stdin / отсутствии цели (нечего блокировать). Хук не должен ронять прогон,
 но при совпадении control-plane-цели — блок.
 """
@@ -27,6 +36,7 @@ from __future__ import annotations
 import json
 import posixpath
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -75,14 +85,18 @@ _HARNESS_ROOT = Path(__file__).resolve().parent.parent
 _HARNESS_HINT_DIRS = ("skills", "hooks", "commands", "references")
 
 
-def _in_harness(target: str) -> bool:
-    """Указывает ли путь внутрь корня харнеса (кода форжа)."""
+def _in_harness(target: str, cwd: str = "") -> bool:
+    """Указывает ли путь внутрь корня харнеса (кода форжа).
+
+    Относительный путь резолвим от cwd СЕССИИ (payload), а не от cwd процесса-хука: рантайм
+    запускает хук с произвольным рабочим каталогом, и от `Path.cwd()` относительный `docs/x.md`
+    мог «приземлиться» внутрь харнеса и дать ложный deny."""
     if not target:
         return False
     try:
         p = Path(target)
         if not p.is_absolute():
-            p = Path.cwd() / p
+            p = Path(cwd or ".") / p
         p = Path(posixpath.normpath(str(p).replace("\\", "/")))
         return p == _HARNESS_ROOT or _HARNESS_ROOT in p.parents
     except (OSError, ValueError):
@@ -112,11 +126,72 @@ def _harness_hint(target: str) -> str:
         f"  Правка самого форжа — отдельная задача вне прогона пайплайна."
     )
 
-# Токены записи в shell-команде (редирект/копирование/inline-python).
-_WRITE_TOKEN_RE = re.compile(
-    r">>?|<>|\btee\b|\bdd\b[^|]*\bof=|\bsed\b[^|]*-i|\bcp\b|\bmv\b|\binstall\b"
-    r"|\bopen\s*\([^)]*['\"][^'\"]+['\"]\s*,\s*['\"][aw]|\.write(?:_text)?\s*\(|\btruncate\b"
+# ── Извлечение ЦЕЛЕЙ записи из shell-команды ──────────────────────────────────────────
+# Гард обязан отличать «файл, в который пишут» от «файл, который читают/исполняют». Иначе
+# `python3 <harness>/…/update.py … 2>&1` выглядит как запись в харнес (см. докстринг модуля).
+_CMD_SEP_RE = re.compile(r"\|\||&&|[;|&\n]")
+_REDIR_TOK_RE = re.compile(r"^[0-9]*&?(>>?|<>)(.*)$")
+_COPY_CMDS = ("cp", "mv", "install", "rsync")
+_MULTI_TARGET_CMDS = ("tee", "truncate")   # пишут во все свои файлы всегда
+_INPLACE_CMDS = ("sed", "perl", "ruby")    # пишут в файл ТОЛЬКО с -i (иначе поток на stdout)
+# inline-python: пишущий вызов в тексте команды. Есть такой — целями считаем ВСЕ строковые
+# литералы команды (какой из них путь, из shell не разобрать; лучше перебдеть).
+_PY_WRITE_RE = re.compile(
+    r"open\s*\([^)]*['\"]\s*,\s*['\"][aw]|\.write(?:_text|_bytes)?\s*\(|\bshutil\.(copy|move)\b"
 )
+_STR_LIT_RE = re.compile(r"'([^']+)'|\"([^\"]+)\"")
+
+
+def _tokens(seg: str) -> list[str]:
+    try:
+        return shlex.split(seg, posix=True)
+    except ValueError:  # незакрытая кавычка — грубая токенизация
+        return re.findall(r"[^\s'\"]+", seg)
+
+
+def _write_targets(cmd: str) -> list[str]:
+    """Пути, в которые команда ПИШЕТ (best-effort). Путь исполняемого скрипта, аргументы-входы
+    и `2>&1` целями не считаются."""
+    out: list[str] = []
+    if _PY_WRITE_RE.search(cmd):
+        out += [a or b for a, b in _STR_LIT_RE.findall(cmd)]
+    for seg in _CMD_SEP_RE.split(cmd.replace(">|", ">")):
+        if not seg.strip():
+            continue
+        toks = _tokens(seg)
+        if not toks:
+            continue
+        # редиректы: `> f`, `>>f`, `1> f`, `&> f` (но не `2>&1` и не fd-номер)
+        redirect_idx = set()
+        for i, t in enumerate(toks):
+            m = _REDIR_TOK_RE.match(t)
+            if not m:
+                continue
+            redirect_idx.add(i)
+            rest = m.group(2)
+            if not rest and i + 1 < len(toks):
+                rest = toks[i + 1]
+                # цель редиректа — НЕ аргумент команды: иначе у `cp src <cp-файл> > /dev/null`
+                # последним аргументом cp оказывался /dev/null, и настоящее назначение копии
+                # (control-plane) не проверялось вовсе — дыра в гарде.
+                redirect_idx.add(i + 1)
+            if rest and not rest.startswith("&") and not rest.isdigit():
+                out.append(rest)
+        argv = [t for i, t in enumerate(toks) if i not in redirect_idx]
+        if not argv:
+            continue
+        name = posixpath.basename(argv[0])
+        files = [a for a in argv[1:] if not a.startswith("-")]
+        if name in _COPY_CMDS and files:
+            out.append(files[-1])          # назначение copy/move — последний аргумент
+        elif name in _MULTI_TARGET_CMDS:
+            out += files
+        elif name in _INPLACE_CMDS and any(a.startswith("-i") for a in argv[1:]):
+            out += files
+        for a in argv:
+            if a.startswith("of="):        # dd of=<file>
+                out.append(a[3:])
+    return [t for t in out if t]
 
 # Чекпойнт-refs (refs/forge/*) — control-plane в git: точки восстановления rollback.py.
 # `git update-ref` на них — подделка чекпойнта (перенаправить откат на выгодный коммит),
@@ -165,12 +240,14 @@ def main() -> int:
         tn = data.get("tool_name", "")
         ti = data.get("tool_input") or {}
 
+        cwd = str(data.get("cwd") or "")
+
         if tn in WRITE_TOOLS:
             target = _collapse(str(ti.get("file_path") or ti.get("path") or ti.get("filename") or ""))
             if target and _CP_RE.search(target):
                 print(_hint(target), file=sys.stderr)
                 return 2
-            if target and _in_harness(target) and _pipeline_active(str(data.get("cwd") or "")):
+            if target and _in_harness(target, cwd) and _pipeline_active(cwd):
                 print(_harness_hint(target), file=sys.stderr)
                 return 2
             return 0
@@ -185,20 +262,15 @@ def main() -> int:
                       "Ручная правка refs подделывает точку восстановления rollback.",
                       file=sys.stderr)
                 return 2
-            # схлопываем `//` и `/./` в команде (best-effort: `..` в тексте команды не резолвим),
-            # чтобы редирект в `ground//pipeline.json` совпал с CP-паттерном.
-            cmd_cp = re.sub(r"/\./", "/", re.sub(r"/{2,}", "/", cmd))
-            # блок только когда есть И токен записи, И упоминание control-plane-пути в команде
-            if _CP_RE.search(cmd_cp) and _WRITE_TOKEN_RE.search(cmd):
-                m = _CP_RE.search(cmd_cp)
-                print(_hint(m.group(0) if m else "ground/*"), file=sys.stderr)
-                return 2
-            if _WRITE_TOKEN_RE.search(cmd):
-                harness = str(_HARNESS_ROOT).replace("\\", "/")
-                for tok in re.findall(r"[^\s'\"|;&><]+", cmd_cp):
-                    if tok.startswith(harness) and _pipeline_active(str(data.get("cwd") or "")):
-                        print(_harness_hint(tok), file=sys.stderr)
-                        return 2
+            targets = [_collapse(t) for t in _write_targets(cmd)]
+            for t in targets:
+                if _CP_RE.search(t):
+                    print(_hint(t), file=sys.stderr)
+                    return 2
+            for t in targets:
+                if _in_harness(t, cwd) and _pipeline_active(cwd):
+                    print(_harness_hint(t), file=sys.stderr)
+                    return 2
             return 0
     except Exception:
         return 0

@@ -59,6 +59,22 @@ def _origin(d: Path, step_id: str):
     (d / "_origins" / f"{step_id}.json").write_text("{}", encoding="utf-8")
 
 
+def _gate(project: Path, step_id: str, *, skill="feature-pipeline", feature="demo", passed=True):
+    """Evidence прохождения детерминированного гейта шага (провенанс record_gate)."""
+    d = _statedir(project, skill, feature) / "gates"
+    d.mkdir(exist_ok=True)
+    (d / f"{step_id}.json").write_text(
+        json.dumps({"passed": passed, "produced_by": "record_gate", "cmd": "true"}),
+        encoding="utf-8")
+
+
+def _pipeline_cfg(project: Path, cfg: dict):
+    """ground/pipeline.json — записанные решения прогона (sources.*, autonomy.* и пр.)."""
+    p = project / "ground"
+    p.mkdir(parents=True, exist_ok=True)
+    (p / "pipeline.json").write_text(json.dumps(cfg), encoding="utf-8")
+
+
 def _excerpt(project: Path, *, modules=("service-x",), entities=()):
     """Содержательная выжимка grounding — нужна, чтобы закрыть 01-grounding
     (update._check_grounding_substance)."""
@@ -172,12 +188,14 @@ def main() -> int:
         rc, out = run(Path(td), "02-sdd")
         check("02-sdd override origin → exit 0", rc == 0, out)
 
-    # 11. --skip-judges обходит все гейты закрытия
+    # 11. --skip-judges обходит все гейты закрытия — но ТОЛЬКО с согласием пользователя (см. 22)
     with tempfile.TemporaryDirectory() as td:
-        _write_manifest(Path(td), [{"id": "02-sdd", "status": "pending",
-                                    "required_judges": ["sdd-judge"]}])
-        rc, out = run(Path(td), "02-sdd", "--skip-judges")
-        check("--skip-judges → exit 0", rc == 0, out)
+        p = Path(td)
+        _write_manifest(p, [{"id": "02-sdd", "status": "pending",
+                             "required_judges": ["sdd-judge"]}])
+        _approval(p, "skip-judges-demo")
+        rc, out = run(p, "02-sdd", "--skip-judges")
+        check("--skip-judges (с approval) обходит гейты → exit 0", rc == 0, out)
 
     # ── doc-approval: доко-фаза не закрывается без утверждения дока ──────────
 
@@ -255,6 +273,133 @@ def main() -> int:
         _override(d, "grounding-substance-01-grounding")
         rc, out = run(Path(td), "01-grounding")
         check("override grounding-substance → exit 0", rc == 0, out)
+
+    # 20. fix-intake не закрывается, пока ответ «к какой стори баг» не записан
+    #     (прогон: агент спросил, пользователь ответил, config.py set не выполнился — молча).
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td)
+        _write_manifest(p, [{"id": "fix-intake", "status": "pending"}],
+                        skill="forgefix", feature="BUG-512")
+        _gate(p, "fix-intake", skill="forgefix", feature="BUG-512")
+        rc, out = run(p, "fix-intake", skill="forgefix", feature="BUG-512")
+        check("fix-intake без sources.story → блок",
+              rc != 0 and "sources.story" in out, f"rc={rc} {out}")
+
+    # 20b. решение записано (в т.ч. осознанное 'none') → шаг закрывается
+    for value in ("STOR-100", "none"):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td)
+            _write_manifest(p, [{"id": "fix-intake", "status": "pending"}],
+                            skill="forgefix", feature="BUG-512")
+            _gate(p, "fix-intake", skill="forgefix", feature="BUG-512")
+            _pipeline_cfg(p, {"sources": {"story": value}})
+            rc, out = run(p, "fix-intake", skill="forgefix", feature="BUG-512")
+            check(f"fix-intake с sources.story={value} → exit 0", rc == 0, f"rc={rc} {out}")
+
+    # 21. lite-design с документом под именем слага задачи → блок (имя = контракт).
+    #     Так дельта/дизайн выпадали из /forge-spec и из следующих фаз.
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td)
+        d = _write_manifest(p, [{"id": "lite-design", "status": "pending"}],
+                            skill="forgelite", feature="KID-1234")
+        _gate(p, "lite-design", skill="forgelite", feature="KID-1234")
+        _origin(d, "lite-design")
+        docs = p / "docs" / "feature-pipeline" / "KID-1234"
+        docs.mkdir(parents=True)
+        (docs / "KID-1234.md").write_text("# design", encoding="utf-8")
+        (docs / "task-plan.json").write_text("{}", encoding="utf-8")
+        rc, out = run(p, "lite-design", "--closed-by", "subagent",
+                      skill="forgelite", feature="KID-1234")
+        check("lite-design: документ по слагу вместо tech-design.md → блок",
+              rc != 0 and "tech-design.md" in out, f"rc={rc} {out}")
+        (docs / "KID-1234.md").rename(docs / "tech-design.md")
+        rc, out = run(p, "lite-design", "--closed-by", "subagent",
+                      skill="forgelite", feature="KID-1234")
+        check("lite-design с каноническими именами → exit 0", rc == 0, f"rc={rc} {out}")
+
+    # 21b. дельта фикса ищется /forge-spec строго как sdd.md — и лежит внутри папки стори
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td)
+        d = _write_manifest(p, [{"id": "fix-spec", "status": "pending"}],
+                            skill="forgefix", feature="BUG-512")
+        _gate(p, "fix-spec", skill="forgefix", feature="BUG-512")
+        _origin(d, "fix-spec")
+        _pipeline_cfg(p, {"sources": {"story": "STOR-100", "spec_anchor": "REQ-0007"}})
+        fixdir = p / "docs" / "feature-pipeline" / "STOR-100" / "fixes" / "BUG-512"
+        fixdir.mkdir(parents=True)
+        (fixdir / "BUG-512.md").write_text("# delta", encoding="utf-8")
+        rc, out = run(p, "fix-spec", "--closed-by", "subagent",
+                      skill="forgefix", feature="BUG-512")
+        check("fix-spec: дельта не под именем sdd.md → блок",
+              rc != 0 and "sdd.md" in out, f"rc={rc} {out}")
+        (fixdir / "BUG-512.md").rename(fixdir / "sdd.md")
+        rc, out = run(p, "fix-spec", "--closed-by", "subagent",
+                      skill="forgefix", feature="BUG-512")
+        check("fix-spec с sdd.md в папке стори → exit 0", rc == 0, f"rc={rc} {out}")
+
+    # 22. --skip-judges — R4: снимает ВСЕ гейты закрытия, поэтому требует согласия пользователя.
+    #     Был bypass в одну опцию (help: «restoring state after init --force»).
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td)
+        _write_manifest(p, [{"id": "02-sdd", "status": "pending",
+                             "required_judges": ["sdd-judge"]}])
+        rc, out = run(p, "02-sdd", "--skip-judges")
+        check("--skip-judges без approval → стоп (exit 3)",
+              rc == 3 and "skip-judges-demo" in out, f"rc={rc} {out}")
+        _approval(p, "skip-judges-demo")
+        rc, out = run(p, "02-sdd", "--skip-judges")
+        check("--skip-judges с approval-маркером → exit 0", rc == 0, f"rc={rc} {out}")
+
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td)
+        _write_manifest(p, [{"id": "02-sdd", "status": "pending"}])
+        _approval(p, "skip-judges-demo", fake=True)
+        rc, out = run(p, "02-sdd", "--skip-judges")
+        check("--skip-judges с маркером БЕЗ провенанса → стоп", rc == 3, f"rc={rc} {out}")
+
+    # 23. RED-шаг задачи без тестируемого кода пропускается ЛЕГАЛЬНО (брифы обещали
+    #     «не заводи шаг», но манифест lite/fix статический — шаг всегда есть).
+    def _taskplan(project: Path, layers: list, feature="demo"):
+        d = project / "docs" / "feature-pipeline" / feature
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "task-plan.json").write_text(json.dumps({"feature_slug": feature, "tasks": [
+            {"id": "F1", "layers": layers,
+             "artifacts": ["src/main/resources/db/changelog/001.xml"]}]}), encoding="utf-8")
+
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td)
+        _write_manifest(p, [{"id": "lite-red", "status": "pending"}],
+                        skill="forgelite", feature="demo")
+        _taskplan(p, ["migration"])
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT), "--project", str(p), "--skill", "forgelite",
+             "--feature", "demo", "--step-id", "lite-red", "--status", "skipped"],
+            capture_output=True, text=True)
+        check("lite-red skipped при task-plan=migration → exit 0",
+              r.returncode == 0, f"rc={r.returncode} {r.stdout}{r.stderr}")
+
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td)
+        _write_manifest(p, [{"id": "lite-red", "status": "pending"}],
+                        skill="forgelite", feature="demo")
+        _taskplan(p, ["service"])
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT), "--project", str(p), "--skill", "forgelite",
+             "--feature", "demo", "--step-id", "lite-red", "--status", "skipped"],
+            capture_output=True, text=True)
+        check("lite-red skipped при задаче с кодом → стоп (exit 3)",
+              r.returncode == 3, f"rc={r.returncode} {r.stdout}{r.stderr}")
+
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td)
+        _write_manifest(p, [{"id": "fix-red", "status": "pending"}],
+                        skill="forgefix", feature="demo")
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT), "--project", str(p), "--skill", "forgefix",
+             "--feature", "demo", "--step-id", "fix-red", "--status", "skipped"],
+            capture_output=True, text=True)
+        check("fix-red skipped без task-plan → стоп (fail-closed)",
+              r.returncode == 3, f"rc={r.returncode} {r.stdout}{r.stderr}")
 
     print(f"\n{PASSED} passed, {FAILED} failed")
     return 1 if FAILED else 0

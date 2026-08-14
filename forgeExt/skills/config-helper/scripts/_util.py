@@ -103,6 +103,14 @@ def coerce_and_validate(entry: dict, raw) -> Any:
 
     # Явный null разрешён для string/bool-параметров с допустимым null-дефолтом
     if s.lower() in _NULL:
+        # `none_is_value` — параметры, для которых 'none' это ОСОЗНАННЫЙ ОТВЕТ пользователя
+        # («стори неизвестна», «в спеке не описано»), а не «значение не задано». Их гейты
+        # (required_decisions, required_decisions_on_close) отличают «ответили» от «не
+        # ответили» по непустому значению: записанный null читается как «не ответили», и
+        # документированный ответ 'none' давал ДЕДЛОК — config.py отвечал "applied", а гейт
+        # продолжал требовать то же решение, пока прогон не уходил в R4-override.
+        if entry.get("none_is_value"):
+            return "none"
         if t in ("string", "bool") or entry.get("default") is None:
             return None
         raise ValueError(f"null недопустим для параметра типа {t}")

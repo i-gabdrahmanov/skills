@@ -30,6 +30,11 @@ description: >
   ```
   python3 <forge>/hooks/preflight.py --project <toplevel>
   ```
+  **exit 2 = конфиг ещё не инициализирован** (первый прогон в проекте: нет `ground/pipeline.json`).
+  Это не ошибка — выполни готовую команду из поля `init_command` вывода preflight
+  (`init_pipeline_config.py --project <toplevel>`) и повтори preflight до exit 0. **Не пропускай
+  этот шаг:** без `pipeline.json` КАЖДЫЙ `config.py set` ниже вернёт exit 3 «pipeline.json не
+  найден», и все решения прогона (`pipeline.mode`, `sources.story`) молча не запишутся.
 
 ## 1. Выбор пути (ПЕРВОЕ действие)
 
@@ -91,6 +96,8 @@ description: >
    ```
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set sources.story <STORY>
    ```
+   Сверяй exit-код каждого `set`: 0 = записано, 3 = конфига нет (вернись к §0 и инициализируй).
+   `update.py` не закроет `fix-intake` с незаписанным `sources.story` — молча потерять ответ нельзя.
 3. Прочитай и строго следуй: `read_file("<project>/.gigacode/skills/forgefix/SKILL.md")`.
    Дальше веди дефект по нему (стейт в namespace `forgefix`). У fix два обязательных вопроса
    пользователю: стори бага (§2.1) и утверждение мини-плана фикса (§3.1) — оба форсятся хуками.

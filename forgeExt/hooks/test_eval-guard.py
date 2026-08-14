@@ -112,14 +112,48 @@ class TestEvalGuard(unittest.TestCase):
                 "tool_input": {"file_path": str(tmp / "src/main/java/X.java")},
             }), 0)
 
-    def test_passes_when_no_active_build_step(self):
+    def test_blocks_when_build_step_only_pending(self):
+        """Регресс: задача резолвилась ТОЛЬКО по статусу `in_progress`, которого на живых
+        прогонах нет (update.py ведёт pending → completed) — EDD-гейт не срабатывал никогда.
+        Единственный готовый build-шаг и есть активная задача."""
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             _make_project(tmp, build_status="pending", cache=None)
             self.assertEqual(_run({
                 "tool_name": "Write", "cwd": str(tmp),
                 "tool_input": {"file_path": str(tmp / "src/main/java/X.java")},
+            }), 2)
+
+    def test_failopen_when_no_build_steps_at_all(self):
+        """Задачу определить нечем (build-шагов нет) — не блокируем."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _make_project(tmp, build_status="pending", cache=None)
+            sdir = tmp / "ground/statements/feature-pipeline/feat-x"
+            (sdir / "manifest.json").write_text(json.dumps({
+                "context": {"feature": "feat-x"},
+                "steps": [{"id": "02-design", "status": "pending"}],
+            }), encoding="utf-8")
+            self.assertEqual(_run({
+                "tool_name": "Write", "cwd": str(tmp),
+                "tool_input": {"file_path": str(tmp / "src/main/java/X.java")},
             }), 0)
+
+    def test_slug_from_top_level_feature_field(self):
+        """Слаг брался только из `context.feature`, а `--context` у init.py опционален:
+        без него путь к eval-plan.json не складывался и гейт молча пропускал запись."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _make_project(tmp, build_status="in_progress", cache=None)
+            sdir = tmp / "ground/statements/feature-pipeline/feat-x"
+            (sdir / "manifest.json").write_text(json.dumps({
+                "feature": "feat-x",                      # context отсутствует вовсе
+                "steps": [{"id": "04-build-T1", "status": "in_progress"}],
+            }), encoding="utf-8")
+            self.assertEqual(_run({
+                "tool_name": "Write", "cwd": str(tmp),
+                "tool_input": {"file_path": str(tmp / "src/main/java/X.java")},
+            }), 2)
 
     def test_block_forged_cache_without_provenance(self):
         # подделка: все passed, но без _meta.produced_by — eval-guard не засчитывает → блок
