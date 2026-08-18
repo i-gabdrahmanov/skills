@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""test_grounding-evidence.py — хук пишет read_grounding ТОЛЬКО на чтении grounding-index.
+"""test_grounding-evidence.py — хук пишет read_grounding ТОЛЬКО на чтении grounding-excerpt.
 
 Гейт 01-grounding снимается по evidence-записи read_grounding (её читает gate-guard).
-Пины: (1) чтение grounding-index → одна запись kind:"grounding" в журнал прогона нужной
+Пины: (1) чтение grounding-excerpt → одна запись kind:"grounding" в журнал прогона нужной
 фичи; (2) чтение прочего кода → evidence не пишется (не лог чтений); (3) пустой stdin →
 exit 0 без падения. Раньше запись жила отдельным файлом ground/phases/<feature>/
 agent-evidence.jsonl рядом с производным кэшем фазовой машины; кэш снят, evidence
@@ -45,14 +45,14 @@ class TestGroundingEvidence(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = _mk_project(Path(td))
             rc = _run({"cwd": str(root), "tool_name": "Read",
-                       "tool_input": {"file_path": "docs/system-analysis/grounding-index.json"}}, root)
+                       "tool_input": {"file_path": "ground/inventory/grounding-excerpt.json"}}, root)
             self.assertEqual(rc, 0)
             self.assertTrue(FE.grounding_read(root, "feature-pipeline", "pipeline"),
                             "grounding-evidence не записано в журнал прогона")
             rec = FE.read_events(root, "feature-pipeline", "pipeline")[-1]
             self.assertEqual(rec["kind"], "grounding")
             self.assertEqual(rec["produced_by"], "grounding-evidence")
-            self.assertIn("grounding-index", rec["path"])
+            self.assertIn("grounding-excerpt", rec["path"])
             self.assertEqual(list(root.glob("ground/phases/**/*.jsonl")), [],
                              "кэш-каталог фазовой машины вернулся")
 

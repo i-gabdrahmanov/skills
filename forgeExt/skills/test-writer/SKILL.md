@@ -29,13 +29,13 @@ description: >
 python3 <project>/.gigacode/skills/test-writer/scripts/analyze_tests.py --root <project> --if-missing
 ```
 
-- `--if-missing` — если `docs/system-analysis/scan/test-conventions.json` уже есть и валиден,
+- `--if-missing` — если `ground/inventory/test-conventions.json` уже есть и валиден,
   скан не повторяется (быстрый выход). Это и есть «первый запуск»: первый вызов сканирует,
   остальные читают кэш.
 - `--refresh` — пересканировать принудительно (тестовая база сильно изменилась: новая фича
   влила десятки тестов, сменился фреймворк).
 
-Затем **прочитай** `docs/system-analysis/scan/test-conventions.json`:
+Затем **прочитай** `ground/inventory/test-conventions.json`:
 
 - `frameworks` — чем реально пишут тесты (JUnit 4/5, Mockito, AssertJ, Spring-test);
 - `naming` — доминирующий паттерн имён методов (`shouldXxxWhenYyy`, `givenXxx`, snake_case…);
@@ -117,7 +117,7 @@ lite-red) — верни ровно его. Если формат не зада�
 ```json
 { "mode": "red|green", "test_files": ["src/test/java/.../FooServiceTest.java"],
   "cases": [{"name": "...", "covers": "acceptance или ветка кода"}],
-  "conventions_used": "docs/system-analysis/scan/test-conventions.json",
+  "conventions_used": "ground/inventory/test-conventions.json",
   "notes": "что не покрыть без инфраструктуры / найденные баги" }
 ```
 

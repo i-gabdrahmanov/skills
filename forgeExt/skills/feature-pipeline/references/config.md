@@ -315,8 +315,7 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_tautological_t
 (дельты) — из глобального `docs`. Синхронность скрипт/хук пинит `test_docs_resolver_consistency.py`.
 
 Git-политика (forge-no-delivery): forge **пишет** обновление мастера в рабочее дерево клона
-(`enrich_grounding` на фазе 06 и `/forge-spec merge` по запросу пользователя), но коммит/push
-мастер-репо делает пользователь.
+(`/forge-spec merge` по запросу пользователя), но коммит/push мастер-репо делает пользователь.
 `sdd.pull_before_grounding: true` включает `git -C <repo_path> pull --ff-only` перед grounding
 (мягко: на ошибке — предупреждение).
 

@@ -87,7 +87,7 @@ class GoldenStateCycle(unittest.TestCase):
                  "reason": "test"}), encoding="utf-8")
         # Содержательная выжимка системы — update._check_grounding_substance не закроет
         # 01-grounding без неё (0 модулей и 0 entities = заглушка).
-        sa = self.proj / "docs/system-analysis"
+        sa = self.proj / "ground/inventory"
         sa.mkdir(parents=True, exist_ok=True)
         (sa / "grounding-excerpt.json").write_text(json.dumps(
             {"modules": [{"name": "service-x"}], "entities": [{"name": "Foo"}]}),

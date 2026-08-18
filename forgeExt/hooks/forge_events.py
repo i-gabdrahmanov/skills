@@ -269,7 +269,7 @@ def overrides(root: Path, skill: str, feature: str,
 
 def grounding_read(root: Path, skill: str, feature: str,
                    events: Optional[list[dict]] = None) -> bool:
-    """Сверялся ли агент с grounding-index. Снимает блок фазы 01-grounding в gate-guard.
+    """Сверялся ли агент с grounding-excerpt. Снимает блок фазы 01-grounding в gate-guard.
 
     Раньше жило отдельным файлом ground/phases/<feature>/agent-evidence.jsonl рядом с
     производным кэшем фазовой машины; кэш снят, а evidence переехало сюда — к остальным

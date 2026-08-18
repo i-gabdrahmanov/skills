@@ -303,28 +303,29 @@ def _check_doc_approval(step: dict, project: Path, skill: str, feature: str):
 
 
 # Фаза grounding: закрыть 01-grounding можно только при СОДЕРЖАТЕЛЬНОЙ выжимке системы.
-_GROUNDING_STEP_PREFIX = "01-grounding"
+# Шаги, снимающие инвентарь: полный пайплайн и lite-ветка. forgelite гоняет тот же
+# check_taskplan, поэтому пустой инвентарь роняет его гейты ровно так же — прикрывать надо оба.
+_GROUNDING_STEP_PREFIX = ("01-grounding", "lite-ground")
 
 
 def _grounding_excerpt_path(project: Path) -> Path:
-    """Путь к grounding-excerpt.json по docs-конфигу (in-repo/separate-repo); фоллбэк docs/system-analysis."""
+    """Путь к срезу инвентаря (ground/inventory/grounding-excerpt.json) через единый резолвер."""
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1].parent / "feature-pipeline" / "scripts"))
         import skill_paths  # type: ignore
         return skill_paths.grounding_excerpt_path(project)
     except Exception:
-        return project / "docs" / "system-analysis" / "grounding-excerpt.json"
+        return project / "ground" / "inventory" / "grounding-excerpt.json"
 
 
 def _check_grounding_substance(step: dict, project: Path, skill: str, feature: str):
-    """Гарантия «01-grounding закрывается только при СОДЕРЖАТЕЛЬНОМ обзоре системы».
+    """Гарантия «01-grounding закрывается только при СОДЕРЖАТЕЛЬНОМ инвентаре».
 
-    Дыра прошлых прогонов: check_grounding.py давал false-positive «grounding есть» на пустом/
-    тонком grounding-excerpt.json (даже {}), reuse-ветка брифа командовала «system-analyst НЕ
-    запускай, не спрашивай» → шаг закрывался, а SDD/tech-design писались без контекста системы
-    («так себе»). Теперь шаг 01-grounding нельзя закрыть, пока выжимка не содержит ХОТЯ БЫ один
-    модуль ИЛИ entity — детерминированный аналог check_brd_doc/_check_doc_approval для grounding
-    (enforcement > guidance: гейт в update.py, а не только в брифе).
+    Инвентарь — топливо детерминированных гейтов дизайна (check_taskplan сверяет по нему
+    reuses и модули). Пустышка (0 модулей и 0 entities) означает, что сканировали не тот
+    корень или сканировать было нечего; пропустить её дальше — значит остаться без гейтов и
+    узнать об этом на фазе дизайна как о «warning: кросс-чек пропущен».
+    Enforcement > guidance: гейт в update.py, а не только в брифе.
     Escape-hatch: override grounding-substance-<step_id> (R4, через override_judge)."""
     step_id = step.get("id", "")
     if not step_id.startswith(_GROUNDING_STEP_PREFIX):
@@ -332,8 +333,7 @@ def _check_grounding_substance(step: dict, project: Path, skill: str, feature: s
     excerpt = _grounding_excerpt_path(project)
     problem = None
     if not excerpt.exists():
-        problem = (f"нет выжимки системы {excerpt} — grounding не собран "
-                   f"(system-analyst/project-grounder не отработал)")
+        problem = (f"нет инвентаря {excerpt} — ensure_inventory.py не отработал")
     else:
         try:
             data = json.loads(excerpt.read_text(encoding="utf-8"))
@@ -342,8 +342,8 @@ def _check_grounding_substance(step: dict, project: Path, skill: str, feature: s
         else:
             if not isinstance(data, dict) or (
                     not (data.get("modules") or []) and not (data.get("entities") or [])):
-                problem = ("grounding-excerpt.json пустой (0 модулей и 0 entities) — это заглушка, "
-                           "а не обзор системы")
+                problem = ("инвентарь пуст (0 модулей и 0 entities) — сканировали не тот корень "
+                           "или сканировать нечего")
     if problem is None:
         return
     ov = _load_override(project, skill, feature, f"grounding-substance-{step_id}")
@@ -357,8 +357,8 @@ def _check_grounding_substance(step: dict, project: Path, skill: str, feature: s
         return
     raise RuntimeError(
         f"Шаг {step_id} нельзя закрыть: {problem}.\n"
-        f"   Собери реальный обзор: system-analyst (обзора нет) или project-grounder "
-        f"(построить выжимку из scan/), затем повтори update.py.\n"
+        f"   Сними инвентарь: python3 <project>/.gigacode/skills/system-analyst/scripts/"
+        f"ensure_inventory.py --root <project> --force, затем повтори update.py.\n"
         + _override_hint(f"grounding-substance-{step_id}", feature, step_id,
                          "<почему grounding объективно недоступен>")
     )

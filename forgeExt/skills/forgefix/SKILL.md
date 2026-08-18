@@ -202,8 +202,9 @@ prompt:
 read_file("<project>/.gigacode/skills/defect-analyzer/SKILL.md")
 (он read-only — это ограничение фазы АНАЛИЗА; записать мини-план ниже ты обязан уже как fix-planner).
 Корень репо: <toplevel>. Дефект: <summary> / симптом + шаги воспроизведения + ожидаемое: <описание>.
-Grounding: если есть <toplevel>/docs/system-analysis/grounding-excerpt.json — возьми оттуда модули и
-конвенции. НЕТ — не запускай полный скан: грепни прицельно по именам классов/методов/ошибок из тикета.
+Grounding: если есть <toplevel>/ground/inventory/grounding-excerpt.json — возьми оттуда модули,
+классы по слоям и каталог переиспользования. НЕТ — грепни прицельно по именам классов/методов/ошибок
+из тикета (снимать инвентарь ради анализа одного дефекта не обязательно).
 Шаги:
 1. Локализуй место правки (файл:строка), сформулируй root cause [подтверждено|гипотеза].
 2. Найди затронутые тесты (пути) и стиль тестовой базы.
@@ -230,7 +231,7 @@ Grounding: если есть <toplevel>/docs/system-analysis/grounding-excerpt.j
    Задача ОДНА: фикс не декомпозируется. Нужна вторая — значит это не минорный дефект: верни
    status:"failed" с причиной, оркестратор сменит путь.
 6. ПОСЛЕДНИМ действием прогони гейт ЧЕРЕЗ РАННЕР (без него шаг не закроется):
-   python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgefix --feature <KEY|slug> --step-id fix-diag --cmd "python3 <project>/.gigacode/skills/tech-design/scripts/check_taskplan.py <fixdir>/task-plan.json"
+   python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgefix --feature <KEY|slug> --step-id fix-diag --cmd "python3 <project>/.gigacode/skills/tech-design/scripts/check_taskplan.py <fixdir>/task-plan.json --scan <toplevel>/ground/inventory/scan"
 Код НЕ правь. Верни JSON: {"step_id":"fix-diag","status":"completed|failed","root_cause":"...",
 "files":["file:line"],"affected_tests":["..."],
 "spec_anchor":{"status":"resolved|ambiguous|not_found","id":"<REQ-ID или null>","title":"<название или null>",

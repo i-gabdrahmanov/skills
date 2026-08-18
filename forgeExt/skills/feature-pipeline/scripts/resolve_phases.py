@@ -68,7 +68,7 @@ def _evaluate_skip_if(skip_expr, pipeline, gates, feature_ctx):
         expr = expr[1:]
 
     if expr == "grounding.exists":
-        # Всегда False — grounding-check делается отдельно через check_grounding.py
+        # Всегда False — инвентарь снимает ensure_inventory.py, он сам идемпотентен
         result = False
     elif expr.startswith("gates."):
         gate_name = expr.split(".", 1)[1]

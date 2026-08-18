@@ -419,14 +419,36 @@ def system_analysis_dir(root: Optional[Path] = None, cfg: Optional[dict] = None)
     return _master_base(root, cfg) / _clean_subdir(docs.get("system_analysis_subdir"), "system-analysis")
 
 
+def inventory_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
+    """ground/inventory — ЭФЕМЕРНЫЙ инвентарь проекта (топливо детерминированных гейтов).
+
+    Не документация и не артефакт поставки: снимается заново скриптом за секунды, в git не
+    едет (каталог самоигнорирующийся). Раньше жил в docs/system-analysis рядом с человеческим
+    обзором — оттуда и брались вечные конфликты: производный файл, переписываемый на каждой
+    фиче, лежал в общем спек-репо. Человеческий обзор (MD + диаграммы system-analyst) остался
+    в system_analysis_dir(); сюда переехало только машинное.
+    """
+    return ground_dir(Path(root) if root else find_project_root()) / "inventory"
+
+
 def scan_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
-    """<system_analysis>/scan."""
-    return system_analysis_dir(root, cfg) / "scan"
+    """ground/inventory/scan — per-category ground truth от scan_all."""
+    return inventory_dir(root, cfg) / "scan"
 
 
 def grounding_excerpt_path(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
-    """<system_analysis>/grounding-excerpt.json."""
-    return system_analysis_dir(root, cfg) / "grounding-excerpt.json"
+    """ground/inventory/grounding-excerpt.json — срез системы, производный от scan."""
+    return inventory_dir(root, cfg) / "grounding-excerpt.json"
+
+
+def architecture_ground_path(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
+    """ground/inventory/architecture-ground.json — граф межмодульных зависимостей."""
+    return inventory_dir(root, cfg) / "architecture-ground.json"
+
+
+def test_conventions_path(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
+    """ground/inventory/test-conventions.json — кеш конвенций тестовой базы."""
+    return inventory_dir(root, cfg) / "test-conventions.json"
 
 
 def master_specs_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:

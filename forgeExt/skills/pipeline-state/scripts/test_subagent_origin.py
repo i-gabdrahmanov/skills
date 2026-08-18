@@ -30,7 +30,7 @@ def _make_manifest(tmp: Path, feature: str = "feat") -> None:
         ],
     }), encoding="utf-8")
     # Содержательная выжимка — update._check_grounding_substance не закроет 01-grounding без неё.
-    sa = tmp / "docs" / "system-analysis"
+    sa = tmp / "ground" / "inventory"
     sa.mkdir(parents=True, exist_ok=True)
     (sa / "grounding-excerpt.json").write_text(
         json.dumps({"modules": [{"name": "service-x"}], "entities": []}), encoding="utf-8")

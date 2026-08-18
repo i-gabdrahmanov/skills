@@ -63,7 +63,7 @@ class TestPreflightResync(unittest.TestCase):
                 {"produced_by": "record_approval", "key": key, "approved_by": "user",
                  "reason": "test"}), encoding="utf-8")
         # Содержательная выжимка — update._check_grounding_substance не закроет 01-grounding без неё.
-        sa = self.proj / "docs/system-analysis"
+        sa = self.proj / "ground/inventory"
         sa.mkdir(parents=True, exist_ok=True)
         (sa / "grounding-excerpt.json").write_text(json.dumps(
             {"modules": [{"name": "svc"}], "entities": [{"name": "Foo"}]}), encoding="utf-8")

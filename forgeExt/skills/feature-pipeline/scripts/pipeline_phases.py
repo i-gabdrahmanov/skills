@@ -265,8 +265,11 @@ def match_required_judges(step_id: str) -> list:
 
 
 # ── Метаданные фаз (phase-defs) ───────────────────────────────────────
-# 01-grounding блокирует чтение src/ до сверки с grounding-index: evidence-разблок
-# (запись read_grounding) даёт хук grounding-evidence, снимает блок gate-guard.
+# 01-grounding блокирует чтение src/ до сверки с инвентарём: evidence-разблок (запись
+# read_grounding) даёт хук grounding-evidence, снимает блок gate-guard.
+# NB: раньше и артефакт, и триггер хука назывались `grounding-index.json` — файла с таким
+# именем не производил никто, так что разблокировать фазу этим путём было нельзя в принципе.
+# Теперь имя настоящее: ground/inventory/grounding-excerpt.json.
 def blocked_tools(phase_id: str) -> list:
     return ["Read", "GrepSearch", "Glob", "Grep"] if phase_id == "01-grounding" else []
 
@@ -292,7 +295,7 @@ def allowed_skills(phase_id: str) -> list:
 def required_artifacts(phase_id: str) -> list:
     return {
         "00-brd":       ["docs/brd.md"],
-        "01-grounding": ["ground/grounding-index.json"],
+        "01-grounding": ["ground/inventory/grounding-excerpt.json"],
         "02-sdd":       ["docs/sdd.md"],
         "02-design":    ["docs/task-plan.json", "docs/tech-design.md"],
         "02-eval-plan": ["docs/eval-plan.json",

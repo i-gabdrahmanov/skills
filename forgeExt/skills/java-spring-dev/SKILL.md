@@ -236,7 +236,7 @@ public class SeasonController {
 
 Before writing utility code (null/empty checks, string ops, collections, dates, JSON), check the
 project's **reuse catalog** — the `reuse` section in `grounding-excerpt.json` and
-`docs/system-analysis/scan/reuse.json` (`dependencies` + `project_utils`), injected by the
+`ground/inventory/scan/reuse.json` (`dependencies` + `project_utils`), injected by the
 `context-injector` hook. Use what's already on the classpath or an existing project util instead
 of hand-rolling:
 - collection null/empty → `CollectionUtils.isEmpty()` (if commons-collections / spring on classpath)

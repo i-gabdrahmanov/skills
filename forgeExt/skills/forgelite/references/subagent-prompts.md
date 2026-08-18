@@ -5,28 +5,16 @@
 SKILL.md остаётся источником процесса (гейты, порядок, hooks) — при правке промпта
 синхронизируй оба места.
 
-## §4.1 lite-ground — лёгкий grounding области кода
+## §4.1 lite-ground — инвентарь области кода
 
-Если `<toplevel>/docs/system-analysis/grounding-excerpt.json` уже есть — переиспользуй, закрой
-шаг инлайн. Иначе субагент-orientation:
+Промпта здесь нет: шаг детерминированный, субагент не нужен.
 
+```bash
+python3 <project>/.gigacode/skills/system-analyst/scripts/ensure_inventory.py --root <toplevel>
 ```
-description: "Lite grounding orientation for <JIRA-KEY>"
-subagent_type: general-purpose
 
-prompt:
-Собери КОМПАКТНЫЙ обзор области кода под задачу — без полного скана.
-Корень репо: <toplevel>
-Задача: <summary> / AC: <core description>
-Действия (грепом по именам классов/сущностей/эндпойнтов из задачи):
-1. Затронутый модуль(и) и 3–8 ключевых классов.
-2. Соседние тесты (пути) и их стиль (JUnit5/Mockito, given/when/then).
-3. Конвенции: сборка (gradle/maven), Lombok, структура пакетов, слои.
-Запиши в <toplevel>/docs/system-analysis/grounding-excerpt.json:
-{"modules":[...],"touched_classes":[...],"neighbor_tests":[...],"conventions":{...},"build":"gradle|maven"}
-Верни JSON: {"step_id":"lite-ground","status":"completed","summary":"<1-2 предложения>"}
-Не смог локализовать — status:"failed" и что мешает.
-```
+Идемпотентно, результат в `<toplevel>/ground/inventory/`. exit 2 (пусто) — не тот корень репо
+кода, спроси пользователя. Шаг закрывается инлайн.
 
 Файл подхватывает `context-injector` (вкладывает в последующих субагентов).
 
@@ -68,7 +56,7 @@ prompt:
 Сначала прочитай и строго следуй: read_file("<project>/.gigacode/skills/test-writer/SKILL.md")
 (режим RED). Конвенции тестовой базы (первый вызов сканирует, дальше кэш):
 python3 <project>/.gigacode/skills/test-writer/scripts/analyze_tests.py --root <toplevel> --if-missing
-Стиль — по docs/system-analysis/scan/test-conventions.json и эталонам из exemplars.
+Стиль — по ground/inventory/test-conventions.json и эталонам из exemplars.
 Напиши падающие unit-тесты (TDD RED) по acceptance criteria. НЕ трогай src/main/.
 Корень репо: <toplevel>. Сборка: <gradle|maven>.
 Задача: <summary> / AC: <acceptance criteria>. Grounding: <классы/соседние тесты>.

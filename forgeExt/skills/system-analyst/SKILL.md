@@ -268,6 +268,12 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/scan_all.py \
 - **ADVISORY** (нечёткая семантика «что считать единицей» — гейт только предупреждает):
   integration, config, cross_cutting, db, async_producers, **reuse**.
 
+> **Инвентарь и документация — разные вещи.** Машинный срез для гейтов пайплайна
+> (`scan/*.json` + `grounding-excerpt.json`) живёт в `ground/inventory/`, снимается
+> `ensure_inventory.py` и в git не едет — каталог самоигнорирующийся. Этот скилл делает другое:
+> человекочитаемый обзор системы в `docs/system-analysis/` (MD + Mermaid), по запросу
+> пользователя. Пайплайн его не требует и не обновляет.
+
 > **`reuse.json` — каталог переиспользования** (для судьи качества `reuse-judge` и
 > разработчика): `dependencies` (внешние библиотеки из build.gradle/pom — что доступно на
 > classpath) + `project_utils` (внутрипроектные util/helper-классы с публичными сигнатурами).
@@ -501,7 +507,8 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/verify_coverage.py \
   выводится (grounding — факты, ADR — обоснование).
 
 Расположение мастера (in-repo или отдельный/удалённый репо) резолвится через `docs.master.*`
-(см. `config.md`), поэтому эти скрипты пишут туда же, куда `enrich_grounding`.
+(см. `config.md`). Инвентарь пайплайна за `docs.master.*` НЕ следует — он всегда в
+`ground/inventory/`.
 
 ---
 

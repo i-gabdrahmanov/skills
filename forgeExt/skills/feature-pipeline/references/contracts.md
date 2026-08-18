@@ -109,7 +109,7 @@ ground/approvals.jsonl   # согласия человека (проектные
 3. **build-judge**: после реализации + зелёных тестов, перед закрытием `04-build-<taskId>`
 3b. **reuse-judge**: после build-judge (PASS), перед закрытием `04-build-<taskId>` —
     гибрид: `run_judge.py reuse` (regex велосипедов по git diff) + LLM по каталогу `scan/reuse.json`
-4. **spec-judge**: после спецадаптера + enrich_grounding, перед закрытием `06-spec` —
+4. **spec-judge**: после спецадаптера, перед закрытием `06-spec` —
    это финальный судья пайплайна (доставку делает пользователь сам)
 
 ## 7. Критерии FAIL по каждому судье
@@ -153,4 +153,4 @@ ground/approvals.jsonl   # согласия человека (проектные
 ### 7.4 spec-judge
 - brd.md, tech-design.md или task-plan.json отсутствуют
 - manifest.json в ground отсутствует
-- enrich_grounding не запускался
+- инвентарь (ground/inventory/grounding-excerpt.json) отсутствует или пуст

@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -372,6 +373,85 @@ databaseChangeLog:
         res = db.scan(self.root)
         self.assertIn("payment", res["tables"])
         self.assertNotIn("artifact", res["tables"], "addColumn не создаёт таблицу")
+
+
+class ScanOutputHygieneTest(unittest.TestCase):
+    """scan/*.json уезжает в общий спек-репо — он не должен тащить туда локальную машину."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        (self.root / "build.gradle").write_text(BUILD_GRADLE, encoding="utf-8")
+        base = self.root / "src/main/java/com/x"
+        for sub, content in [("domain/Artifact.java", ENTITY_JAVA),
+                             ("api/ArtifactController.java", CONTROLLER_JAVA),
+                             ("common/DateUtils.java", UTIL_JAVA),
+                             ("service/ArtifactService.java", SERVICE_JAVA)]:
+            pth = base / sub
+            pth.parent.mkdir(parents=True, exist_ok=True)
+            pth.write_text(content, encoding="utf-8")
+        self.out = self.root / "ground/inventory/scan"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _files(self) -> list[str]:
+        found = []
+        for cat in ("domain", "api", "components", "reuse", "integration", "cross_cutting", "config"):
+            data = json.loads((self.out / f"{cat}.json").read_text(encoding="utf-8"))
+            for group in ("items", "dependencies", "project_utils"):
+                for it in data.get(group, []):
+                    if isinstance(it, dict) and it.get("file"):
+                        found.append(it["file"])
+        return found
+
+    def test_file_paths_are_root_relative_posix(self):
+        """Абсолютный путь машины в scan — утечка имени пользователя и конфликт на каждом merge."""
+        scan_all.write_scan([self.root], self.out)
+        files = self._files()
+        self.assertTrue(files, "фикстура должна давать записи с file")
+        for f in files:
+            self.assertFalse(Path(f).is_absolute(), f"абсолютный путь в scan: {f}")
+            self.assertNotIn("\\", f, f"нативный разделитель Windows в scan: {f}")
+            self.assertNotIn(str(self.root), f, f"корень машины протёк в scan: {f}")
+        self.assertIn("src/main/java/com/x/domain/Artifact.java", files)
+
+    def test_scan_dir_self_ignores(self):
+        """scan/ — производный кеш (пересобирается перед каждым использованием), в git не нужен."""
+        scan_all.write_scan([self.root], self.out)
+        gi = self.out / ".gitignore"
+        self.assertTrue(gi.exists())
+        self.assertIn("*", gi.read_text(encoding="utf-8").split())
+
+    def test_multi_root_paths_are_prefixed_and_relative(self):
+        """Мультирут: путь относителен своему корню и снабжён его именем — иначе записи
+        из разных сервисов неразличимы, а абсолютный путь вернул бы утечку машины."""
+        other = self.root / "svc-b"
+        (other / "src/main/java/com/y/domain").mkdir(parents=True)
+        (other / "build.gradle").write_text(BUILD_GRADLE, encoding="utf-8")
+        (other / "src/main/java/com/y/domain/Other.java").write_text(
+            ENTITY_JAVA.replace("Artifact", "Other").replace("com.x", "com.y"), encoding="utf-8")
+
+        out = self.root / "multi-scan"
+        scan_all.write_scan([self.root / "src", other], out)
+        files = []
+        for cat in ("domain", "components"):
+            data = json.loads((out / f"{cat}.json").read_text(encoding="utf-8"))
+            files += [i["file"] for i in data.get("items", []) if i.get("file")]
+        self.assertTrue(files)
+        for f in files:
+            self.assertFalse(Path(f).is_absolute(), f)
+        self.assertTrue(any(f.startswith("svc-b/") for f in files), files)
+
+    def test_repeated_scan_is_byte_identical(self):
+        """Одинаковый код → одинаковые байты: иначе конфликт неразрешим «перегенерируй»."""
+        scan_all.write_scan([self.root], self.out)
+        first = {c: (self.out / f"{c}.json").read_bytes()
+                 for c in ("domain", "api", "components", "reuse")}
+        scan_all.write_scan([self.root], self.out)
+        for cat, before in first.items():
+            self.assertEqual((self.out / f"{cat}.json").read_bytes(), before,
+                             f"{cat}.json нестабилен между прогонами")
 
 
 class StripCommentsTest(unittest.TestCase):

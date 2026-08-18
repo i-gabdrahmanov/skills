@@ -79,7 +79,7 @@ class MultiFeatureGate(unittest.TestCase):
                  "reason": "test"}), encoding="utf-8")
         # Содержательная выжимка (проектная, не пофичевая) — update._check_grounding_substance
         # не закроет 01-grounding без неё.
-        sa = self.proj / "docs/system-analysis"
+        sa = self.proj / "ground/inventory"
         sa.mkdir(parents=True, exist_ok=True)
         (sa / "grounding-excerpt.json").write_text(json.dumps(
             {"modules": [{"name": "svc"}], "entities": [{"name": "Foo"}]}), encoding="utf-8")

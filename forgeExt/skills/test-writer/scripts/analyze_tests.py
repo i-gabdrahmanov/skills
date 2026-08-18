@@ -4,7 +4,7 @@
 Зачем: тестописатель должен писать тесты В СТИЛЕ проекта, а не «как обычно». Этот скрипт один
 раз сканирует все `src/test/**/*.java`, собирает конвенции (фреймворки, имена, структура,
 базовые классы) и отбирает эталонные тесты по эвристикам качества. Результат кэшируется в
-`docs/system-analysis/scan/test-conventions.json` (рядом с reuse.json из grounding) и
+`ground/inventory/test-conventions.json` (рядом с остальным эфемерным инвентарём) и
 переиспользуется всеми последующими вызовами тестописателя — «анализ при первом запуске».
 
 Отбор эталонов консервативен: Spring-context тесты (@SpringBootTest/@DataJpaTest/…) и
@@ -31,7 +31,7 @@ from collections import Counter
 from pathlib import Path
 
 SCHEMA_VERSION = 1
-DEFAULT_OUT = "docs/system-analysis/scan/test-conventions.json"
+DEFAULT_OUT = "ground/inventory/test-conventions.json"
 SKIP_DIRS = {".git", ".gradle", ".idea", ".gigacode", "build", "target", "out", "node_modules"}
 
 FRAMEWORK_MARKERS = {

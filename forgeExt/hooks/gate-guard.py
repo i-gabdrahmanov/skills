@@ -184,7 +184,7 @@ def check_phase_gate(tool_name: str, tool_input: dict, agent_type: str | None,
 
         # Пропускаем системные пути и конфиги
         if any(safe in file_path for safe in
-               ("ground/phases", "grounding-index", "ground/pipeline", ".gigacode/")):
+               ("ground/phases", "grounding-excerpt", "ground/pipeline", ".gigacode/")):
             return True
 
         # Пропускаем чтение README, .md, .json, .yml — если не в src/
@@ -201,7 +201,7 @@ def check_phase_gate(tool_name: str, tool_input: dict, agent_type: str | None,
             if "/test/" in file_path or "/Test" in file_path:
                 return True
 
-        # Прочитал ли агент grounding-index — из журнала прогона (kind:"grounding");
+        # Прочитал ли агент grounding-excerpt — из журнала прогона (kind:"grounding");
         # прогон до миграции дочитывается со старого agent-evidence.jsonl.
         if current_phase_id == "01-grounding" and phase_status != "completed":
             mp = R.active_manifest(root)
@@ -212,7 +212,7 @@ def check_phase_gate(tool_name: str, tool_input: dict, agent_type: str | None,
             f"phase gate: фаза '{current_phase_id}' не завершена (status={phase_status}). "
             f"Инструмент '{tool_name}' заблокирован до её завершения. "
             f"Агент '{agent_type or '?'}' пытается читать: {file_path or command[:80]}. "
-            f"Требуется завершить текущую фазу или прочитать grounding-index.json."
+            f"Требуется завершить текущую фазу или прочитать grounding-excerpt.json."
         )
         return _deny()
 

@@ -139,7 +139,7 @@ router+forgelite+forgefix едут в `skills/`), затем `gigacode --experim
 | `pii-boundary.py` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
 | `state-write-guard.py` | PreToolUse Write/Edit/Bash | запрет прямой записи моделью в control-plane-файлы (`manifest.json`, `_origins`, `gates`, `overrides`, `judges`, `approvals`, `pipeline.json`, `ground/phases/`) — мутация только через санкц. скрипты; плюс запрет писать артефакты фазы в КАТАЛОГ ХАРНЕСА (корень резолвится от самого хука, гейт активен только при активном манифесте) | exit 2 |
 | `inline-phase-guard.py` | PreToolUse Bash/Write/Edit | actor-guard: главный агент не производит артефакты/код/билд subagent-фазы inline (по `agent_type`) | exit 2 |
-| `grounding-evidence.py` | PreToolUse Read | пишет evidence `kind:"grounding"` в журнал прогона (`statements/<skill>/<feature>/events.jsonl`) при чтении grounding-index — по нему `gate-guard` снимает блок фазы `01-grounding` | нет |
+| `grounding-evidence.py` | PreToolUse Read | пишет evidence `kind:"grounding"` в журнал прогона (`statements/<skill>/<feature>/events.jsonl`) при чтении grounding-excerpt — по нему `gate-guard` снимает блок фазы `01-grounding` | нет |
 | `prompt-guard.py` | UserPromptSubmit + PostToolUse(read/fetch) | детект prompt-injection → additionalContext | нет |
 | `file-journal.py` | PostToolUse Write/Edit/Bash | безусловный журнал изменённых файлов активной фичи (`journal/files.jsonl`, привязка к step_id) — скоуп восстановления кода для `rollback.py` | нет |
 | `state-recorder.py` | SubagentStop | авто-запись шага в pipeline-state по `step_id` | нет |
@@ -155,7 +155,7 @@ router+forgelite+forgefix едут в `skills/`), затем `gigacode --experim
 |---|---|---|
 | `feature-pipeline` | Оркестратор: ведёт фичу по фазам от BRD до верифицированного артефакта (доставка — на пользователе) | gate-скрипты + evals |
 | `pipeline-state` | Состояние многошаговых пайплайнов с субагентами | косвенно через evals |
-| `project-grounder` | Фаза 1 (grounding): переиспользует обзор или зовёт `system-analyst` | `verify_coverage.py` |
+| `project-grounder` | Фаза 1: снимает эфемерный инвентарь проекта для гейтов | `ensure_inventory.py` |
 | `system-analyst` | Скан Java/Spring сервиса (модули, API, Kafka, БД) | `verify_coverage.py` |
 | `sdd` | BRD → спецификация `sdd.md` (GWT, API, данные, приёмка) | `check_sdd_doc.py` |
 | `tech-design` | SDD → план + `task-plan.json` + структура слоёв | `check_taskplan.py` |
@@ -185,8 +185,9 @@ router+forgelite+forgefix едут в `skills/`), затем `gigacode --experim
 - **Pipeline-state намеспейсится ПО ФИЧЕ**: `ground/statements/feature-pipeline/<feature>/` (был один
   `pipeline/` на все фичи → вытесняли друг друга). Фичи сосуществуют, резюм точечный.
   `--feature <slug>` во всех вызовах init/read/update/add_steps/build_evidence.
-- **Grounding не повторять** — `check_grounding.py` (детектор в нескольких местах) → reuse молча;
-  свежесть между фичами держит `enrich_grounding.py` (инкрементально по изменённым модулям, без полного рескана).
+- **Инвентарь эфемерный** — `ensure_inventory.py` снимает его в `ground/inventory/` (в git не едет) и
+  сам решает, нужен ли рескан, по отпечатку исходников. Поддерживать «свежесть» между фичами нечего:
+  инвентарь производен от кода, а не накапливается по дельтам.
 - **BRD на языке бизнеса** — никаких классов/сущностей/методов/SQL в BRD; код-факты идут в tech-design;
   grounding-выжимка BRD живёт в `ground/brd-grounding/`, не рядом с самим BRD.
 - **Короткая точка входа `forge` / `/forge`** (2026-07-20). Пайплайн зовётся коротким именем **forge**.

@@ -17,7 +17,7 @@
 | forgelite | @team | 2026-12 | исполнение подготовленной подзадачи Jira (режим lite: grounding→tech-design по спеке→RED→GREEN→verify; доставка — на пользователе) | check_scope.py + record_gate (RED/GREEN) + check_coverage.py |
 | forgefix | @team | 2026-12 | минорный дефект (режим fix: диагностика→**гейт фикс-плана**→RED воспроизводит баг→минимальный фикс→verify→точечная дельта спеки внутри папки стори; доставка — на пользователе) | check_fix_scope.py + find_spec_anchor.py + record_approval (fix-plan) + record_gate (RED/GREEN/verify) + check_fix_delta.py |
 | pipeline-state | @team | 2026-12 | оркестраторы >3 субагентов | косвенно через evals |
-| project-grounder | @team | 2026-12 | фаза grounding | verify_coverage.py |
+| project-grounder | @team | 2026-12 | фаза 1: инвентарь для гейтов | ensure_inventory.py |
 | system-analyst | @team | 2026-12 | скан Java/Spring сервиса | verify_coverage.py |
 | sdd | @team | 2026-12 | BRD → спецификация (sdd.md) | check_sdd_doc.py |
 | tech-design | @team | 2026-12 | SDD → план + слои | check_taskplan.py, check_sdd.py |

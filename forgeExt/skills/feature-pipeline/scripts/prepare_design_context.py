@@ -13,17 +13,17 @@ BRD выключен по умолчанию (см. pipeline_phases.BRD_ENABLED)
 Usage:
     python3 prepare_design_context.py \\
         --sdd docs/feature-pipeline/<slug>/sdd.md \\
-        --grounding docs/system-analysis/grounding-excerpt.json \\
+        --grounding ground/inventory/grounding-excerpt.json \\
         --out docs/feature-pipeline/<slug>/design-context.json
 
     python3 prepare_design_context.py \\
         --brd docs/feature-pipeline/<slug>/brd.md \\
-        --grounding docs/system-analysis/grounding-excerpt.json \\
+        --grounding ground/inventory/grounding-excerpt.json \\
         --out docs/feature-pipeline/<slug>/design-context.json
 
     python3 prepare_design_context.py \\
         --task-plan docs/feature-pipeline/<slug>/task-plan.json \\
-        --grounding docs/system-analysis/grounding-excerpt.json \\
+        --grounding ground/inventory/grounding-excerpt.json \\
         --out ...
 
     python3 prepare_design_context.py \\
@@ -281,8 +281,8 @@ def main():
         elif key == "--project":
             project_root = val
 
-    # --grounding опционален: без него резолвим путь мастера по docs.* (master separate-repo
-    # aware) через skill_paths, взяв корень из --project (или cwd).
+    # --grounding опционален: без него берём инвентарь через skill_paths (он всегда в
+    # ground/inventory и за docs.* не следует), взяв корень из --project (или cwd).
     if not grounding_path:
         try:
             sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -297,7 +297,10 @@ def main():
 
     grounding_file = Path(grounding_path)
     if not grounding_file.exists():
-        print(json.dumps({"error": f"Grounding file not found: {grounding_path}"}, ensure_ascii=False))
+        # Инвентарь эфемерный — его штатно может не быть. Не «файл не найден», а что делать.
+        print(json.dumps({"error": f"инвентарь не снят: {grounding_path}. Прогони "
+                                   f"system-analyst/scripts/ensure_inventory.py --root <project>"},
+                         ensure_ascii=False))
         sys.exit(1)
 
     grounding = json.loads(grounding_file.read_text(encoding="utf-8"))
