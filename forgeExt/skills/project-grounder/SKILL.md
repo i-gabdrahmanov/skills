@@ -1,288 +1,105 @@
 ---
 name: project-grounder
 description: >
-  Фаза 1 (Grounding) пайплайна feature-pipeline: проверяет наличие готового
-  системного обзора проекта (docs/system-analysis/) и либо переиспользует его,
-  либо запускает system-analyst для сбора. На выходе — компактная выжимка
-  (модули, entity, API, Kafka, клиенты) для передачи в tech-design, и шаг
-  01-grounding в pipeline-state feature-pipeline.
+  Фаза 1 пайплайна feature-pipeline: снимает эфемерный инвентарь проекта
+  (модули, классы по слоям, entity, эндпойнты, топики, таблицы, каталог
+  переиспользования) в ground/inventory — топливо детерминированных гейтов
+  дизайна. Не LLM-работа: один вызов ensure_inventory.py.
 
-  Используй этот скилл когда: пользователь говорит "подготовь контекст для
-  аналитика", "запусти grounding", "собери системный обзор для пайплайна",
-  "нужен анализ проекта перед дизайном", "инициализируй контекст системы",
-  или когда feature-pipeline вызывает Фазу 1. Также активируй при любом
-  запросе типа "прогони grounding", "собери данные о системе", "нужна база
-  для tech-design".
+  Используй этот скилл когда: пользователь говорит "сними инвентарь",
+  "запусти grounding", "подготовь контекст для дизайна", "нужна база для
+  tech-design", или когда feature-pipeline вызывает Фазу 1.
 ---
 
 # Project Grounder
 
-Скилл обеспечивает Фазу 1 (Grounding) пайплайна `feature-pipeline`: даёт
-дизайнеру (`tech-design`) актуальный срез системы — модули, домен, API, async,
-внешние клиенты. Ничего не пишет в исходники.
+Фаза 1 (`01-grounding`) пайплайна `feature-pipeline`. Даёт гейтам дизайна машинный список
+того, что в коде есть на самом деле. Ничего не пишет в исходники.
 
-> **Хуки gigacode3.** Выжимку `docs/system-analysis/grounding-excerpt.json` рантайм-хук
-> `context-injector` (SubagentStart) теперь сам подкладывает субагентам `tech-design`/`build`.
-> Поэтому обязательно сохраняй её по этому пути — она стала точкой инъекции контекста.
+> **Это не документация.** Человеческий обзор системы (MD + диаграммы) делает `system-analyst`
+> в `docs/system-analysis/` — по запросу пользователя, вне пайплайна. Здесь собирается только
+> машинный инвентарь, и только потому, что гейт не может опираться на «агент мог бы грепнуть»:
+> чтобы поймать выдуманный класс, нужен список настоящих.
 
 ---
 
 ## 0. Предусловия
 
-- Текущая директория — корень репо кода (Java/Spring).
-- `<project>/ground/pipeline.json` должен существовать (создаётся скриптом
-  инициализации `feature-pipeline`; если его нет, сообщи и остановись).
-- Скилл `pipeline-state` доступен — нужен для шага 01-grounding.
-- Скилл `system-analyst` доступен — запускается если обзора нет.
+- Текущая директория — корень репо кода.
+- `<project>/ground/pipeline.json` существует (создаётся инициализацией `feature-pipeline`).
+- Скилл `pipeline-state` доступен — нужен для шага `01-grounding`.
 
 ---
 
-## 1. Читаем конфиг
+## 1. Снять инвентарь
 
 ```bash
-cat ground/pipeline.json
+python3 <project>/.gigacode/skills/system-analyst/scripts/ensure_inventory.py --root . --json
 ```
 
-Возьми:
-- `docs.docs_path` — путь к папке с документацией (относительно корня проекта
-  или абсолютный). Если относительный — разворачивай от корня проекта (cwd).
-- `project.is_git` — нужен для pipeline-state (если `false`, state всё равно
-  работает; скрипты берут cwd вместо git toplevel).
+Скрипт идемпотентен и сам решает, нужен ли рескан: сравнивает отпечаток исходников (сколько
+файлов и когда самый свежий) с сохранённым. Код не менялся — не делает ничего; добавили,
+удалили или правили файл — пересканирует. Спрашивать пользователя «пересканировать?» не надо.
 
-Если `pipeline.json` не найден — сообщи пользователю:
-> "Не найден `ground/pipeline.json`. Запусти сначала `feature-pipeline`, чтобы
->  проект был инициализирован, или создай конфиг вручную."
-Остановись.
+- **exit 0** — инвентарь в `ground/inventory/`: `scan/*.json` (per-category ground truth) и
+  `grounding-excerpt.json` (компактный срез для tech-design и `context-injector`).
+- **exit 2** — пусто (0 модулей и 0 entities). Это не «маленький проект», а «не тот корень»
+  или «сканировать нечего». СТОП, уточни корень репо кода. Шаг не закрывай — хард-гейт
+  `_check_grounding_substance` в `update.py` всё равно не даст.
+
+Каталог самоигнорирующийся (`.gitignore` = `*`): инвентарь производен от кода, в git не едет,
+конфликтовать между разработчиками ему нечем.
 
 ---
 
-## 2. Проверяем наличие system-analysis (детерминированно, в нескольких местах)
+## 2. Архитектурный граунд модулей
 
-Не проверяй один путь руками — используй детектор, он ищет grounding в типовых местах
-(`system-analysis/`: `grounding-excerpt.json`, `overview.md`, `scan/`) и не даёт повторять грундинг снова и снова:
+Граф межмодульных зависимостей — его читает гейт фазы 05, чтобы отличить принятую связку от
+нового арх-связывания:
+
 ```bash
-python3 <project>/.gigacode/skills/system-analyst/scripts/check_grounding.py --root . --json
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.py \
+    --root . --emit-ground
 ```
-- **exit 0** → §2a (есть, переиспользуй). Вердикт содержит `kind` (excerpt|scan|overview),
-  `path`, `excerpt_path`.
-- **exit 1** → §2b (нет, запускай system-analyst).
 
-### 2a. Обзор уже есть → переиспользуй (без повторного вопроса)
-
-Грундинг найден — **переиспользуй по умолчанию, НЕ спрашивай и НЕ пересканируй** (повторный
-грундинг на каждом прогоне — это и есть то, что раздражало). Кратко сообщи, что обзор найден
-(`kind`, `path` из вердикта) и идём дальше:
-- `kind=excerpt` → выжимка готова, сразу §5 (сохранение шага).
-- `kind=scan` или `overview` (нет `grounding-excerpt.json`) → собери выжимку из scan (§4) и иди дальше.
-
-Полный рескан (§3) запускай **только** при явном запросе пользователя или если `verify_coverage.py`
-не сходится (реальный рассинхрон). По умолчанию — reuse.
-
-> **Свежесть обзора.** Переиспользовать (1) обычно безопасно: после каждой фичи `feature-pipeline`
-> в фазе Document **инкрементально обогащает** ground дельтой фичи (`enrich_grounding.py`, только
-> изменённые модули, без полного рескана), так что обзор не «протухает». Полный рескан (2) нужен
-> лишь при явном подозрении на рассинхрон — например, если правки шли мимо пайплайна или
-> `verify_coverage.py` падает.
-
-### 2b. Обзора нет
-
-Сообщи:
-> "Системный обзор не найден в `<docs_path>/system-analysis/`. Запускаем `system-analyst`."
-
-Переходи к §3.
+Без пути пишет `ground/inventory/architecture-ground.json`. Правила уточняются человеком в
+`ground/architecture-policy.json` (`module_deps.forbidden`/`allowed_new`).
 
 ---
 
-## 3. Запускаем system-analyst
-
-Перед вызовом убедись, что `system-analyst` знает правильный `docs_path`.
-Запиши его в конфиг, которым пользуется `system-analyst`:
+## 3. Закрыть шаг
 
 ```bash
-python3 - <<'EOF'
-import json, pathlib, sys
-
-project = pathlib.Path.cwd()
-config_path = project / ".gigacode/skills/minor-defect-fix/config.json"
-config_path.parent.mkdir(parents=True, exist_ok=True)
-
-# Читаем docs_path из pipeline.json
-pipeline = json.loads((project / "ground/pipeline.json").read_text())
-docs_path = pipeline["docs"]["docs_path"]
-if not pathlib.Path(docs_path).is_absolute():
-    docs_path = str((project / docs_path).resolve())
-
-config = {}
-if config_path.exists():
-    config = json.loads(config_path.read_text())
-
-# Добавляем/обновляем запись для текущего проекта
-projects = config.get("projects", {})
-projects[str(project)] = {"docs_path": docs_path}
-config["projects"] = projects
-# Также ставим как активный проект (system-analyst читает текущий)
-config["docs_path"] = docs_path
-
-config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2))
-print(f"OK: docs_path = {docs_path}")
-EOF
+python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py \
+    --skill feature-pipeline --step-id 01-grounding --status completed \
+    --output-json '{"inventory_dir": "ground/inventory", "modules_count": <N>, "entities_count": <M>}'
 ```
 
-Теперь загрузи скилл `system-analyst`. Он сам проведёт опрос про бизнес-намерение
-и скоуп, запустит субагентов и запишет MD-файлы в `<docs_path>/system-analysis/`.
-
-> **Важно:** не передавай в `system-analyst` историю разговора feature-pipeline.
-> Он стартует с чистого листа — только контекст проекта из кода и конфига.
-
-После завершения `system-analyst` переходи к §4.
+Если `pipeline-state` не инициализирован (`manifest.json` нет) — не падай, сообщи и пропусти:
+оркестратор инициализирует state при полном прогоне.
 
 ---
 
-## 4. Строим компактную выжимку (grounding excerpt) — из scan-JSON
-
-**Не перечитывай MD глазами LLM** — именно так терялись артефакты (14 entities из 55,
-21 endpoint из 93). Источник выжимки — детерминированный scan-JSON. Если его ещё нет
-(переиспользуем старый обзор без папки `scan/`), прогони сканер сам — он дешёвый и
-без LLM:
-
-```bash
-python3 <project>/.gigacode/skills/system-analyst/scripts/scan_all.py \
-    -o "<docs_path>/system-analysis/scan"
-```
-
-Собери excerpt **напрямую из `scan/*.json`** (полные `items[]`, ничего не сокращая):
-`entities` ← `domain.json`, `api_endpoints` ← `api.json`, `async` ← `async_consumers.json`
-+ `async_producers.json`, `external_clients` ← `integration.json`, `tables` ← `db.json`,
-`modules` ← `structure.json`, `reuse` ← `reuse.json` (каталог переиспользования —
-зависимости и util-классы; компактно: координаты `artifact:version` и имена классов).
-
-Структура JSON:
-
-```json
-{
-  "generated_at": "<ISO timestamp>",
-  "modules": [
-    {"name": "service-dbservice", "path": "service/dbservice", "depends_on": []}
-  ],
-  "entities": [
-    {"name": "Artifact", "module": "service-dbservice", "key_fields": ["id", "status", "createdAt"]}
-  ],
-  "components": [
-    {"name": "ArtifactService", "layer": "service", "package": "com.x.service", "module": "service-dbservice"},
-    {"name": "ArtifactRepository", "layer": "repository", "package": "com.x.repo", "module": "service-dbservice"}
-  ],
-  "api_endpoints": [
-    {"method": "GET", "path": "/api/v1/artifacts", "module": "service-dbservice"}
-  ],
-  "async": [
-    {"type": "kafka", "topic": "artifact.created", "direction": "producer", "module": "service-dbservice"}
-  ],
-  "external_clients": [
-    {"name": "UpzClient", "target": "upz-adapter", "module": "service-dbservice"}
-  ],
-  "tables": ["artifact", "task", "document"],
-  "reuse": {
-    "dependencies": ["commons-lang3:3.14.0", "spring-boot-starter-web:3.2.1"],
-    "project_utils": ["com.x.common.DateUtils", "com.x.common.JsonHelper"]
-  }
-}
-```
-
-> Каталог `reuse` нужен судье качества `reuse-judge` и разработчику: знать, что уже доступно
-> на classpath и какие util-классы есть в проекте, чтобы не писать велосипеды.
-> Инвентарь `components` — ground-truth реальных классов слоёв service/repository/mapper/dto/controller.
-> tech-design ссылается на переиспользуемые классы только по нему, а гейт `check_taskplan` валит
-> дизайн, если `reuses`-класс не найден в инвентаре (защита от выдуманных «существующих» классов).
-
-Сохрани в `<docs_path>/system-analysis/grounding-excerpt.json`.
-
-### 4.1 Самопроверка полноты (gate — ОБЯЗАТЕЛЬНО)
-
-Сверь выжимку против ground truth, прежде чем отдавать дальше:
-
-```bash
-python3 <project>/.gigacode/skills/system-analyst/scripts/verify_coverage.py \
-    --scan "<docs_path>/system-analysis/scan" \
-    --reported "<docs_path>/system-analysis/grounding-excerpt.json" \
-    --code-root .
-```
-
-`--code-root .` включает независимый кросс-чек: грубый счёт `@Entity`/`@KafkaListener`/
-`@*Mapping` по коду как нижняя граница против недосчёта самого сканера (основной gate
-сверяет excerpt со scan и эту дыру не видит). Предупреждение `⚠ сканер недосчитал` —
-повод на полный рескан через `system-analyst`, даже если HARD-категории формально `pass`.
-
-- `pass` (exit 0) — полнота HARD-категорий подтверждена, иди в §5.
-- `fail` (exit 2) — выжимка недосчитала (гейт печатает `missing N: <имена>`).
-  Перестрой excerpt из scan-JSON (не из MD) и прогони гейт снова. **Не передавай
-  неполную выжимку в `tech-design`** — иначе дизайнер спроектирует по дырявому обзору.
-
-Покажи пользователю краткую сводку **с вердиктом**:
-> "Выжимка готова (self-check ✓): N модулей, M entities, K endpoints, L Kafka-топиков,
->  P внешних клиентов."
-
----
-
-## 5. Обновляем pipeline-state
-
-Обнови шаг `01-grounding` в pipeline feature-pipeline (скрипт сам берёт корень проекта —
-git toplevel или cwd; `--project <путь>` нужен только если корень другой):
-
-```bash
-python <project>/.gigacode/skills/pipeline-state/scripts/update.py \
-    --skill feature-pipeline \
-    --step-id 01-grounding \
-    --status completed \
-    --output-json '{
-      "system_analysis_path": "<docs_path>/system-analysis",
-      "excerpt_path": "<docs_path>/system-analysis/grounding-excerpt.json",
-      "modules_count": <N>,
-      "entities_count": <M>,
-      "endpoints_count": <K>
-    }'
-```
-
-Если pipeline-state ещё не инициализирован для этого прогона (`manifest.json` не
-существует) — не падай, просто пропусти обновление state и сообщи:
-> "pipeline-state не инициализирован — обновление шага 01-grounding пропущено.
->  Оркестратор инициализирует state при полном прогоне."
-
----
-
-## 6. Результат
-
-Скилл завершён. Верни итог оркестратору или пользователю:
+## 4. Результат
 
 ```
-✓ Grounding завершён
-  Обзор: <docs_path>/system-analysis/
-  Выжимка: <docs_path>/system-analysis/grounding-excerpt.json
-  Передать в tech-design: путь к выжимке + <docs_path>/system-analysis/
+✓ Инвентарь снят
+  ground/inventory/ — N модулей, M entities, K классов, L endpoints
+  Дальше: tech-design читает grounding-excerpt.json; check_taskplan сверяет по нему reuses
 ```
-
-Если запущен standalone (не из feature-pipeline), спроси:
-> "Хочешь сразу перейти к тех-дизайну? Для этого нужен BRD."
 
 ---
 
 ## Что НЕ делать
 
-- Не перезапускать `system-analyst` если обзор уже есть и пользователь выбрал
-  «переиспользовать».
-- Не строить excerpt перечитыванием MD глазами LLM — только из `scan/*.json`
-  (иначе теряются артефакты). И не передавать excerpt дальше без `pass` от
-  `verify_coverage.py`.
-- Не передавать в `system-analyst` историю разговора feature-pipeline.
-- Не писать в исходники проекта — только в `docs/`.
-- Не хранить в pipeline-state сами MD-файлы — только пути и счётчики.
-- Не блокироваться на отсутствии pipeline-state manifest — просто пропустить §5.
+- Не спрашивать «пересканировать ли» — скрипт решает сам по отпечатку исходников.
+- Не коммитить `ground/inventory/` — он эфемерный и самоигнорирующийся.
+- Не собирать человеческую документацию (`system-analyst`) — это отдельный запрос пользователя,
+  пайплайну она не нужна.
+- Не закрывать шаг при exit 2.
 
----
+## Связанное
 
-## Ссылки
-
-- `<project>/.gigacode/skills/system-analyst/SKILL.md` — полный цикл анализа
-- `<project>/.gigacode/skills/system-analyst/scripts/scan_all.py` — детерминированный скан (ground truth для excerpt)
-- `<project>/.gigacode/skills/system-analyst/scripts/verify_coverage.py` — gate самопроверки полноты
-- `<project>/.gigacode/skills/pipeline-state/scripts/` — init/read/update
-- `<project>/.gigacode/skills/tech-design/SKILL.md` — потребитель `grounding-excerpt.json` (что именно передаётся дизайнеру на стыке 1→2)
+- `system-analyst` — человеческий обзор системы (MD + диаграммы), вне пайплайна.
+- `tech-design` — потребитель `grounding-excerpt.json`.
+- `feature-pipeline/references/phases/01-grounding.md` — бриф фазы.

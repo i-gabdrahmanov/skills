@@ -204,6 +204,7 @@ from _project import (  # noqa: E402
     _master_base,
     approval_path,
     approvals_dir,
+    architecture_ground_path,
     archived_dir,
     docs_base,
     feature_docs_dir,
@@ -212,6 +213,7 @@ from _project import (  # noqa: E402
     gates_dir,
     grounding_excerpt_path,
     ground_dir,
+    inventory_dir,
     judge_path,
     judges_dir,
     load_pipeline_config,
@@ -233,6 +235,7 @@ from _project import (  # noqa: E402
     statements_dir,
     step_output_path,
     system_analysis_dir,
+    test_conventions_path,
 )
 
 

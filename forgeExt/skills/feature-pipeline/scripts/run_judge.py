@@ -55,7 +55,6 @@ SCHEMA_VERSION = "feature-pipeline/judge-verdict@1"
 PROJECT_ROOT: Path | None = None
 GROUND_DIR: Path | None = None
 FEATURE_DOCS_DIR: Path | None = None
-SYSTEM_ANALYSIS_DIR: Path | None = None
 SKILL_NAME: str = "feature-pipeline"
 BRD_OVERRIDE: Path | None = None  # явный путь к brd.md (--brd) для standalone-проверки
 REUSE_SCAN_OVERRIDE: Path | None = None  # явный путь к scan/reuse.json (--reuse-scan)
@@ -75,13 +74,42 @@ DEFAULT_SERVICE_UNIT_COVERAGE_EXCLUDES = [
 
 def _set_paths(project_root: Path, skill: str = "feature-pipeline") -> None:
     """Устанавливает глобальные пути для скрипта (вызывается из main())."""
-    global PROJECT_ROOT, GROUND_DIR, FEATURE_DOCS_DIR, SYSTEM_ANALYSIS_DIR, SKILL_NAME
+    global PROJECT_ROOT, GROUND_DIR, FEATURE_DOCS_DIR, SKILL_NAME
     PROJECT_ROOT = project_root
     GROUND_DIR = project_root / "ground"
     # docs-расположение резолвится по ground/pipeline.json (in-repo / separate-repo)
     FEATURE_DOCS_DIR = skill_paths.feature_docs_dir(project_root)
-    SYSTEM_ANALYSIS_DIR = skill_paths.system_analysis_dir(project_root)
+    # system-analysis (человеческий обзор) run_judge не читает: инвентарь для гейтов живёт в
+    # ground/inventory и резолвится через skill_paths там, где нужен. Флаг --system-analysis-dir
+    # снят — после переезда инвентаря он ничего не переопределял и молча не делал ничего.
     SKILL_NAME = skill
+
+
+def _ensure_inventory(project_root: Path) -> "str | None":
+    """Снять инвентарь перед гейтом дизайна. Возвращает текст warning'а или None.
+
+    Инвентарь — топливо кросс-чеков `check_taskplan` (модули из structure.json, классы из
+    components.json). Он эфемерный: в git не едет, на свежем клоне или после чистки ground/
+    его просто нет. Проверять «есть ли» и тихо пропускать гейт — худший вариант: судья
+    отрапортует PASS, не проверив ровно то, ради чего инвентарь и существует.
+    Скрипт идемпотентен (сканирует, только если код изменился), поэтому зовём безусловно.
+    """
+    try:
+        script = skill_paths.script(project_root, "system-analyst", "ensure_inventory")
+    except Exception as exc:
+        return f"инвентарь не снят (скрипт не найден: {exc}) — кросс-чеки дизайна могут быть неполны"
+    import subprocess  # локально — как в остальных вызывающих функциях этого модуля
+    try:
+        r = subprocess.run([sys.executable, str(script), "--root", str(project_root), "--quiet"],
+                           capture_output=True, text=True, timeout=300)
+    except Exception as exc:
+        return f"инвентарь не снят ({exc}) — кросс-чеки дизайна могут быть неполны"
+    if r.returncode == 2:
+        return ("инвентарь пуст (0 модулей и 0 entities) — кросс-чек reuses/модулей не на чем "
+                "выполнить; проверь корень репо кода")
+    if r.returncode != 0:
+        return f"ensure_inventory вернул {r.returncode}: {(r.stderr or '').strip()[:200]}"
+    return None
 
 
 def _load_json(path: Path) -> dict | None:
@@ -1066,38 +1094,33 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
                         "detail": "manifest.json not found in ground", "severity": "error"})
         blocking_issues.append("manifest.json в ground отсутствует")
 
-    # grounding-excerpt.json — должен быть актуален (содержать записи, а не пустой)
-    excerpt_path = SYSTEM_ANALYSIS_DIR / "grounding-excerpt.json"
+    # Инвентарь проекта — должен быть содержательным (записи, а не пустышка).
+    # Свежесть тут НЕ проверяется: инвентарь эфемерный и снимается заново перед гейтом
+    # (ensure_inventory.py). Прежняя проверка «excerpt новее task-plan.json» доказывала
+    # факт запуска enrich_grounding — вместе с самим enrich она потеряла смысл.
+    excerpt_path = skill_paths.grounding_excerpt_path(PROJECT_ROOT)
     if excerpt_path.exists():
         try:
             excerpt_data = json.loads(excerpt_path.read_text(encoding="utf-8"))
-            excerpt_age = excerpt_data.get("updated_at", "")
             excerpt_gate = excerpt_data.get("gate_total", 0)
-
-            # Проверка: enrich_grounding запускался после task-plan
-            excerpt_mtime = excerpt_path.stat().st_mtime if excerpt_path.exists() else 0
-            tp_mtime = task_plan_path.stat().st_mtime if task_plan_path.exists() else 0
-            enrich_fresh = excerpt_mtime >= tp_mtime if (excerpt_mtime and tp_mtime) else False
-
-            if excerpt_gate > 0 and enrich_fresh:
-                checks.append({"name": "Grounding excerpt exists and non-empty", "status": "PASS",
-                               "detail": f"grounding-excerpt.json found, gate_total={excerpt_gate}, enrich_grounding запущен",
+            modules = excerpt_data.get("modules") or []
+            if excerpt_gate > 0 or modules:
+                checks.append({"name": "Inventory exists and non-empty", "status": "PASS",
+                               "detail": f"инвентарь снят, gate_total={excerpt_gate}, "
+                                         f"модулей={len(modules)}",
                                "severity": "warning"})
-            elif excerpt_gate > 0 and not enrich_fresh:
-                warnings.append("grounding-excerpt.json старше task-plan.json — enrich_grounding не запускался после изменений")
-                checks.append({"name": "Enrich grounding fresh", "status": "WARN",
-                               "detail": "excerpt старше task-plan, enrich_grounding не обновлён", "severity": "warning"})
             else:
-                warnings.append("grounding-excerpt.json пуст (gate_total=0) — enrich_grounding не дал данных")
-                checks.append({"name": "Grounding excerpt non-empty", "status": "WARN",
-                               "detail": "grounding-excerpt.json пуст", "severity": "warning"})
+                warnings.append("инвентарь пуст (0 модулей, gate_total=0) — "
+                                "перезапусти ensure_inventory.py --force")
+                checks.append({"name": "Inventory non-empty", "status": "WARN",
+                               "detail": "инвентарь пуст", "severity": "warning"})
         except (json.JSONDecodeError, KeyError, AttributeError):
-            warnings.append("grounding-excerpt.json повреждён")
-            checks.append({"name": "Grounding excerpt valid", "status": "WARN",
+            warnings.append("инвентарь повреждён — перезапусти ensure_inventory.py --force")
+            checks.append({"name": "Inventory valid", "status": "WARN",
                            "detail": "grounding-excerpt.json повреждён", "severity": "warning"})
     else:
-        warnings.append("grounding-excerpt.json не найден — enrich_grounding не запускался")
-        checks.append({"name": "Grounding excerpt exists", "status": "WARN",
+        warnings.append("инвентарь не снят — прогони ensure_inventory.py")
+        checks.append({"name": "Inventory exists", "status": "WARN",
                         "detail": "grounding-excerpt.json not found", "severity": "warning"})
 
     # Требования-мастер: мастер обновляет ПОЛЬЗОВАТЕЛЬ командой /forge-spec merge, пайплайн в
@@ -1244,22 +1267,30 @@ def check_design(slug: str, feature_dir: Path | None) -> dict:
     taskplan_path = feature_dir / "task-plan.json" if feature_dir else None
     sdd_path = feature_dir / "sdd.md" if feature_dir else None
 
-    # scan-каталог грундинга (structure.json — модули, components.json — классы). Без --scan
-    # кросс-чек модулей И reuses в check_taskplan не запускается (включается только при --scan).
+    # scan-каталог инвентаря (structure.json — модули, components.json — классы). Без --scan
+    # кросс-чек модулей И reuses в check_taskplan не запускается — причём МОЛЧА: его warning'и
+    # сами завязаны на scan_given. Инвентарь эфемерный, на свежем клоне его может не быть, —
+    # поэтому здесь его СНИМАЕМ (идемпотентно, секунды, без LLM), а не «пропускаем, если нет».
     try:
         scan_dir = skill_paths.scan_dir(project_root)
     except Exception:
         scan_dir = None
+    inventory_note = _ensure_inventory(project_root)
 
     checks = []
     blocking_issues = []
     warnings = []
+    if inventory_note:
+        warnings.append(inventory_note)
 
     # 1. check_taskplan
     if taskplan_path and taskplan_path.exists():
         try:
             cmd = [sys.executable, str(check_taskplan_script), str(taskplan_path), "--json"]
-            if scan_dir and Path(scan_dir).exists():
+            # --scan передаём ВСЕГДА, когда путь резолвится: даже если каталога нет,
+            # check_taskplan тогда хотя бы скажет warning'ом, что кросс-чек не выполнен.
+            # Раньше при отсутствии каталога флаг не передавался — и гейт молчал совсем.
+            if scan_dir:
                 cmd.extend(["--scan", str(scan_dir)])
             r = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=60,
@@ -1829,9 +1860,18 @@ def _git_diff_added(base: str) -> list:
 
 
 def _load_reuse_deps() -> set:
-    """Множество имён зависимостей (artifact и group) из scan/reuse.json."""
+    """Множество имён зависимостей (artifact и group) из scan/reuse.json.
+
+    Пустой результат — не нейтральное значение: `lib_available` тогда всегда False, и КАЖДЫЙ
+    найденный велосипед падает с блокирующего FAIL до необязательного WARN. То есть отсутствие
+    каталога тихо превращает гейт переиспользования в советчика. Инвентарь эфемерный, поэтому
+    сначала снимаем его (идемпотентно), а если он всё равно пуст — зовущий обязан сказать это
+    вслух (см. check_reuse).
+    """
     p = REUSE_SCAN_OVERRIDE if REUSE_SCAN_OVERRIDE else (
-        SYSTEM_ANALYSIS_DIR / "scan" / "reuse.json")
+        skill_paths.scan_dir(PROJECT_ROOT) / "reuse.json")
+    if not REUSE_SCAN_OVERRIDE and not Path(p).exists():
+        _ensure_inventory(PROJECT_ROOT)
     data = _load_json(Path(p))
     deps: set = set()
     if data:
@@ -1863,6 +1903,14 @@ def check_reuse(slug: str, feature_dir: Path | None) -> dict:
                              "Нет production-изменений для проверки")
 
     deps = _load_reuse_deps()
+    if not deps:
+        # Без каталога зависимостей блокирующий слой судьи не работает — говорим это явно,
+        # а не отдаём «PASS с парой WARN», который читается как «велосипедов нет».
+        warnings.append("каталог зависимостей пуст (scan/reuse.json) — блокирующий слой "
+                        "reuse-судьи не работает, находки понижены до WARN; "
+                        "сними инвентарь: ensure_inventory.py --root <project>")
+        checks.append({"name": "reuse catalog available", "status": "WARN",
+                       "detail": "scan/reuse.json пуст или отсутствует", "severity": "warning"})
     for name, pattern, replacement, libs in REUSE_PATTERNS:
         hits = []
         for f, t in added:
@@ -1938,8 +1986,6 @@ def main():
                         help="Имя скилла для резолвинга ground/statements/<skill>/")
     parser.add_argument("--feature-docs", default=None,
                         help="Путь к docs/feature-pipeline (по умолчанию <project-root>/docs/feature-pipeline)")
-    parser.add_argument("--system-analysis-dir", default=None,
-                        help="Путь к docs/system-analysis (по умолчанию <project-root>/docs/system-analysis)")
     parser.add_argument("--brd", default=None,
                         help="Явный путь к документу БТ для фазы brd (standalone-проверка, "
                              "напр. docs/feature-pipeline/<slug>/brd.md). Относительный путь — от --project-root.")
@@ -1947,7 +1993,7 @@ def main():
                         help="База git diff для фазы reuse (по умолчанию HEAD).")
     parser.add_argument("--reuse-scan", default=None,
                         help="Путь к scan/reuse.json (каталог зависимостей) для фазы reuse "
-                             "(по умолчанию docs/system-analysis/scan/reuse.json).")
+                             "(по умолчанию ground/inventory/scan/reuse.json).")
     parser.add_argument("--recheck", action="store_true",
                         help="Перепроверить существующий вердикт (exit 1 если нет или failed)")
     parser.add_argument("--from-output", default=None,
@@ -1967,10 +2013,6 @@ def main():
     if args.feature_docs:
         global FEATURE_DOCS_DIR
         FEATURE_DOCS_DIR = Path(args.feature_docs).resolve()
-
-    if args.system_analysis_dir:
-        global SYSTEM_ANALYSIS_DIR
-        SYSTEM_ANALYSIS_DIR = Path(args.system_analysis_dir).resolve()
 
     if args.brd:
         global BRD_OVERRIDE

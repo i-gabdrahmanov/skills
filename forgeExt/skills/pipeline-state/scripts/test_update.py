@@ -78,7 +78,7 @@ def _pipeline_cfg(project: Path, cfg: dict):
 def _excerpt(project: Path, *, modules=("service-x",), entities=()):
     """Содержательная выжимка grounding — нужна, чтобы закрыть 01-grounding
     (update._check_grounding_substance)."""
-    sa = project / "docs" / "system-analysis"
+    sa = project / "ground" / "inventory"
     sa.mkdir(parents=True, exist_ok=True)
     (sa / "grounding-excerpt.json").write_text(
         json.dumps({"modules": list(modules), "entities": list(entities)}), encoding="utf-8")

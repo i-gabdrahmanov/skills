@@ -22,12 +22,33 @@ LAYERS = {"migration", "entity", "repository", "dto", "mapper", "service", "cont
 REQUIRED_TOP = ["feature_slug", "title", "tasks"]
 
 
+def _excerpt(scan_dir: str | None) -> dict:
+    """grounding-excerpt.json рядом со scan-каталогом (<system-analysis>/scan → на уровень выше).
+
+    scan/ — производный кеш, он не коммитится и на свежем клоне его нет: фаза 01 при найденном
+    excerpt уходит в reuse-ветку и scan_all не гоняет. Без фоллбэка оба кросс-чека ниже молча
+    вырождались бы в warning — а это ровно те гейты, ради которых грундинг и собирается.
+    """
+    if not scan_dir:
+        return {}
+    p = Path(scan_dir).parent / "grounding-excerpt.json"
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def _load_modules(scan_dir: str | None):
     if not scan_dir:
         return None
     p = Path(scan_dir) / "structure.json"
     if not p.exists():
-        return None
+        mods = _excerpt(scan_dir).get("modules") or []
+        names = {m["name"] for m in mods if isinstance(m, dict) and m.get("name")}
+        return names or None
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
@@ -57,7 +78,7 @@ def _load_existing_classes(scan_dir: str | None):
         return None
     comp = _read_scan(scan_dir, "components.json")
     if not comp:
-        return None
+        return _classes_from_excerpt(scan_dir)
     names: set[str] = set()
     for it in comp.get("items", []):
         if it.get("name"):
@@ -71,6 +92,31 @@ def _load_existing_classes(scan_dir: str | None):
     for it in _read_scan(scan_dir, "reuse.json").get("project_utils", []):
         if it.get("class"):
             names.add(it["class"])
+    return names
+
+
+def _classes_from_excerpt(scan_dir: str | None):
+    """Инвентарь классов из excerpt'а — фоллбэк, когда scan/ не собран на этой машине.
+
+    Excerpt несёт те же components/entities и FQN util-классов, что и scan, — этого хватает,
+    чтобы гейт ловил галлюцинированные «существующие» классы. None, если инвентаря нет вовсе:
+    пропустить кросс-чек честнее, чем валить дизайн по пустому списку.
+    """
+    data = _excerpt(scan_dir)
+    names: set[str] = set()
+    for it in data.get("components") or []:
+        if isinstance(it, dict) and it.get("name"):
+            names.add(it["name"])
+    if not names:
+        return None
+    for it in data.get("entities") or []:
+        if isinstance(it, dict) and it.get("name"):
+            names.add(it["name"])
+    reuse = data.get("reuse")
+    if isinstance(reuse, dict):
+        for fqn in reuse.get("project_utils") or []:
+            if isinstance(fqn, str) and fqn.strip():
+                names.add(fqn.strip().rsplit(".", 1)[-1])
     return names
 
 

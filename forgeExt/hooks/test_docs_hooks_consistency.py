@@ -77,6 +77,39 @@ class TestDocsHooksConsistency(unittest.TestCase):
         self.assertNotIn("log-agent", raw, "log-agent удалён — не должен быть в settings")
         self.assertNotIn("agent-logger", raw, "agent-logger (log-agent) удалён — не должен быть в settings")
 
+    def test_no_doc_promises_an_unwired_hook(self):
+        """Обратное направление: дока НЕ вправе обещать хук, которого нет в проводке.
+
+        Существующие пины ловят только «проведён, но не описан». Обратную дыру они пропускали:
+        `docs/pipeline-technical.md` годами держал в таблице `evidence-enforcer` с пометкой
+        «блок доставки, exit 2» — хука нет с тех пор, как из форжа сняли доставку. Дока,
+        обещающая несуществующий enforcement, хуже отсутствия доки: на неё полагаются.
+        """
+        block = json.loads(SETTINGS.read_text(encoding="utf-8")).get("hooks", {})
+        wired: set[str] = set()
+        for groups in block.values():
+            for group in groups:
+                for h in group.get("hooks", []):
+                    b = _basename(h.get("command", ""))
+                    if b:
+                        wired.add(b)
+        name = re.compile(r"`?([a-z][a-z0-9\-_]*)(?:\.py)?`?")
+        events = ("PreToolUse", "PostToolUse", "SubagentSt", "UserPrompt", "Stop")
+        for doc in (FORGE, HOOKS / "DEPLOY.md", REPO / "docs" / "pipeline-technical.md"):
+            claimed: set[str] = set()
+            for line in doc.read_text(encoding="utf-8").splitlines():
+                if not line.startswith("|"):
+                    continue
+                cells = [c.strip() for c in line.strip("|").split("|")]
+                if len(cells) < 3 or not any(e in cells[1] for e in events):
+                    continue
+                m = name.match(cells[0])
+                if m:
+                    claimed.add(m.group(1))
+            ghosts = sorted(c for c in claimed if c not in wired)
+            self.assertEqual(ghosts, [],
+                             f"{doc.name}: таблица хуков обещает непроведённые хуки: {ghosts}")
+
     def test_every_wired_hook_in_forge_roster(self):
         """Каждый проведённый в settings хук обязан присутствовать в ростер-таблице FORGE.md.
 

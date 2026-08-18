@@ -125,10 +125,14 @@ gigacode --experimental-hooks -p "сделай фичу X"     # одной ко
 
 ```
 <project>/
-├── docs/feature-pipeline/<slug>/      # brd.md, tech-design.md, task-plan.json, sdd.md, eval-plan.json
-├── docs/system-analysis/              # карта системы (grounding) + grounding-excerpt.json
+├── docs/feature-pipeline/<slug>/      # brd.md, sdd.md, tech-design.md, task-plan.json,
+│                                     #   eval-plan.json, design-context.json
+├── docs/system-analysis/              # человеческий обзор системы (system-analyst, по запросу;
+│                                     #   пайплайну НЕ нужен)
 └── ground/
     ├── pipeline.json                  # конфиг конвейера (критичность, пороги, Jira-мета)
+    ├── inventory/                     # эфемерный инвентарь для гейтов — в git НЕ едет,
+    │                                  #   снимается ensure_inventory.py за секунды
     └── statements/feature-pipeline/<slug>/   # состояние прогона (манифест, судьи, errors.json)
 ```
 

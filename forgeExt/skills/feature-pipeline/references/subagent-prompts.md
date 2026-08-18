@@ -156,7 +156,7 @@ prompt:
 Сначала прочитай и строго следуй: read_file("<project>/.gigacode/skills/test-writer/SKILL.md")
 (режим RED). Конвенции тестовой базы (первый вызов сканирует, дальше кэш):
 python3 <project>/.gigacode/skills/test-writer/scripts/analyze_tests.py --root <project> --if-missing
-Затем прочитай docs/system-analysis/scan/test-conventions.json и 1-2 эталонных теста из
+Затем прочитай ground/inventory/test-conventions.json и 1-2 эталонных теста из
 exemplars — пиши в их стиле.
 
 TDD, фаза RED. Реализации ещё НЕТ — твоя задача написать тесты, которые её специфицируют:
@@ -305,7 +305,7 @@ prompt:
 Сначала прочитай и строго следуй: read_file("<project>/.gigacode/skills/test-writer/SKILL.md")
 (режим GREEN). Конвенции тестовой базы (первый вызов сканирует, дальше кэш):
 python3 <project>/.gigacode/skills/test-writer/scripts/analyze_tests.py --root <project> --if-missing
-Стиль — по docs/system-analysis/scan/test-conventions.json и эталонам из exemplars.
+Стиль — по ground/inventory/test-conventions.json и эталонам из exemplars.
 
 Прочитай check_coverage.py отчёт (LOW/MISSING файлы).
 Допиши тесты только под непокрытое. Не переписывай зелёные тесты.
@@ -663,15 +663,17 @@ prompt:
    a. docs/feature-pipeline/<slug>/brd.md — существует?
    b. docs/feature-pipeline/<slug>/tech-design.md — существует?
    c. docs/feature-pipeline/<slug>/task-plan.json — существует?
-2. Проверь актуальность ground (если есть enrich_grounding):
+2. Проверь состояние прогона и инвентаря:
    a. ground/statements/feature-pipeline/<slug>/manifest.json — exists?
-   b. docs/system-analysis/scan/ — обновлён для изменённых модулей?
-   c. docs/system-analysis/grounding-excerpt.json — существует и не пуст?
+   b. ground/inventory/grounding-excerpt.json — существует и не пуст?
+   (Свежесть инвентаря НЕ проверяй по времени файлов: он эфемерный и пересобирается
+   ensure_inventory.py по отпечатку исходников, а не накапливается между фичами.)
 3. Проверь, что docs/feature-pipeline/ не замусорен:
    a. Нет папок предыдущих фич с incomplete-статусом.
    b. Только текущая фича.
 4. Проверь артефакты (если применимо):
-   a. UML-диаграммы (system-analysis/api.md) — обновлены для изменённых эндпойнтов?
+   a. UML-диаграммы (docs/system-analysis/api.md) — если пользователь ведёт этот обзор,
+      обновлены для изменённых эндпойнтов? Обзора нет — это не FAIL, пайплайн его не требует.
    b. ADR (Architecture Decision Records) — если нужно, созданы?
 5. **Правописание и язык.** Прочитай прозу `tech-design.md` и `sdd.md` и проверь русский текст
    на орфографические ошибки, «странные»/несуществующие слова (машинный перевод, обрезки,
@@ -682,7 +684,7 @@ prompt:
 Критерии FAIL:
 - brd.md, tech-design.md или task-plan.json отсутствуют
 - ground/statements/feature-pipeline/<slug> пуст или отсутствует manifest
-- enrich_grounding не запускался (проверить по времени файлов ground)
+- ground/inventory/grounding-excerpt.json отсутствует или пуст
 - tech-design.md/sdd.md нечитаемы из-за орфографии / «странных» слов (смысл искажён)
 
 Верни JSON:
@@ -694,10 +696,9 @@ prompt:
     {"name": "BRD exists", "status": "PASS", "detail": "brd.md found", "severity": "error"},
     {"name": "Tech design exists", "status": "PASS", "detail": "tech-design.md found", "severity": "error"},
     {"name": "Правописание/язык", "status": "PASS", "detail": "орфография tech-design.md/sdd.md — ок", "severity": "warning"},
-    {"name": "Grounding updated", "status": "FAIL", "detail": "grounding-excerpt.json not updated since last run", "severity": "error"}
+    {"name": "Inventory non-empty", "status": "PASS", "detail": "ground/inventory/grounding-excerpt.json содержателен", "severity": "warning"}
   ],
   "missing_docs": [],
-  "stale_grounding_modules": ["service/taskservice"],
   "blocking_issues": ["grounding-excerpt.json не обновлён — следующая фича стартует без контекста"],
   "summary": "2/3 checks passed. 1 blocking issue."
 }
@@ -802,7 +803,7 @@ prompt:
 Контекст:
 - Фича (slug): <slug>
 - git diff (production, без тестов): <git diff>
-- Каталог переиспользования: <docs/system-analysis/scan/reuse.json> (dependencies + project_utils)
+- Каталог переиспользования: <ground/inventory/scan/reuse.json> (dependencies + project_utils)
   и секция reuse из grounding-excerpt.json (инъектится context-injector)
 - tech-design.md: <путь>
 

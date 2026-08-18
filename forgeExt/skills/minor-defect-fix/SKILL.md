@@ -341,8 +341,8 @@ prompt:
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py reuse <JIRA-KEY> \
   --diff-base HEAD --project-root <toplevel>
 ```
-- Если каталога `docs/system-analysis/scan/reuse.json` нет — создай его (первый запуск)
-  через project-grounder/system-analyst, либо пропусти проверку с пометкой.
+- Если каталога `ground/inventory/scan/reuse.json` нет — сними инвентарь:
+  `python3 <project>/.gigacode/skills/system-analyst/scripts/ensure_inventory.py --root <toplevel>`.
 - exit 1 (есть велосипеды) — покажи список `BLOCKING:`/`WARN:` пользователю и спроси, заменить
   ли на библиотеку/util из каталога. Не правь молча и не блокируй коммит автоматически.
 

@@ -68,7 +68,7 @@ pre-existing и НЕ будет считаться твоей виной (но �
 
 Контракт `4.1` первым делом читает скилл `test-writer` (персона тестописателя: правила RED/GREEN
 + конвенции тестовой базы проекта, кэшируемые при первом запуске в
-`docs/system-analysis/scan/test-conventions.json` скриптом `analyze_tests.py --if-missing`).
+`ground/inventory/test-conventions.json` скриптом `analyze_tests.py --if-missing`).
 
 Для каждой задачи вызови agent() с контрактом тестописателя `get_prompt.py 4.1`:
 ```

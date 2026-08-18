@@ -465,9 +465,9 @@ pipeline-state: sdd→`check_sdd_doc.py`, design→`check_taskplan.py`+`check_sd
 (сама генерация, без gate — ошибка только если скрипт упал),
 jira→`check_jira.py`, build→`check_build.py` (с дополнительным
 **хуком `eval-guard`**, который проверяет прохождение eval'ов в рантайме),
-tests→`check_coverage.py`, document→`enrich_grounding.py` (инкрементально). Шаг не
+tests→`check_coverage.py`, grounding→`ensure_inventory.py`. Шаг не
 закрывается, пока execution-gate не вернул `pass` (exit 0) — это ловит молчаливый
-недосчёт/провал (как `verify_coverage.py` в grounding).
+недосчёт/провал.
 
 ---
 
@@ -521,7 +521,7 @@ tests→`check_coverage.py`, document→`enrich_grounding.py` (инкремен�
 | 03-jira | `references/phases/03-jira.md` | Гейт 3 + check_jira |
 | 04-tdd | `references/phases/04-tdd.md` | red/build/reuse-judge + record_gate per-task |
 | 05-verify | `references/phases/05-verify.md` | coverage+regression+arch + record_gate |
-| 06-document | `references/phases/06-document.md` | spec-judge + enrich_grounding (финал) |
+| 06-document | `references/phases/06-document.md` | spec-judge (финал) |
 
 ---
 

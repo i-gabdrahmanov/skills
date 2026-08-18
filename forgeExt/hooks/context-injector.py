@@ -23,7 +23,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-PER_FILE_LIMIT = 6000  # символов на файл
+PER_FILE_LIMIT = 20000  # символов на файл
+
+# Служебные ключи excerpt'а: нужны человеку и git-истории, но не субагенту — при инъекции режем.
+_EXCERPT_NOISE_KEYS = ("_sources",)
 
 
 def _env_hint() -> str | None:
@@ -61,6 +64,23 @@ def _env_hint() -> str | None:
     return "### Окружение этой машины (переопределяет буквальные примеры команд в доках)\n" + "\n".join(lines)
 
 
+def _compact_excerpt(data: dict) -> str:
+    """Ужать grounding-excerpt под инъекцию: снять служебное и лишние пробелы.
+
+    В файле excerpt лежит с indent=2 и с `_sources` (в какой фиче артефакт появился) —
+    это для человека и git-истории. Субагенту нужен только сам срез системы, а на живом
+    проекте excerpt заметно длиннее PER_FILE_LIMIT, и всё, что не влезло, субагент просто
+    не увидит. Ужимаем — обрезка начинается сильно позже.
+    """
+    def _strip(v):
+        if isinstance(v, dict):
+            return {k: _strip(x) for k, x in v.items() if k not in _EXCERPT_NOISE_KEYS}
+        if isinstance(v, list):
+            return [_strip(x) for x in v]
+        return v
+    return json.dumps(_strip(data), ensure_ascii=False, separators=(",", ":"))
+
+
 def _inject_targets(root: Path) -> list[tuple[str, Path]]:
     """(label, абсолютный путь) файлов для инъекции, в порядке важности.
 
@@ -71,7 +91,7 @@ def _inject_targets(root: Path) -> list[tuple[str, Path]]:
         import _project  # type: ignore
         excerpt = _project.grounding_excerpt_path(root)
     except Exception:
-        excerpt = root / "docs/system-analysis/grounding-excerpt.json"  # fallback (резолвер недоступен)
+        excerpt = root / "ground/inventory/grounding-excerpt.json"  # fallback (резолвер недоступен)
     return [
         ("system-analysis/grounding-excerpt.json", excerpt),  # компактный срез системы
         ("ground/conventions.md", root / "ground/conventions.md"),  # раскладка слоёв проекта
@@ -126,8 +146,13 @@ def main() -> int:
                         print(f"[context-injector] WARNING: {label} без ключей {missing} — "
                               f"инъектится как есть, но grounding может быть неполным",
                               file=sys.stderr)
+                    txt = _compact_excerpt(parsed)
             if len(txt) > PER_FILE_LIMIT:
-                txt = txt[:PER_FILE_LIMIT] + f"\n…(усечено, всего {len(txt)} символов)"
+                # Обрезка молча теряет хвост среза — говорим субагенту, где взять полный,
+                # иначе он решит, что видит систему целиком.
+                txt = (txt[:PER_FILE_LIMIT]
+                       + f"\n…(усечено: показано {PER_FILE_LIMIT} из {len(txt)} символов; "
+                         f"полный срез — в файле {p})")
             chunks.append(f"### Контекст пайплайна: `{label}`\n```\n{txt}\n```")
 
         if not chunks:

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""grounding-evidence.py — фиксирует чтение grounding-index в журнале прогона.
+"""grounding-evidence.py — фиксирует чтение grounding-excerpt в журнале прогона.
 
-НЕ логгер. Единственная задача: когда агент читает `grounding-index.json`, дописать одну
+НЕ логгер. Единственная задача: когда агент читает `grounding-excerpt.json`, дописать одну
 evidence-запись `kind:"grounding"` в журнал прогона фичи (events.jsonl). Её читает
-`gate-guard`, чтобы снять блок фазы `01-grounding` (пока агент не сверился с grounding-index,
+`gate-guard`, чтобы снять блок фазы `01-grounding` (пока агент не сверился с grounding-excerpt,
 чтение `src/` заблокировано).
 
 Вынесено из удалённого `log-agent` (там эта запись ехала попутно с логами тул-активности).
-В отличие от прежней версии пишет ТОЛЬКО факт чтения grounding-index — никакого пер-файлового
+В отличие от прежней версии пишет ТОЛЬКО факт чтения grounding-excerpt — никакого пер-файлового
 «лога чтений» (read_code/search_code/…): их потребитель (agentops) удалён, а гейту нужен лишь
 `read_grounding`. Хук лёгкий, sync, НИКОГДА не падает с ненулевым кодом — фиксация evidence не
 должна ронять прогон.
@@ -40,12 +40,12 @@ def _agent_label(data: dict) -> str:
 
 
 def _record_grounding_read(data: dict, root: str) -> None:
-    """Пишет evidence, только если агент читает grounding-index."""
+    """Пишет evidence, только если агент читает grounding-excerpt."""
     if data.get("tool_name", "") not in {"Read", "ReadFile"}:
         return
     tool_input = data.get("tool_input") or {}
     file_path = str(tool_input.get("file_path") or tool_input.get("path") or "")
-    if "grounding-index" not in file_path:
+    if "grounding-excerpt" not in file_path:
         return
 
     # Пишем в журнал прогона активной фичи. Раньше — в ground/phases/<feature>/

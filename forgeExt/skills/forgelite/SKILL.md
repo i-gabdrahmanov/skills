@@ -135,26 +135,25 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --proje
 
 Закрой `lite-jira` (команда update.py как в §1.1).
 
-## 3. Лёгкий grounding → `lite-ground`
-1. Если `<toplevel>/docs/system-analysis/grounding-excerpt.json` есть — переиспользуй, закрой инлайн.
-2. Иначе субагент-orientation (agent()):
+## 3. Инвентарь → `lite-ground`
+
+Субагент здесь не нужен: инвентарь снимает скрипт за секунды, детерминированно и без LLM.
+
+```bash
+python3 <project>/.gigacode/skills/system-analyst/scripts/ensure_inventory.py --root <toplevel>
 ```
-description: "Lite grounding orientation for <JIRA-KEY>"
-subagent_type: general-purpose
-prompt:
-Собери КОМПАКТНЫЙ обзор области кода под задачу — без полного скана.
-Корень репо: <toplevel>
-Задача: <summary> / AC: <core description>
-Действия (грепом по именам классов/сущностей/эндпойнтов из задачи):
-1. Затронутый модуль(и) и 3–8 ключевых классов.
-2. Соседние тесты (пути) и их стиль (JUnit5/Mockito, given/when/then).
-3. Конвенции: сборка (gradle/maven), Lombok, структура пакетов, слои.
-Запиши в <toplevel>/docs/system-analysis/grounding-excerpt.json:
-{"modules":[...],"touched_classes":[...],"neighbor_tests":[...],"conventions":{...},"build":"gradle|maven"}
-Верни JSON: {"step_id":"lite-ground","status":"completed","summary":"<1-2 предложения>"}
-Не смог локализовать — status:"failed" и что мешает.
-```
-Файл подхватывает `context-injector` (вкладывает в последующих субагентов). Reuse — закрой инлайн.
+
+Идемпотентно: код не менялся — ничего не делает; менялся — пересканирует сам. Результат в
+`<toplevel>/ground/inventory/` (эфемерный, в git не едет). Закрой шаг инлайн.
+
+- **exit 2** (пусто) — сканировали не тот корень. Уточни у пользователя корень репо кода.
+
+`grounding-excerpt.json` подхватывает `context-injector` и вкладывает в последующих субагентов.
+
+> Раньше здесь субагент писал «лёгкий обзор» своей формы (`touched_classes`, `neighbor_tests`).
+> Проблема была не в объёме, а в том, что такой файл проходил гейты полного пайплайна как
+> настоящий инвентарь: `check_taskplan` не находил в нём `components` и молча пропускал
+> кросс-чек `reuses`. Теперь форма одна и настоящая.
 
 ## 4. Tech-design по существующей спеке → `lite-design` (Gate 1)
 
@@ -189,7 +188,7 @@ prompt:
      по этой спеке (sdd_ref якори — на её разделы). НЕ пиши BRD/SDD заново. Пиши ТОЛЬКО в <litedir>
      (абсолютный путь выше) — запись в каталог харнеса (skills/) блокирует state-write-guard.
      ПОСЛЕДНИМ действием прогони гейт ЧЕРЕЗ РАННЕР (без него шаг не закроется):
-     python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-design --cmd "python3 <project>/.gigacode/skills/tech-design/scripts/check_taskplan.py <путь-к-task-plan.json> && python3 <project>/.gigacode/skills/tech-design/scripts/check_sdd.py <путь-к-task-plan.json> --sdd <sources.spec>"
+     python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-design --cmd "python3 <project>/.gigacode/skills/tech-design/scripts/check_taskplan.py <путь-к-task-plan.json> --scan <toplevel>/ground/inventory/scan && python3 <project>/.gigacode/skills/tech-design/scripts/check_sdd.py <путь-к-task-plan.json> --sdd <sources.spec>"
      Верни JSON {"step_id":"lite-design","status":"completed"} только если раннер дал exit 0.
    ```
 > **Gate 1:** «Дизайн такой?» — к коду только после «да» (или предзаписи в headless).
@@ -218,7 +217,7 @@ prompt:
 Сначала прочитай и строго следуй: read_file("<project>/.gigacode/skills/test-writer/SKILL.md")
 (режим RED). Конвенции тестовой базы (первый вызов сканирует, дальше кэш):
 python3 <project>/.gigacode/skills/test-writer/scripts/analyze_tests.py --root <toplevel> --if-missing
-Стиль — по docs/system-analysis/scan/test-conventions.json и эталонам из exemplars.
+Стиль — по ground/inventory/test-conventions.json и эталонам из exemplars.
 Напиши падающие unit-тесты (TDD RED) по acceptance criteria. НЕ трогай src/main/.
 Корень репо: <toplevel>. Сборка: <gradle|maven>.
 Задача: <summary> / AC: <acceptance criteria>. Grounding: <классы/соседние тесты>.

@@ -41,7 +41,7 @@ class T(unittest.TestCase):
     def test_broken_excerpt_json_not_injected(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            sa = tmp / "docs" / "system-analysis"
+            sa = tmp / "ground" / "inventory"
             sa.mkdir(parents=True)
             (sa / "grounding-excerpt.json").write_text('{"modules": [broken', encoding="utf-8")
             r = _run_in(tmp)
@@ -52,7 +52,7 @@ class T(unittest.TestCase):
     def test_valid_excerpt_injected(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            sa = tmp / "docs" / "system-analysis"
+            sa = tmp / "ground" / "inventory"
             sa.mkdir(parents=True)
             (sa / "grounding-excerpt.json").write_text(
                 json.dumps({"modules": ["m1"], "conventions": {"build": "gradle"}}),
@@ -65,7 +65,7 @@ class T(unittest.TestCase):
     def test_excerpt_missing_keys_warns_but_injects(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            sa = tmp / "docs" / "system-analysis"
+            sa = tmp / "ground" / "inventory"
             sa.mkdir(parents=True)
             (sa / "grounding-excerpt.json").write_text(json.dumps({"foo": 1}), encoding="utf-8")
             r = _run_in(tmp)

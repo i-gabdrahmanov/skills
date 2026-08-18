@@ -41,16 +41,44 @@ HARD = {"domain", "api", "async_consumers"}
 
 
 def _default_scan_dir(root: Path) -> Path:
-    """Каталог scan по конфигу docs (in-repo/separate-repo); фоллбэк <root>/docs/system-analysis/scan."""
+    """Каталог scan через единый резолвер; фоллбэк <root>/ground/inventory/scan."""
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "feature-pipeline" / "scripts"))
         import skill_paths  # type: ignore
         return skill_paths.scan_dir(root)
     except Exception:
-        return root / "docs/system-analysis/scan"  # fallback (резолвер недоступен)
+        return root / "ground/inventory/scan"  # fallback (резолвер недоступен)
 
 
-def _attribute(items: list[dict], index, prefix: str = "") -> dict:
+def _rel_file(f: str, root: Path, prefix: str) -> str:
+    """Путь артефакта относительно корня скана, всегда через '/'.
+
+    Сканеры отдают `str(path)` от `root.resolve()`, т.е. абсолютный путь машины. В
+    scan/*.json это и утечка имени пользователя в спек-репо, и гарантированный конфликт
+    на каждом merge (у двух разработчиков не совпадает ни один путь). К модулю запись уже
+    приписана выше (`attribute_module`), а `file` ниже по течению не читает никто, кроме
+    самой атрибуции — так что абсолютный путь после неё не нужен.
+    """
+    p = Path(f)
+    try:
+        rel = p.resolve().relative_to(root).as_posix()
+    except ValueError:
+        return p.as_posix()  # вне корня скана (симлинк/чужой путь) — оставляем как есть
+    return f"{prefix}/{rel}" if prefix else rel
+
+
+def _sort_key(it: dict) -> tuple:
+    """Устойчивый порядок записей внутри категории.
+
+    Без него порядок = порядок обхода `rglob`, т.е. порядок файловой системы: одинаковый
+    код давал бы разные scan/*.json на разных машинах.
+    """
+    return (str(it.get("file") or ""),
+            str(it.get("name") or it.get("path") or it.get("topic") or it.get("class") or ""),
+            str(it.get("handler") or it.get("method") or it.get("http_method") or ""))
+
+
+def _attribute(items: list[dict], index, prefix: str = "", root: "Path | None" = None) -> dict:
     counts: dict[str, int] = {}
     for it in items:
         f = it.get("file")
@@ -58,14 +86,17 @@ def _attribute(items: list[dict], index, prefix: str = "") -> dict:
         if prefix:
             mod = f"{prefix}:{mod}"
         it["module"] = mod
+        if f and root is not None:
+            it["file"] = _rel_file(f, root, prefix)
         counts[mod] = counts.get(mod, 0) + 1
+    items.sort(key=_sort_key)
     return counts
 
 
-def _cat(name: str, items: list[dict], index, prefix: str) -> dict:
+def _cat(name: str, items: list[dict], index, prefix: str, root: "Path | None" = None) -> dict:
     return {"category": name, "hard": name in HARD, "total": len(items),
             "gate_total": len(items),
-            "counts_by_module": _attribute(items, index, prefix), "items": items}
+            "counts_by_module": _attribute(items, index, prefix, root), "items": items}
 
 
 def scan_root(root: Path, prefix: str = "") -> dict:
@@ -98,15 +129,15 @@ def scan_root(root: Path, prefix: str = "") -> dict:
                       "build_system": struct["build_system"], "is_multi_module": struct["is_multi_module"],
                       "spring_boot_version": struct["spring_boot_version"], "java_version": struct["java_version"],
                       "spring_boot_applications": struct["spring_boot_applications"], "modules": struct["modules"]},
-        "domain": _cat("domain", domain.scan(root), index, prefix),
-        "components": _cat("components", components_mod.scan(root), index, prefix),
-        "api": _cat("api", ep_items, index, prefix),
-        "async_consumers": _cat("async_consumers", consumers, index, prefix),
-        "async_producers": _cat("async_producers", producers, index, prefix),
-        "integration": _cat("integration", integration.scan(root), index, prefix),
-        "cross_cutting": _cat("cross_cutting", cross_cutting.scan(root), index, prefix),
+        "domain": _cat("domain", domain.scan(root), index, prefix, root),
+        "components": _cat("components", components_mod.scan(root), index, prefix, root),
+        "api": _cat("api", ep_items, index, prefix, root),
+        "async_consumers": _cat("async_consumers", consumers, index, prefix, root),
+        "async_producers": _cat("async_producers", producers, index, prefix, root),
+        "integration": _cat("integration", integration.scan(root), index, prefix, root),
+        "cross_cutting": _cat("cross_cutting", cross_cutting.scan(root), index, prefix, root),
         "config": {"category": "config", "hard": False, "total": len(cfg["files"]),
-                   "profiles": cfg["profiles"], "counts_by_module": _attribute(cfg["files"], index, prefix),
+                   "profiles": cfg["profiles"], "counts_by_module": _attribute(cfg["files"], index, prefix, root),
                    "items": cfg["files"]},
         "db": {"category": "db", "hard": False, "total": len(db_items), "gate_total": len(db_items),
                "migration_tool": dbres["migration_tool"], "migration_count": dbres["migration_count"],
@@ -116,8 +147,8 @@ def scan_root(root: Path, prefix: str = "") -> dict:
     # reuse — каталог переиспользования (ADVISORY): внешние зависимости + util-классы проекта.
     dep_items = reuse_mod.scan_dependencies(root)
     util_items = reuse_mod.scan_project_utils(root)
-    dep_counts = _attribute(dep_items, index, prefix)
-    util_counts = _attribute(util_items, index, prefix)
+    dep_counts = _attribute(dep_items, index, prefix, root)
+    util_counts = _attribute(util_items, index, prefix, root)
     reuse_counts = {m: dep_counts.get(m, 0) + util_counts.get(m, 0)
                     for m in set(dep_counts) | set(util_counts)}
     cats["reuse"] = {"category": "reuse", "hard": False,
@@ -158,9 +189,8 @@ def _merge(into: dict, src: dict) -> None:
 def write_scan(roots: list[Path], out: Path) -> dict:
     """Прогнать сканеры по корням и записать per-category JSON + summary.json в ``out``.
 
-    Возвращает summary-словарь. Переиспользуется из main() и из enrich_grounding
-    (чтобы инкрементальное обогащение освежало scan по реальному коду, а не читало
-    устаревшие JSON).
+    Возвращает summary-словарь. Переиспользуется из main() и из ensure_inventory
+    (он решает, устарел ли инвентарь, и зовёт скан только когда код изменился).
     """
     multi = len(roots) > 1
     cats: dict = {}
@@ -168,6 +198,15 @@ def write_scan(roots: list[Path], out: Path) -> dict:
         _merge(cats, scan_root(r, prefix=r.name if multi else ""))
 
     out.mkdir(parents=True, exist_ok=True)
+    # scan/ — производный кеш инвентаря: снимается заново, когда код изменился. Держать его в
+    # git незачем, а вред есть: полная перезапись на каждом прогоне = конфликт на каждый merge.
+    # Самоигнорирующийся каталог; '*' прячет и сам .gitignore, поэтому в клоне scan/ просто не
+    # появится. (Штатное место — ground/inventory/scan, но -o может указать куда угодно.)
+    gitignore = out / ".gitignore"
+    if not gitignore.exists():
+        gitignore.write_text(
+            "# Производный кеш системного скана — пересобирается scan_all.py. В git не нужен.\n*\n",
+            encoding="utf-8")
     for name, cat in cats.items():
         (out / f"{name}.json").write_text(json.dumps(cat, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -201,9 +240,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Deterministic system scan (ground truth for self-check).")
     ap.add_argument("roots", nargs="*", help="project root(s) (default: git toplevel или cwd)")
     ap.add_argument("-o", "--out", default=None,
-                    help="output dir (default: <root>/docs/system-analysis/scan — канонический путь, "
-                         "откуда читают check_grounding/verify_coverage/enrich_grounding; "
-                         "для отдельного спека-репо передавай <docs_path>/system-analysis/scan)")
+                    help="output dir (default: <root>/ground/inventory/scan — канонический путь, "
+                         "откуда читают ensure_inventory/verify_coverage и гейты дизайна)")
     ap.add_argument("--quiet", action="store_true", help="do not print the summary table")
     args = ap.parse_args()
 

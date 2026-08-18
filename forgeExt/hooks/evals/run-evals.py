@@ -224,8 +224,8 @@ def main() -> int:
 
         # ── context-injector: инъекция при general-purpose (а не по agent_type) ──
         rci = make_project(tmp / "ctxinj")
-        (rci / "docs" / "system-analysis").mkdir(parents=True, exist_ok=True)
-        (rci / "docs" / "system-analysis" / "grounding-excerpt.json").write_text('{"modules":[]}', encoding="utf-8")
+        (rci / "ground" / "inventory").mkdir(parents=True, exist_ok=True)
+        (rci / "ground" / "inventory" / "grounding-excerpt.json").write_text('{"modules":[]}', encoding="utf-8")
         c, out = run_hook("context-injector.py", {"cwd": str(rci), "agent_type": "general-purpose", "agent_id": "x"})
         check("context-injector: general-purpose + excerpt → инъекция в hookSpecificOutput",
               c == 0 and has_addctx(out) and "grounding-excerpt" in out)
@@ -252,7 +252,7 @@ def main() -> int:
             "phases": [
                 # Бизнес-анализ (00-brd) выключен: пайплайн стартует с 01-grounding (depends_on []).
                 {"id": "01-grounding", "skip_allowed": False, "status": "in_progress",
-                 "depends_on": [], "artifacts": ["ground/grounding-index.json"]},
+                 "depends_on": [], "artifacts": ["ground/inventory/grounding-excerpt.json"]},
                 {"id": "02-design", "skip_allowed": True, "status": "pending",
                  "depends_on": ["01-grounding"], "artifacts": []},
             ]}), encoding="utf-8")
@@ -261,7 +261,7 @@ def main() -> int:
             "phases": [
                 {"id": "01-grounding", "allowed_skills": ["system-analyst", "Explore"],
                  "blocked_tools_until_complete": ["Read", "GrepSearch", "Glob"],
-                 "blocked_paths": ["src/"], "required_artifacts": ["ground/grounding-index.json"]},
+                 "blocked_paths": ["src/"], "required_artifacts": ["ground/inventory/grounding-excerpt.json"]},
                 {"id": "02-design", "allowed_skills": ["tech-design"],
                  "blocked_tools_until_complete": [], "blocked_paths": [],
                  "required_artifacts": ["docs/task-plan.json"]},
@@ -290,23 +290,23 @@ def main() -> int:
                         "agent_type": "system-analyst"})
         check("phase-lock: Read src/ в grounding → deny", c == 2)
 
-        # 4. Read grounding-index → разрешён
+        # 4. Read grounding-excerpt → разрешён
         c, out = run_hook("gate-guard.py", {"cwd": str(rpl), "tool_name": "Read",
-                        "tool_input": {"file_path": "ground/grounding-index.json"},
+                        "tool_input": {"file_path": "ground/inventory/grounding-excerpt.json"},
                         "agent_type": "system-analyst"})
-        check("phase-lock: Read grounding-index → allow", c == 0)
+        check("phase-lock: Read grounding-excerpt → allow", c == 0)
 
-        # 5. Read src/ после прочтения grounding-index (через evidence) → allow
+        # 5. Read src/ после прочтения grounding-excerpt (через evidence) → allow
         ev_path = rpl / "ground" / "phases" / "agent-evidence.jsonl"
         ev_path.write_text(json.dumps({"ts": "now", "event": "read_grounding",
-                          "agent": "test", "path": "ground/grounding-index.json"}) + "\n",
+                          "agent": "test", "path": "ground/inventory/grounding-excerpt.json"}) + "\n",
                           encoding="utf-8")
         c, out = run_hook("gate-guard.py", {"cwd": str(rpl), "tool_name": "Read",
                         "tool_input": {"file_path": "src/main/java/Foo.java"},
                         "agent_type": "system-analyst"})
-        check("phase-lock: Read src/ после grounding-index → allow", c == 0)
+        check("phase-lock: Read src/ после grounding-excerpt → allow", c == 0)
 
-        # 6. grounding-evidence: чтение grounding-index → запись grounding в журнал прогона.
+        # 6. grounding-evidence: чтение grounding-excerpt → запись grounding в журнал прогона.
         # Evidence живёт в едином append-only логе ground/statements/<skill>/<feature>/
         # events.jsonl (kind:"grounding"), а не отдельным phases/<feature>/agent-evidence.jsonl.
         rge = rpl / "_ge"
@@ -315,12 +315,12 @@ def main() -> int:
             json.dumps({"skill": "feature-pipeline", "steps": [{"id": "01-grounding", "status": "in_progress"}]}),
             encoding="utf-8")
         c, out = run_hook("grounding-evidence.py", {"cwd": str(rge), "tool_name": "Read",
-                        "tool_input": {"file_path": "docs/system-analysis/grounding-index.json"}})
+                        "tool_input": {"file_path": "ground/inventory/grounding-excerpt.json"}})
         ge_ev = rge / "ground" / "statements" / "feature-pipeline" / "pipeline" / "events.jsonl"
-        check("grounding-evidence: Read grounding-index → grounding в events.jsonl",
+        check("grounding-evidence: Read grounding-excerpt → grounding в events.jsonl",
               c == 0 and ge_ev.exists()
               and '"kind": "grounding"' in ge_ev.read_text(encoding="utf-8")
-              and "grounding-index" in ge_ev.read_text(encoding="utf-8"))
+              and "grounding-excerpt" in ge_ev.read_text(encoding="utf-8"))
         # не-grounding чтение → ничего не пишет
         c, out = run_hook("grounding-evidence.py", {"cwd": str(rge), "tool_name": "Read",
                         "tool_input": {"file_path": "src/main/java/Foo.java"}})

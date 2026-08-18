@@ -125,8 +125,8 @@ Override **не подделывает вердикт**: FAIL остаётся �
 
 ### C6. `reuse-judge` FAIL: «велосипед»
 **Причина:** код дублирует доступную библиотеку/util проекта.
-**Фикс:** замените на библиотеку/util из каталога `docs/system-analysis/scan/reuse.json`.
-Если каталога нет — он создаётся в фазе grounding (project-grounder/system-analyst).
+**Фикс:** замените на библиотеку/util из каталога `ground/inventory/scan/reuse.json`.
+Если его нет — снимите инвентарь: `ensure_inventory.py --root <project>`.
 
 ---
 

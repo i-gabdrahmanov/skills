@@ -160,6 +160,33 @@ def main() -> int:
         check("нет components.json → reuses не валит (pass + warn)",
               rc == 0 and any("components.json" in w for w in j.get("warnings", [])), raw)
 
+    # 13b. scan/ не собран на этой машине (производный кеш, в git не едет) — оба кросс-чека
+    # держатся на grounding-excerpt.json рядом. Иначе гейты дизайна молча вырождались бы
+    # в warning на любом свежем клоне, где фаза 01 переиспользовала excerpt.
+    with tempfile.TemporaryDirectory() as td:
+        sa = Path(td) / "system-analysis"
+        scan = sa / "scan"
+        scan.mkdir(parents=True)  # каталог есть, категорий скана нет
+        (sa / "grounding-excerpt.json").write_text(json.dumps({
+            "modules": [{"name": "core", "path": "core"}],
+            "components": [{"name": "RealService", "layer": "service"}],
+            "entities": [{"name": "Artifact"}],
+            "reuse": {"project_utils": ["com.x.common.DateUtils"]},
+        }), encoding="utf-8")
+
+        rc, j, raw = run(_plan(tasks=[_task("T1", module="ghost")]), "--scan", str(scan))
+        check("модули из excerpt: чужой модуль → fail", rc == 2 and _has_err(j, "ghost"), raw)
+
+        rc, j, raw = run(_plan(tasks=[_task("T1", module="core", reuses=["GhostService"])]),
+                         "--scan", str(scan))
+        check("reuses из excerpt: выдуманный класс → fail",
+              rc == 2 and _has_err(j, "GhostService"), raw)
+
+        rc, j, raw = run(_plan(tasks=[_task("T1", module="core",
+                                            reuses=["RealService", "DateUtils", "Artifact"])]),
+                         "--scan", str(scan))
+        check("reuses из excerpt: реальные классы → pass", rc == 0, raw)
+
     # 14. no_test: валидный bool → pass без предупреждений; не-bool → warning (не валит)
     rc, j, raw = run(_plan(tasks=[_task("T1", no_test=True)]))
     check("no_test:true → pass", rc == 0 and j.get("status") == "pass", raw)

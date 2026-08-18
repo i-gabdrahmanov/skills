@@ -288,8 +288,28 @@ class TestGateResultCheck(unittest.TestCase):
     def test_non_gate_step_not_affected(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d); _make_manifest(tmp)
+            # lite-ground не требует gate-result (судей у него нет), но требует содержательный
+            # инвентарь: forgelite гоняет тот же check_taskplan, и пустой инвентарь молча
+            # выродил бы его кросс-чеки. Кладём инвентарь, чтобы проверять именно gate-result.
+            inv = tmp / "ground" / "inventory"
+            inv.mkdir(parents=True, exist_ok=True)
+            (inv / "grounding-excerpt.json").write_text(
+                json.dumps({"modules": [{"name": "svc"}], "entities": []}), encoding="utf-8")
             r = _close(tmp, "lite-ground")
             self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_lite_ground_blocked_on_empty_inventory(self):
+        """Пустой инвентарь не закрывает lite-ground: дальше forgelite зовёт check_taskplan,
+        и без инвентаря его кросс-чеки reuses/модулей молча не выполняются."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_manifest(tmp)
+            inv = tmp / "ground" / "inventory"
+            inv.mkdir(parents=True, exist_ok=True)
+            (inv / "grounding-excerpt.json").write_text(
+                json.dumps({"modules": [], "entities": []}), encoding="utf-8")
+            r = _close(tmp, "lite-ground")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("инвентарь пуст", r.stderr)
 
     def test_lite_design_without_artifact_blocked(self):
         # lite-design закрывался «со слов субагента» — судей у lite-* нет, evidence обязателен

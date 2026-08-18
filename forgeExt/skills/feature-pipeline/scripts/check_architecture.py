@@ -11,13 +11,13 @@
 build-файлов — Gradle `project(':...')` и Maven `<dependency>` на внутренний модуль в `pom.xml` —
 и проверяет их против «архитектурного граунда» проекта (что проект УЖЕ соединяет). Режим `graph`
 (дефолт): цикл или новая group-связка → блок; принятая связка → пропуск. Граунд эмитится на grounding
-(`--emit-ground`) в docs/system-analysis/architecture-ground.json; уточняется ground/architecture-policy.json.
+(`--emit-ground`) в ground/inventory/architecture-ground.json; уточняется ground/architecture-policy.json.
 
 Usage:
     check_architecture.py [--root .] [--base HEAD] [--changed "a.java b.java"]
         [--pipeline-config pipeline.json] [--package-root ru.x.y] [--strict] [--json]
         [--module-dep-policy graph|deny_new|policy|off] [--arch-ground PATH]
-    check_architecture.py --root . --emit-ground docs/system-analysis/architecture-ground.json
+    check_architecture.py --root . --emit-ground        # → ground/inventory/architecture-ground.json
 Exit: 0 = pass (или только warnings без --strict), 2 = fail (нарушение error-уровня / --strict).
 """
 from __future__ import annotations
@@ -446,19 +446,19 @@ def _creates_cycle(base_edges: set, frm: str, to: str) -> bool:
 
 
 def _default_arch_ground(root: Path) -> Path:
-    """Дефолтный путь architecture-ground.json — под system-analysis МАСТЕРА (резолвер
+    """Дефолтный путь architecture-ground.json — в эфемерном инвентаре (резолвер
     skill_paths, уважает docs.master/separate-repo), с фолбэком docs/system-analysis
     для окружений без skill_paths."""
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import skill_paths  # co-located
-        return skill_paths.system_analysis_dir(root) / "architecture-ground.json"
+        return skill_paths.architecture_ground_path(root)
     except Exception:
-        return root / "docs" / "system-analysis" / "architecture-ground.json"
+        return root / "ground" / "inventory" / "architecture-ground.json"
 
 
 def load_arch_ground(root: Path, explicit: "str | None" = None) -> "dict | None":
-    """architecture-ground.json (по умолчанию — под system-analysis мастера), либо None."""
+    """architecture-ground.json (по умолчанию — в эфемерном инвентаре), либо None."""
     p = Path(explicit) if explicit else _default_arch_ground(root)
     try:
         return json.loads(p.read_text(encoding="utf-8"))
@@ -592,7 +592,7 @@ def main() -> int:
     ap.add_argument("--module-dep-policy", choices=["graph", "deny_new", "policy", "off"], default=None,
                     help="политика новых межмодульных зависимостей (дефолт quality.module_dep_policy / graph)")
     ap.add_argument("--arch-ground", default=None,
-                    help="путь к architecture-ground.json (дефолт docs/system-analysis/)")
+                    help="путь к architecture-ground.json (дефолт ground/inventory/)")
     ap.add_argument("--emit-ground", nargs="?", const="__AUTO__", default=None,
                     help="построить граф модулей и записать architecture-ground.json (без проверки). "
                          "Без значения — авто-путь под system-analysis мастера (резолвер); "

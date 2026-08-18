@@ -186,7 +186,7 @@ class TestCli(unittest.TestCase):
         self.root = Path(self._tmp.name)
         _make_project(self.root)
         self.script = SCRIPTS / "analyze_tests.py"
-        self.out = self.root / "docs/system-analysis/scan/test-conventions.json"
+        self.out = self.root / "ground/inventory/test-conventions.json"
 
     def tearDown(self):
         self._tmp.cleanup()

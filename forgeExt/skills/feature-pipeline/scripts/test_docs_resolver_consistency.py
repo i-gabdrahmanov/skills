@@ -171,14 +171,32 @@ class TestResolverConsistency(unittest.TestCase):
                 self.assertEqual(set(map(str, sa.values())), {str(exp_sa)},
                                  f"system_analysis рассинхрон/ошибка в кейсе «{name}»: {sa}")
 
-    def test_scan_and_excerpt_under_system_analysis(self):
-        cfg = {"docs": {"mode": "separate-repo", "repo_path": EXT}}
-        self.assertEqual(str(skill_paths.scan_dir(PROJ, cfg)), f"{EXT}/system-analysis/scan")
-        self.assertEqual(str(skill_paths.grounding_excerpt_path(PROJ, cfg)),
-                         f"{EXT}/system-analysis/grounding-excerpt.json")
-        # сторона хуков — тот же путь
-        self.assertEqual(str(_project.grounding_excerpt_path(PROJ, cfg)),
-                         f"{EXT}/system-analysis/grounding-excerpt.json")
+    def test_inventory_is_in_ground_regardless_of_docs_config(self):
+        """Инвентарь (scan/excerpt/arch-ground) НЕ следует за docs.* и docs.master.*.
+
+        Он эфемерный и в git не едет — а docs.* задаёт, где лежат ДОКУМЕНТЫ, в том числе в
+        чужом спек-репо. Раньше инвентарь ездил туда вместе с ними: производный файл,
+        переписываемый на каждой фиче, оказывался в общем репозитории — отсюда и брались
+        вечные конфликты. Теперь его место фиксировано: ground/inventory.
+        """
+        for name, cfg in {
+            "in-repo default": {"docs": {}},
+            "custom docs base": {"docs": {"docs_path": "documentation"}},
+            "separate-repo": {"docs": {"mode": "separate-repo", "repo_path": EXT}},
+            "master separate": {"docs": {"docs_path": "docs",
+                                         "master": {"mode": "separate-repo", "repo_path": EXT}}},
+        }.items():
+            with self.subTest(case=name):
+                for mod in (skill_paths, _project):
+                    self.assertEqual(str(mod.scan_dir(PROJ, cfg)),
+                                     str(PROJ / "ground/inventory/scan"))
+                    self.assertEqual(str(mod.grounding_excerpt_path(PROJ, cfg)),
+                                     str(PROJ / "ground/inventory/grounding-excerpt.json"))
+                    self.assertEqual(str(mod.architecture_ground_path(PROJ, cfg)),
+                                     str(PROJ / "ground/inventory/architecture-ground.json"))
+                # а человеческий обзор за docs.* по-прежнему следует
+                self.assertNotEqual(str(skill_paths.system_analysis_dir(PROJ, cfg)),
+                                    str(PROJ / "ground/inventory"))
 
     def test_master_override_splits_location(self):
         """docs.master → мастер в отдельном репо, дельты остаются in-repo; skill_paths==_project."""
@@ -188,9 +206,10 @@ class TestResolverConsistency(unittest.TestCase):
         for mod in (skill_paths, _project, _util):
             self.assertEqual(str(mod.feature_docs_dir(PROJ, cfg)),
                              str(PROJ / "docs/feature-pipeline"))
-        # мастер (system-analysis/scan/excerpt/specs/adr) — в EXT; skill_paths и _project совпадают
-        for fn in ("system_analysis_dir", "scan_dir", "grounding_excerpt_path",
-                   "master_specs_dir", "master_adr_dir"):
+        # мастер (system-analysis/specs/adr) — в EXT; skill_paths и _project совпадают.
+        # scan/excerpt в этот список НЕ входят: инвентарь эфемерный и живёт в ground/,
+        # см. test_inventory_is_in_ground_regardless_of_docs_config.
+        for fn in ("system_analysis_dir", "master_specs_dir", "master_adr_dir"):
             a = str(getattr(skill_paths, fn)(PROJ, cfg))
             b = str(getattr(_project, fn)(PROJ, cfg))
             self.assertEqual(a, b, f"{fn}: skill_paths≠_project под docs.master")
@@ -213,14 +232,17 @@ PRODUCTION_FILES = [
     HOOKS / "eval-guard.py",
     PSTATE / "init.py",
     ROOT / "skills/system-analyst/scripts/scan_all.py",
-    ROOT / "skills/system-analyst/scripts/enrich_grounding.py",
-    ROOT / "skills/system-analyst/scripts/check_grounding.py",
+    ROOT / "skills/system-analyst/scripts/ensure_inventory.py",
+    ROOT / "skills/tech-design/scripts/check_taskplan.py",
+    ROOT / "skills/test-writer/scripts/analyze_tests.py",
 ]
 # Подстроки, маркирующие путь-конструкцию в обход резолвера.
 BYPASS = ('"docs/feature-pipeline"', "'docs/feature-pipeline'",
           '"docs/system-analysis"', "'docs/system-analysis'",
           '"docs/system-analysis/scan"', "'docs/system-analysis/scan'",
-          '"docs/system-analysis/grounding-excerpt.json"')
+          '"docs/system-analysis/grounding-excerpt.json"',
+          # инвентарь резолвится только через inventory_dir/scan_dir/grounding_excerpt_path
+          '"ground/inventory"', "'ground/inventory'")
 
 
 def _is_allowed(line: str) -> bool:

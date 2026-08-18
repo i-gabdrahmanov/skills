@@ -167,17 +167,22 @@ sequenceDiagram
 - **Гейт 1** + **выбор критичности** → пишет `autonomy.{criticality,auto_max_risk}` в `pipeline.json`
   (low→R2 / medium→R1 / high→R0). До выбора `gate-guard` блокирует любое R2+.
 
-### Фаза 1 — Grounding
-- **Детектор:** `system-analyst/scripts/check_grounding.py --root . --json`.
-  - exit 0 — переиспользовать (НЕ пересканировать). При `kind=scan` — собрать выжимку (project-grounder §4).
-  - exit 1 — запустить `system-analyst` (свой цикл + гейт коммита спеки).
-- Свежесть между фичами — инкрементально в фазе 5 (`enrich_grounding.py`), полный рескан не нужен.
-- **Гейт grounding** перед переходом к дизайну.
+### Фаза 1 — Инвентарь (`01-grounding`)
+- **Сборщик:** `system-analyst/scripts/ensure_inventory.py --root . --json` — не LLM-работа.
+  - exit 0 — инвентарь в `ground/inventory/` (эфемерный, самоигнорирующийся, в git не едет).
+  - exit 2 — пусто (0 модулей и 0 entities): не тот корень репо кода. СТОП.
+- Идемпотентен: рескан решается по отпечатку исходников (число файлов + время самого свежего),
+  поэтому ловит и добавление, и удаление, и правку на месте. «Поддерживать свежесть» между
+  фичами нечего — инвентарь производен от кода.
+- **Хард-гейт закрытия** `_check_grounding_substance` в `update.py`: пустой инвентарь не закроет шаг.
+- Человеческий обзор (`docs/system-analysis/`, MD + Mermaid) делает `system-analyst` по запросу
+  пользователя — пайплайн его не требует и не обновляет.
 
 ### Фаза 2 — SDD (`02-sdd`)
 - `preflight-validate.py` (exit 1 = предыдущий шаг сделан inline → СТОП).
 - Субагент `sdd` (контракт §4.0a `subagent-prompts.md`) → строгая спецификация `sdd.md`
-  (вход: `brd.md` + `grounding-excerpt.json`). НЕ читать `sdd/SKILL.md` в контекст оркестратора.
+  (вход: `brd.md` + `ground/inventory/grounding-excerpt.json`). НЕ читать `sdd/SKILL.md` в
+  контекст оркестратора.
 - **Judge:** `run_judge.py sdd <slug>` (`sdd-judge`).
 - **Гейт SDD** — утверждение спецификации (правки → возврат `sdd`; новое бизнес-требование → откат к BRD
   через `pipeline-state/scripts/rollback.py --to-step 00-brd`: R4-гейт `--dry-run` → «да» → `record_approval`
@@ -220,15 +225,15 @@ sequenceDiagram
 
 ### Фаза 5 — Document
 - Спецадаптер (§5) правит спеку в `docs_path`.
-- `enrich_grounding.py --task-plan ... --feature <slug>` (инкрементально; non-zero → полный рескан).
 - `spec-judge` (§7.4) + `run_judge.py spec <slug> --recheck`. Закрыть `06-spec`.
 
-### Фаза 6 — Deliver (per task, stacked)
-- `delivery-judge` (гибрид, §7.5): `run_judge.py delivery --from-output` → `--recheck`
-  (ингест сам применяет пол секретов, `INGEST_FLOOR_PHASES`). На push `evidence-enforcer`
-  дополнительно валидирует сообщение HEAD-коммита (запрет `Co-Authored-By`).
-- **Гейт 4** коммиты → **Гейт 5** push + stacked PR (target = ветка-родитель/default) → **Гейт 6** отчёт в Story.
-- `check_delivery.py` перед закрытием `07-deliver-<id>` и `07-report`. Ветки stacked по `depends_on`.
+### Доставки в пайплайне НЕТ
+
+Пайплайн кончается на `06-document` верифицированным артефактом. Коммиты, push, PR и отчёт в
+Jira делает пользователь сам (forge-no-delivery). Соответственно нет ни фазы `07-deliver`, ни
+судьи `delivery`, ни `check_delivery.py`, ни хука `evidence-enforcer` — раздел про них снят,
+чтобы дока не обещала enforcement, которого не существует. Актуальный список шагов —
+`resolve_phases.py`, список судей — `PHASE_MAP` в `run_judge.py`.
 
 ---
 
@@ -243,16 +248,19 @@ sequenceDiagram
 | `inline-phase-guard` | PreToolUse Write/Edit/Bash | actor-guard: ГЛАВНЫЙ агент (пустой `agent_type`) не производит артефакты/код subagent-фазы inline; снимается override `subagent-origin` | exit 2 |
 | `destructive-blocker` | PreToolUse Bash | чёрный список (`rm -rf /`, force-push, DROP) | exit 2 |
 | `pii-boundary` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
-| `evidence-enforcer` | PreToolUse Bash | блок доставки без полного evidence bundle | exit 2 |
-| `grounding-evidence` | PreToolUse Read | пишет `read_grounding` в `agent-evidence.jsonl` при чтении grounding-index (по нему `gate-guard` снимает блок `01-grounding`) | — |
+| `grounding-evidence` | PreToolUse Read | пишет evidence `kind:"grounding"` в журнал прогона при чтении grounding-excerpt (по нему `gate-guard` снимает блок `01-grounding`) | — |
+| `fork-syntax-guard` | PreToolUse Bash | ловит `$(...)`/backticks, которые рантайм молча срезает | exit 2 |
+| `state-write-guard` | PreToolUse Write/Edit/Bash | запрет прямой правки состояния прогона в обход `update.py` | exit 2 |
+| `file-journal` | PostToolUse Write/Edit/Bash | журнал изменённых файлов прогона | — |
 | `prompt-guard` | UserPromptSubmit + PostToolUse | детект prompt-injection → additionalContext | — |
 | `state-recorder` | SubagentStop | авто-запись шага по `step_id` | — |
 | `context-injector` | SubagentStart | инъекция grounding-excerpt/conventions | — |
 | `phase-gate` | Stop | блок завершения с висящим `in_progress` | block |
 
-**Порядок (sequential) PreToolUse Bash:** destructive-blocker → evidence-enforcer →
-inline-phase-guard → gate-guard. **Write/Edit:** pii-boundary → tdd-guard → eval-guard →
-sod-enforcer → inline-phase-guard → gate-guard.
+**Порядок (sequential) PreToolUse Bash:** destructive-blocker → fork-syntax-guard →
+pii-boundary → sod-enforcer → state-write-guard → inline-phase-guard → gate-guard.
+**Write/Edit:** pii-boundary → tdd-guard → eval-guard → sod-enforcer → state-write-guard →
+inline-phase-guard → gate-guard. Источник истины — `hooks/hooks.json`.
 
 > Гарантию «фаза выполнена ЧЕРЕЗ субагента» держит не PreToolUse-хук (он срабатывает и внутри
 > субагента → заблокировал бы его), а `update._check_subagent_origin` на закрытии шага: фазы из
