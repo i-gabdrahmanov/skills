@@ -68,7 +68,7 @@ _DEFAULT_ID_PREFIX = "REQ"
 _GWT = re.compile(r"(?i)given.*when.*then")
 _NOT_APPLICABLE = re.compile(r"(?i)не\s+примен|not\s+applicable|\bn/?a\b")
 _PLACEHOLDER = re.compile(r"<[^>\n]+>")
-_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.*)$")
+_HEADING = re.compile(r"^\s{0,3}(#{1,6})\s+(.*)$")
 
 _CODE_FENCE = re.compile(r"```(?:java|diff|kotlin|sql|xml)\b", re.IGNORECASE)
 _CODE_SIGNS = re.compile(
@@ -79,26 +79,34 @@ _LIQUIBASE = re.compile(r"(?i)\b(?:changeSet|databaseChangeLog|liquibase)\b")
 
 
 def _parse_sections(raw: str) -> list[tuple[str, str]]:
-    sections: list[tuple[str, str]] = []
-    head: str | None = None
-    body: list[str] = []
-    for line in raw.splitlines():
+    """[(heading_lower, body), ...]; тело — до следующего заголовка ТОГО ЖЕ ИЛИ БОЛЕЕ ВЫСОКОГО
+    уровня, то есть ВКЛЮЧАЯ вложенные подразделы. Раньше тело обрывалось на любом следующем
+    заголовке, и раздел, расписанный подразделами, судья считал пустым (см. одноимённую
+    правку в sdd/scripts/check_sdd_doc.py)."""
+    lines = raw.splitlines()
+    heads: list[tuple[int, int, str]] = []   # (номер строки, уровень, заголовок)
+    for i, line in enumerate(lines):
         m = _HEADING.match(line)
         if m:
-            if head is not None:
-                sections.append((head.lower(), "\n".join(body)))
-            head, body = m.group(1).strip(), []
-        elif head is not None:
-            body.append(line)
-    if head is not None:
-        sections.append((head.lower(), "\n".join(body)))
+            heads.append((i, len(m.group(1)), m.group(2).strip()))
+    sections: list[tuple[str, str]] = []
+    for n, (i, level, title) in enumerate(heads):
+        end = len(lines)
+        for j, lvl, _title in heads[n + 1:]:
+            if lvl <= level:
+                end = j
+                break
+        sections.append((title.lower(), "\n".join(lines[i + 1:end])))
     return sections
 
 
 def _find_body(sections: list[tuple[str, str]], markers: list[str]) -> str | None:
-    for head, body in sections:
-        if any(mk in head for mk in markers):
-            return body
+    """Маркеры перебираются В ПОРЯДКЕ СПИСКА (от специфичного к общему), иначе общий маркер
+    цепляется за заголовок документа вместо своего раздела."""
+    for mk in markers:
+        for head, body in sections:
+            if mk in head:
+                return body
     return None
 
 
@@ -112,13 +120,38 @@ def _is_na(body: str) -> bool:
     return bool(_NOT_APPLICABLE.search(body))
 
 
+# Многострочный сценарий: Given / When / Then отдельными строками — КАНОНИЧЕСКАЯ форма
+# Gherkin, и именно так их пишут люди и модели. Однострочный поиск `given.*when.*then` её не
+# видел и валил корректную спеку «нет ни одного сценария Given-When-Then» (та же правка уже
+# сделана в sdd/scripts/check_sdd_doc.py — здесь дубль логики отставал).
+_GWT_STEP = re.compile(r"(?i)^\s*(?:[-*+>]\s*)?(?:\*\*|__|_|\*)?\s*(given|when|then)\b")
+_GWT_WINDOW = 12          # строк между Given и Then — сценарий, а не совпадение через весь док
+
+
 def _has_gwt(raw: str) -> bool:
-    """≥1 реальный сценарий Given-When-Then в ТЕЛЕ (не в заголовке «(Given-When-Then)»)."""
-    for line in raw.splitlines():
+    """≥1 реальный сценарий Given-When-Then в ТЕЛЕ (не в заголовке «(Given-When-Then)»).
+
+    Засчитывается и однострочная запись, и многострочная (Given/When/Then подряд, в пределах
+    _GWT_WINDOW строк, с учётом markdown-разметки: `**Given** …`, `- given …`, `> Given …`)."""
+    seen = None                       # какой шаг сценария ждём следующим
+    start = -1
+    for i, line in enumerate(raw.splitlines()):
         if line.lstrip().startswith("#"):
             continue
         if _GWT.search(line):
+            return True               # всё в одной строке — прежнее поведение
+        m = _GWT_STEP.match(line)
+        if not m:
+            continue
+        step = m.group(1).lower()
+        if step == "given":
+            seen, start = "when", i
+        elif step == "when" and seen == "when" and i - start <= _GWT_WINDOW:
+            seen = "then"
+        elif step == "then" and seen == "then" and i - start <= _GWT_WINDOW:
             return True
+        else:
+            seen, start = (None, -1) if step != "given" else ("when", i)
     return False
 
 
@@ -128,7 +161,9 @@ def _req_heading(prefix: str) -> "re.Pattern[str]":
 
 
 def _parse_requirements(raw: str, prefix: str) -> list[dict]:
-    """Блоки требований [{id, num, title, body}]; тело — до следующего заголовка любого уровня."""
+    """Блоки требований [{id, num, title, body}]; тело — до следующего заголовка уровня ###
+    и выше. Вложенные под-заголовки (`#### …`) остаются ЧАСТЬЮ требования: иначе требование,
+    расписанное подпунктами, теряло тело и валилось как «нет проверяемого утверждения»."""
     pat = _req_heading(prefix)
     out: list[dict] = []
     cur: "dict | None" = None
@@ -141,7 +176,8 @@ def _parse_requirements(raw: str, prefix: str) -> list[dict]:
             continue
         if cur is None:
             continue
-        if _HEADING.match(line):        # любой следующий заголовок закрывает блок
+        h = _HEADING.match(line)
+        if h and len(h.group(1)) <= 3:  # заголовок уровня ### и выше закрывает блок
             out.append(cur)
             cur = None
         else:
@@ -177,7 +213,8 @@ def _check_requirements(raw, sections, text_lower, prefix, scenario_floor, error
         if not title or _PLACEHOLDER.fullmatch(title):
             errors.append(f"{r['id']}: пустое название требования")
         # утверждение = тело без строк-сценариев; требование без него — это просто набор сценариев
-        statement = "\n".join(l for l in r["body"].splitlines() if not _GWT.search(l))
+        statement = "\n".join(l for l in r["body"].splitlines()
+                               if not _GWT.search(l) and not _GWT_STEP.match(l))
         if not _has_content(statement):
             errors.append(f"{r['id']} «{title}»: нет проверяемого утверждения (что система делает)")
         if scenario_floor and not _has_gwt(r["body"]):

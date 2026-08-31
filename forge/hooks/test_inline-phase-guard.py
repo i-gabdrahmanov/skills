@@ -35,9 +35,14 @@ def _make(tmp: Path, active_step: str | None, slug: str = "feat", override_step=
 
 
 def _run(tmp: Path, payload: dict) -> int:
+    return _run_full(tmp, payload)[0]
+
+
+def _run_full(tmp: Path, payload: dict) -> tuple[int, str]:
     payload = {**payload, "cwd": str(tmp)}
-    return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
-                          capture_output=True, text=True).returncode
+    r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
+                       capture_output=True, text=True)
+    return r.returncode, r.stderr
 
 
 class TestInlinePhaseGuard(unittest.TestCase):
@@ -285,6 +290,94 @@ class TestSubagentDetection(unittest.TestCase):
             finally:
                 subagent_scope.leave(sid, "general-purpose-1", "general-purpose")
             self.assertEqual(_run(tmp, payload), 2, "субагент закончил — гейт снова активен")
+
+    # ── запись артефакта фазы средствами shell (обход write-инструмента) ──
+    def test_shell_copy_into_phase_artifact_blocked(self):
+        """Реальный обход с прогона: write_file в /tmp/sdd-temp.md (имя не совпадает) +
+        `cp /tmp/sdd-temp.md docs/<slug>/sdd.md`. Хук смотрел только на Write/Edit, а для
+        Bash — только на build/test-команды, и артефакт фазы появлялся без субагента."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make(tmp, "02-sdd")
+            for cmd in ("cp /tmp/sdd-temp.md docs/feature-pipeline/feat/sdd.md",
+                        "mv /tmp/sdd-temp.md docs/feature-pipeline/feat/sdd.md",
+                        "printf x > docs/feature-pipeline/feat/sdd.md",
+                        "cat /tmp/a | tee docs/feature-pipeline/feat/sdd.md",
+                        "sed -i s/a/b/ docs/feature-pipeline/feat/sdd.md"):
+                self.assertEqual(_run(tmp, {"tool_name": "Bash",
+                                            "tool_input": {"command": cmd}}), 2, cmd)
+
+    def test_shell_write_into_phase_code_blocked(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make(tmp, "04-build-T1")
+            self.assertEqual(_run(tmp, {"tool_name": "Bash", "tool_input": {
+                "command": "cp /tmp/T.java src/main/java/T.java"}}), 2)
+
+    def test_shell_read_of_phase_artifact_allowed(self):
+        """Чтение и прогон судьи с путём артефакта в argv — не запись, блокировать нельзя."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make(tmp, "02-sdd")
+            for cmd in ("cat docs/feature-pipeline/feat/sdd.md",
+                        "python3 .gigacode/skills/sdd/scripts/check_sdd_doc.py "
+                        "docs/feature-pipeline/feat/sdd.md",
+                        "cp docs/feature-pipeline/feat/sdd.md /tmp/backup.md",
+                        "ls -la docs"):
+                self.assertEqual(_run(tmp, {"tool_name": "Bash",
+                                            "tool_input": {"command": cmd}}), 0, cmd)
+
+    def test_override_from_journal_lifts_block(self):
+        """Escape-hatch обязан читаться ОТТУДА, КУДА ЕГО ПИШЕТ override_judge — из журнала.
+
+        Регрессия: хук открывал файл overrides/subagent-origin.json, а overrides уехали в
+        events.jsonl; прямая запись файла запрещена state-write-guard. Хатч был мёртв, и
+        оркестратор на живом прогоне перебирал record_approval → override_judge → echo> →
+        --closed-by inline по кругу, а затем обошёл гейт копированием из /tmp."""
+        import forge_events as FE
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make(tmp, "02-sdd")
+            payload = {"tool_name": "Write",
+                       "tool_input": {"file_path": str(tmp / "docs/feature-pipeline/feat/sdd.md")}}
+            self.assertEqual(_run(tmp, payload), 2, "без override — блок")
+            FE.append_event(tmp, "feature-pipeline", "feat", "override",
+                            target="subagent-origin", judge="subagent-origin",
+                            step_id="02-sdd", reason="agent() недоступен",
+                            approved_by="user", produced_by="override_judge")
+            self.assertEqual(_run(tmp, payload), 0, "override из журнала снимает блок")
+
+    def test_deny_names_missing_actor_signal(self):
+        """Отказ обязан различать «ты правда оркестратор» и «actor-сигнала нет вовсе».
+
+        Второе — тупик: без SubagentStart хук блокирует и САМ субагент, и запуск ещё одного
+        субагента даёт тот же отказ по кругу (tasks/008). Причина должна быть в тексте, иначе
+        она недиагностируема — на прогоне это выглядит как «субагент не смог применить правки»."""
+        import subagent_scope
+        sid = "diag-" + uuid.uuid4().hex
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make(tmp, "02-sdd")
+            payload = {"tool_name": "Write", "session_id": sid,
+                       "tool_input": {"file_path": str(tmp / "docs/feature-pipeline/feat/sdd.md")}}
+
+            code, err = _run_full(tmp, payload)
+            self.assertEqual(code, 2)
+            self.assertIn("не пришло НИ ОДНОГО SubagentStart", err)
+
+            # SubagentStart прошёл и субагент уже закончил: сигнал жив, блок корректен.
+            subagent_scope.enter(sid, "general-purpose-1", "general-purpose")
+            subagent_scope.leave(sid, "general-purpose-1", "general-purpose")
+            code, err = _run_full(tmp, payload)
+            self.assertEqual(code, 2)
+            self.assertIn("Actor-сигнал в этой сессии РАБОТАЕТ", err)
+            self.assertNotIn("не пришло НИ ОДНОГО SubagentStart", err)
+
+    def test_start_seen_is_sticky_across_stop(self):
+        """`seen` переживает SubagentStop — это факт про рантайм, а не про живого субагента."""
+        import subagent_scope
+        sid = "sticky-" + uuid.uuid4().hex
+        self.assertFalse(subagent_scope.start_seen(sid))
+        subagent_scope.enter(sid, "gp-1", "general-purpose")
+        self.assertTrue(subagent_scope.start_seen(sid))
+        subagent_scope.leave(sid, "gp-1", "general-purpose")
+        self.assertFalse(subagent_scope.active(sid), "субагент закончил")
+        self.assertTrue(subagent_scope.start_seen(sid), "но сигнал рантайма — был")
 
     def test_empty_agent_type_still_means_orchestrator(self):
         """Ключ ЕСТЬ и пуст — рантайм умеет это поле, доверяем ему, agent_id не спасает."""

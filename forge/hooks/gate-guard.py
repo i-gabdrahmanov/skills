@@ -324,8 +324,8 @@ def check_gate_override(command: str, root: Path) -> str | None:
             "(его мог выписать сам агент). " if exists_no_prov else " "
         )
         return (
-            f"снятие гейта (override_judge) — R4-класс, нужен approval-маркер "
-            f"ground/approvals/{key}.json.{prov_note}Порядок: (1) останови работу и спроси "
+            f"снятие гейта (override_judge) — R4-класс, нужен approval-маркер '{key}'"
+            f" (журнал ground/approvals.jsonl, пишет ТОЛЬКО record_approval.py).{prov_note}Порядок: (1) останови работу и спроси "
             f"пользователя (покажи, что не сходится); (2) ТОЛЬКО после явного «да» зафиксируй "
             f"согласие СКРИПТОМ pipeline-state/scripts/record_approval.py --key {key} "
             f"--approved-by user --reason \"<кто/почему>\" (он штампует провенанс; прямой Write "
@@ -365,7 +365,7 @@ def check_skip_judges(command: str, root: Path) -> str | None:
                      "считается. " if feat and R.approval_exists(root, key) else " ")
         return (
             f"`--skip-judges` снимает ВСЕ гейты закрытия шага — R4-класс, нужен approval-маркер "
-            f"ground/approvals/{key}.json.{prov_note}Легитимный случай один: восстановление "
+            f"'{key}' (журнал ground/approvals.jsonl, пишет ТОЛЬКО record_approval.py).{prov_note}Легитимный случай один: восстановление "
             f"статусов после init.py --force. Порядок: (1) объясни пользователю, зачем обходить "
             f"гейты, и спроси; (2) после явного «да» — pipeline-state/scripts/record_approval.py "
             f"--key {key} --approved-by user --reason \"<зачем обход>\"; (3) повтори команду. "
@@ -417,8 +417,8 @@ def check_rollback(command: str, root: Path) -> str | None:
             " В команде нет --feature/--to-step — ключ маркера не резолвится."
         )
         return (
-            f"откат пайплайна (rollback.py) — R4-класс, нужен approval-маркер "
-            f"ground/approvals/{key}.json.{prov_note}Порядок: (1) покажи пользователю план "
+            f"откат пайплайна (rollback.py) — R4-класс, нужен approval-маркер '{key}'"
+            f" (журнал ground/approvals.jsonl, пишет ТОЛЬКО record_approval.py).{prov_note}Порядок: (1) покажи пользователю план "
             f"отката (rollback.py ... --dry-run: какие шаги сбросятся, какой код "
             f"восстановится, какие сироты останутся); (2) ТОЛЬКО после явного «да» зафиксируй "
             f"согласие СКРИПТОМ pipeline-state/scripts/record_approval.py --key {key} "
@@ -520,7 +520,8 @@ def main() -> int:
                              if R.approval_exists(root, key) else " ")
                 return _block(
                     f"фаза '{step}' требует ЯВНОГО подтверждения плана пользователем; нет "
-                    f"approval-маркера ground/approvals/{key}.json.{prov_note}"
+                    f"approval-маркера '{key}' (журнал ground/approvals.jsonl, пишет ТОЛЬКО "
+                    f"record_approval.py).{prov_note}"
                     f"Порядок: (1) покажи план (что сломано → как чиним, где правим, риск "
                     f"регресса, какое требование спеки затронуто) и спроси «делаем так или "
                     f"правки?»; (2) ТОЛЬКО после явного «да» — pipeline-state/scripts/"

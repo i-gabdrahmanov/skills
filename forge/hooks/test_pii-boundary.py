@@ -39,6 +39,48 @@ class T(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
 
 
+class TInfraPathNotPII(unittest.TestCase):
+    """Путь к корню проекта — инфраструктура, не ПДн.
+
+    Живой прогон: корень проекта `/home/work/<таб-номер>@<домен>/code/<repo>`. Email-паттерн
+    матчился на КАЖДУЮ команду с абсолютным путём — разведочный grep, mkdir, printf в docs/ —
+    и хук превращался в сплошной deny, не имеющий отношения к ПДн."""
+
+    ROOT = "/home/work/22269498@sigma.sbrf.ru/code/pprb-kid"
+
+    def _run_at_root(self, tool_name: str, tool_input: dict):
+        payload = json.dumps({"hook_event_name": "PreToolUse", "cwd": self.ROOT,
+                              "tool_name": tool_name, "tool_input": tool_input})
+        return subprocess.run([sys.executable, str(HOOK)], input=payload,
+                              capture_output=True, text=True, timeout=30)
+
+    def test_grep_with_dev_null_passes(self):
+        r = self._run_at_root("Bash", {"command":
+            f"grep -rn approvals_path {self.ROOT}/.gigacode 2>/dev/null"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_write_into_repo_docs_passes(self):
+        r = self._run_at_root("Bash", {"command":
+            f"mkdir -p {self.ROOT}/docs/x && printf hello > {self.ROOT}/docs/x/sdd.md"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_real_pii_into_docs_still_blocked(self):
+        r = self._run_at_root("Bash", {"command":
+            f"printf ivan.petrov@client-bank.ru > {self.ROOT}/docs/x/leak.md"})
+        self.assertEqual(r.returncode, 2, r.stdout)
+
+    def test_real_pii_via_write_still_blocked(self):
+        r = self._run_at_root("Write", {"file_path": f"{self.ROOT}/src/main/java/X.java",
+                                        "content": "// owner: ivan.petrov@client-bank.ru"})
+        self.assertEqual(r.returncode, 2, r.stdout)
+
+    def test_second_redirect_target_is_checked(self):
+        """`cmd 2>/dev/null > out.md`: первым шёл /dev/null, и настоящая цель не проверялась."""
+        r = self._run_at_root("Bash", {"command":
+            "echo ivan.petrov@client-bank.ru 2>/dev/null > docs/out.md"})
+        self.assertEqual(r.returncode, 2, r.stdout)
+
+
 class TPythonWriteVector(unittest.TestCase):
     """M5: запись PII через inline-python (без shell-редиректа) — раньше проходила мимо _target."""
 

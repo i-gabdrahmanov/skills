@@ -65,6 +65,47 @@ class MasterGateTest(unittest.TestCase):
             self.assertEqual(v["status"], "pass", f"{pol}: {v['errors']}")
         self.assertEqual(gate.check(p, "applicability")["requirements"], 2)
 
+    def test_section_written_as_subsections_is_not_empty(self):
+        """Раздел с подразделами — не пустой (тело включает вложенные заголовки)."""
+        doc = full_master().replace(
+            BLOCKS["threat"],
+            "## 7. Модель угроз и безопасность\n\n"
+            "### 7.1 Данные\nВнутренние, без ПДн.\n\n"
+            "### 7.2 Threat surface\nТолько внутренний контур, доступ по mTLS.",
+        )
+        for pol in ("hard", "applicability", "soft"):
+            v = gate.check(self._write(doc), pol)
+            self.assertEqual(v["status"], "pass", f"{pol}: {v['errors']}")
+
+    def test_truly_empty_section_still_fails(self):
+        doc = full_master().replace(
+            BLOCKS["threat"], "## 7. Модель угроз и безопасность\n\n### 7.1\n\n### 7.2\n")
+        v = gate.check(self._write(doc), "applicability")
+        self.assertEqual(v["status"], "fail")
+        self.assertTrue(any("пуст" in e for e in v["errors"]), v["errors"])
+
+    def test_multiline_gwt_scenario_counts(self):
+        """Given/When/Then отдельными строками — каноническая форма Gherkin, не fail."""
+        multiline = ("### REQ-0001: Экспорт отчёта оператору\n"
+                     "Система формирует отчёт по заявкам за период и отдаёт его оператору.\n"
+                     "- **Given** есть заявки за период\n"
+                     "- **When** оператор запросил отчёт\n"
+                     "- **Then** отчёт сформирован")
+        doc = full_master().replace(REQ_1, multiline)
+        v = gate.check(self._write(doc), "applicability")
+        self.assertEqual(v["status"], "pass", v["errors"])
+
+    def test_requirement_body_keeps_nested_subheadings(self):
+        """`#### …` внутри требования не обрывает его тело."""
+        nested = ("### REQ-0001: Экспорт отчёта оператору\n"
+                  "#### Утверждение\n"
+                  "Система формирует отчёт по заявкам за период и отдаёт его оператору.\n"
+                  "#### Сценарии\n"
+                  "- **Given** есть заявки **When** запрошен отчёт **Then** отчёт сформирован")
+        doc = full_master().replace(REQ_1, nested)
+        v = gate.check(self._write(doc), "applicability")
+        self.assertEqual(v["status"], "pass", v["errors"])
+
     def test_missing_core_requirements_fails(self):
         doc = full_master().replace(BLOCKS["requirements"], "")
         for pol in ("hard", "applicability", "soft"):

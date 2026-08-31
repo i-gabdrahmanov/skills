@@ -185,42 +185,10 @@ def _allow_inline_build(root: Path) -> bool:
         return False
 
 
-def _is_phase_work(step_id: str, tool_name: str, tool_input: dict, root: Path) -> str | None:
-    """Возвращает человекочитаемое описание productive-работы фазы, если действие ею является.
-    Иначе None (действие не относится к productive-работе данной subagent-фазы)."""
-    target = _target_path(tool_name, tool_input)
-    if not target:
-        return None
-    norm = target.replace("\\", "/")
+def _phase_artifact(step_id: str, norm: str) -> str | None:
+    """Описание артефакта фазы, если путь `norm` (уже с прямыми слэшами) — им является."""
 
-    # Bash: productive только build/test-команды; control-plane и python-subprocess обёртки
-    # всегда пропускаем. Флаг autonomy.allow_inline_build принудительно опускает блок
-    # build/test-комманд для оркестратора (окружения, где градл не может идти субагентом).
-    # Запись кода (Write) при этом НЕ разрешается — хук и дальше блокирует productive-артефакты
-    # фазы.
-    if tool_name in BASH_TOOLS:
-        if _CONTROL_BASH_RE.search(norm):
-            return None
-        if re.search(BUILD_CMD_RE, norm):
-            if _allow_inline_build(root):
-                return None
-            # Python-subprocess обёртка (subprocess.run/Popen/call/check_*/os.system/_run_cmd).
-            # Легитимный escape-hatch для orchestrator→Bash→`python3 -c "subprocess.run('./gradlew test', ...)"`:
-            # gradle/mvn вызывается через python-API, поэтому bypass соразмерен с control-plane
-            # скриптами вроде check_tests_red.py. Узкое место: паттерн subprocess.run( и т.п.
-            # должен присутствовать в COMMAND-строке буквально — тонкая обёртка
-            # `python3 wrapper.py --cmd "./gradlew test"` блокируется, что и нужно
-            # (легитимный путь — через сам скрипт, который резолвит команду из конфига, либо
-            # через явный subprocess-вызов в command).
-            if PYTHON_SUBPROCESS_RE.search(norm):
-                return None
-            if step_id.startswith(("04-test", "04-build", "05-tests",
-                                   "lite-red", "lite-green", "lite-verify",
-                                   "fix-red", "fix-green", "fix-verify")):
-                return f"запуск сборки/тестов ({BUILD_CMD_RE})"
-        return None
-
-    # Write/Edit: артефакты/код, которые обязан производить субагент фазы.
+    # Артефакты/код, которые обязан производить субагент фазы.
     if step_id.startswith("02-sdd"):
         if re.search(r"(^|/)sdd\.md$", norm):
             return "запись sdd.md"
@@ -271,6 +239,83 @@ def _is_phase_work(step_id: str, tool_name: str, tool_input: dict, root: Path) -
     return None
 
 
+# Запись файла средствами shell — в обход write-инструмента. Оркестратор в живом прогоне
+# именно так и обошёл гейт: `write_file /tmp/sdd-temp.md` (имя не совпадает с артефактом) +
+# `cp /tmp/sdd-temp.md docs/<slug>/sdd.md`. Хук смотрел только на Write/Edit, а для Bash —
+# только на build/test-команды, поэтому копирование прошло молча и артефакт фазы появился
+# без единого субагента.
+_SH_REDIRECT_RE = re.compile(r"(?<![0-9<>])>>?\s*([^\s;|&<>()]+)")
+_SH_TEE_RE = re.compile(r"\btee\s+(?:-a\s+)?([^\s;|&<>()]+)")
+_SH_DD_RE = re.compile(r"\bdd\b[^;|&]*?\bof=([^\s;|&<>()]+)")
+_SH_PYWRITE_RE = re.compile(r"\bopen\s*\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"][aw]"
+                            r"|\bPath\(\s*['\"]([^'\"]+)['\"]\s*\)\s*\.write_text")
+# cp/mv/install/rsync/ln: цель — ПОСЛЕДНИЙ неопционный аргумент сегмента команды.
+_SH_COPY_RE = re.compile(r"\b(?:cp|mv|install|rsync|ln)\b((?:\s+[^\s;|&<>()]+)+)")
+# Правка на месте: цель — любой из аргументов.
+_SH_INPLACE_RE = re.compile(r"\b(?:sed\s+-[^\s]*i[^\s]*|touch|truncate|patch)\b"
+                            r"((?:\s+[^\s;|&<>()]+)+)")
+
+
+def _shell_write_targets(cmd: str) -> list[str]:
+    """Пути, в которые команда ПИШЕТ. Чтения (`cat`, `grep`, судья с путём артефакта в argv)
+    сюда не попадают — иначе гейт заблокировал бы собственные check_*-скрипты."""
+    out: list[str] = []
+    for rx in (_SH_REDIRECT_RE, _SH_TEE_RE, _SH_DD_RE):
+        out.extend(m.group(1) for m in rx.finditer(cmd))
+    for m in _SH_PYWRITE_RE.finditer(cmd):
+        out.append(m.group(1) or m.group(2) or "")
+    for m in _SH_COPY_RE.finditer(cmd):
+        args = [a for a in m.group(1).split() if not a.startswith("-")]
+        if len(args) >= 2:
+            out.append(args[-1])          # destination
+    for m in _SH_INPLACE_RE.finditer(cmd):
+        out.extend(a for a in m.group(1).split() if not a.startswith("-"))
+    return [t for t in out if t]
+
+
+def _is_phase_work(step_id: str, tool_name: str, tool_input: dict, root: Path) -> str | None:
+    """Возвращает человекочитаемое описание productive-работы фазы, если действие ею является.
+    Иначе None (действие не относится к productive-работе данной subagent-фазы)."""
+    target = _target_path(tool_name, tool_input)
+    if not target:
+        return None
+    norm = target.replace("\\", "/")
+
+    # Bash: productive-работа фазы — это (а) запись артефакта фазы средствами shell
+    # (редирект/tee/cp/mv/sed -i — обход write-инструмента) и (б) build/test-команды.
+    # Control-plane и python-subprocess обёртки всегда пропускаем. Флаг
+    # autonomy.allow_inline_build принудительно опускает блок build/test-команд для
+    # оркестратора (окружения, где градл не может идти субагентом); запись артефакта он НЕ
+    # разрешает — хук и дальше блокирует productive-артефакты фазы.
+    if tool_name in BASH_TOOLS:
+        if _CONTROL_BASH_RE.search(norm):
+            return None
+        for dest in _shell_write_targets(str(tool_input.get("command") or "")):
+            what = _phase_artifact(step_id, dest.replace("\\", "/"))
+            if what:
+                return f"{what} средствами shell ({dest})"
+        if re.search(BUILD_CMD_RE, norm):
+            if _allow_inline_build(root):
+                return None
+            # Python-subprocess обёртка (subprocess.run/Popen/call/check_*/os.system/_run_cmd).
+            # Легитимный escape-hatch для orchestrator→Bash→`python3 -c "subprocess.run('./gradlew test', ...)"`:
+            # gradle/mvn вызывается через python-API, поэтому bypass соразмерен с control-plane
+            # скриптами вроде check_tests_red.py. Узкое место: паттерн subprocess.run( и т.п.
+            # должен присутствовать в COMMAND-строке буквально — тонкая обёртка
+            # `python3 wrapper.py --cmd "./gradlew test"` блокируется, что и нужно
+            # (легитимный путь — через сам скрипт, который резолвит команду из конфига, либо
+            # через явный subprocess-вызов в command).
+            if PYTHON_SUBPROCESS_RE.search(norm):
+                return None
+            if step_id.startswith(("04-test", "04-build", "05-tests",
+                                   "lite-red", "lite-green", "lite-verify",
+                                   "fix-red", "fix-green", "fix-verify")):
+                return f"запуск сборки/тестов ({BUILD_CMD_RE})"
+        return None
+
+    return _phase_artifact(step_id, norm)
+
+
 def _is_subagent(data: dict) -> bool:
     """Действие идёт ИЗ субагента (тогда хук не вмешивается), а не от оркестратора.
 
@@ -300,35 +345,80 @@ def _is_subagent(data: dict) -> bool:
         return False
 
 
-def _block(step_id: str, what: str, feature: str | None) -> int:
+def _actor_signal_note(session_id: str) -> str:
+    """Диагностика для текста отказа: работает ли вообще actor-сигнал в этой сессии.
+
+    Без неё отказ неразличим для двух РАЗНЫХ причин: (а) действует правда оркестратор —
+    надо запустить субагента; (б) рантайм не шлёт `SubagentStart` (хук не разложен, матчер
+    не сработал, в payload'е нет `session_id`), и тогда блокируется САМ субагент — запуск
+    ещё одного субагента даёт тот же отказ по кругу (tasks/008). Модель в случае (б) обязана
+    остановиться и сказать пользователю, что чинить, а не крутить цикл."""
+    try:
+        import subagent_scope
+        if subagent_scope.start_seen(session_id):
+            return ("  Actor-сигнал в этой сессии РАБОТАЕТ (SubagentStart уже приходил) — "
+                    "значит это действительно inline-вызов оркестратора.")
+        return ("  ВНИМАНИЕ: за эту сессию не пришло НИ ОДНОГО SubagentStart, поэтому хук не "
+                "может отличить субагента от оркестратора и блокирует обоих. Если ты СУБАГЕНТ "
+                "— повторный запуск субагента даст тот же отказ (замкнутый цикл, tasks/008): "
+                "остановись и скажи пользователю проверить хук SubagentStart "
+                "(`context-injector` в .gigacode/settings.json, `bash .gigacode/deploy-local.sh "
+                "--check`) и наличие `session_id` в его payload'е.")
+    except Exception:
+        return ""
+
+
+def _block(step_id: str, what: str, feature: str | None, session_id: str = "") -> int:
     feat = feature or "<slug>"
-    print(
+    lines = [
         f"[inline-phase-guard] DENY: фаза '{step_id}' обязана выполняться ЧЕРЕЗ "
-        f"agent(subagent_type=...), а не inline главным агентом. Заблокировано: {what}.\n"
+        f"agent(subagent_type=...), а не inline главным агентом. Заблокировано: {what}.",
+    ]
+    note = _actor_signal_note(session_id)
+    if note:
+        lines.append(note)
+    lines.append(
         f"  Запусти эту работу субагентом. Если agent() реально недоступен (деградация) — "
         f"снятие гейта только через override_judge (судья subagent-origin), и это R4: "
         f"gate-guard пропустит его ТОЛЬКО при approval-маркере "
-        f"ground/approvals/gate-override-subagent-origin.json, который фиксируется после "
-        f"ЯВНОГО «да» пользователя (спроси, покажи причину; feature={feat}, step={step_id}).",
-        file=sys.stderr,
+        f"'gate-override-subagent-origin' (журнал ground/approvals.jsonl, пишет ТОЛЬКО "
+        f"record_approval.py — прямая запись файла заблокирована state-write-guard), "
+        f"который фиксируется после ЯВНОГО «да» пользователя (спроси, покажи причину; feature={feat}, step={step_id})."
     )
+    print("\n".join(lines), file=sys.stderr)
     return 2
 
 
 def _has_override(root: Path, skill: str | None, feature: str | None, step_id: str) -> bool:
-    """overrides/subagent-origin.json активной фичи снимает блок (как у судей)."""
+    """Снятие блока судьёй subagent-origin (override_judge, R4) — как у судей.
+
+    Читаем через `forge_events.override`, то есть из ЖУРНАЛА events.jsonl. Раньше здесь
+    открывался файл `overrides/subagent-origin.json` напрямую — и escape-hatch был МЁРТВЫМ:
+    overrides уехали в журнал, единственный санкционированный писатель (`override_judge.py`)
+    пишет туда `kind:"override"`, а прямая запись файла запрещена `state-write-guard`. Итог
+    на живом прогоне: гейт блокирует запись артефакта, а выйти из блокировки нечем —
+    оркестратор перебирает `record_approval` → `override_judge` → `echo >` → `--closed-by
+    inline` по кругу и в итоге обходит гейт копированием файла из /tmp. `update.py` тот же
+    override уже читал через FE — не сходились именно хук и скрипт.
+
+    Legacy-файл остаётся фолбэком: его подхватывает сам `FE.override` (прогоны до миграции)."""
     if not skill or not feature:
         return False
-    path = root / "ground" / "statements" / skill / feature / "overrides" / "subagent-origin.json"
-    if not path.exists():
-        return False
+    ov = None
     try:
-        ov = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        import forge_events as FE
+        ov = FE.override(root, skill, feature, "subagent-origin")
+    except Exception:
+        # FE недоступен (обрезанный бандл) — прежнее поведение: читаем файл-маркер.
+        path = root / "ground" / "statements" / skill / feature / "overrides" / "subagent-origin.json"
+        try:
+            ov = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return False
+    if not isinstance(ov, dict):
         return False
     # override без привязки к шагу — общий; с step_id — только для своего шага.
-    ov_step = ov.get("step_id") if isinstance(ov, dict) else None
-    return ov_step in (None, "", step_id)
+    return ov.get("step_id") in (None, "", step_id)
 
 
 def main() -> int:
@@ -370,7 +460,7 @@ def main() -> int:
         )
         return 0
 
-    return _block(step_id, what, feature)
+    return _block(step_id, what, feature, str(data.get("session_id") or ""))
 
 
 if __name__ == "__main__":

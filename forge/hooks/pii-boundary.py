@@ -14,6 +14,7 @@ NB: при внутренней ошибке хук fail-OPEN (не может �
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 
@@ -60,18 +61,59 @@ def _content(tool_name: str, ti: dict) -> str:
     return str(ti.get("content") or ti.get("new_string") or ti.get("text") or "")
 
 
-def _target(tool_name: str, ti: dict) -> str:
+# Пути в командной строке. Класс символов включает `@` и `+`: без них цель обрезалась на
+# первом же `@` — а корень проекта у пользователя вида `/home/work/<таб-номер>@<домен>/code/…`
+# вполне обычен. Обрезанный путь ломал ОБЕ проверки: scope считался по огрызку
+# ('/home/work/22269498'), и запись в docs/ репо выглядела записью «вне scope».
+_PATH_CHARS = r"[\w./~@+=-]+"
+
+# Сток, в который писать безопасно по определению: содержимое никуда не попадает.
+# `2>/dev/null` — вообще не запись контента, а глушилка stderr, и она стояла в КАЖДОЙ
+# второй команде разведки.
+_NULL_SINKS = {"/dev/null", "/dev/zero", "/dev/stdout", "/dev/stderr", "nul", "NUL"}
+
+
+def _targets(tool_name: str, ti: dict) -> list[str]:
+    """Все цели записи. Список, а не первое совпадение: в `cmd 2>/dev/null > out.txt`
+    первым шёл /dev/null, и настоящая цель (out.txt) не проверялась вовсе."""
     if tool_name in ("Bash", "run_shell_command"):
         cmd = str(ti.get("command") or "")
         # перенаправление/запись в файл: > >> , tee [-a], dd of=, а также inline-python
         # (open('path','w'|'a'), Path('path').write_text(...)) — иначе PII писали мимо редиректа.
-        m = (re.search(r">>?\s*([\w./~-]+)", cmd)
-             or re.search(r"\btee\s+(?:-a\s+)?([\w./~-]+)", cmd)
-             or re.search(r"\bdd\b[^|]*\bof=([\w./~-]+)", cmd)
-             or re.search(r"\bopen\s*\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"][aw]", cmd)
-             or re.search(r"\bPath\(\s*['\"]([^'\"]+)['\"]\s*\)\s*\.write_text", cmd))
-        return m.group(1) if m else ""
-    return str(ti.get("file_path") or ti.get("path") or ti.get("filename") or "")
+        pats = (rf"(?<![0-9<>])>>?\s*({_PATH_CHARS})",
+                rf"\btee\s+(?:-a\s+)?({_PATH_CHARS})",
+                rf"\bdd\b[^|]*\bof=({_PATH_CHARS})",
+                r"\bopen\s*\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"][aw]",
+                r"\bPath\(\s*['\"]([^'\"]+)['\"]\s*\)\s*\.write_text")
+        out = []
+        for pat in pats:
+            out.extend(m.group(1) for m in re.finditer(pat, cmd))
+        return [t for t in out if t not in _NULL_SINKS]
+    one = str(ti.get("file_path") or ti.get("path") or ti.get("filename") or "")
+    return [one] if one and one not in _NULL_SINKS else []
+
+
+def _strip_infra_paths(content: str, data: dict) -> str:
+    """Убрать из сканируемого текста путь к корню проекта и cwd.
+
+    Корень проекта — инфраструктура, а не полезная нагрузка: он и так есть на диске у всех,
+    кто работает в репо, «утечь» им нельзя. Но выглядеть он может как угодно — у пользователя
+    это `/home/work/<таб-номер>@<домен>/code/<repo>`, и email-паттерн `pii_patterns` матчился
+    на КАЖДУЮ команду с абсолютным путём: разведочный grep, mkdir, printf в docs/. Хук
+    превращался в сплошной deny, не имеющий отношения к ПДн."""
+    roots = []
+    try:
+        roots.append(str(R.project_root(data.get("cwd", ""))))
+    except Exception:
+        pass
+    roots.append(str(data.get("cwd") or ""))
+    # ТОЛЬКО абсолютные и неоднобуквенные пути. Иначе cwd="." вырезает из содержимого ВСЕ
+    # точки, и `user@example.com` перестаёт совпадать с email-паттерном — то есть слепое
+    # вырезание само становится дырой в детекторе.
+    real = {r for r in roots if r and os.path.isabs(r) and len(r) > 3}
+    for root in sorted(real, key=len, reverse=True):
+        content = content.replace(root, "").replace(root.replace("\\", "/"), "")
+    return content
 
 
 def main() -> int:
@@ -85,17 +127,20 @@ def main() -> int:
         content = _content(tn, ti)
         if not content:
             return 0
-        target = _target(tn, ti)
+        targets = _targets(tn, ti)
         # для Bash без редиректа в файл — нечего охранять
-        if tn in ("Bash", "run_shell_command") and not target:
+        if tn in ("Bash", "run_shell_command") and not targets:
             return 0
-        if target and _allowed_scope(target):
-            return 0  # разрешённый scope (тесты/фикстуры/ground)
+        guarded = [t for t in targets if not _allowed_scope(t)]
+        if targets and not guarded:
+            return 0  # все цели в разрешённом scope (тесты/фикстуры/ground)
 
+        content = _strip_infra_paths(content, data)
         for pat in R.load_policy().get("pii_patterns", []):
             if re.search(pat, content):
                 print(f"[pii-boundary] DENY: запись PII/секрета (паттерн /{pat[:32]}…/) в "
-                      f"'{target or '?'}' вне разрешённого scope. Убери ПДн или пиши в test/fixtures.",
+                      f"'{guarded[0] if guarded else '?'}' вне разрешённого scope. "
+                      f"Убери ПДн или пиши в test/fixtures.",
                       file=sys.stderr)
                 return 2
     except Exception:
