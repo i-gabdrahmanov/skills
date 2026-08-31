@@ -1,0 +1,594 @@
+#!/usr/bin/env python3
+"""pipeline_phases.py — ЕДИНЫЙ источник истины фазовой машины feature-pipeline.
+
+Здесь и только здесь живут:
+  • PREFIX_PHASE / MAIN_PHASES / REQUIRED_JUDGES_MASK
+  • guess_phase / match_required_judges
+  • метаданные фаз (allowed_skills / blocked_tools / blocked_paths / required_artifacts)
+  • build_gate / build_defs — единственная реализация «manifest/steps → gate.json/phase-defs»
+  • active_feature — резолв активной фичи
+
+Все скрипты (add_steps, preflight-validate) и фазовые гейты хуков импортируют отсюда,
+чтобы PREFIX_PHASE/порядок фаз/маска судей не расходились между копиями (раньше так ловили
+06-doc и неканонический порядок фаз). Хуки (другая база деплоя) импортируют best-effort с
+inline-fallback, который пинится тестом test_phase_consistency.py.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from typing import Optional
+
+# ── Маппинг префиксов шагов → фазы ────────────────────────────────────
+PREFIX_PHASE = {
+    "00-": "00-brd",
+    "01-": "01-grounding",
+    "02-sdd": "02-sdd",                   # спецификация (BRD → sdd.md), до tech-design
+    "02-eval-plan": "02-eval-plan",       # отдельная фаза между design и jira
+    "02-": "02-design",
+    "03-": "03-jira",
+    "04-": "04-tdd",
+    "05-": "05-verify",
+    "06-": "06-document",
+}
+
+# Главные фазы в КАНОНИЧЕСКОМ порядке (по нему сортируется gate, а не по появлению шагов).
+# Доставки (07-deliver/07-report) в пайплайне нет: commit/push/PR/отчёт делает пользователь
+# сам (промптом или руками), пайплайн заканчивается верифицированным артефактом.
+MAIN_PHASES = ["00-brd", "01-grounding", "02-sdd", "02-design", "02-eval-plan",
+               "03-jira", "04-tdd", "05-verify", "06-document"]
+
+# ── Мастер-переключатель бизнес-анализа (BRD) ─────────────────────────
+# BRD-фаза (00-brd), BRD-грундинг (brd-grounder) и brd-judge ЗАБЛОКИРОВАНЫ: пайплайн стартует
+# сразу с фазы спецификации (02-sdd), которая пишет sdd.md из исходной идеи/Jira, а не из brd.md.
+# Код BRD НЕ удалён — 00-brd остаётся в MAIN_PHASES/PREFIX_PHASE/allowed_skills/judges-registry,
+# просто не резолвится в активный список фаз (resolve_phases) и не требуется судьями (run_judge).
+# ВЕРНУТЬ бизнес-анализ: поставь BRD_ENABLED = True, верни строку 00-brd в манифест-таблицу
+# feature-pipeline/SKILL.md и зависимость 02-sdd → 00-brd. SDD-промпты самонастроятся (при
+# переданном brd.md снова возьмут его как первичный источник требований).
+BRD_ENABLED = False
+
+# Маска судей по id шага. ЕДИНЫЙ источник — references/judges-registry.json (pipeline-state),
+# читается через judges_registry. Раньше маска дублировалась здесь, в init.py и
+# patch_manifest_judges.py и расходилась (00-brd добавили не во все копии). Имена судей ДОЛЖНЫ
+# совпадать с вердиктами run_judge.py (<phase>-judge.json).
+_PSTATE_SCRIPTS = Path(__file__).resolve().parents[1].parent / "pipeline-state" / "scripts"
+if str(_PSTATE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_PSTATE_SCRIPTS))
+try:
+    import judges_registry as _judges_registry
+    REQUIRED_JUDGES_MASK = _judges_registry.step_masks()
+except Exception as _e:  # реестр недоступен (pipeline-state не развёрнут рядом) — деградируем мягко
+    REQUIRED_JUDGES_MASK = {}
+    # Это мягкий fail-open enforcement: без маски шаги закрываются без судейских гейтов.
+    # Раньше падение глоталось молча — теперь оно видно (срабатывает лишь при кривом деплое).
+    print(f"[pipeline_phases] WARNING: judges-registry недоступен ({_e}) — "
+          f"REQUIRED_JUDGES_MASK пуст, судейские гейты не форсятся.", file=sys.stderr)
+
+# ── Импорт единого предиката фазы (enabled_by / skip_if) ────────────────────────────
+# Используем тот же модуль, что и resolve_phases.py — DRY. Раньше live-снимок
+# не учитывал enabled_by/skip_if, и current_phase застревал на опорожнённой фазе
+# (02-eval-plan при quality.eval_enabled=false и т.п., п.8 KIDPPRB-9254).
+# Импорт best-effort: без _phase_eligibility live_phase_decision просто деградирует
+# до старого поведения (без eligibility-проверки) — backward-compat.
+_FP_SCRIPTS = Path(__file__).resolve().parent
+if str(_FP_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_FP_SCRIPTS))
+try:
+    from _phase_eligibility import (  # noqa: F401 — ре-экспорт для вызывающих
+        ShouldExecute,
+        load_gates_json,
+        load_pipeline_json,
+        phase_eligibility,
+    )
+except Exception as _e:  # noqa: BLE001 — мягкая деградация: live_phase_decision остаётся рабочим
+    ShouldExecute = None  # type: ignore[assignment]
+    load_pipeline_json = None  # type: ignore[assignment]
+    load_gates_json = None  # type: ignore[assignment]
+    phase_eligibility = None  # type: ignore[assignment]
+    print(f"[pipeline_phases] WARNING: _phase_eligibility недоступен ({_e}) — "
+          f"live_phase_decision не учитывает enabled_by/skip_if.", file=sys.stderr)
+
+
+def guess_phase(step_id: str) -> str:
+    """id шага ('04-test-foo') → id фазы ('04-tdd'). Длинный префикс побеждает."""
+    if not isinstance(step_id, str):
+        return ""  # малформед-манифест (None/число вместо id) — не роняем фазовую машину
+    for prefix, phase in sorted(PREFIX_PHASE.items(), key=lambda x: -len(x[0])):
+        if step_id.startswith(prefix):
+            return phase
+    return step_id
+
+
+def is_container_step(step_id: str) -> bool:
+    """Container-шаг — main-phase placeholder, чей id ТОЧНО совпадает с фазой ('04-tdd').
+    Его собственный статус не отражает завершённость динамических шагов фазы
+    (04-test-T1/04-build-T1), поэтому при наличии динамических шагов он исключается из
+    расчёта завершённости фазы."""
+    return step_id in MAIN_PHASES
+
+
+# ── Соглашения об id динамических шагов (ЕДИНЫЙ источник; копии в хуках пинит ───────────
+#    test_phase_consistency). Раньше эти префиксы были «магическими строками» в eval-guard,
+#    tdd-guard, update._check_subagent_origin, preflight — переименуй в одном месте,
+#    enforcement тихо отвалится.
+BUILD_STEP_PREFIX = "04-build-"      # 04-build-<taskId> — GREEN-фаза задачи (пишет src/main)
+TEST_STEP_PREFIX = "04-test-"        # 04-test-<taskId>  — RED-фаза задачи (пишет src/test)
+
+# Фазы, ОБЯЗАННЫЕ исполняться субагентом (не inline). Совпадает с префиксами шагов.
+# Хвост lite-* — плоские шаги lite-ветки (forgelite): RED/GREEN/verify тоже идут субагентом.
+# Хвост fix-* — плоские шаги fix-ветки (forgefix, минорный дефект): диагностика/RED/GREEN/
+# verify/дельта спеки. fix-intake (чтение тикета + скоуп-чек) — инлайн, как lite-jira.
+SUBAGENT_PHASE_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
+                           "lite-design", "lite-red", "lite-green", "lite-verify",
+                           "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec")
+
+# Фазы, закрытие которых требует gate-result артефакта (gates/<step_id>.json от record_gate.py):
+# «шаг закрыт, потому что детерминированный гейт РЕАЛЬНО прошёл», а не потому что субагент
+# вернул status:"completed". Код/тесты/сборка + lite-контроль: lite-jira (скоуп-чек check_scope —
+# иначе его молча пропускали) и lite-design (check_taskplan + check_sdd по sources.spec — иначе
+# шаг закрывался со слов субагента: судей у lite-* нет по дизайну, evidence — единственный пол).
+# fix-* — вся ветка целиком: судей у неё нет по дизайну (дешёвый путь), поэтому evidence
+# детерминированного гейта — единственный пол под закрытием шага, включая инлайн-скоуп-чек
+# fix-intake (иначе «это баг или фича» решалось бы прозой) и дельту спеки fix-spec.
+GATE_RESULT_PREFIXES = ("04-test", "04-build", "05-tests",
+                        "lite-jira", "lite-design", "lite-red", "lite-green", "lite-verify",
+                        "fix-intake", "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec")
+
+
+def requires_gate_result(step_id) -> bool:
+    """Требует ли закрытие шага evidence-артефакта детерминированного гейта."""
+    return isinstance(step_id, str) and step_id.startswith(GATE_RESULT_PREFIXES)
+
+
+# Обязательные шаги: их НЕЛЬЗЯ тихо пропустить (status=skipped) без override — иначе fallback
+# «не смог спросить → пропущу фазу» тихо выкидывает качество-гейты (Thrust 1: fallback=STOP).
+# grounding/brd сюда НЕ входят (grounding легитимно reuse-skip).
+# lite-design уже в SUBAGENT_PHASE_PREFIXES (tech-design обязан идти субагентом).
+REQUIRED_STEP_PREFIXES = SUBAGENT_PHASE_PREFIXES
+
+
+def requires_no_silent_skip(step_id) -> bool:
+    """True — шаг обязательный, skip только через override (иначе exit 3 ESCALATE)."""
+    return isinstance(step_id, str) and step_id.startswith(REQUIRED_STEP_PREFIXES)
+
+
+# ── Освобождение задач от RED-теста/покрытия по типу (слои/флаг) ───────────────────────
+# Прецедент — coverage-гейт (run_judge DEFAULT_SERVICE_UNIT_COVERAGE_EXCLUDES): не тестируемые
+# слои не должны требовать RED, иначе гейт требует невозможного (для DDL/data-holder unit-теста
+# нет). Задача exempt, если task.no_test=true ЛИБО ВСЕ её слои ∈ quality.no_test_layers. Дефолт
+# совпадает с тем, что coverage уже исключает (data-holders / framework-generated). service/
+# controller/scheduler НИКОГДА не в дефолте. Правило «ВСЕ слои» — fail-closed: смешанная задача
+# (repository+service) тестируется. ЕДИНЫЙ предикат — импортируют check_tests_red, run_judge,
+# tdd-guard (тем же best-effort паттерном, что судейская маска).
+NO_TEST_LAYERS_DEFAULT = ["migration", "entity", "dto", "repository"]
+
+# Слои, дающие реальный Java-код (src/main/java). migration → src/main/resources (не код).
+_JAVA_LAYERS = frozenset({"entity", "repository", "dto", "mapper", "service", "controller", "scheduler"})
+
+
+def resolve_no_test_layers(cfg: dict) -> list:
+    """quality.no_test_layers из pipeline.json; None/не-список → дефолт (как coverage_exclude_globs)."""
+    v = ((cfg or {}).get("quality") or {}).get("no_test_layers")
+    return v if isinstance(v, list) else list(NO_TEST_LAYERS_DEFAULT)
+
+
+def task_is_test_exempt(task: dict, cfg: dict) -> bool:
+    """Освобождена ли задача от RED-гейта/покрытия: явный no_test ЛИБО ВСЕ слои в no_test_layers.
+
+    Пустой layers → НЕ exempt (fail-closed: непроклассифицированная задача тестируется).
+    """
+    if not isinstance(task, dict):
+        return False
+    if task.get("no_test") is True:
+        return True
+    layers = task.get("layers") or []
+    if not layers:
+        return False
+    ntl = resolve_no_test_layers(cfg)
+    return all(lay in ntl for lay in layers)
+
+
+def all_tasks_test_exempt(plan: Optional[dict], cfg: dict) -> bool:
+    """Ни одной задачи, которая пишет код и НЕ освобождена от RED (для плоских lite/fix-ветвей).
+
+    ЕДИНЫЙ предикат: им пользуются и tdd-guard (пропустить запись src/main без RED-шага), и
+    update.py (разрешить `skipped` для RED-шага). Пустой/нечитаемый план → False (fail-closed).
+    """
+    if not isinstance(plan, dict):
+        return False
+    tasks = plan.get("tasks", []) or []
+    if not tasks:
+        return False
+    return not any(task_touches_code(t) and not task_is_test_exempt(t, cfg) for t in tasks)
+
+
+def task_touches_code(task: dict) -> bool:
+    """Пишет ли задача реальный код — по java-слоям или артефакту под main/java.
+
+    ЕДИНЫЙ сигнал «код» — java-слои (service/controller/... — одномодульные артефакты в task-plan
+    относительны к src/main/java, поэтому по пути их не отличить, а по слою — точно) плюс
+    подстрока main/java в артефакте (мульти-модульные полные пути). migration → changeset в
+    src/main/resources (не java) — НЕ код. src/test/... — тоже не main-код (не содержит main/java).
+    """
+    if not isinstance(task, dict):
+        return False
+    for a in task.get("artifacts", []) or []:
+        if isinstance(a, str) and "main/java" in a.replace("\\", "/"):
+            return True
+    return any(lay in _JAVA_LAYERS for lay in (task.get("layers") or []))
+
+
+def task_of_artifact(plan: Optional[dict], target: str) -> Optional[str]:
+    """Задача task-plan, которой принадлежит файл (по её `artifacts`). None — не определить.
+
+    ЕДИНЫЙ источник для хуков (tdd-guard, eval-guard): «активная задача» через статус
+    `in_progress` не резолвится (его никто не проставляет), а `current_step_id` на параллельных
+    задачах намеренно отдаёт None. Без привязки по файлу оба хука либо ложно блокировали код
+    одной задачи незакрытым RED другой, либо молча fail-open'или EDD-гейт.
+
+    Совпадение по пути (артефакт — суффикс цели) однозначно; совпадение только по имени файла
+    принимается, лишь когда на него претендует РОВНО одна задача.
+    """
+    if not isinstance(plan, dict):
+        return None
+    t = str(target or "").replace("\\", "/")
+    if not t:
+        return None
+    by_name: list[str] = []
+    for task in plan.get("tasks", []) or []:
+        tid = task.get("id")
+        if not tid:
+            continue
+        for a in task.get("artifacts", []) or []:
+            a_norm = str(a).replace("\\", "/").lstrip("./")
+            if not a_norm:
+                continue
+            if t.endswith(a_norm):
+                return tid
+            if a_norm.rsplit("/", 1)[-1] == t.rsplit("/", 1)[-1]:
+                by_name.append(tid)
+    return by_name[0] if len(set(by_name)) == 1 else None
+
+
+def _task_id_after(step_id, prefix: str):
+    """task-id из id шага по префиксу ('04-build-T1' → 'T1'); иначе None."""
+    if isinstance(step_id, str) and step_id.startswith(prefix):
+        return step_id[len(prefix):] or None
+    return None
+
+
+def build_task_id(step_id):
+    """task-id из build-шага ('04-build-T1' → 'T1'), иначе None."""
+    return _task_id_after(step_id, BUILD_STEP_PREFIX)
+
+
+def test_task_id(step_id):
+    """task-id из RED-test-шага ('04-test-T1' → 'T1'), иначе None."""
+    return _task_id_after(step_id, TEST_STEP_PREFIX)
+
+
+def is_build_step(step_id) -> bool:
+    return build_task_id(step_id) is not None
+
+
+def requires_subagent(step_id) -> bool:
+    """Должен ли шаг исполняться субагентом (а не inline-оркестратором)."""
+    return isinstance(step_id, str) and step_id.startswith(SUBAGENT_PHASE_PREFIXES)
+
+
+def match_required_judges(step_id: str) -> list:
+    """required_judges для шага по маске (точное совпадение → wildcard *)."""
+    if step_id in REQUIRED_JUDGES_MASK:
+        return list(REQUIRED_JUDGES_MASK[step_id])
+    for mask, judges in REQUIRED_JUDGES_MASK.items():
+        if mask.endswith("*") and step_id.startswith(mask[:-1]):
+            return list(judges)
+    return []
+
+
+# ── Метаданные фаз (phase-defs) ───────────────────────────────────────
+# 01-grounding блокирует чтение src/ до сверки с инвентарём: evidence-разблок (запись
+# read_grounding) даёт хук grounding-evidence, снимает блок gate-guard.
+# NB: раньше и артефакт, и триггер хука назывались `grounding-index.json` — файла с таким
+# именем не производил никто, так что разблокировать фазу этим путём было нельзя в принципе.
+# Теперь имя настоящее: ground/inventory/grounding-excerpt.json.
+# Имена ЧИТАЮЩИХ инструментов: и Claude-нотация, и КАНОН рантайма. Список сравнивается с
+# tool_name из payload'а (`tool_name in blocked_tools`), а рантайм шлёт канон (read_file,
+# search_file_content, glob) — с одними Claude-именами блокировка чтения src/ до завершения
+# grounding'а не совпала бы никогда, даже будучи правильно проведённой (tasks/012).
+_READ_TOOL_NAMES = ["Read", "ReadFile", "read_file",
+                    "Grep", "GrepSearch", "grep", "search_file_content",
+                    "Glob", "glob"]
+
+
+def blocked_tools(phase_id: str) -> list:
+    return list(_READ_TOOL_NAMES) if phase_id == "01-grounding" else []
+
+
+def blocked_paths(phase_id: str) -> list:
+    return ["src/"] if phase_id == "01-grounding" else []
+
+
+def allowed_skills(phase_id: str) -> list:
+    return {
+        "00-brd":       ["brd-grounder", "brd-interview", "business-requirements"],
+        "01-grounding": ["project-grounder", "system-analyst", "Explore"],
+        "02-sdd":       ["sdd"],
+        "02-design":    ["tech-design"],
+        "02-eval-plan": ["general-purpose"],
+        "03-jira":      ["jira-task-writer"],
+        "04-tdd":       ["java-spring-dev", "bugfix-developer", "minor-defect-fix", "Explore"],
+        "05-verify":    ["Explore"],
+        "06-document":  ["general-purpose", "Explore"],
+    }.get(phase_id, [])
+
+
+def required_artifacts(phase_id: str) -> list:
+    return {
+        "00-brd":       ["docs/brd.md"],
+        "01-grounding": ["ground/inventory/grounding-excerpt.json"],
+        "02-sdd":       ["docs/sdd.md"],
+        "02-design":    ["docs/task-plan.json", "docs/tech-design.md"],
+        "02-eval-plan": ["docs/eval-plan.json",
+                         "ground/statements/feature-pipeline/**/judges/eval-judge.json"],
+    }.get(phase_id, [])
+
+
+def _ordered_unique_phases(steps: list) -> list:
+    """Уникальные фазы по шагам, отсортированные по каноническому MAIN_PHASES."""
+    seen = []
+    for step in steps:
+        pid = guess_phase(step.get("id", ""))
+        if pid not in seen:
+            seen.append(pid)
+    seen.sort(key=lambda p: MAIN_PHASES.index(p) if p in MAIN_PHASES else 999)
+    return seen
+
+
+def build_gate(steps: list, manifest: Optional[dict] = None,
+               existing_meta: Optional[dict] = None,
+               defs_meta: Optional[dict] = None,
+               enabled_phases: Optional[set] = None) -> dict:
+    """Единственная реализация «steps/manifest → gate.json».
+
+    existing_meta: {phase_id: {"skip_allowed": bool}} — сохранить ранее заданные значения.
+    defs_meta:     {phase_id: {"required_artifacts": [...]}} — из phase-defs (иначе дефолт).
+    enabled_phases: если задан — только эти id фаз участвуют в машине; остальные (не включённые,
+        напр. 02-eval-plan при quality.eval_enabled=false) НЕ попадают в список и не резолвятся в
+        current_phase (иначе фазовый снимок «застревал» на опорожнённой фазе, не давая дальше —
+        п.8 KIDPPRB-9254). None → все шаги-фазы (обратная совместимость).
+    Порядок фаз — КАНОНИЧЕСКИЙ (MAIN_PHASES), статусы восстанавливаются из манифеста.
+    """
+    existing_meta = existing_meta or {}
+    defs_meta = defs_meta or {}
+    step_status = {}
+    if manifest:
+        step_status = {s["id"]: s["status"] for s in manifest.get("steps", [])}
+
+    phases = []
+    for pid in _ordered_unique_phases(steps):
+        if enabled_phases is not None and pid not in enabled_phases:
+            continue  # фаза не включена конфигурацией — не участвует в машине (не current_phase)
+        em = existing_meta.get(pid, {})
+        dm = defs_meta.get(pid, {})
+        phases.append({
+            "id": pid,
+            "label": next((s.get("title", pid) for s in steps if guess_phase(s.get("id", "")) == pid), pid),
+            "skip_allowed": em.get("skip_allowed", pid != "01-grounding"),
+            "status": "pending",
+            "depends_on": [],
+            "artifacts": dm.get("required_artifacts", required_artifacts(pid)),
+        })
+
+    # depends_on — каждая главная фаза зависит от предыдущей главной
+    present = [p["id"] for p in phases]
+    main_order = [m for m in MAIN_PHASES if m in present]
+    for i, pid in enumerate(main_order):
+        if i == 0:
+            continue
+        for p in phases:
+            if p["id"] == pid:
+                p["depends_on"].append(main_order[i - 1])
+                break
+
+    # Статусы из манифеста (ЕДИНАЯ семантика фазовой машины): фаза completed,
+    # если все её ДИНАМИЧЕСКИЕ шаги completed/skipped. Container-шаг (04-tdd и т.п.) не
+    # учитывается, пока есть динамические; если динамических нет — смотрим по самому container.
+    if step_status:
+        for phase in phases:
+            dynamic = [s["id"] for s in steps
+                       if guess_phase(s.get("id", "")) == phase["id"]
+                       and not is_container_step(s["id"])]
+            if dynamic:
+                if all(step_status.get(sid) in ("completed", "skipped") for sid in dynamic):
+                    phase["status"] = "completed"
+            elif step_status.get(phase["id"]) in ("completed", "skipped"):
+                phase["status"] = "completed"
+
+    # current_phase — первая не-completed (по каноническому порядку)
+    current_phase = ""
+    for phase in phases:
+        if phase["status"] != "completed":
+            current_phase = phase["id"]
+            phase["status"] = "in_progress"
+            break
+
+    return {
+        "pipeline_id": (manifest or {}).get("pipeline_id", ""),
+        "feature": (manifest or {}).get("feature",
+                    ((manifest or {}).get("context") or {}).get("feature", "")),
+        "schema": "phase-gate@1",
+        "current_phase": current_phase,
+        "phases": phases,
+    }
+
+
+def _resolve_phase_definition(phase_id: str, pipeline: Optional[dict] = None) -> dict:
+    """Определение фазы (enabled_by/skip_if) по id для phase_eligibility.
+
+    Приоритет:
+      1) phases_override в pipeline.json (если есть и pipeline передан) — пользовательский
+         override имеет приоритет над дефолтом.
+      2) resolve_phases.DEFAULT_PHASES — канонический реестр с enabled_by/skip_if.
+      3) Fallback: {"id": phase_id, "enabled_by": None, "skip_if": None} — always-eligible.
+
+    Lazy-import resolve_phases, чтобы избежать циклической зависимости при загрузке:
+    pipeline_phases → resolve_phases → pipeline_phases (для BRD_ENABLED). К моменту вызова
+    live_phase_decision resolve_phases уже загружен (если использовался вызывающим кодом),
+    а если нет — импорт пройдёт штатно.
+    """
+    if pipeline:
+        override = pipeline.get("phases_override")
+        if isinstance(override, list):
+            for entry in override:
+                if isinstance(entry, dict) and entry.get("id") == phase_id:
+                    out = {"id": phase_id, "enabled_by": None, "skip_if": None}
+                    if "enabled_by" in entry:
+                        out["enabled_by"] = entry["enabled_by"]
+                    if "skip_if" in entry:
+                        out["skip_if"] = entry["skip_if"]
+                    return out
+    try:
+        import resolve_phases as _rp
+        for p in _rp.DEFAULT_PHASES:
+            if p.get("id") == phase_id:
+                return {"id": phase_id,
+                        "enabled_by": p.get("enabled_by"),
+                        "skip_if": p.get("skip_if")}
+    except Exception:
+        pass
+    return {"id": phase_id, "enabled_by": None, "skip_if": None}
+
+
+def live_phase_decision(manifest: Optional[dict], enabled_phases: Optional[set] = None,
+                        *, project_root=None, pipeline=None, gates=None,
+                        feature_ctx=None) -> dict:
+    """Живой фазовый снимок из manifest — ЕДИНСТВЕННЫЙ источник фазового состояния.
+
+    Раньше рядом лежал ground/phases/<feature>/gate.json — персистентный кэш этого же
+    расчёта. Кэш требовал синхронизации (phase_sync при каждом закрытии шага, resync в
+    preflight, отдельная ветка в state-recorder) и умел устаревать, если sync пропущен или
+    упал: гейты решали по протухшему снимку. Снят — считаем на месте, расчёт копеечный.
+    Возвращает {"current_phase": str, "phases": [...]}. enabled_phases — фильтр активных фаз
+    (см. build_gate); не энебл фазы не блокируют ход пайплайна (п.8).
+
+    Eligibility (NEW, п.8 KIDPPRB-9254): если передан project_root/pipeline/gates, каждая
+    фаза проходит phase_eligibility (enabled_by + skip_if) из _phase_eligibility.
+      - enabled_by не выполнен → status="skipped", skip_reason="disabled_by: <cond>"
+      - skip_if сработал     → status="skipped", skip_reason="skip_if: <expr>"
+      - current_phase        → первая фаза НЕ completed И НЕ skipped
+    Без project_root/pipeline/gates (старый контракт) поведение прежнее — обратная
+    совместимость с тестами и существующими вызовами.
+    """
+    steps = (manifest or {}).get("steps", [])
+
+    # Eligibility активируется, если вызывающий передал project_root ИЛИ явный pipeline.
+    # Без этого (старый контракт: live_phase_decision(manifest)) — gating пропускается,
+    # чтобы не сломать существующие юнит-тесты и инлайн-снимки без ФС.
+    apply_eligibility = phase_eligibility is not None and (
+        project_root is not None or pipeline is not None or gates is not None
+    )
+
+    if apply_eligibility:
+        # Конфиги: явный аргумент > загрузка с project_root > пустой dict.
+        if pipeline is None and load_pipeline_json is not None:
+            pipeline = load_pipeline_json(project_root)
+        elif pipeline is None:
+            pipeline = {}
+        if gates is None and load_gates_json is not None and project_root is not None:
+            gates_path = Path(project_root) / "ground" / "feature-gates.json"
+            gates = load_gates_json(gates_path)
+        elif gates is None:
+            gates = {}
+        if feature_ctx is None:
+            feature_ctx = (manifest or {}).get("context") or {}
+
+    gate = build_gate(steps, manifest, enabled_phases=enabled_phases)
+    raw_phases = gate.get("phases", []) or []
+    original_current = gate.get("current_phase", "")
+
+    if not apply_eligibility:
+        return {"current_phase": original_current, "phases": raw_phases}
+
+    # Применяем enabled_by/skip_if к каждой фазе снимка.
+    out_phases: list = []
+    for ph in raw_phases:
+        ph_out = dict(ph)
+        pdef = _resolve_phase_definition(ph["id"], pipeline)
+        elig = phase_eligibility(pdef, pipeline, gates, feature_ctx)
+        if not elig.should_execute:
+            # Конфиг отключил фазу — помечаем skipped, сохраняем в списке для диагностики,
+            # но current_phase на неё НЕ встаёт (вычисляется ниже как первый не-completed
+            # и не-skipped). Так гейт видит «все, что должны, в норме», а не-зачётные
+            # фазы просто исключены из advancement.
+            ph_out["status"] = "skipped"
+            ph_out["skip_reason"] = elig.skip_reason
+        out_phases.append(ph_out)
+
+    # current_phase: первый phase со status НЕ completed И НЕ skipped (по MAIN_PHASES-порядку,
+    # который build_gate уже выдерживает). Если всё позади — пустая строка (как раньше).
+    current_phase = ""
+    for ph in out_phases:
+        if ph.get("status") not in ("completed", "skipped"):
+            current_phase = ph["id"]
+            break
+
+    return {"current_phase": current_phase, "phases": out_phases}
+
+
+def live_state(manifest: Optional[dict], project_root=None) -> tuple:
+    """(gate, defs_map) из манифеста — то, что фазовым гейтам нужно целиком.
+
+    defs_map: {phase_id: {allowed_skills, blocked_tools_until_complete, blocked_paths,
+    required_artifacts}} — бывший phase-defs.json, тоже чистая производная от списка шагов.
+
+    `project_root` включает eligibility (enabled_by/skip_if). Без него live_phase_decision
+    работает по старому контракту и фазы, ВЫКЛЮЧЕННЫЕ конфигом, остаются `pending`: гейт
+    видит current_phase на фазе, которую никто никогда не закроет (напр. 02-eval-plan при
+    quality.eval_enabled=false), и её allowed_skills/depends_on блокируют всё подряд.
+    Вызывающий (gate-guard) корень знает — передаёт (tasks/012).
+    """
+    steps = (manifest or {}).get("steps", [])
+    defs_map = {p["id"]: p for p in build_defs(steps).get("phases", [])}
+    return live_phase_decision(manifest, project_root=project_root), defs_map
+
+
+def build_defs(steps: list) -> dict:
+    """Единственная реализация «steps → phase-defs.json»."""
+    defs = []
+    for pid in _ordered_unique_phases(steps):
+        defs.append({
+            "id": pid,
+            "allowed_skills": allowed_skills(pid),
+            "blocked_tools_until_complete": blocked_tools(pid),
+            "blocked_paths": blocked_paths(pid),
+            "required_artifacts": required_artifacts(pid),
+        })
+    return {"schema": "phase-defs@1", "phases": defs}
+
+
+# ── Per-feature резолв стейта (C1: gate под фичу) ─────────────────────
+def active_feature(root: Path, skill: str = "feature-pipeline") -> str:
+    """Активная фича = самый свежий manifest.json в ground/statements/<skill>/<feature>/.
+    'pipeline' (back-compat) если ни одного манифеста нет."""
+    base = Path(root) / "ground" / "statements" / skill
+    if not base.is_dir():
+        return "pipeline"
+    best, best_mtime = None, -1.0
+    for d in base.iterdir():
+        if not d.is_dir() or d.name == "archived":
+            continue
+        mp = d / "manifest.json"
+        if not mp.exists():
+            continue
+        try:
+            mtime = mp.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > best_mtime:
+            best, best_mtime = d.name, mtime
+    return best or "pipeline"
+
+
