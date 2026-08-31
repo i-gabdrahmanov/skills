@@ -76,7 +76,7 @@ def enter(session_id: str, agent_id: str, agent_type: str = "") -> None:
     data = _load(session_id)
     active = data.get("active") if isinstance(data.get("active"), dict) else {}
     active[str(agent_id or agent_type or "subagent")] = time.time()
-    _save(session_id, {"active": active})
+    _save(session_id, {"active": active, "seen": True})
 
 
 def leave(session_id: str, agent_id: str, agent_type: str = "") -> None:
@@ -91,7 +91,25 @@ def leave(session_id: str, agent_id: str, agent_type: str = "") -> None:
         active.pop(key, None)
     elif active:
         active.pop(min(active, key=lambda k: active[k]), None)
-    _save(session_id, {"active": active})
+    # `seen` — липкий: он про способность РАНТАЙМА слать SubagentStart, а не про то, работает
+    # ли субагент прямо сейчас. Снимать его вместе с active нельзя, иначе диагностика ниже
+    # («сигнал есть, но ты оркестратор» vs «сигнала нет вовсе») теряет смысл после первого
+    # же SubagentStop.
+    _save(session_id, {"active": active, "seen": bool(data.get("seen")) or bool(active)})
+
+
+def start_seen(session_id: str) -> bool:
+    """Приходил ли в этой сессии хоть один SubagentStart.
+
+    Отличает два несовпадающих состояния, которые для `active()` выглядят одинаково («False»):
+      • сигнал РАБОТАЕТ, но субагент сейчас не активен → блокировка оркестратора корректна;
+      • сигнала НЕТ вовсе (рантайм не шлёт SubagentStart, хук не разложен, матчер не сработал,
+        в payload'е нет session_id) → блокируется в том числе САМ субагент, и это тупик
+        (tasks/008). Различать их надо в тексте отказа, иначе причина не диагностируема.
+    """
+    if not session_id:
+        return False
+    return bool(_load(session_id).get("seen"))
 
 
 def active(session_id: str) -> bool:

@@ -320,7 +320,7 @@ def _check_doc_approval(step: dict, project: Path, skill: str, feature: str):
     record_script = Path(__file__).resolve().parent / "record_approval.py"
     raise StepGateBlocked(
         f"Шаг {step_id} нельзя закрыть: {doc}.md не утверждён пользователем "
-        f"(нет валидного маркера ground/approvals/{key}.json).\n"
+        f"(нет валидного approval-маркера '{key}' в ground/approvals.jsonl).\n"
         f"   Порядок: (1) спроси пользователя («утверждаем {doc.upper()}?»); "
         f"(2) ТОЛЬКО после явного «да»:\n"
         f"   python3 {record_script} --project {project} --key {key} "
@@ -642,7 +642,7 @@ def _check_skip_judges(project: Path, feature: str) -> None:
         "\n" + "=" * 60 + "\n"
         "⛔ STOP: --skip-judges снимает ВСЕ гейты закрытия шага (судьи, gate-result,\n"
         "   subagent-origin, обязательные решения, артефакты) — это R4-класс.\n"
-        f"   Нужен approval-маркер ground/approvals/{key}.json с провенансом record_approval.\n"
+        f"   Нужен approval-маркер '{key}' (журнал ground/approvals.jsonl) с провенансом record_approval.\n"
         "   Порядок: (1) объясни пользователю, ЗАЧЕМ обходить гейты (легитимный случай —\n"
         "   восстановление статусов после init.py --force) и спроси; (2) после явного «да»:\n"
         f"   python3 {rec_script} --project {project} --key {key} --approved-by user "

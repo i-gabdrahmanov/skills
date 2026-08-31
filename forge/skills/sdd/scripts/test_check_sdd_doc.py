@@ -115,6 +115,61 @@ class GateTest(unittest.TestCase):
         self.assertEqual(v["status"], "fail")
         self.assertTrue(any("пуст" in e for e in v["errors"]))
 
+    def test_section_written_as_subsections_is_not_empty(self):
+        """Раздел, расписанный подразделами, — НЕ пустой.
+
+        Регрессия: тело раздела обрывалось на любом следующем заголовке, поэтому
+        «## 5. API-контракты» → «### 5.1 POST /claims …» имел пустое тело и судья валил
+        корректный SDD с «раздел пуст». Модель дописывала текст, снова получала fail —
+        и сжигала лимит ре-итераций."""
+        doc = full_doc().replace(
+            THREAT_BLOCK,
+            "## 9. Модель угроз и безопасность\n\n"
+            "### 9.1 Обрабатываемые данные\nПДн класса К2: ФИО, телефон.\n\n"
+            "### 9.2 Threat surface\nВнешний REST за шлюзом; перебор закрыт rate-limit.",
+        )
+        for pol in ("hard", "applicability", "soft"):
+            v = gate.check(self._write(doc), pol)
+            self.assertEqual(v["status"], "pass", f"{pol}: {v['errors']}")
+
+    def test_core_section_written_as_subsections_is_not_empty(self):
+        """То же для CORE-группы (она жёсткая при любой политике)."""
+        doc = full_doc().replace(
+            CORE_BLOCKS["api"],
+            "## 5. API-контракты\n\n"
+            "### 5.1 POST /api/v1/claims\nТело ClaimRequest, ответ 201/400, авторизация JWT.",
+        )
+        v = gate.check(self._write(doc), "applicability")
+        self.assertEqual(v["status"], "pass", v["errors"])
+
+    def test_truly_empty_section_still_fails(self):
+        """Обратная сторона: раздел с ПУСТЫМИ подразделами по-прежнему валится."""
+        doc = full_doc().replace(
+            THREAT_BLOCK,
+            "## 9. Модель угроз и безопасность\n\n### 9.1\n\n### 9.2\n",
+        )
+        v = gate.check(self._write(doc), "applicability")
+        self.assertEqual(v["status"], "fail")
+        self.assertTrue(any("пуст" in e for e in v["errors"]), v["errors"])
+
+    def test_na_inside_subsection_counts(self):
+        """«не применимо» в подразделе засчитывается — тело раздела включает подразделы."""
+        doc = full_doc().replace(
+            REGULATORY_BLOCK,
+            "## 12. Регуляторные требования\n\n### 12.1\nне применимо: внутренний инструмент.",
+        )
+        self.assertEqual(gate.check(self._write(doc), "hard")["status"], "pass")
+
+    def test_generic_marker_does_not_grab_document_title(self):
+        """Общий маркер «api» не должен цепляться за заголовок документа вместо раздела."""
+        doc = full_doc().replace("# SDD: тестовая фича", "# SDD: API приёма заявок")
+        v = gate.check(self._write(doc), "applicability")
+        self.assertEqual(v["status"], "pass", v["errors"])
+        self.assertEqual(
+            gate._find_body(gate._parse_sections(doc), ["api-контракт", "api"]).strip(),
+            "POST /api/v1/claims — тело ClaimRequest, ответ 201/400.",
+        )
+
     def test_missing_contextual_warns_under_applicability_fails_under_hard(self):
         doc = full_doc().replace(DECISIONS_BLOCK, "")
         self.assertEqual(gate.check(self._write(doc), "applicability")["status"], "pass")

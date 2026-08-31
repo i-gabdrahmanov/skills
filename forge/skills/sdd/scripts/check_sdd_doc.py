@@ -65,7 +65,7 @@ _DEFAULT_POLICY = "applicability"
 _GWT = re.compile(r"(?i)given.*when.*then")
 _NOT_APPLICABLE = re.compile(r"(?i)не\s+примен|not\s+applicable|\bn/?a\b")
 _PLACEHOLDER = re.compile(r"<[^>\n]+>")
-_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.*)$")
+_HEADING = re.compile(r"^\s{0,3}(#{1,6})\s+(.*)$")
 
 # Признаки утечки реализации в SDD (спека = «что», а не «как»):
 _CODE_FENCE = re.compile(r"```(?:java|diff|kotlin|sql|xml)\b", re.IGNORECASE)
@@ -77,29 +77,41 @@ _LIQUIBASE = re.compile(r"(?i)\b(?:changeSet|databaseChangeLog|liquibase)\b")
 
 
 def _parse_sections(raw: str) -> list[tuple[str, str]]:
-    """Разбивает документ на разделы по заголовкам. Возвращает [(heading_lower, body), ...]."""
-    sections: list[tuple[str, str]] = []
-    current_head: str | None = None
-    current_body: list[str] = []
-    for line in raw.splitlines():
+    """Разбивает документ на разделы по заголовкам. Возвращает [(heading_lower, body), ...].
+
+    Тело раздела — всё до следующего заголовка ТОГО ЖЕ ИЛИ БОЛЕЕ ВЫСОКОГО уровня, то есть
+    ВКЛЮЧАЯ вложенные подразделы. Раньше тело обрывалось на любом следующем заголовке, и
+    раздел, расписанный подразделами (обычная форма: «## 5. API-контракт» → «### 5.1 POST
+    /users …»), получал ПУСТОЕ тело: судья валил корректный SDD с «раздел пуст», модель
+    дописывала текст, снова получала fail — и так до исчерпания лимита ре-итераций.
+    """
+    lines = raw.splitlines()
+    heads: list[tuple[int, int, str]] = []   # (номер строки, уровень, заголовок)
+    for i, line in enumerate(lines):
         m = _HEADING.match(line)
         if m:
-            if current_head is not None:
-                sections.append((current_head.lower(), "\n".join(current_body)))
-            current_head = m.group(1).strip()
-            current_body = []
-        elif current_head is not None:
-            current_body.append(line)
-    if current_head is not None:
-        sections.append((current_head.lower(), "\n".join(current_body)))
+            heads.append((i, len(m.group(1)), m.group(2).strip()))
+    sections: list[tuple[str, str]] = []
+    for n, (i, level, title) in enumerate(heads):
+        end = len(lines)
+        for j, lvl, _title in heads[n + 1:]:
+            if lvl <= level:
+                end = j
+                break
+        sections.append((title.lower(), "\n".join(lines[i + 1:end])))
     return sections
 
 
 def _find_body(sections: list[tuple[str, str]], markers: list[str]) -> str | None:
-    """Тело раздела, чей ЗАГОЛОВОК содержит любой из markers. None — заголовок не найден."""
-    for head, body in sections:
-        if any(mk in head for mk in markers):
-            return body
+    """Тело раздела, чей ЗАГОЛОВОК содержит любой из markers. None — заголовок не найден.
+
+    Маркеры перебираются В ПОРЯДКЕ СПИСКА (от специфичного к общему): иначе на документе
+    «# SDD: API рассылки» общий маркер «api» цеплялся бы за заголовок документа, а не за
+    «## 5. API-контракт», и телом раздела оказывался бы весь документ (или шапка)."""
+    for mk in markers:
+        for head, body in sections:
+            if mk in head:
+                return body
     return None
 
 

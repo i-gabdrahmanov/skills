@@ -56,7 +56,8 @@ class TGateOverride(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             r = _run(self.CMD, td)
             self.assertEqual(r.returncode, 2, r.stderr)
-            self.assertIn("gate-override-step-reopen-04-build-T1.json", r.stderr)
+            self.assertIn("gate-override-step-reopen-04-build-T1", r.stderr)
+        self.assertIn("approvals.jsonl", r.stderr)
 
     def test_create_with_approval_passes(self):
         with tempfile.TemporaryDirectory() as td:
@@ -133,7 +134,8 @@ class TRollback(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             r = _run(self.CMD, td)
             self.assertEqual(r.returncode, 2, r.stderr)
-            self.assertIn("rollback-f1-02-sdd.json", r.stderr)
+            self.assertIn("rollback-f1-02-sdd", r.stderr)
+        self.assertIn("approvals.jsonl", r.stderr)
 
     def test_rollback_with_approval_passes(self):
         with tempfile.TemporaryDirectory() as td:
@@ -211,7 +213,8 @@ class TSkipJudges(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             r = _run(self.CMD, td)
             self.assertEqual(r.returncode, 2, r.stderr)
-            self.assertIn("skip-judges-f1.json", r.stderr)
+            self.assertIn("skip-judges-f1", r.stderr)
+        self.assertIn("approvals.jsonl", r.stderr)
 
     def test_with_approval_passes(self):
         with tempfile.TemporaryDirectory() as td:
@@ -364,7 +367,8 @@ class TPhaseApproval(unittest.TestCase):
             _mk_fix_state(td, self.STEPS, self.CFG)
             r = _write_run(self.TEST_FILE, td)
             self.assertEqual(r.returncode, 2, r.stderr)
-            self.assertIn("fix-plan-BUG-512.json", r.stderr)
+            self.assertIn("fix-plan-BUG-512", r.stderr)
+        self.assertIn("approvals.jsonl", r.stderr)
 
     def test_red_write_passes_with_approval(self):
         with tempfile.TemporaryDirectory() as td:
@@ -388,7 +392,8 @@ class TPhaseApproval(unittest.TestCase):
                                 "depends_on": ["fix-red"]}], self.CFG)
             r = _write_run("src/main/java/com/acme/ReportService.java", td)
             self.assertEqual(r.returncode, 2, r.stderr)
-            self.assertIn("fix-plan-BUG-512.json", r.stderr)
+            self.assertIn("fix-plan-BUG-512", r.stderr)
+        self.assertIn("approvals.jsonl", r.stderr)
 
     def test_approval_of_other_feature_does_not_unlock(self):
         with tempfile.TemporaryDirectory() as td:
