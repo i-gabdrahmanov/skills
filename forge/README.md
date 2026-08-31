@@ -19,13 +19,13 @@
 ## Что внутри
 
 ```
-forgeExt/
+forge/
 ├── hooks/
 │   ├── settings.hooks.json   # эталон блока hooks для project-модели (${PYTHON}, ${PROJECT_ROOT})
 │   ├── *.py                  # хук-скрипты + зависимости (_project.py, risk_ladder.py, forge_events.py)
 │   ├── risk-policy.json      # deny-политика (R0–R5 ladder)
 │   ├── DEPLOY.md             # полный ростер хуков: события, порядок, диагностика
-│   ├── test_*.py, tests/     # юнит-тесты control-plane (97 шт.)
+│   ├── test_*.py, tests/     # юнит-тесты control-plane (30 файлов)
 │   ├── evals/run-evals.py    # eval-набор (поведенческие пины хуков)
 │   ├── resolve_hook_paths.py # подстановка ${PYTHON}/${PROJECT_ROOT} в settings.hooks.json
 │   └── run-hook-tests.sh     # юнит-тесты хуков + evals одной командой
@@ -68,11 +68,14 @@ forgeExt/
 ## Тесты
 
 ```bash
-python3 skills/run_all_tests.py          # весь набор: скиллы + хуки + корень (97 тестов)
-python3 skills/run_all_tests.py --skill hooks   # только control-plane
+python3 skills/run_all_tests.py          # весь набор: скиллы + хуки + корень (108 файлов тестов)
+python3 skills/run_all_tests.py --skill hooks   # только control-plane (30)
 bash hooks/run-hook-tests.sh             # юнит-тесты хуков + eval-набор
 ```
-Требуется Python 3.10+ (скрипты используют PEP 604).
+Пол интерпретатора — **Python 3.9** (`hooks/test_python_floor.py` держит его кодом: всё дерево
+парсится под 3.9, PEP 604 в аннотациях требует `from __future__ import annotations`). Пол поднят
+намеренно НЕ будет: хук, падающий на импорте, отдаёт `exit 1`, а рантайм читает это как
+«возражений нет» — то есть молча снятый enforcement на корпоративных машинах с 3.9.
 
 ## Установка
 
@@ -90,9 +93,14 @@ python3 /path/to/target-project/.gigacode/hooks/preflight.py --project /path/to/
 # ✅ exit 0 — можно работать
 # ❌ exit 1 — ENFORCEMENT OFF, чини деплой/флаг
 
-# 4. запустить рантайм с хуками (форк GigaCode — флаг обязателен):
-gigacode --experimental-hooks -p "<задача>"
+# 4. запустить рантайм с хуками — ИНТЕРАКТИВНО (форк GigaCode — флаг обязателен):
+gigacode --experimental-hooks
 ```
+
+Дальше в сессии — команда `/forge <ключ Jira или описание>`: `router` классифицирует задачу и
+уводит в fix / lite / full. **Headless (`-p`) для пайплайна не годится** без `-y`/YOLO и
+предзаписи решений: рантайм не даёт выполнить `agent`, фаза уходит inline и упирается в
+`inline-phase-guard` (см. INSTALL.md §4).
 
 **Обновление** — `bash update.sh /path/to/target-project` (или повторный `deploy.sh`).
 **Деинсталляция** — `bash uninstall.sh /path/to/target-project` (снимает hooks/ + skills/ + блок
@@ -117,7 +125,7 @@ hooks из `settings.json`; `--purge-state` дополнительно снос�
 
 ## Проверено
 
-- `python3 skills/run_all_tests.py` — 97/97 (control-plane + skills + корень).
+- `python3 skills/run_all_tests.py` — 108/108 (control-plane + skills + корень).
 - `bash cleanup-legacy.sh --apply` на user-уровне с extension-остатками — успех,
   операторские скиллы (pptx/pdf/skill-creator) не тронуты.
 - `destructive-blocker` блокирует на точном payload qwen (`git push -f origin main` →
@@ -132,7 +140,8 @@ hooks из `settings.json`; `--purge-state` дополнительно снос�
 
 - **001** — падающий `hooks/tests/test_project_resolver.py::test_find_project_root` в
   source-репо (нет git/build-маркеров; ложно-красный в extension-окружении).
-- **004** — инициализация git в `forgeExt` (или адаптация тестов к extension-корню).
+- **004** — инициализация git в каталоге форжа (или адаптация тестов к вложенной git-раскладке:
+  git-корень внешний, `forge/` — подкаталог).
 - **005** — накладные расходы `grounding-evidence` на каждый `read_file` (наблюдение,
   пренебрежимо на малых проектах).
 

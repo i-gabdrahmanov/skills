@@ -124,10 +124,12 @@ bash deploy.sh /path/to/target-project
 pprb-kid). **Запускай ВСЕГДА с флагом:**
 
 ```bash
-gigacode --experimental-hooks -p "<задача>"
-# или интерактивно:
-gigacode --experimental-hooks
+gigacode --experimental-hooks          # интерактивно — канон; дальше команда /forge <задача>
 ```
+
+Headless (`-p`) — отдельный режим: `agent` в нём требует `-y`/YOLO, иначе субагент не стартует и
+фаза упирается в `inline-phase-guard`; плюс `ask_user_question` не рендерится, поэтому все решения
+и approval-маркеры должны быть предзаписаны ДО прогона (INSTALL.md §4).
 
 Флаг — это флаг **запуска бинаря**, его нельзя прописать в `settings.json`. Установка
 через `deploy.sh` его не ставит (не может — это аргумент процесса); `preflight.py` ловит

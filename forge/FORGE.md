@@ -311,7 +311,8 @@ git-история и связанные `tasks/`.
   (inline-phase-guard + sod).
 - [Thrust-5 / 2026-07-04] Lite-jira/lite-design в `GATE_RESULT_PREFIXES`; `INGEST_FLOOR_PHASES`
   расширен (brd/eval standalone AND, build/delivery гибрид); тавтология-floor вшит;
-  `evidence-enforcer` запрещает `Co-Authored-By`, для forgelite требует ключ Jira.
+  `evidence-enforcer` запрещает `Co-Authored-By`, для forgelite требует ключ Jira
+  (сам хук снят позже вместе с доставкой — BR-13).
 - [Thrust-6 / 2026-08-10] `risk_ladder.current_step_id` ставит `in_progress`; `phase_approvals`
   требуют `fix-plan-<feature>` для `fix-red`/`fix-green`; `sources.story` — required_decisions
   `fix-diag`; `pipeline.mode` действует только в паре с `pipeline.mode_task`.
@@ -363,7 +364,11 @@ git-история и связанные `tasks/`.
   SoD через `agent_caps` поэтому неактивен by design; основной SoD форсит `sod-enforcer` по id
   активного шага, а актора для `inline-phase-guard` даёт отметка сессии `subagent_scope.py`.
 - **Инструмент `agent` в headless (`-p`) требует `-y`/YOLO** — иначе рантайм не даёт его
-  выполнить, и модель уходит делать работу фазы сама (прямо в блок inline-phase-guard).
+  выполнить, и модель уходит делать работу фазы сама (прямо в блок inline-phase-guard). Отсюда
+  канон запуска — **интерактив** (`gigacode --experimental-hooks` → `/forge <задача>`); headless
+  описан отдельным режимом с `-y` и предзаписью решений (INSTALL.md §4). Отказ
+  inline-phase-guard различает «actor-сигнал работает» и «`SubagentStart` не приходил вовсе»,
+  чтобы вторая причина не читалась как первая и не уводила в цикл перезапусков (tasks/008).
 - **Гейт-хуки fail-OPEN при таймауте/краше** (>60с). Тяжёлые гейты запускает оркестратор.
 - **`$(...)`/backticks/`find -exec`/`ls -R` РЕЖЕТСЯ** → в SKILL.md/доках заменены на
   `Glob`/`Grep`/`Read`. `fork-syntax-guard.py` объясняет замену.

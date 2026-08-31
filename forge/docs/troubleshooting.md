@@ -8,20 +8,20 @@
 
 ```bash
 # 1. Харнес вообще активен? (заодно прогоняет доктор целостности пайплайна)
-python3 <forge>/hooks/preflight.py --project .   # 0=ок, 2=не инициализирован, 1=ENFORCEMENT OFF
+python3 .gigacode/hooks/preflight.py --project .   # 0=ок, 2=не инициализирован, 1=ENFORCEMENT OFF
 
 # 2. Доктор целостности пайплайна (судьи, фазы, пути реестра)
-python3 <forge>/skills/feature-pipeline/scripts/doctor.py --project . --json
+python3 .gigacode/skills/feature-pipeline/scripts/doctor.py --project . --json
 
 # 3. Все пути реестра существуют?
-python3 <forge>/skills/feature-pipeline/scripts/check_paths.py --project .
+python3 .gigacode/skills/feature-pipeline/scripts/check_paths.py --project .
 
 # 4. Что в работе / на каком шаге застряли?
-python3 <forge>/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
+python3 .gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
 ```
 
-> Глубже: eval-набор хуков — `bash <forge>/hooks/run-hook-tests.sh`; тесты скиллов
-> И юнит-тесты хуков (единый прогон) — `python3 <forge>/skills/run_all_tests.py`
+> Глубже: eval-набор хуков — `bash .gigacode/hooks/run-hook-tests.sh`; тесты скиллов
+> И юнит-тесты хуков (единый прогон) — `python3 .gigacode/skills/run_all_tests.py`
 > (только хуки — `--skill hooks`).
 
 ---
@@ -33,10 +33,14 @@ python3 <forge>/skills/pipeline-state/scripts/read.py --skill feature-pipeline -
 **Причины и фиксы:**
 - **Не передан флаг запуска** → запускайте `gigacode --experimental-hooks` (это аргумент процесса,
   в `settings.json` его прописать нельзя).
-- **Extension не установлен/выключен** → `gigacode extensions list` должен показывать `forge`;
-  если нет — `extensions link|install`, если `disabled` — `extensions enable forge` (user-guide §3).
-- **Legacy-раскладка перекрывает extension** (`<project>/.gigacode/` от прежнего `deploy.sh`) →
-  `bash <ext>/cleanup-legacy.sh <project>` (INSTALL.md §1).
+- **Харнес не развёрнут в проект** → в `<project>/.gigacode/` должны лежать `hooks/`, `skills/`,
+  `commands/` и `settings.json` с блоком hooks. Нет — `bash <forge>/deploy.sh <project>`
+  (`<forge>` = корень исходника forge; user-guide §3).
+- **Блок hooks не сгенерирован** (в `settings.json` остались `${PYTHON}`/`${PROJECT_ROOT}`) →
+  `bash .gigacode/deploy-local.sh` (проверить выбор интерпретатора без записи: `--dry-run`).
+- **Legacy extension-раскладка на user-уровне перекрывает project-деплой** (`~/.gigacode/skills/`,
+  `~/.gigacode/hooks/`, блок hooks в user-`settings.json`) → `bash <forge>/cleanup-legacy.sh --apply`
+  (INSTALL.md §1), затем **рестарт сессии**.
 - **`disableAllHooks: true`** в settings → снимите.
 
 ### A2. `preflight.py` → exit 1 (ENFORCEMENT OFF)
@@ -81,9 +85,12 @@ service-unit + моки, либо переключите на `test_layer=mixed`
 **Причина:** попытка записать PII/секрет вне разрешённого scope.
 **Фикс:** уберите секрет из артефакта; секреты не хранятся в pipeline-state и не пишутся в docs.
 
-### B5. `evidence-enforcer`: блок доставки
-**Причина:** evidence bundle неполный (completeness ниже `evidence.threshold`) — доставка преждевременна.
-**Фикс:** доведите предыдущие фазы (тесты/покрытие/спека) до закрытых шагов, затем доставка.
+### B5. `inline-phase-guard`: блок записи артефакта фазы
+**Причина:** артефакт фазы (`sdd.md`, `tech-design.md`, код) пишет **оркестратор**, а фаза обязана
+идти субагентом (BR-10). Считается и запись средствами shell — редирект, `tee`, `cp`/`mv` из `/tmp`,
+`sed -i`: обойти хук копированием файла нельзя.
+**Фикс:** запустить работу через `agent(subagent_type=...)`. Если `agent` в рантайме недоступен —
+см. D2, это блокер, а не деградация.
 
 > Если прогон дорогой по токенам — сжимайте контекст (выжимки шагов вместо полных выводов),
 > тяжёлый вывод держите в субагентах. Отдельного бюджет-гейта нет.
@@ -106,10 +113,10 @@ service-unit + моки, либо переключите на `test_layer=mixed`
 
 ### C3. Ручной override гейта (последнее средство)
 ```bash
-python3 <forge>/skills/pipeline-state/scripts/override_judge.py \
+python3 .gigacode/skills/pipeline-state/scripts/override_judge.py \
     --judge <judge-name> --feature <slug> --step-id <step-id> --reason "<почему допустим пропуск>"
 # затем закрыть шаг как обычно — update.py увидит override
-python3 <forge>/skills/pipeline-state/scripts/override_judge.py --feature <slug> --list   # просмотр
+python3 .gigacode/skills/pipeline-state/scripts/override_judge.py --feature <slug> --list   # просмотр
 ```
 Override **не подделывает вердикт**: FAIL остаётся в `judges/<judge>.json`, снимается лишь блок закрытия,
 `--reason` идёт в аудит. Если на шаге два судьи — override нужен на **каждый** упавший.
@@ -139,9 +146,22 @@ Override **не подделывает вердикт**: FAIL остаётся �
 случилось — шаг помечается, не продолжайте, пока не переделано субагентом.
 
 ### D2. `agent` недоступен в рантайме
-**Симптом:** субагент не стартует (tool error).
-**Действие:** конвейер выполнит фазу inline как **деградацию** (`degraded: true` в state) и явно
-это пометит, чекпойнтя каждый микрошаг. Это допустимо как фоллбэк, но устойчивость ниже.
+**Симптом:** субагент не стартует (tool error); любая продуктивная запись фазы упирается в
+`inline-phase-guard` → `exit 2`.
+**Это блокер, а не деградация.** Inline-исполнение фазы запрещено хуком: повторный запуск субагента
+даёт тот же отказ по кругу.
+**Причины по частоте:**
+- **headless (`-p`) без `-y`/YOLO** — рантайм не даёт выполнить `agent`. Перезапуститесь
+  интерактивно (`gigacode --experimental-hooks`) или добавьте `-y` (user-guide §4).
+- **хук `SubagentStart` не разложен / не сматчен** — тогда харнес не отличает субагента от
+  оркестратора и блокирует **обоих**. Отказ это прямо сообщает («за эту сессию не пришло ни одного
+  SubagentStart»). Проверка: `context-injector` в `.gigacode/settings.json`,
+  `bash .gigacode/deploy-local.sh --check`, наличие `session_id` в payload'е.
+
+**Если `agent` действительно недоступен и починить нельзя** — снятие блока только через судью
+`subagent-origin` (`override_judge.py`, §C3). Это R4: `gate-guard` пропустит override лишь при
+approval-маркере `gate-override-subagent-origin`, который фиксируется `record_approval.py` после
+явного «да» пользователя.
 
 ### D3. Частые обрывы стрима на тяжёлых фазах
 **Причина:** раздут главный контекст (gradle/JaCoCo/сканы в основном агенте).
@@ -163,7 +183,9 @@ Override **не подделывает вердикт**: FAIL остаётся �
 
 ### E1. MCP не подключён
 **Симптом:** нет инструментов вида `*jira*` / `*bitbucket*`.
-**Действие:** пайплайн идёт в режиме «без Jira / до коммита». Для фаз 2.5 и 6 подключите MCP-серверы.
+**Действие:** пайплайн идёт в режиме «без Jira» (фаза `03-jira` пропускается). Нужна постановка
+задач — подключите MCP Atlassian. Bitbucket харнесу не нужен: доставку (ветка/коммит/PR/отчёт)
+конвейер не делает — это на вас (BR-13).
 **Важно:** имена инструментов отличаются у серверов — **не угадывайте**, смотрите список доступных.
 
 ### E2. `check_jira` FAIL: «паритет нарушен»
@@ -202,7 +224,7 @@ Override **не подделывает вердикт**: FAIL остаётся �
 `--artifacts` для шагов с файлами (`02-design`, `02-eval-plan`, `03-jira`).
 **Фикс:** прогоните недостающего судью; закрывайте `update.py ... --status completed --artifacts '{...}'`.
 
-### G2. Шаги `04-*`/`07-deliver-*` не сопоставляются с задачами
+### G2. Шаги `04-*` не сопоставляются с задачами
 **Причина:** перепутан регистр task-id (`t1` вместо `T1`), или использован `add_steps.py` из
 `pipeline-state/scripts/` (он не проставляет `required_judges`).
 **Фикс:** используйте `feature-pipeline/scripts/add_steps.py`; id шагов — ровно как task-id (`T1`→`04-test-T1`).
@@ -217,10 +239,10 @@ Override **не подделывает вердикт**: FAIL остаётся �
 
 ```bash
 # харнес активен ДО прогона:
-python3 <forge>/hooks/preflight.py --project .   # <forge> = корень extension'а
+python3 .gigacode/hooks/preflight.py --project .
 
 # статус шагов пайплайна:
-python3 <forge>/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
+python3 .gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
 ```
 
 > Если после всех шагов проблема не воспроизводится через `preflight`/`doctor` — это, скорее всего,

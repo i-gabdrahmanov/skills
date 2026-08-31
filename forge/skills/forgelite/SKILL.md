@@ -20,7 +20,9 @@ description: >
 > `<project>` = корень репо кода (там же `.gigacode/`). Не используй `~/.gigacode/...`.
 
 > **Рантайм — форк GigaCode (Qwen). Жёсткие правила:**
-> - Хуки за флагом запуска: `gigacode --experimental-hooks -p "..."` (иначе `0 hook entries`).
+> - Хуки за флагом запуска: `gigacode --experimental-hooks` (иначе `0 hook entries`). Headless
+>   `-p` дополнительно требует `-y`/YOLO — без него `agent` не стартует и фаза упирается в
+>   `inline-phase-guard`.
 > - В командах — только однострочные, без `$(...)` и обратных кавычек (рантайм режет).
 > - Тяжёлую фазу — только через `agent(subagent_type="general-purpose", ...)`. `agent()` и
 >   `ask_user_question` не активны одновременно.
