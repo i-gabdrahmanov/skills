@@ -1,0 +1,365 @@
+---
+name: forgelite
+description: >
+  Лёгкая ветка forge для исполнения УЖЕ ПОДГОТОВЛЕННОЙ подзадачи из Jira (есть описание и
+  acceptance criteria) для Java/Spring: grounding → tech-design по СУЩЕСТВУЮЩЕЙ спеке (source of
+  truth) → TDD RED→GREEN → покрытие. Без BRD и без написания SDD с нуля, без постановки
+  задач — только исполнение готового тикета (tech-design строится по уже готовой спеке, а не
+  пишется заново). Коммиты/push/PR/отчёты в Jira пайплайн НЕ делает — их выполняет
+  пользователь сам (промптом или руками) после завершения. Обычно вызывается роутером
+  (skills/router), когда пользователь выбрал путь «готовая задача»; работает и автономно.
+  Триггеры: «выполни задачу из jira», «сделай KIDPPRB-1234», «прогони готовый subtask».
+  Отличие от feature-pipeline — тот с нуля (BRD→код); от minor-defect-fix — тот баг + спека
+  в отдельном репо.
+---
+
+# Forgelite — lite-ветка: исполнение готовой задачи Jira
+
+> **Пути — через `feature-pipeline/references/skill-paths.json`** (общие скрипты forge) и
+> локально `references/manifest-steps.json`. Зовём как `python3 <project>/.gigacode/<path>`.
+> `<project>` = корень репо кода (там же `.gigacode/`). Не используй `~/.gigacode/...`.
+
+> **Рантайм — форк GigaCode (Qwen). Жёсткие правила:**
+> - Хуки за флагом запуска: `gigacode --experimental-hooks -p "..."` (иначе `0 hook entries`).
+> - В командах — только однострочные, без `$(...)` и обратных кавычек (рантайм режет).
+> - Тяжёлую фазу — только через `agent(subagent_type="general-purpose", ...)`. `agent()` и
+>   `ask_user_question` не активны одновременно.
+
+Плоский цикл (feature = ключ Jira; стейт в namespace `forgelite`, отдельно от `feature-pipeline`):
+**Jira → grounding → tech-design по спеке → RED → GREEN → покрытие**. На этом пайплайн
+заканчивается: commit/push/PR/отчёт в Jira делает пользователь сам (промптом или руками).
+
+Шаги стейта (`lite-*`, чтобы НЕ пересекаться с фазовой машиной full-пути и масками судей):
+`lite-jira → lite-ground → lite-design → lite-red → lite-green → lite-verify`.
+
+> **lite ≠ «без дизайна».** Для простой задачи спека (SDD) уже существует — это **source of
+> truth**. `lite-design` строит tech-design/task-plan ПО НЕЙ (скилл `tech-design`, субагент),
+> BRD/SDD заново НЕ пишутся. Путь к спеке — обязательное решение `inputs.spec`: пока оно не
+> записано, `gate-guard` блокирует запись фазы `lite-design` (fail-closed). См. §4.
+
+---
+
+## 0. Предусловия
+
+- Java/Spring (gradle или maven). MCP **Atlassian (Jira)** подключён (иначе стоп).
+- cwd = корень репо кода (`<toplevel>`). Харнес развёрнут; preflight должен быть зелёным.
+- Если тебя вызвал роутер — критичность/конфиг уже выставлены (`decisions.auto_max_risk=R2`,
+  `quality.eval_enabled=false`). Если запускаешься автономно — проверь, что они выставлены (см. §1.1).
+- Ключ задачи (`[A-Z]+-\d+`) не передан — спроси один раз, провалидируй.
+
+## 1. Архитектура (кто что делает)
+
+| Этап | step-id | Кто | Механизм |
+|---|---|---|---|
+| Fetch Jira + скоуп-чек | `lite-jira` | главный агент | MCP |
+| Лёгкий grounding | `lite-ground` | reuse или субагент | agent() |
+| Tech-design по спеке (Gate 1) | `lite-design` | субагент (`tech-design`) | agent() |
+| TDD RED | `lite-red` | субагент-тестописатель | agent() |
+| TDD GREEN | `lite-green` | java-spring-dev (субагент) | agent() |
+| Тесты + регресс модулей + покрытие (финал) | `lite-verify` | субагент-раннер | agent() |
+
+> **Субагент = ЯВНЫЙ вызов `agent(subagent_type="general-purpose", ...)`.** RED-тесты / GREEN-код /
+> прогон тестов не пиши inline (заблокирует `inline-phase-guard`; нет SubagentStop → молчат
+> проверки). Субагент ПОСЛЕДНИМ действием сам гоняет свой детерминированный гейт и возвращает
+> JSON с `step_id` и `status` (`completed` только при прохождении гейта). Хук `state-recorder`
+> закрывает шаг по этому статусу. Инлайн-шаг (lite-jira) закрывает
+> главный агент через `update.py`. `lite-design` — субагентная фаза (tech-design; главный агент не
+> пишет tech-design.md/task-plan.json inline — заблокирует `inline-phase-guard`).
+
+### 1.1. Инициализация (один раз)
+```
+python3 <forge>/hooks/preflight.py --project <toplevel>
+```
+> **`<forge>` — корень кода форжа: каталог на два уровня выше этого SKILL.md**
+> (`<project>/.gigacode` при развёртывании через `deploy.sh`; см. INSTALL.md). preflight печатает
+> его в `layout.base`; ниже любой путь `<project>/.gigacode/skills/...` читай как
+> `<forge>/skills/...`.
+
+exit 0 — продолжаем; exit 1 — стоп, чинить деплой/установку (см. INSTALL.md). **exit 2 — конфиг не
+инициализирован** (первый прогон в проекте): выполни команду из поля `init_command` вывода preflight
+```
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.py --project <toplevel>
+```
+и повтори preflight до exit 0. Без `ground/policy.json` (общий конфиг) ИЛИ активного
+`manifest.json` (per-feature `inputs.*`/`decisions.*`) любой `config.py set` ниже вернёт exit 3,
+и решения прогона (в т.ч. `inputs.spec`) молча не запишутся.
+
+Заведи стейт (namespace forgelite):
+```
+python3 <project>/.gigacode/skills/pipeline-state/scripts/init.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --steps @<project>/.gigacode/skills/forgelite/references/manifest-steps.json
+```
+Автономный запуск (не из роутера) — выставь lite-конфиг через config-helper (`--project` идёт
+ДО подкоманды `set`; `auto_max_risk` — sensitive, нужен `--confirm`; per-feature поля идут в
+`manifest.json` — передай `--skill`/`--feature`, project-wide (`quality.*`) — без них, в `policy.json`):
+```
+python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set decisions.auto_max_risk R2 --confirm --skill forgelite --feature <JIRA-KEY>
+python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set decisions.criticality medium --skill forgelite --feature <JIRA-KEY>
+python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set quality.eval_enabled false
+```
+Закрытие шага — только после прохождения гейта:
+```
+python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id <id> --status completed
+```
+
+**Папка артефактов задачи — РЕЗОЛВНИ ЕЁ СЕЙЧАС, не подставляй плейсхолдер:**
+```
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/skill_paths.py feature-docs --project <toplevel> --feature <JIRA-KEY>
+```
+Печатает абсолютный путь по `docs.*` (in-repo → `<toplevel>/docs/feature-pipeline/<JIRA-KEY>`,
+separate-repo → каталог внешнего репо). Дальше `<litedir>` = ровно этот путь; туда идут
+`tech-design.md` и `task-plan.json` (шаг `lite-design`), и его целиком подставляй субагентам —
+конфиг они не читают.
+
+> ⛔ **Каталог харнеса — не место для артефактов.** `<project>/.gigacode/skills/...` — это КОД форжа,
+> общий на все проекты. `state-write-guard` блокирует запись туда
+> во время прогона (exit 2). Не знаешь путь — выполни команду выше, а не пиши рядом со SKILL.md.
+
+---
+
+## 2. Fetch Jira + скоуп-чек → `lite-jira`
+Через MCP получи: summary, description, **acceptance criteria**, issuetype, priority, статус,
+последние 5–10 комментариев, имена вложений.
+
+**Скоуп-чек — детерминированный (enforced: `update.py` НЕ закроет `lite-jira` без
+evidence-артефакта от record_gate).** Сохрани JSON issue из MCP в файл и прогони ЧЕРЕЗ РАННЕР:
+```
+python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-jira --cmd "python3 <project>/.gigacode/skills/forgelite/scripts/check_scope.py --issue-json <файл-с-issue.json>"
+```
+- **exit 0** — скоуп ок, продолжай.
+- **exit 1** (внутри — exit 3 ESCALATE от check_scope, причины в артефакте гейта) — СТОП, спроси
+  пользователя: «Задача не похожа на готовую подзадачу. Продолжить в lite или взять full
+  (feature-pipeline)?» Не решай молча. Если пользователь явно сказал «продолжаем lite» —
+  зафиксируй его согласие и сними гейт (это R4: сначала `record_approval.py --key
+  gate-override-gate-result-lite-jira --approved-by user --reason "..."`, затем
+  `override_judge.py --judge gate-result-lite-jira --reason "..."`), после чего закрывай шаг.
+- Нечитаемый JSON issue — перечитай из MCP и повтори раннер.
+
+Дополнительно останови и спроси сам, если видишь несколько независимых сценариев в одной задаче.
+
+Закрой `lite-jira` (команда update.py как в §1.1).
+
+## 3. Инвентарь → `lite-ground`
+
+Субагент здесь не нужен: инвентарь снимает скрипт за секунды, детерминированно и без LLM.
+
+```bash
+python3 <project>/.gigacode/skills/system-analyst/scripts/ensure_inventory.py --root <toplevel>
+```
+
+Идемпотентно: код не менялся — ничего не делает; менялся — пересканирует сам. Результат в
+`<toplevel>/ground/inventory/` (эфемерный, в git не едет). Закрой шаг инлайн.
+
+- **exit 2** (пусто) — сканировали не тот корень. Уточни у пользователя корень репо кода.
+
+`grounding-excerpt.json` подхватывает `context-injector` и вкладывает в последующих субагентов.
+
+> Раньше здесь субагент писал «лёгкий обзор» своей формы (`touched_classes`, `neighbor_tests`).
+> Проблема была не в объёме, а в том, что такой файл проходил гейты полного пайплайна как
+> настоящий инвентарь: `check_taskplan` не находил в нём `components` и молча пропускал
+> кросс-чек `reuses`. Теперь форма одна и настоящая.
+
+## 4. Tech-design по существующей спеке → `lite-design` (Gate 1)
+
+Спека (SDD) для задачи **уже существует** — это source of truth. НЕ пиши BRD/SDD заново.
+
+1. **Зафиксируй путь к спеке** (обязательное решение `inputs.spec`). Интерактивно — спроси
+   пользователя «где лежит спецификация задачи?» (`ask_user_question`); headless — путь предзаписан.
+   Запиши артефакт (per-feature поле → `manifest.json` активной фичи):
+   ```
+   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set inputs.spec <путь-к-спеке> --skill forgelite --feature <JIRA-KEY>
+   ```
+   Пока `inputs.spec` не записан, `gate-guard` заблокирует запись фазы `lite-design` (fail-closed).
+   **Если путь не получить интерактивно** (вопрос не отрендерился — headless/форк): НЕ угадывай и
+   НЕ пропускай `lite-design` (это обязательный шаг — `update.py` даст `exit 3`). Остановись и
+   попроси предзапись `config.py set inputs.spec <путь> --skill forgelite --feature <JIRA-KEY>` + перезапуск.
+   > **Имена файлов дизайна — контракт, а не оформление.** Ровно `tech-design.md` и
+   > `task-plan.json` в `<litedir>`: по этим именам их читают фазы `lite-red`/`lite-green`, и по
+   > ним же `update.py` не закроет `lite-design` (документ, названный по слагу задачи, для
+   > следующих фаз всё равно что не существует).
+
+2. **Субагентом** (`tech-design`) построй `<litedir>/tech-design.md` + `<litedir>/task-plan.json`
+   ПО ЭТОЙ спеке (вход — `inputs.spec`, а не свежий `sdd.md`; `<litedir>` — резолвнутый путь из §1.1,
+   подставь его абсолютным). Главный агент tech-design.md/task-plan.json inline
+   НЕ пишет (заблокирует `inline-phase-guard`). Гейт: `check_taskplan.py` + `check_sdd.py --sdd
+   <inputs.spec>` — ЧЕРЕЗ РАННЕР `record_gate.py` (он пишет evidence; `update.py` НЕ закроет
+   `lite-design` без него — слово субагента не доказательство).
+   ```
+   subagent_type: general-purpose
+   prompt: |
+     Ты — tech-design. Прочитай СУЩЕСТВУЮЩУЮ спеку (source of truth) по пути <inputs.spec> и
+     grounding-excerpt. Построй <litedir>/tech-design.md + <litedir>/task-plan.json по слоям СТРОГО
+     по этой спеке (sdd_ref якори — на её разделы). НЕ пиши BRD/SDD заново. Пиши ТОЛЬКО в <litedir>
+     (абсолютный путь выше) — запись в каталог харнеса (skills/) блокирует state-write-guard.
+     ПОСЛЕДНИМ действием прогони гейт ЧЕРЕЗ РАННЕР (без него шаг не закроется):
+     python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-design --cmd "python3 <project>/.gigacode/skills/tech-design/scripts/check_taskplan.py <путь-к-task-plan.json> --scan <toplevel>/ground/inventory/scan && python3 <project>/.gigacode/skills/tech-design/scripts/check_sdd.py <путь-к-task-plan.json> --sdd <inputs.spec>"
+     Верни JSON {"step_id":"lite-design","status":"completed"} только если раннер дал exit 0.
+   ```
+> **Gate 1:** «Дизайн такой?» — к коду только после «да» (или предзаписи в headless).
+
+Субагент закрывает `lite-design` сам (SubagentStop → `state-recorder`).
+
+## 5. TDD RED — субагент → `lite-red`
+Хук `tdd-guard` не даст писать `src/main/java/`, пока `lite-red` не закрыт (ресурсы —
+`src/main/resources`: liquibase changeset, yml — не гейтятся, RED для них не нужен).
+
+> **Задача не про код → RED пропускается ЯВНО.** Если все слои задачи ∈ `quality.no_test_layers`
+> (дефолт `migration`/`entity`/`dto`/`repository`) или у неё `no_test:true` в task-plan —
+> падающий unit-тест не пишется. Манифест lite-ветки статический, поэтому шаг `lite-red` в нём
+> ЕСТЬ — закрой его как пропущенный:
+> ```
+> python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-red --status skipped
+> ```
+> `update.py` разрешает этот пропуск ДЕТЕРМИНИРОВАННО — сверяя task-plan тем же предикатом, что
+> и `tdd-guard` (который по нему же пропускает запись `src/main/java/`). Задача пишет код —
+> пропуск не пройдёт (exit 3), и это правильно. Оставлять шаг висеть в `pending` не нужно.
+
+```
+description: "TDD RED tests for <JIRA-KEY>"
+subagent_type: general-purpose
+prompt:
+Сначала прочитай и строго следуй: read_file("<project>/.gigacode/skills/test-writer/SKILL.md")
+(режим RED). Конвенции тестовой базы (первый вызов сканирует, дальше кэш):
+python3 <project>/.gigacode/skills/test-writer/scripts/analyze_tests.py --root <toplevel> --if-missing
+Стиль — по ground/inventory/test-conventions.json и эталонам из exemplars.
+Напиши падающие unit-тесты (TDD RED) по acceptance criteria. НЕ трогай src/main/.
+Корень репо: <toplevel>. Сборка: <gradle|maven>.
+Задача: <summary> / AC: <acceptance criteria>. Grounding: <классы/соседние тесты>.
+УТВЕРЖДЁННЫЙ ДИЗАЙН — прочитай ЦЕЛИКОМ, тесты специфицируют именно его, а не твою версию решения:
+read_file("<litedir>/tech-design.md")   (§3 — слои, классы, сигнатуры, которые появятся)
+read_file("<litedir>/task-plan.json")   (задачи, acceptance, sdd_ref)
+Правила:
+0. Тесты ссылаются на классы/методы ИЗ ДИЗАЙНА (их ещё нет — это норма для RED). Дизайн кажется
+   неверным/неполным — НЕ решай сам: верни status:"failed" и что именно не сходится.
+1. Тесты только в src/test/, стиль соседних (JUnit5/Mockito, given/when/then).
+2. Каждый пункт AC — отдельным тестом + edge cases (null/пусто/граница). Без @Disabled.
+3. Тесты ДОЛЖНЫ компилироваться и ПАДАТЬ. Никакого production-кода/заглушек в src/main/.
+4. ПОСЛЕДНИМ действием прогони RED-гейт ЧЕРЕЗ РАННЕР (он пишет evidence — без него шаг не закроется).
+   Гейт ПО-ТЕСТОВЫЙ (JUnit XML прогона): должны выполниться ТОЛЬКО твои новые тесты и ВСЕ упасть —
+   один red + остальные green = FAIL (зелёный новый тест вакуумен: проходит без реализации).
+   Поэтому скоупь --cmd на СВОИ тест-классы:
+   Gradle: python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-red --expect red --compile-cmd "./gradlew compileTestJava" --cmd "./gradlew test --tests 'FooTest' --tests 'BarTest'"
+   Maven:  тот же вызов с --compile-cmd "mvn -q test-compile" --cmd "mvn -q test -Dtest=FooTest,BarTest"
+   exit 0 = RED корректен (компиляция прошла, ВСЕ тесты прогона падают). Если раннер FAILED
+   «компиляция упала» — это НЕ RED (чини сигнатуры/импорты); «тесты прошли» — это GREEN
+   (не годится); «RED не чистый: N зелёных» — вакуумные тесты, перепиши их падающими.
+Верни JSON: {"step_id":"lite-red","status":"completed|failed","tests_written":["..."],"compile_ok":true,"tests_failed":true}
+status:"completed" ТОЛЬКО если compile_ok=true И tests_failed=true.
+```
+После ответа прочитай `git diff src/test/`. `status:"failed"` — разбери и перезапусти.
+Лимит ре-итераций форсится детерминированно (`quality.max_step_reopens`, дефолт 3): `update.py`
+вернёт **exit 3 (ESCALATE)** — тогда СТОП, покажи пользователю, что не сходится, и спроси.
+
+## 6. TDD GREEN — java-spring-dev (субагент) → `lite-green`
+```
+description: "TDD GREEN implementation for <JIRA-KEY> (java-spring-dev)"
+subagent_type: general-purpose
+prompt:
+Сначала прочитай и строго следуй: read_file("<project>/.gigacode/skills/java-spring-dev/SKILL.md")
+Затем реализуй production-код, чтобы RED-тесты стали зелёными (TDD GREEN).
+Корень репо: <toplevel>. Задача: <summary> / AC: <acceptance criteria>.
+RED-тесты (пути): <из lite-red>. Конвенции: <из grounding>.
+УТВЕРЖДЁННЫЙ ДИЗАЙН — прочитай ЦЕЛИКОМ ПЕРЕД первой правкой кода и реализуй ЕГО:
+read_file("<litedir>/tech-design.md")   (§3 — раскладка по слоям: что переиспользуем, что
+                                         добавляем, какие классы/сигнатуры/миграции)
+read_file("<litedir>/task-plan.json")   (задачи, layers, artifacts, acceptance)
+Правила:
+0. Реализация идёт ПО ДИЗАЙНУ: те слои, те классы, те точки расширения. «Позеленить тесты как
+   угодно» — не цель. Дизайн не работает (сигнатура невозможна, слой не тот, нужен ещё один
+   класс) — НЕ отступай молча: верни status:"failed" с тем, что не сходится, чтобы дизайн
+   поправили. Отступление, о котором никто не узнал, — главный источник расхождения кода и спеки.
+1. Минимальное изменение под AC. Не рефактори соседнее, не вводи лишних абстракций.
+2. Конвенции проекта (Lombok, пакеты, слои) — как в java-spring-dev.
+3. Переиспользуй существующие util/библиотеки classpath — без велосипедов.
+4. Правь только src/main/ (тесты уже есть; не ослабляй их).
+5. ПОСЛЕДНИМ действием прогони BUILD-гейт ЧЕРЕЗ РАННЕР (он пишет evidence — без него шаг не закроется):
+   Gradle: python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-green --cmd "./gradlew build"
+   Maven:  тот же вызов с --cmd "mvn -q verify"
+   Должно пройти (exit 0 = сборка и тесты зелёные).
+Верни JSON: {"step_id":"lite-green","status":"completed|failed","files_changed":["..."],"build_ok":true}
+status:"completed" ТОЛЬКО если build_ok=true (сборка и тесты зелёные).
+```
+### 6.1. reuse-judge (advisory)
+Окинь diff `src/main/` на «велосипеды» (дублирование доступных util/библиотек из grounding).
+Нашёл — **покажи пользователю и предложи** заменить. Не блокирует, решает пользователь.
+
+## 7. Тесты + покрытие + регресс затронутых модулей — субагент → `lite-verify`
+```
+description: "Run tests + regression guard + JaCoCo coverage gate for <JIRA-KEY>"
+subagent_type: general-purpose
+prompt:
+Прогони тесты, регресс-гейт затронутых модулей и детерминированный gate покрытия (порог 0.80).
+Корень репо: <toplevel>. Сборка: <gradle|maven>. Изменённые файлы (без тестов): <список>.
+Шаги:
+1. Gradle: ./gradlew test jacocoTestReport   |  Maven: mvn -q test jacoco:report
+2. ЕДИНЫМ РАННЕРОМ прогони составной гейт (он пишет evidence — без него шаг не закроется).
+   Гейт = регресс затронутых модулей `&&` покрытие. Первый — `module_tests.py guard`: он сам
+   через git stash снимает эталон «зелёного ДО» по ВСЕМ модулям, затронутым твоим диффом (не
+   только твой сервис!), возвращает правки и сверяет — сломал/не прогнал тест второго сервиса
+   = FAIL. Это закрывает «тронул другой сервис, его тесты проигнорированы».
+   python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --step-id lite-verify --timeout 3000 --cmd "python3 <project>/.gigacode/skills/feature-pipeline/scripts/module_tests.py guard --root <toplevel> --base HEAD && python3 <project>/.gigacode/skills/minor-defect-fix/scripts/check_coverage.py --root <toplevel> --base HEAD --threshold 0.80 --json"
+   Регресс (ранее зелёный тест затронутого модуля теперь красный / не прогнался) — НЕ подгоняй
+   тест/код под зелёное: найди и устрани настоящую причину. Ниже порога покрытия — допиши тесты
+   в src/test/ (стиль соседних). После правок повтори раннер.
+Верни JSON: {"step_id":"lite-verify","status":"completed|failed","tests":{"passed":N,"failed":N,"skipped":N},"regression_ok":true|false,"coverage_gate":<вывод check_coverage.py>}
+status:"completed" ТОЛЬКО если тесты зелёные И регресс-гейт И coverage_gate дали exit 0 (составной раннер вернул 0). Компайл-эррор — status:"failed","build_error":"...".
+```
+Лимит итераций GREEN↔verify форсится детерминированно (`quality.max_step_reopens`, дефолт 3) —
+на исчерпании `update.py` вернёт exit 3 (ESCALATE): СТОП, покажи пользователю и спроси.
+
+**`lite-verify` — финальный шаг пайплайна.** Покажи пользователю итог: что изменено
+(файлы), тесты, покрытие. Коммит, push, PR и комментарий в Jira пайплайн НЕ делает —
+их пользователь выполняет сам (промптом или руками), когда сочтёт артефакт готовым.
+
+---
+
+## Карта MCP
+| Действие | Паттерн инструмента |
+|---|---|
+| Jira issue | `*jira*get*issue*`, `*atlassian*issue*` |
+Не угадывай — бери первый подходящий из доступных.
+
+## Что НЕ делать
+- Не коммить, не пушь, не создавай PR и не пиши в Jira — доставку делает пользователь сам.
+- RED/GREEN/прогон — только субагентом (иначе `inline-phase-guard`).
+- Не обходи через `reset --hard`/`checkout .`.
+- Не пиши BRD и не пиши SDD с нуля, не ставь задачи в Jira (это full-путь feature-pipeline).
+  Tech-design (`lite-design`) строй ТОЛЬКО по существующей спеке (`inputs.spec`), а не заново.
+  Спеку в отдельном репо не бери (это minor-defect-fix).
+- Не зови RED/GREEN, не вложив в промпт пути `<litedir>/tech-design.md` и `<litedir>/task-plan.json`:
+  субагент конфиг не читает и файлы сам не ищет — без путей он реализует СВОЮ версию решения,
+  а утверждённый дизайн остаётся бумажкой.
+- Не переименовывай артефакты фаз: `tech-design.md`/`task-plan.json` — фиксированные имена.
+
+## Связь
+Ветка forge: вызывается роутером (`skills/router`) при выборе «готовая задача», full-путь —
+`feature-pipeline`. Разработчик GREEN — `java-spring-dev`. Стейт — `pipeline-state` (namespace
+`forgelite`).
+
+## v2 model (manifest v2 + policy.json)
+
+Конфиг разделён на два файла с разной семантикой; писатель — только
+`skills/config-helper/scripts/config.py set` (валидация по реестру, атомарная запись, бэкап).
+
+- **Project-wide (`ground/policy.json`)** — общая конфигурация проекта: `quality.*`,
+  `conventions.*`, `docs.*`, `sdd.*`, `adr.*`, `spec.*`, `jira.*`. Иммутабельна на прогоне
+  активной фичи (манифест существует) — `set` вернёт exit 1.
+- **Per-feature (`ground/statements/forgelite/<JIRA-KEY>/manifest.json`)** — входы и решения
+  текущей задачи: `inputs.mode`/`inputs.spec` и `decisions.mode_task`/
+  `decisions.criticality`/`decisions.auto_max_risk`. Без активного манифеста
+  `set inputs.*`/`decisions.*` падает (exit 3).
+- **Dual-read:** `risk_ladder.config_get()` делает 3-tier lookup manifest → policy.json →
+  legacy `ground/pipeline.json`. Старые пути (`sources.*`/`pipeline.mode*`/`autonomy.*`)
+  читаются из pipeline.json для обратной совместимости, но НОВЫЕ записи идут в
+  `inputs.*`/`decisions.*` (config.py validate помечает их в policy.json как DEPRECATED,
+  warning). Не пиши в legacy `pipeline.json` напрямую — используй `config.py set`.
+
+Пример (lite-путь, запись `inputs.spec` для активной фичи):
+```
+python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> \
+  set inputs.spec docs/feature-pipeline/KIDPPRB-1234/sdd.md --skill forgelite --feature KIDPPRB-1234
+```
+Пример (project-wide `quality.coverage_threshold`, без `--skill`/`--feature`):
+```
+python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> \
+  set quality.coverage_threshold 0.85
+```

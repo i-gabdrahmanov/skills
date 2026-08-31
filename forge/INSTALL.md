@@ -1,0 +1,120 @@
+# Установка forge (project-модель)
+
+Forge ставится в целевой Java/Spring-проект через `deploy.sh` — один скрипт копирует
+hooks/ + skills/ + команды в `<project>/.gigacode/` и доводит `settings.json`.
+Боевой рантайм — **GigaCode**: бинарь `gigacode`, базовый каталог `~/.gigacode`.
+Проверено на `gigacode v26.5+`.
+
+> **Модель установки — единственная (project).** Манифестов extension'а (`qwen-extension.json`
+> / `gigacode-extension.json`) в репо нет, `qwen/gigacode extensions link|install` НЕ
+> поддерживается. Если forge где-то остался от прежней extension-раскладки (user-уровень
+> `~/.gigacode/skills/`, `~/.gigacode/hooks/`, блок hooks в `settings.json`) — он ПЕРЕКРЫВАЕТ
+> project-деплой: задваивает цепочки хуков, подменяет скиллы старыми копиями и уводит
+> `/forge` к устаревшей команде. Снимается `cleanup-legacy.sh` (см. §1).
+
+## 0. Требования
+
+- Python **3.9+** в `PATH` с рабочим `expat` (модуль `xml.etree`).
+  Установщик не берёт «первый python из PATH» вслепую: он пробует кандидатов
+  (`python3`, `python`, `py -3`, затем `python3.13…3.9`) и запекает в `settings.json`
+  первый ЗДОРОВЫЙ — версия не ниже пола и живой stdlib. Это не косметика: выбранный
+  интерпретатор подставляется как `${PYTHON}` в команду КАЖДОГО хука, а хук, падающий
+  на импорте, отдаёт `exit 1` — рантайм читает это как «возражений нет» и выполняет
+  вызов. Кривой python здесь = молча снятый enforcement.
+  Если годного нет, установщик берёт что есть и печатает `⚠ ВНИМАНИЕ` — читай вывод.
+- Флаг `--experimental-hooks` при запуске `gigacode` (в форке GigaCode хуки за флагом;
+  без него рантайм стартует с `[HOOK_REGISTRY] 0 hook entries` — control-plane молчит).
+
+## 1. Убрать остатки прежней extension-раскладки (если была)
+
+Если forge раньше стоял как extension (`qwen extensions link|install`), нужно снять
+user-уровень (`~/.gigacode/skills/`, `~/.gigacode/hooks/`), иначе они перекроют project-деплой.
+
+**Одна команда** — `cleanup-legacy.sh` (по умолчанию только план, ничего не меняет):
+
+```bash
+bash cleanup-legacy.sh --apply                           # user-уровень ($HOME)
+bash cleanup-legacy.sh /path/to/target-project --apply   # + legacy в проекте (если был)
+```
+
+Корпоративный контур, где писать в `$HOME` или в проект нельзя:
+
+```bash
+bash cleanup-legacy.sh --apply --backup-dir /tmp/forge-bak
+```
+
+Перенести ещё `ground/` и git-refs чекпойнтов (рабочие данные прогона):
+
+```bash
+bash cleanup-legacy.sh /path/to/target-project --apply --purge-state
+```
+
+Затем — **перезапустить сессию** (рантайм кэширует список скиллов на старте) и проверить
+`preflight.py` — ошибок «старые копии перекрывают» быть не должно.
+
+## 2. Установка в проект
+
+```bash
+bash deploy.sh /path/to/target-project
+```
+
+`deploy.sh` делает:
+1. Копирует `hooks/` и `skills/` (co-located) в `<target>/.gigacode/`.
+2. Удаляет `__pycache__`, `.DS_Store`, локальный `config.json`.
+3. Удаляет хуки-сироты (были в старом деплое, но нет в исходнике).
+4. Кладёт `deploy-local.sh`, `FORGE.md`, `SKILLS-REGISTRY.md`.
+5. Копирует `commands/*.md` (снимает устаревший `forge.toml`).
+6. Запускает `deploy-local.sh` — генерирует `settings.json` из `settings.hooks.json`
+   (подставляет `${PYTHON}` = выбранный здоровый интерпретатор и `${PROJECT_ROOT}` =
+   абсолютный путь проекта).
+7. Прогоняет `preflight.py` (advisory).
+
+## 3. Проверка готовности
+
+```bash
+python3 /path/to/target-project/.gigacode/hooks/preflight.py --project /path/to/target-project
+```
+
+- ✅ `exit 0` — можно работать.
+- ❌ `exit 1` — ENFORCEMENT OFF, проверь `deploy.sh` и флаг `--experimental-hooks`.
+- ❌ `exit 2` — `pipeline.json` не инициализирован (нормально для первого запуска).
+
+## 4. Запуск рантайма
+
+```bash
+gigacode --experimental-hooks -p "<задача>"
+# или интерактивно:
+gigacode --experimental-hooks
+```
+
+## 5. Обновление
+
+```bash
+bash update.sh /path/to/target-project
+```
+
+Или повторный `deploy.sh` — он перезапишет копиями из исходника (хуки-сироты в таргете
+подчищаются автоматически).
+
+## 6. Деинсталляция
+
+```bash
+bash uninstall.sh /path/to/target-project
+```
+
+Снимает:
+- блок hooks из `<project>/.gigacode/settings.json` (с бэкапом);
+- `hooks/`, `skills/`, `commands/`, `deploy-local.sh`, `FORGE.md`, `SKILLS-REGISTRY.md`;
+- `--purge-state` дополнительно сносит `ground/` и git-refs чекпойнтов.
+
+Операторские скиллы/хуки (свопские, не из исходника forge) остаются.
+
+## 7. Корпоративный контур
+
+- Нестандартный python: запусти установщик нужным интерпретатором явно — в `settings.json`
+  попадёт `sys.executable` того процесса, что выполнил `resolve_hook_paths.py`. Проверить
+  выбор без записи: `bash .gigacode/deploy-local.sh --dry-run`.
+- `cleanup-legacy.sh --backup-dir /tmp/forge-bak` — увести бэкап в доступное место
+  (в `$HOME`/проект писать нельзя).
+- Снять прежнюю extension-раскладку в репо-исходнике негде (manifest'ов нет) — снимается
+  только на целевой машине через `cleanup-legacy.sh`.

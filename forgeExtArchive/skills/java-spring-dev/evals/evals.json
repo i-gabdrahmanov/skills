@@ -1,0 +1,23 @@
+{
+  "skill_name": "java-spring-dev",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "Добавь сущность Season (сезон) со следующими полями: name (String, обязательное, макс 128 символов), startDate (LocalDate, обязательное), endDate (LocalDate, обязательное). Нужны: entity, repository, DTO запроса и ответа, маппер и полный CRUD сервис с интерфейсом, и контроллер.",
+      "expected_output": "Полный стек: entity/Season.java с @Getter @Setter, repository/SeasonRepository.java, dto/CreateSeasonRequest.java с @Data и валидацией, dto/SeasonResponse.java с @Data, mapper/SeasonMapper.java как @Component, service/SeasonService.java как интерфейс, service/SeasonServiceImpl.java с @Service @RequiredArgsConstructor реализующий интерфейс, controller/SeasonController.java. Без records, без статических from() методов.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "prompt": "Создай сервис LeaderboardService который возвращает топ-10 игроков по суммарным очкам для конкретной игры. Метод getTopPlayers(UUID gameId) возвращает List<LeaderboardEntryResponse> с полями: userId, displayName, totalScore (BigDecimal), matchesPlayed (long), rank (int).",
+      "expected_output": "service/LeaderboardService.java как интерфейс, service/LeaderboardServiceImpl.java с @Service @RequiredArgsConstructor, dto/LeaderboardEntryResponse.java с @Data @AllArgsConstructor @NoArgsConstructor (т.к. создаётся напрямую в сервисе). Без records.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "У нас есть entity Match и entity Game. Напиши MatchMapper который маппит Match -> MatchSummaryResponse. MatchSummaryResponse содержит: id (UUID), gameName (String), playedAt (Instant), participantCount (int), winnerName (String — имя победителя или 'Ничья' если несколько победителей).",
+      "expected_output": "mapper/MatchMapper.java как @Component без интерфейса, dto/MatchSummaryResponse.java с @Data. Маппер получает данные из entity через геттеры. Логика определения победителя inline в маппере.",
+      "files": []
+    }
+  ]
+}

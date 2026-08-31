@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "/abs/path/to/code-repo": {
+      "docs_path": "/abs/path/to/spec-repo"
+    }
+  }
+}

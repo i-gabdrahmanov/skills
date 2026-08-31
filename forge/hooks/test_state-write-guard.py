@@ -1,0 +1,416 @@
+#!/usr/bin/env python3
+"""Тесты hooks/state-write-guard.py (BLOCKER-1): запрет прямой записи в control-plane state."""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+
+HOOK = Path(__file__).resolve().parent / "state-write-guard.py"
+
+
+def _run(tool_name: str, tool_input: dict):
+    payload = json.dumps({"hook_event_name": "PreToolUse", "cwd": ".",
+                          "tool_name": tool_name, "tool_input": tool_input})
+    return subprocess.run([sys.executable, str(HOOK)], input=payload,
+                          capture_output=True, text=True, timeout=30)
+
+
+def _write(path: str):
+    return _run("write_file", {"file_path": path})
+
+
+def _bash(cmd: str):
+    return _run("run_shell_command", {"command": cmd})
+
+
+class TWriteVector(unittest.TestCase):
+    def test_block_manifest(self):
+        r = _write("ground/statements/feature-pipeline/f1/manifest.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_approvals(self):
+        r = _write("ground/approvals/human-approval.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_pipeline_json(self):
+        r = _write("ground/pipeline.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_policy_json(self):
+        # policy.json — канонический v2 project-wide config (build/jira/conventions/...).
+        # Прямой Write со скомплектованным JSON обходит провенанс config.py: тот читает
+        # файл и применяет как есть. Легитимный путь записи — config.py (Bash→python).
+        r = _write("ground/policy.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("control-plane", r.stderr)
+
+    def test_block_feature_gates_json(self):
+        # feature-gates.json — live gate-флаги (gates.X.Y), читаются pipeline_phases.py и
+        # _phase_eligibility.py. Прямой Write со скомплектованным JSON обходит провенанс
+        # config.py: легитимный путь записи — config.py set gates.* (Bash→python).
+        r = _write("ground/feature-gates.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("control-plane", r.stderr)
+
+    def test_block_feature_gates_json_absolute_path(self):
+        # абсолютный путь (как приходит от payload из сессии): lookbehind должен сматчить
+        # после разделителя '/', а не только в начале строки.
+        r = _run("Write", {"file_path": "/tmp/any/ground/feature-gates.json"})
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_feature_gates_json_bash_redirect(self):
+        # Bash-вектор: echo > ground/feature-gates.json — тот же класс обхода
+        r = _bash("echo '{}' > ground/feature-gates.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_risk_policy_json_always(self):
+        # risk-policy.json — control-plane файл ХАРНЕСА (co-located с хуками).
+        # Должен быть защищён ВСЕГДА (даже вне активного прогона), т.к. это кодовая
+        # константа, а не derived state. Покрывает оба layout-варианта: hooks/risk-policy.json
+        # (legacy/extension) и .gigacode/hooks/risk-policy.json (deployed).
+        for path in ("hooks/risk-policy.json", ".gigacode/hooks/risk-policy.json"):
+            r = _run("Write", {"file_path": path})
+            self.assertEqual(r.returncode, 2, f"{path}: expected block, got rc={r.returncode}\nstderr={r.stderr}")
+
+    def test_block_manifest_explicit(self):
+        # per-feature manifest.json — альтернатива из списка CP_PATTERNS (тот же класс,
+        # что pipeline.json: подделанный Write со всеми шагами completed снимал бы прогон).
+        # Покрываем явным тестом, чтобы регрессия в regex-движке (исчезновение альтернативы)
+        # не открыла обход.
+        r = _write("ground/statements/forgefix/STOR-1/manifest.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("control-plane", r.stderr)
+
+    def test_block_overrides(self):
+        r = _write("ground/statements/forgelite/f1/overrides/subagent-origin.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_gates(self):
+        r = _write("ground/statements/feature-pipeline/f1/gates/04-build-T1.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_origins(self):
+        r = _write("ground/statements/feature-pipeline/f1/_origins/04-build-T1.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_judges(self):
+        # подделанный вердикт с produced_by:"run_judge" прошёл бы провенанс update._check_judges
+        r = _write("ground/statements/feature-pipeline/f1/judges/brd-judge.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_phase_gate(self):
+        # gate.json читает phase-lock gate-guard — подделка снимала бы фазовую блокировку
+        r = _write("ground/phases/f1/gate.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_phase_defs_legacy_path(self):
+        r = _write("ground/phases/phase-defs.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_evals_json(self):
+        # evals.json — кэш EDD (eval-guard читает status:passed); прямой Write со всеми passed
+        # снимал бы eval-гейт (тот же класс, что judges/gates)
+        r = _write("ground/statements/feature-pipeline/f1/evals.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_double_slash_bypass(self):
+        # ground//pipeline.json пишет в тот же файл, но обходил бы CP-regex без нормализации
+        r = _write("ground//pipeline.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_dot_segment_bypass(self):
+        r = _write("ground/./pipeline.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_dotdot_traversal_bypass(self):
+        r = _write("ground/statements/feature-pipeline/f1/../f1/manifest.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_edit_tool_too(self):
+        r = _run("edit", {"file_path": "ground/statements/feature-pipeline/f1/manifest.json"})
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_pass_normal_src(self):
+        r = _write("src/main/java/com/x/Foo.java")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_pass_regular_ground_doc(self):
+        # прочие файлы в ground/ (не control-plane) — не наша забота
+        r = _write("ground/brd-grounding/notes.md")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_block_journal(self):
+        # журнал изменённых файлов пишет ТОЛЬКО хук file-journal — подделка Write-ом
+        # перенаправляла бы скоуп восстановления rollback.py
+        r = _write("ground/statements/feature-pipeline/f1/journal/files.jsonl")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_rollbacks_archive(self):
+        # архив evidence отката — тоже control-plane (история инвалидированных доказательств)
+        r = _write("ground/statements/feature-pipeline/f1/rollbacks/20260716-120000/gates/04-build-T1.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+
+class TBashVector(unittest.TestCase):
+    def test_block_redirect_into_manifest(self):
+        r = _bash("echo '{}' > ground/statements/feature-pipeline/f1/manifest.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_redirect_into_policy_json(self):
+        # policy.json — project-wide v2-конфиг; легитимный писатель config.py (Bash→python).
+        # Прямой echo>/tee сюда — обход провенанса.
+        r = _bash("echo '{}' > ground/policy.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("control-plane", r.stderr)
+
+    def test_block_python_c_open_write_into_policy_json(self):
+        # inline-python через open(...,'w') — то же поведение, что и для pipeline.json
+        r = _bash("python3 -c \"open('ground/policy.json','w').write('{}')\"")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_tee_into_approvals(self):
+        r = _bash("echo x | tee ground/approvals/human-approval.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_python_c_open_write(self):
+        r = _bash("python3 -c \"open('ground/statements/feature-pipeline/f1/manifest.json','w').write('{}')\"")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_pass_sanctioned_update_script(self):
+        # легальный путь: update.py пишет manifest через open() ВНУТРИ python — в тексте команды
+        # нет ни редиректа, ни литерала manifest.json → не блокируется
+        r = _bash("python3 .gigacode/skills/pipeline-state/scripts/update.py "
+                  "--skill feature-pipeline --feature f1 --step-id 04-build-T1 --status completed")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_pass_read_of_manifest(self):
+        # чтение control-plane файла — можно (нет токена записи)
+        r = _bash("cat ground/statements/feature-pipeline/f1/manifest.json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_block_redirect_into_judges(self):
+        r = _bash("echo '{}' > ground/statements/forgelite/f1/judges/coverage-judge.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_python_write_phase_gate(self):
+        r = _bash("python3 -c \"open('ground/phases/f1/gate.json','w').write('{}')\"")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_redirect_into_evals(self):
+        r = _bash("echo '{}' > ground/statements/feature-pipeline/f1/evals.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_redirect_double_slash(self):
+        r = _bash("echo '{}' > ground//pipeline.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_pass_run_judge_ingest_command(self):
+        # легальный путь вердикта: run_judge пишет judges/ внутри python — в тексте команды
+        # нет ни редиректа, ни control-plane-пути → не блокируется
+        r = _bash("python3 .gigacode/skills/feature-pipeline/scripts/run_judge.py brd feat "
+                  "--from-output verdict.json --project-root .")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_pass_read_phase_gate(self):
+        r = _bash("cat ground/phases/f1/gate.json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_block_redirect_into_journal(self):
+        r = _bash("echo '{}' >> ground/statements/feature-pipeline/f1/journal/files.jsonl")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_update_ref_forge_checkpoint(self):
+        # подделка чекпойнт-ref перенаправила бы откат кода на выгодный коммит; deny безусловно
+        r = _bash("git update-ref refs/forge/checkpoints/feat/02-sdd deadbeef")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_update_ref_forge_with_flags(self):
+        r = _bash("git -C . update-ref refs/forge/checkpoints/feat/02-sdd deadbeef")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_pass_update_ref_other_namespace(self):
+        # refs вне forge-namespace — не наша забота (их сторожат другие хуки/политика)
+        r = _bash("git update-ref refs/heads/tmp deadbeef")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_block_dd_of_control_plane(self):
+        r = _bash("dd if=/dev/null of=ground/pipeline.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_sed_inplace_manifest(self):
+        r = _bash("sed -i.bak -e s/pending/completed/ "
+                  "ground/statements/feature-pipeline/f1/manifest.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_truncate_journal(self):
+        r = _bash("truncate -s 0 ground/statements/feature-pipeline/f1/journal/files.jsonl")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_clobber_redirect(self):
+        # `>|` (noclobber override) — тот же редирект
+        r = _bash("printf '{}' >| ground/pipeline.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_cp_over_manifest(self):
+        r = _bash("cp /tmp/fake.json ground/statements/feature-pipeline/f1/manifest.json")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_copy_with_trailing_redirect(self):
+        """Регресс: `> /dev/null` попадал в argv, и последним аргументом `cp` оказывался он —
+        настоящее назначение копии (control-plane) не проверялось вовсе."""
+        r = _bash("cp /tmp/fake.json ground/pipeline.json > /dev/null")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_block_install_with_redirects(self):
+        r = _bash("install -m 644 /tmp/x ground/approvals.jsonl >/dev/null 2>&1")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_pass_cp_from_control_plane(self):
+        # копия ИЗ control-plane наружу — чтение, а не подделка стейта
+        r = _bash("cp ground/statements/feature-pipeline/f1/manifest.json /tmp/backup.json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_pass_read_manifest_with_unrelated_redirect(self):
+        # `>` есть, но пишет он в /tmp — control-plane только читают
+        r = _bash("cat ground/statements/feature-pipeline/f1/manifest.json "
+                  "| python3 -c \"import sys;print(len(sys.stdin.read()))\" > /tmp/size.txt")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+
+class TContract(unittest.TestCase):
+    def test_failopen_empty_stdin(self):
+        r = subprocess.run([sys.executable, str(HOOK)], input="",
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+HARNESS = Path(__file__).resolve().parent.parent  # корень харнеса (forge/)
+
+
+def _run_in(project: Path, tool_name: str, tool_input: dict):
+    """Прогон хука с cwd конкретного проекта (для харнес-гейта важен активный манифест)."""
+    payload = json.dumps({"hook_event_name": "PreToolUse", "cwd": str(project),
+                          "tool_name": tool_name, "tool_input": tool_input})
+    return subprocess.run([sys.executable, str(HOOK)], input=payload,
+                          capture_output=True, text=True, timeout=30)
+
+
+def _project(td: str, *, with_manifest: bool) -> Path:
+    """Временный проект; with_manifest=True — «идёт прогон»."""
+    root = Path(td).resolve()
+    (root / "ground").mkdir(parents=True, exist_ok=True)
+    if with_manifest:
+        d = root / "ground/statements/forgefix/STOR-1"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "manifest.json").write_text(json.dumps({"steps": []}), encoding="utf-8")
+    return root
+
+
+class THarnessDir(unittest.TestCase):
+    """Артефакты фазы не должны падать в каталог самого харнеса (в extension-раскладке он
+    ОБЩИЙ на все проекты — артефакт задачи оседает в коде форжа и едет в следующий проект)."""
+
+    def test_block_artifact_written_into_skills_dir(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            proj = _project(td, with_manifest=True)
+            r = _run_in(proj, "write_file",
+                        {"file_path": str(HARNESS / "skills/forgefix/STOR-1/sdd.md")})
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("каталог ХАРНЕСА", r.stderr)
+            self.assertIn("skill_paths.py", r.stderr)  # подсказка, как узнать верный путь
+
+    def test_block_write_into_hooks_dir(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            proj = _project(td, with_manifest=True)
+            r = _run_in(proj, "write_file", {"file_path": str(HARNESS / "hooks/evil.py")})
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+
+    def test_block_bash_redirect_into_harness(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            proj = _project(td, with_manifest=True)
+            r = _run_in(proj, "run_shell_command",
+                        {"command": f"echo x > {HARNESS}/skills/forgefix/notes.md"})
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+
+    def test_pass_docs_dir_of_project(self):
+        """Легитимный путь артефакта — docs/ ПРОЕКТА."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            proj = _project(td, with_manifest=True)
+            r = _run_in(proj, "write_file",
+                        {"file_path": str(proj / "docs/feature-pipeline/STOR-1/sdd.md")})
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_pass_harness_write_outside_pipeline(self):
+        """Разработка самого форжа (нет активного манифеста) не блокируется."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            proj = _project(td, with_manifest=False)
+            r = _run_in(proj, "write_file",
+                        {"file_path": str(HARNESS / "skills/forgefix/SKILL.md")})
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_pass_reading_harness_scripts_via_bash(self):
+        """Вызов скриптов харнеса (без токена записи) — не запись, не блокируем."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            proj = _project(td, with_manifest=True)
+            r = _run_in(proj, "run_shell_command",
+                        {"command": f"python3 {HARNESS}/skills/pipeline-state/scripts/read.py --list"})
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+
+class TSanctionedScriptsNotBlocked(unittest.TestCase):
+    """Регресс на прогон: харнес-гейт глушил САНКЦИОНИРОВАННЫЕ скрипты стейта.
+
+    Достаточно было любого `>` в команде (`2>&1`, `>/dev/null`, стрелка внутри кавычек), и путь
+    к самому update.py/config.py/run_judge.py считался «записью в каталог харнеса» → deny.
+    Т.е. гард блокировал ровно тот путь записи pipeline-state, который сам же предписывает."""
+
+    def _bash_in_run(self, cmd: str):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            proj = _project(td, with_manifest=True)
+            return _run_in(proj, "run_shell_command", {"command": cmd})
+
+    def test_update_py_with_stderr_redirect(self):
+        r = self._bash_in_run(f"python3 {HARNESS}/skills/pipeline-state/scripts/update.py "
+                              "--skill forgefix --feature STOR-1 --step-id fix-diag "
+                              "--status completed 2>&1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_update_py_with_arrow_inside_quoted_arg(self):
+        r = self._bash_in_run(f"python3 {HARNESS}/skills/pipeline-state/scripts/update.py "
+                              "--feature STOR-1 --step-id fix-verify --status completed "
+                              "--context-summary \"покрытие > 0.80, RED -> GREEN\"")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_config_py_set_story_with_devnull(self):
+        # именно так теряется ответ на «к какой стори относится баг»
+        r = self._bash_in_run(f"python3 {HARNESS}/skills/config-helper/scripts/config.py "
+                              "--project . set sources.story STOR-100 2>/dev/null")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_record_gate_piped_to_tail(self):
+        r = self._bash_in_run(f"python3 {HARNESS}/skills/pipeline-state/scripts/record_gate.py "
+                              "--project . --skill forgefix --feature STOR-1 --step-id fix-green "
+                              "--cmd \"./gradlew build\" 2>&1 | tail -5")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_preflight_output_redirected_outside_harness(self):
+        r = self._bash_in_run(f"python3 {HARNESS}/hooks/preflight.py --project . > /tmp/pre.json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_still_blocks_cp_over_harness_file(self):
+        r = self._bash_in_run(f"cp /tmp/evil.md {HARNESS}/skills/forgefix/SKILL.md")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
