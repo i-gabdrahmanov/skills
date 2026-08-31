@@ -13,12 +13,15 @@
 **PDLC v3.5: `Pipeline > model; hooks = enforcement; skills = guidance`.**
 
 - **SKILL.md** — guidance: модель может проигнорировать.
-- **Хуки (control-plane)** — enforcement: рантайм форсит правила (risk ladder, TDD, evidence,
-  token budget, phase-gate). Блокировка = `exit 2` + причина в `stderr`.
+- **Хуки (control-plane)** — enforcement: рантайм форсит правила (risk ladder, TDD, grounding-
+  evidence, inline-phase, phase-gate). Блокировка = `exit 2` + причина в `stderr`.
 - **Судьи + execution-gates** — детерминированные проверки, которые закрывают шаг только при PASS.
 
 > Запуск рантайма обязателен с флагом `--experimental-hooks`, иначе `[HOOK_REGISTRY] 0 hook entries`
 > и весь control-plane молчит. Перед прогоном — `preflight.py` (exit 0 = харнес активен).
+> Запуск — **интерактивный** (`gigacode --experimental-hooks`, дальше `/forge <задача>`): в headless
+> (`-p`) рантайм не даёт выполнить `agent` без `-y`/YOLO, а фаза без субагента упирается в
+> `inline-phase-guard` (INSTALL.md §4).
 
 ---
 
@@ -37,10 +40,10 @@ flowchart TD
     P25 --> P3[Фаза 3: Build TDD]
     P3 --> P4[Фаза 4: Verify]
     P4 --> P5[Фаза 5: Document]
-    P5 --> P6[Фаза 6: Deliver]
+    P5 --> END([Верифицированный артефакт<br/>доставка — на пользователе])
 
     classDef phase fill:#e6f0ff,stroke:#6ea8fe,color:#0b3a7a;
-    class P0,P1,P2,P25,P3,P4,P5,P6 phase;
+    class P0,P1,P2,P25,P3,P4,P5 phase;
 ```
 
 **Главное правило исполнения:** фазы Design / Build / Verify / Document выполняются
@@ -64,16 +67,14 @@ flowchart TD
 | 3 Build (per task) | `java-spring-dev` | субагент, TDD RED→GREEN | — |
 | 4 Verify | тестописатель + тестраннер | субагенты | — |
 | 5 Document | спецадаптер | субагент general-purpose | — |
-| 6 Deliver (per task, stacked) | главный агент | Bitbucket/Jira MCP | **Гейты 4–6** |
 
 > **Вложенный скилл vs субагент:** скилл грузится в контекст оркестратора (может задать вопрос);
 > субагент изолирован и возвращает JSON с полем `step_id` (его подхватывает хук `state-recorder`).
 
-> **Таксономия гейтов (во избежание путаницы):** нумерованные **Гейт 1–6** НЕ совпадают с номерами
-> фаз `P0–P6`. Именованные гейты (**критичности**, **Grounding**, **SDD**) идут без номера. Все
-> **Гейты 4–6 — внутри одной фазы Deliver** (commit / push+PR / отчёт): это три под-гейта доставки,
-> а не дубли по фазам Build/Verify/Document (у тех гейтов человека нет). Полный список —
-> Гейт 1 → критичности → Grounding → SDD → Гейт 2 → Гейт 3 → Гейт 4 → Гейт 5 → Гейт 6.
+> **Таксономия гейтов (во избежание путаницы):** нумерованные **Гейт 1–3** НЕ совпадают с номерами
+> фаз `P0–P5`. Именованные гейты (**критичности**, **Grounding**, **SDD**) идут без номера. Полный
+> список — Гейт 1 → критичности → Grounding → SDD → Гейт 2 → Гейт 3. Прежних Гейтов 4–6 (commit /
+> push+PR / отчёт) больше нет: доставки в пайплайне нет, и гейтить нечего.
 
 ---
 
@@ -99,10 +100,10 @@ State намеспейсится по фиче: `<project>/ground/statements/fea
 | `04-build-<taskId>` | TDD GREEN: код зеленит | `04-test-<taskId>`, `02-eval-plan` | `build-judge`, `reuse-judge` |
 | `05-tests` | Полный прогон + coverage | все `04-build-*` | `coverage-judge` |
 | `06-spec` | Spec updated | `05-tests` | `spec-judge` |
-| `07-deliver-<taskId>` | Ветка+коммит+stacked PR | `05-tests`, `06-spec` | `delivery-judge` |
-| `07-report` | Отчёт в Story | все `07-deliver-*` | — |
 
-`04-test-*`, `04-build-*`, `07-deliver-*` добавляются после фазы 2 через
+`06-spec` — последний шаг: доставки в пайплайне нет (см. «Доставки в пайплайне НЕТ» ниже).
+
+`04-test-*` и `04-build-*` добавляются после фазы 2 через
 `feature-pipeline/scripts/add_steps.py` (он же проставляет `required_judges` и пересобирает gate.json —
 версию из `pipeline-state/scripts/` здесь НЕ применять). **Регистр task-id сохраняется**: `T1` → `04-test-T1`.
 
@@ -144,10 +145,9 @@ sequenceDiagram
     O->>A: java-spring-dev GREEN (§4.3)
     O->>A: build-judge + reuse-judge
     O->>G: check_build.py --task
-    Note over O: Фаза 6 — Deliver
-    O->>A: delivery-judge
-    O->>U: Гейты 4–6 (commit / push+PR / отчёт)
-    O->>G: check_delivery.py
+    Note over O: Фазы 4–5 — Verify, Document
+    O->>J: run_judge coverage / spec
+    Note over O,U: Конец пайплайна: артефакт верифицирован.<br/>Коммит, PR и отчёт делает пользователь сам.
 ```
 
 ---
@@ -194,7 +194,7 @@ sequenceDiagram
 - Субагент `tech-design` проектирует ПО `sdd.md` → `tech-design.md`, `task-plan.json`
   (`sdd.md` уже создан на `02-sdd` — НЕ трогает).
 - **Judge:** `run_judge.py design <slug>` (`design-judge`).
-- **Гейт 2**, затем `add_steps.py` добавляет `02-eval-plan`, `04-test/build-<taskId>`, `07-deliver-<taskId>`.
+- **Гейт 2**, затем `add_steps.py` добавляет `02-eval-plan` и `04-test/build-<taskId>`.
 
 ### Фаза 2 (доп.) — Eval-plan
 - `build_evals_from_design.py task-plan.json` → `eval-plan.json` (compile / coverage / test_pass на задачу).
@@ -269,7 +269,7 @@ inline-phase-guard → gate-guard.
 > SUBAGENT_PHASE_PREFIXES закрываются completed только записью от SubagentStop (state-recorder).
 
 > ⚠️ Гейт-хуки **fail-OPEN** при таймауте/краше (>60с убивается → действие проходит). Поэтому тяжёлые
-> гейты (`check_taskplan`/`check_delivery`/coverage) гоняет ОРКЕСТРАТОР как execution-gate, а хуки лёгкие
+> гейты (`check_taskplan`/`check_coverage`/`check_build`) гоняет ОРКЕСТРАТОР как execution-gate, а хуки лёгкие
 > (file-reads) — страховка. Не клади тяжёлый subprocess в hook hot-path.
 
 ---
@@ -299,10 +299,10 @@ flowchart TD
 
 ```bash
 # харнес активен ДО прогона:
-python3 <forge>/hooks/preflight.py --project .
+python3 .gigacode/hooks/preflight.py --project .
 
 # какие фичи в работе:
-python3 <forge>/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
+python3 .gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
 ```
 
 ---

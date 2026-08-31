@@ -77,15 +77,55 @@ python3 /path/to/target-project/.gigacode/hooks/preflight.py --project /path/to/
 
 - ✅ `exit 0` — можно работать.
 - ❌ `exit 1` — ENFORCEMENT OFF, проверь `deploy.sh` и флаг `--experimental-hooks`.
-- ❌ `exit 2` — `pipeline.json` не инициализирован (нормально для первого запуска).
+- ❌ `exit 2` — конфиг не инициализирован (`ground/policy.json`; legacy-имя — `pipeline.json`).
+  Нормально для первого запуска.
 
 ## 4. Запуск рантайма
 
+**Канон — интерактивный запуск:**
+
 ```bash
-gigacode --experimental-hooks -p "<задача>"
-# или интерактивно:
 gigacode --experimental-hooks
 ```
+
+Дальше в сессии — команда:
+
+```
+/forge <ключ Jira или описание задачи>
+```
+
+`/forge` зовёт `router`: он классифицирует задачу и уводит в **fix** (минорный дефект),
+**lite** (готовая подзадача по существующей спеке) или **full** (фича с нуля). Путь известен
+заранее — `/forge-fix` или `/forge-lite` напрямую.
+
+### Headless (`-p`) — отдельный режим, не дефолт
+
+`gigacode --experimental-hooks -p "<задача>"` для пайплайна **не работает** по двум независимым
+причинам, и обе — ограничения рантайма, а не настройка:
+
+1. **Инструмент `agent` в headless требует `-y`/YOLO.** Без него рантайм не даёт выполнить вызов
+   субагента, а каждая продуктивная фаза обязана идти субагентом (BR-10). Модель уходит делать
+   работу фазы сама и упирается в `inline-phase-guard` (`exit 2`); запуск ещё одного субагента даёт
+   тот же отказ по кругу.
+2. **`ask_user_question` в headless не рендерится** — пользовательские гейты (BRD, SDD, дизайн,
+   критичность, «создавать задачи в Jira?») ответить нечем.
+
+Если headless нужен (CI, пакетный прогон) — запускать с `-y` **и** предзаписать всё, что
+пайплайн иначе спросит, ДО прогона:
+
+```bash
+# решения (критичность, режим, пути) — в manifest/policy:
+python3 <project>/.gigacode/skills/config-helper/scripts/config.py set <key> <value> \
+        --skill <skill> --feature <slug>
+# согласия человека (BRD/SDD/план) — approval-маркеры с провенансом:
+python3 <project>/.gigacode/skills/pipeline-state/scripts/record_approval.py \
+        --project <project> --key <key> --approved-by user --reason "<кто/почему>"
+
+gigacode --experimental-hooks -y -p "<задача>"
+```
+
+Нет предзаписи → `gate-guard` заблокирует продуктивную запись фазы. Это правильное поведение:
+согласие человека не подделывается моделью.
 
 ## 5. Обновление
 
