@@ -12,6 +12,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -37,6 +38,68 @@ class T(unittest.TestCase):
         r = subprocess.run([sys.executable, str(HOOK)], input="",
                            capture_output=True, text=True, timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
+
+
+class TRmInsideProject(unittest.TestCase):
+    """`rm -rf <абсолютный путь>`: снаружи проекта — деструктив, внутри — штатная уборка.
+
+    tasks/011 расширил «опасную цель» с «ровно / или ~» до любого абсолютного пути, чтобы
+    ловить `rm -rf /etc/passwd`. Побочно под блок попал `rm -rf /путь/к/проекту/build` —
+    то, что gradle-разработчик набирает каждый день; eval `rm -rf <abs>/build → allow` пинил
+    прежнее ожидание и с тех пор был красным. Здесь фиксируем границу целиком, в обе стороны:
+    ослабление без этих тестов открыло бы обратно `rm -rf /etc`."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.proj = Path(self._tmp.name).resolve()
+        (self.proj / ".git").mkdir()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _rm(self, command: str, cwd=None):
+        payload = json.dumps({"hook_event_name": "PreToolUse",
+                              "cwd": str(self.proj) if cwd is None else cwd,
+                              "tool_name": "run_shell_command",
+                              "tool_input": {"command": command}})
+        return subprocess.run([sys.executable, str(HOOK)], input=payload,
+                              capture_output=True, text=True, timeout=30).returncode
+
+    def test_allow_cleanup_inside_project(self):
+        for target in ("build", "target", "build/classes", "build/../out"):
+            with self.subTest(target=target):
+                self.assertEqual(self._rm(f"rm -rf {self.proj}/{target}"), 0)
+
+    def test_allow_several_targets_inside(self):
+        self.assertEqual(self._rm(f"rm -rf {self.proj}/build {self.proj}/out"), 0)
+
+    def test_block_project_root_itself(self):
+        self.assertEqual(self._rm(f"rm -rf {self.proj}"), 2)
+
+    def test_block_escape_above_root(self):
+        self.assertEqual(self._rm(f"rm -rf {self.proj}/../neighbour"), 2)
+
+    def test_block_outside_project(self):
+        for target in ("/etc/passwd", "/", "~", "~/Documents", "/usr/local/lib"):
+            with self.subTest(target=target):
+                self.assertEqual(self._rm(f"rm -rf {target}"), 2)
+
+    def test_block_symlink_pointing_out_of_project(self):
+        with tempfile.TemporaryDirectory() as outside:
+            (self.proj / "link").symlink_to(outside)
+            self.assertEqual(self._rm(f"rm -rf {self.proj}/link"), 2)
+
+    def test_block_glob_inside_project(self):
+        """Цель глоба известна только после раскрытия — исключение не выдаём."""
+        self.assertEqual(self._rm(f"rm -rf {self.proj}/*"), 2)
+
+    def test_block_mixed_targets(self):
+        """Одна внешняя цель отменяет исключение для всей команды."""
+        self.assertEqual(self._rm(f"rm -rf {self.proj}/build /etc/x"), 2)
+
+    def test_fail_closed_when_root_unknown(self):
+        """Корень не резолвится → остаёмся строгими, а не открываемся."""
+        self.assertEqual(self._rm(f"rm -rf {self.proj}/build", cwd="/nonexistent-xyz"), 2)
 
 
 class TBlacklistForms(unittest.TestCase):
