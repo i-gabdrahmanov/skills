@@ -17,7 +17,9 @@
 #   3. Удаляет ТОЧЕЧНО то, что положил deploy.sh (перечень из исходного репо), внутри
 #      co-located skills/ hooks/ commands/ + deploy-local.sh и доки. Самописные скиллы/хуки
 #      оператора рядом — НЕ трогает; опустевший каталог убирает только rmdir'ом.
-#   4. --purge-state: дополнительно сносит рабочие данные (ground/ + git-refs чекпойнтов).
+#   4. Снимает из <target>/.gitignore блок forge (ground/*, .gigacode/ — ровно между
+#      маркерами; строки оператора в этом файле остаются).
+#   5. --purge-state: дополнительно сносит рабочие данные (ground/ + git-refs чекпойнтов).
 #
 # Порядок «сначала settings.json, потом файлы» — не косметика: если снести hooks/ первым и
 # упасть на середине, рантайм останется с блоком hooks, зовущим удалённые скрипты, и КАЖДЫЙ
@@ -27,6 +29,7 @@
 #   - самописные скиллы/хуки/команды оператора в .gigacode/{skills,hooks,commands}/ —
 #     всё, чего нет в исходном репо Forge, остаётся на месте.
 #   - ground/            — рабочие данные пайплайна (BRD/SDD/манифесты/логи). Только --purge-state.
+#   - .gitignore         — файл целиком; снимается ТОЛЬКО блок между маркерами forge.
 #   - settings.json      — остальные секции (permissions, mcpServers, $version) не наши.
 #   - *.bak              — бэкапы, в т.ч. первозданный settings.json.bak (до установки Forge).
 #   - refs/forge/*       — git-чекпойнты отката. Только --purge-state.
@@ -222,6 +225,25 @@ remove_forge_owned "$SRC/hooks"    "$GIG/hooks"    "hooks"
 # показывает окно миграции на каждом старте. Снимаем по имени ДО сметания commands/.
 remove_path "$GIG/commands/forge.toml" "commands/forge.toml (устаревший формат)"
 [ -d "$SRC/commands" ] && remove_forge_owned "$SRC/commands" "$GIG/commands" "commands"
+# .gitignore: снять РОВНО блок, который положил deploy.sh (между маркерами). Файл целиком не
+# трогаем — в нём строки оператора; опустевший после снятия блока файл тоже оставляем, его
+# наличие/отсутствие forge не касается.
+GI="$TARGET/.gitignore"
+GI_BEGIN="# >>> forge: рабочие данные пайплайна >>>"
+GI_END="# <<< forge <<<"
+if [ -f "$GI" ] && grep -qF "$GI_BEGIN" "$GI"; then
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "  [dry-run] снять блок forge из .gitignore"
+  else
+    awk -v b="$GI_BEGIN" -v e="$GI_END" '
+      $0 == b { skip = 1; next }
+      $0 == e { skip = 0; next }
+      !skip   { print }
+    ' "$GI" > "$GI.forge-tmp" && mv "$GI.forge-tmp" "$GI"
+    echo "  ✓ .gitignore: блок forge снят (строки оператора не тронуты)"
+  fi
+fi
+
 remove_path "$GIG/deploy-local.sh"  "deploy-local.sh"
 remove_path "$GIG/FORGE.md"         "FORGE.md"
 remove_path "$GIG/SKILLS-REGISTRY.md" "SKILLS-REGISTRY.md"

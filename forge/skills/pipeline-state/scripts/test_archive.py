@@ -11,6 +11,8 @@ docs/feature-pipeline/. Поэтому гейты здесь проверяют�
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -108,10 +110,19 @@ class TestReadyRun(Base):
         self.assertEqual(meta["source"], "STOR-100")
         self.assertEqual(meta["steps"]["06-spec"], "completed")
 
-    def test_state_is_not_touched(self):
+    def test_state_moves_too(self):
+        res = archive.archive_feature(self.root, "STOR-100")
+        self.assertFalse((self.root / "ground/statements/feature-pipeline/STOR-100").exists())
+        moved = self.root / "ground/archive/feature-pipeline/STOR-100/manifest.json"
+        self.assertTrue(moved.is_file())
+        self.assertEqual(Path(res["state_target"]), moved.parent)
+
+    def test_meta_records_both_halves(self):
         archive.archive_feature(self.root, "STOR-100")
-        man = self.root / "ground/statements/feature-pipeline/STOR-100/manifest.json"
-        self.assertTrue(man.is_file(), "стейт прогона архивация трогать не должна")
+        meta = json.loads((self._arc("STOR-100") / archive.META_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(meta["state_source"], "statements/feature-pipeline/STOR-100")
+        self.assertEqual(meta["state_target"], "archive/feature-pipeline/STOR-100")
+        self.assertIn("checkpoints_deleted", meta)
 
     def test_dry_run_writes_nothing(self):
         res = archive.archive_feature(self.root, "STOR-100", dry_run=True)
@@ -126,13 +137,22 @@ class TestReadyRun(Base):
         self.assertTrue(Path(res["target"]).name.startswith("STOR-100-"))
         self.assertTrue((Path(res["target"]) / "tech-design.md").is_file())
 
-    def test_restore_returns_docs(self):
+    def test_restore_returns_docs_and_state(self):
         archive.archive_feature(self.root, "STOR-100")
         res = archive.restore_feature(self.root, "STOR-100")
         self.assertTrue(res["moved"])
         self.assertTrue((self.src / "tech-design.md").is_file())
         self.assertFalse((self.src / archive.META_NAME).exists())
         self.assertFalse(self._arc("STOR-100").exists())
+        self.assertTrue((self.root / "ground/statements/feature-pipeline/STOR-100"
+                         / "manifest.json").is_file())
+        self.assertFalse((self.root / "ground/archive/feature-pipeline/STOR-100").exists())
+
+    def test_dry_run_leaves_state_alone(self):
+        archive.archive_feature(self.root, "STOR-100", dry_run=True)
+        self.assertTrue((self.root / "ground/statements/feature-pipeline/STOR-100"
+                         / "manifest.json").is_file())
+        self.assertFalse((self.root / "ground" / "archive").exists())
 
     def test_restore_refuses_when_place_taken(self):
         archive.archive_feature(self.root, "STOR-100")
@@ -264,6 +284,99 @@ class TestDeltaGate(Base):
                          "архив-сиблинг не должен попадать в обход дельт")
 
 
+class TestArchivedRunIsInvisible(Base):
+    """Смысл переноса стейта: завершённый прогон перестаёт считаться активным.
+
+    Активная фича резолвится по самому свежему манифесту в ground/statements/*/*/ — пока
+    завершённые прогоны лежат там, гейты могут примениться по чужому стейту (принятый риск
+    в FORGE.md). Каждый резолвер проверяем отдельно: они написаны независимо."""
+
+    def setUp(self):
+        super().setUp()
+        self._run("feature-pipeline", "STOR-100", _steps(FULL_STEPS))
+        self._docs("STOR-100")
+        archive.archive_feature(self.root, "STOR-100")
+
+    def test_project_resolvers_do_not_see_it(self):
+        sys.path.insert(0, str(SCRIPTS.parents[2] / "hooks"))
+        import _project
+        self.assertIsNone(_project.active_feature_with_skill(self.root))
+        # back-compat sentinel «манифестов нет» (_project.py:307), а не имя фичи
+        self.assertEqual(_project.active_feature(self.root), "pipeline")
+
+    def test_risk_ladder_has_no_active_manifest(self):
+        sys.path.insert(0, str(SCRIPTS.parents[2] / "hooks"))
+        import risk_ladder
+        self.assertIsNone(risk_ladder.active_manifest(self.root))
+
+    def test_read_list_features_is_empty(self):
+        import read
+        self.assertEqual(read.list_features(self.root, "feature-pipeline")["features"], [])
+
+    def test_find_runs_is_empty(self):
+        self.assertEqual(archive.find_runs(self.root), [])
+
+    def test_policy_json_unlocks_for_config_py(self):
+        """Побочная польза: config.py блокировал set в policy.json, пока есть ЛЮБОЙ манифест
+        (_has_active_feature смотрит на наличие файла, а не на статус прогона).
+
+        Подпроцессом, а не импортом: у config-helper свой `_util` с другим API, и в одном
+        интерпретаторе с pipeline-state он даёт ImportError (тот самый R6-конфликт)."""
+        cfg = SCRIPTS.parents[1] / "config-helper" / "scripts" / "config.py"
+        r = subprocess.run([sys.executable, str(cfg), "--project", str(self.root),
+                            "set", "spec.drift", "off"],
+                           capture_output=True, text=True, timeout=60)
+        self.assertNotIn("immutable", r.stdout + r.stderr)
+        self.assertEqual(json.loads(r.stdout).get("status"), "applied", r.stdout)
+
+
+@unittest.skipIf(shutil.which("git") is None, "нет git в PATH")
+class TestCheckpoints(Base):
+    """Чекпойнты — точки восстановления для rollback.py. Откатывать завершённое некуда."""
+
+    def setUp(self):
+        super().setUp()
+        git = shutil.which("git")
+        self.git = [git, "-C", str(self.root)]
+        subprocess.run([git, "init", "-q", str(self.root)], check=True, timeout=30)
+        (self.root / "a.txt").write_text("x", encoding="utf-8")
+        subprocess.run(self.git + ["add", "-A"], check=True, timeout=30)
+        subprocess.run(self.git + ["-c", "user.email=t@t", "-c", "user.name=t",
+                                   "commit", "-qm", "init"], check=True, timeout=30)
+        sha = subprocess.run(self.git + ["rev-parse", "HEAD"], capture_output=True,
+                             text=True, timeout=30).stdout.strip()
+        for step in ("02-sdd", "06-spec"):
+            subprocess.run(self.git + ["update-ref",
+                                       f"refs/forge/checkpoints/STOR-100/{step}", sha],
+                           check=True, timeout=30)
+        self._run("feature-pipeline", "STOR-100", _steps(FULL_STEPS))
+        self._docs("STOR-100")
+
+    def _refs(self):
+        r = subprocess.run(self.git + ["for-each-ref", "--format=%(refname)", "refs/forge/"],
+                           capture_output=True, text=True, timeout=30)
+        return [x for x in r.stdout.split("\n") if x]
+
+    def test_archive_drops_feature_checkpoints(self):
+        self.assertEqual(len(self._refs()), 2)
+        res = archive.archive_feature(self.root, "STOR-100")
+        self.assertEqual(res["checkpoints_deleted"], 2)
+        self.assertEqual(self._refs(), [])
+
+    def test_other_features_checkpoints_survive(self):
+        subprocess.run(self.git + ["update-ref", "refs/forge/checkpoints/STOR-999/02-sdd",
+                                   subprocess.run(self.git + ["rev-parse", "HEAD"],
+                                                  capture_output=True, text=True,
+                                                  timeout=30).stdout.strip()],
+                       check=True, timeout=30)
+        archive.archive_feature(self.root, "STOR-100")
+        self.assertEqual(self._refs(), ["refs/forge/checkpoints/STOR-999/02-sdd"])
+
+    def test_dry_run_keeps_checkpoints(self):
+        archive.archive_feature(self.root, "STOR-100", dry_run=True)
+        self.assertEqual(len(self._refs()), 2)
+
+
 class TestSeparateRepoDocs(Base):
     """separate-repo: архив обязан ехать в репо доков, а не в корень проекта."""
 
@@ -279,6 +392,93 @@ class TestSeparateRepoDocs(Base):
         res = archive.archive_feature(self.root, "STOR-100")
         self.assertEqual(Path(res["target"]), specrepo / "archive" / "STOR-100")
         self.assertTrue((specrepo / "archive" / "STOR-100" / "tech-design.md").is_file())
+
+
+class TestPartialMoveRollback(Base):
+    """Половина переезда — худший исход: доки в архиве, стейт на месте → прогон выглядит
+    живым, а артефактов его фаз нет. Проверяем, что откат реально срабатывает — в обеих
+    раскладках, включая вложенную (<стори>/fixes/<баг>), где откат приходится в каталог,
+    husk-родителей которого переезд успел опустошить."""
+
+    def _break_state_target(self, skill="feature-pipeline"):
+        """Файл вместо каталога на пути назначения → mkdir/move валится OSError."""
+        arc = self.root / "ground" / "archive"
+        arc.mkdir(parents=True, exist_ok=True)
+        (arc / skill).write_text("не каталог", encoding="utf-8")
+
+    def test_flat_feature_rolls_back(self):
+        self._run("feature-pipeline", "STOR-100", _steps(FULL_STEPS))
+        src = self._docs("STOR-100")
+        self._break_state_target()
+        with self.assertRaises(archive.Fail) as cm:
+            archive.archive_feature(self.root, "STOR-100")
+        self.assertIn("стейт прогона не переносится", str(cm.exception))
+        self.assertTrue((src / "tech-design.md").is_file(), "доки обязаны вернуться")
+        self.assertFalse(self._arc("STOR-100").exists())
+        self.assertTrue((self.root / "ground/statements/feature-pipeline/STOR-100"
+                         / "manifest.json").is_file())
+
+    def test_fix_inside_pruned_story_rolls_back(self):
+        """Стори без собственных доков: prune снёс бы и fixes/, и саму STOR-100."""
+        self._run("forgefix", "BUG-512", _steps(["fix-intake", "fix-spec"]),
+                  inputs={"story": "STOR-100"})
+        src = self._docs("STOR-100/fixes/BUG-512")
+        self._break_state_target("forgefix")
+        with self.assertRaises(archive.Fail):
+            archive.archive_feature(self.root, "STOR-100/fixes/BUG-512")
+        self.assertTrue((src / "tech-design.md").is_file(),
+                        "откат обязан вернуть доки на исходный путь целиком")
+        self.assertTrue((self.root / "ground/statements/forgefix/BUG-512"
+                         / "manifest.json").is_file())
+
+    def test_restore_rolls_back_when_state_place_is_broken(self):
+        self._run("feature-pipeline", "STOR-100", _steps(FULL_STEPS))
+        self._docs("STOR-100")
+        archive.archive_feature(self.root, "STOR-100")
+        # место стейта под проектом занято файлом → вернуть некуда
+        st = self.root / "ground" / "statements" / "feature-pipeline"
+        st.mkdir(parents=True, exist_ok=True)
+        (st / "STOR-100").write_text("не каталог", encoding="utf-8")
+        with self.assertRaises(archive.Fail):
+            archive.restore_feature(self.root, "STOR-100")
+        self.assertTrue((self._arc("STOR-100") / "tech-design.md").is_file(),
+                        "доки обязаны остаться в архиве")
+
+
+class TestArchiveDirResolution(Base):
+    """Инвариант: архив — СИБЛИНГ каталога доков, при любой раскладке docs.*
+
+    Не «docs_base/archive»: legacy `feature_docs_path` уводит доки в своё дерево, и привязка к
+    docs_base завела бы постороннюю папку в другом (docs/archive при доках в documentation/)."""
+
+    def _dirs(self, **docs):
+        self.policy["docs"].update(docs)
+        self._write_policy()
+        sys.path.insert(0, str(SCRIPTS.parents[2] / "hooks"))
+        import _project
+        return _project.feature_docs_dir(self.root), _project.archive_docs_dir(self.root)
+
+    def test_default_layout(self):
+        d, a = self._dirs()
+        self.assertEqual((d, a), (self.root / "docs/feature-pipeline", self.root / "docs/archive"))
+
+    def test_legacy_feature_docs_path_keeps_archive_next_to_docs(self):
+        d, a = self._dirs(feature_docs_path="documentation/features")
+        self.assertEqual(d, self.root / "documentation/features")
+        self.assertEqual(a, self.root / "documentation/archive")
+
+    def test_separate_repo(self):
+        d, a = self._dirs(mode="separate-repo", repo_path=str(self.root / "specrepo"))
+        self.assertEqual(a, d.parent / "archive")
+
+    def test_custom_subdirs_stay_siblings(self):
+        d, a = self._dirs(feature_subdir="feat", archive_subdir="done")
+        self.assertEqual((d, a), (self.root / "docs/feat", self.root / "docs/done"))
+
+    def test_archive_subdir_colliding_with_docs_falls_back(self):
+        d, a = self._dirs(archive_subdir="feature-pipeline")
+        self.assertNotEqual(a, d, "архив внутри самого себя — переносить было бы некуда")
+        self.assertEqual(a, self.root / "docs/archive")
 
 
 class TestSlugSafety(Base):

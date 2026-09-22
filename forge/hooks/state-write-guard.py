@@ -129,6 +129,11 @@ _CP_PATTERNS = [
     r"(?<![\w-])ground/statements/[^/]+/[^/]+/(?:_origins|gates|overrides|judges|journal|rollbacks)(?:/|\b)",
     r"(?<![\w-])ground/approvals(?:/|\b)",
     r"(?<![\w-])ground/phases(?:/|\b)",
+    # ground/archive/ — стейт ЗАВЕРШЁННЫХ прогонов (archive.py). Данные те же, что в
+    # statements/: манифест, evidence, вердикты. Санкционированный писатель — archive.py
+    # (пишет файловым API изнутри процесса, тул Write не использует); голый `mv`/`cp` сюда
+    # означает, что кто-то раскладывает стейт руками в обход гейтов готовности.
+    r"(?<![\w-])ground/archive(?:/|\b)",
     # risk-policy.json — control-plane файл ХАРНЕСА (co-located с хуками), не project config.
     # Защищаем ВСЕГДА (не только при активном ране) — это кодовая константа, не derived state.
     # Легитимная запись — Edit в PR с явным обоснованием, не в проде.

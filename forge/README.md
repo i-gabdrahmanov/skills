@@ -43,6 +43,7 @@ forge/
 ├── docs/                   # user-guide, troubleshooting, pipeline-*, v2/ (исторический анализ)
 ├── tasks/                  # открытые задачи/наблюдения (см. tasks/*.md)
 ├── deploy.sh               # развернуть hooks/ + skills/ + команды в <project>/.gigacode/
+│                           #   + блок ground/* и .gigacode/ в .gitignore (снимает uninstall.sh)
 ├── deploy-local.sh         # in-project фиксер: подставляет пути в settings.json
 ├── update.sh               # обновить деплой (rsync hooks/skills)
 ├── uninstall.sh            # снять деплой из <project>/.gigacode/

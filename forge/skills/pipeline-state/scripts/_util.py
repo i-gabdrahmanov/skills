@@ -55,6 +55,7 @@ from _project import (  # noqa: E402
     pipeline_config_path,
     safe_component,
     safe_slug,
+    state_archive_dir,
     state_dir,
     statements_dir,
     step_output_path,
@@ -143,7 +144,9 @@ def task_docs_dir(project, skill: str, feature: str) -> Path:
     sources.story) — тем же config_get, что у хуков.
     """
     project = Path(project)
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "feature-pipeline" / "scripts"))
+    _fp = str(Path(__file__).resolve().parents[2] / "feature-pipeline" / "scripts")
+    if _fp not in sys.path:                     # зовётся в цикле по прогонам — без дублей
+        sys.path.insert(0, _fp)
     import skill_paths as SP  # noqa: E402
     if skill != "forgefix":
         return SP.feature_docs_dir(project) / feature

@@ -191,7 +191,9 @@ def _archive_merged(root: Path, slugs: list, dry_run: bool = False) -> None:
     не провал слияния (типичный отказ — сверку запустили посреди незавершённого прогона)."""
     if not slugs:
         return
-    sys.path.insert(0, str(SCRIPT_DIR.parents[1] / "pipeline-state" / "scripts"))
+    _ps = str(SCRIPT_DIR.parents[1] / "pipeline-state" / "scripts")
+    if _ps not in sys.path:
+        sys.path.insert(0, _ps)
     try:
         import archive
     except Exception as e:  # noqa: BLE001

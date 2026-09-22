@@ -9,9 +9,22 @@
 <docs_base>/feature-pipeline/ (spec_cli._features), и архив внутри этого каталога продолжал бы
 попадать в `/forge-spec status`: заархивированное требование предлагалось бы слить повторно.
 
-Стейт прогона (ground/statements/<skill>/<feature>/) НЕ трогается: единственные легальные
-писатели control-plane — update.py/record_*. Провенанс переноса едет внутри самой перенесённой
-папки (archive-meta.json), поэтому list/restore работают, не читая манифест.
+Уносится ДВА каталога: доки (<docs_base>/feature-pipeline/<слаг>) и стейт прогона
+(ground/statements/<skill>/<feature>/ → ground/archive/<skill>/<feature>/). Второй — тоже
+control-plane, поэтому archive.py встаёт в один ряд с init.py/rollback.py как санкционированный
+писатель стейта (BLOCKER-1): произвольный `mv` по этим путям режет state-write-guard.
+
+Зачем уносить стейт. Активная фича резолвится ПО САМОМУ СВЕЖЕМУ манифесту в ground/statements/*/*/
+(risk_ladder.active_manifest) — завершённые прогоны остаются в этой выборке и тем повышают шанс,
+что гейты применятся по чужому стейту (принятый риск в FORGE.md). Из ground/archive/ прогон
+выпадает у всех резолверов сразу.
+
+Git-чекпойнты фичи (refs/forge/checkpoints/<feature>/*) при архивации УДАЛЯЮТСЯ: это точки
+восстановления для rollback.py, а откатывать завершённое некуда. Их restore не вернёт — число
+удалённых пишется в archive-meta.json.
+
+Провенанс переноса едет внутри самой перенесённой папки доков (archive-meta.json), поэтому
+list/restore работают, не читая манифест.
 
 Usage:
     python3 archive.py [--project <root>] status [--json]
@@ -45,11 +58,19 @@ if _cached_util is not None and getattr(_cached_util, "__file__", None) and \
         Path(_cached_util.__file__).resolve().parent != _HERE:
     del sys.modules["_util"]
 
-from _util import (archive_docs_dir, feature_docs_dir, manifest_path,  # noqa: E402
-                   repo_root, safe_load_json, task_docs_dir)
+from _util import (archive_docs_dir, feature_docs_dir, ground_dir, manifest_path,  # noqa: E402
+                   repo_root, safe_load_json, state_archive_dir, state_dir, task_docs_dir)
 import read as _read  # summarize()  # noqa: E402
 
 META_NAME = "archive-meta.json"
+
+
+def _ensure_path(p: Path) -> None:
+    """sys.path.insert без дублей: резолверы зовутся в цикле по прогонам, и голый insert
+    растил бы sys.path на запись за вызов (и замедлял КАЖДЫЙ последующий импорт)."""
+    sp = str(p)
+    if sp not in sys.path:
+        sys.path.insert(0, sp)
 
 # Фолбэк финального шага плоских веток, если реестр шагов не прочитался. Живой источник —
 # skills/<skill>/references/manifest-steps.json (последний элемент).
@@ -150,7 +171,7 @@ def final_step_ids(skill: str, manifest: dict) -> list:
         fin = _flat_final_step(skill)
         return [fin] if fin in ids else ([ids[-1]] if ids else [])
     try:
-        sys.path.insert(0, str(_HERE.parents[1] / "feature-pipeline" / "scripts"))
+        _ensure_path(_HERE.parents[1] / "feature-pipeline" / "scripts")
         import pipeline_phases as PP
         phases = PP._ordered_unique_phases(steps)
         if not phases:
@@ -221,7 +242,7 @@ def live_runs_inside(project: Path, target: Path, exclude) -> list:
 def delta_state(project: Path, slug: str):
     """Состояние дельты относительно мастера: merged|new|drifted|no-master (или None)."""
     try:
-        sys.path.insert(0, str(_HERE.parents[1] / "system-analyst" / "scripts"))
+        _ensure_path(_HERE.parents[1] / "system-analyst" / "scripts")
         import spec_cli
         return spec_cli.delta_state(Path(project), slug)
     except Exception:  # noqa: BLE001 — мастер не настроен/движок не поднялся: гейт не давим
@@ -240,6 +261,15 @@ def _prune_empty(start: Path, stop: Path) -> None:
         except OSError:
             return
         cur = cur.parent
+
+
+def _drop_checkpoints(project: Path, feature: str) -> int:
+    """Снять git-чекпойнты завершённой фичи. Best-effort: нет git — просто 0."""
+    try:
+        from checkpoint import delete_checkpoints
+        return int(delete_checkpoints(Path(project), feature))
+    except Exception:  # noqa: BLE001 — не git-репо/нет ref'ов: уборка не обязана падать
+        return 0
 
 
 def archive_feature(project, slug, skill=None, force: bool = False, reason=None,
@@ -288,15 +318,37 @@ def archive_feature(project, slug, skill=None, force: bool = False, reason=None,
     plan = {
         "ok": True, "slug": slug, "skill": skill, "feature": feature,
         "source": _rel(src, base), "target": str(target), "dry_run": bool(dry_run),
+        "state_target": str(state_archive_dir(project, skill) / feature),
         "delta_state": ds, "forced": bool(force),
     }
     if dry_run:
         plan["moved"] = False
         return plan
 
+    st_src = state_dir(project, skill, feature)
+    st_target = state_archive_dir(project, skill) / feature
+    if st_target.exists():
+        st_target = st_target.parent / f"{st_target.name}-{_ts()}"
+
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(target))
+    try:
+        st_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(st_src), str(st_target))
+    except OSError as e:
+        # Частичный перенос хуже отказа: доки уехали, стейт остался — прогон выглядит живым,
+        # а его артефактов на месте нет. Возвращаем доки и отказываем целиком.
+        src.parent.mkdir(parents=True, exist_ok=True)   # явно, а не через фолбэк shutil
+        shutil.move(str(target), str(src))
+        raise Fail(f"стейт прогона не переносится ({st_src} → {st_target}): {e}. "
+                   f"Доки возвращены на место, ничего не изменилось.")
+    # Husk-каталоги ('<стори>/fixes/') подчищаем ТОЛЬКО когда уехали обе половины. Прибрать
+    # раньше не смертельно (shutil.move на откате пересоздаёт путь copytree-фолбэком), но тогда
+    # откат — полное копирование дерева доков вместо rename. Порядок «сначала оба переноса,
+    # потом уборка» держит откат дешёвым и не полагается на недокументированный фолбэк.
     _prune_empty(src.parent, base)
+
+    dropped = _drop_checkpoints(project, feature)
 
     man = st["manifest"]
     meta = {
@@ -309,6 +361,9 @@ def archive_feature(project, slug, skill=None, force: bool = False, reason=None,
         "last_update": man.get("last_update"),
         "archived_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "source": _rel(src, base),
+        "state_source": _rel(st_src, ground_dir(project)),
+        "state_target": _rel(st_target, ground_dir(project)),
+        "checkpoints_deleted": dropped,
         "steps": st["steps"],
         "delta_state": ds,
         "master_source": _master_source(project),
@@ -319,6 +374,8 @@ def archive_feature(project, slug, skill=None, force: bool = False, reason=None,
     (target / META_NAME).write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
                                     encoding="utf-8")
     plan["moved"] = True
+    plan["state_target"] = str(st_target)
+    plan["checkpoints_deleted"] = dropped
     return plan
 
 
@@ -342,6 +399,7 @@ def restore_feature(project, slug, dry_run: bool = False) -> dict:
 
     meta_file = src / META_NAME
     rel = _rel(src, arc)
+    meta = {}
     if meta_file.is_file():
         meta = safe_load_json(meta_file, what=META_NAME)
         rel = meta.get("source") or rel
@@ -349,13 +407,34 @@ def restore_feature(project, slug, dry_run: bool = False) -> dict:
     if target.exists():
         raise Fail(f"место занято: {target} — уберите каталог или переименуйте архив")
 
+    st_src = st_target = None
+    if meta.get("state_target") and meta.get("state_source"):
+        g = ground_dir(project)
+        st_src, st_target = g / meta["state_target"], g / meta["state_source"]
+        if not st_src.is_dir():
+            st_src = st_target = None            # стейт уже убрали руками — вернём одни доки
+        elif st_target.exists():
+            raise Fail(f"место стейта занято: {st_target} — уберите каталог или переименуйте")
+
     plan = {"ok": True, "slug": rel, "source": str(src), "target": str(target),
+            "state_source": str(st_src) if st_src else None,
+            "state_target": str(st_target) if st_target else None,
             "dry_run": bool(dry_run)}
     if dry_run:
         plan["moved"] = False
         return plan
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(target))
+    if st_src is not None:
+        try:
+            st_target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(st_src), str(st_target))
+            _prune_empty(st_src.parent, state_archive_dir(project))
+        except OSError as e:
+            src.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(target), str(src))
+            raise Fail(f"стейт не возвращается ({st_src} → {st_target}): {e}. "
+                       f"Доки оставлены в архиве, ничего не изменилось.")
     try:
         (target / META_NAME).unlink()
     except OSError:
@@ -368,7 +447,7 @@ def restore_feature(project, slug, dry_run: bool = False) -> dict:
 def _master_source(project) -> str:
     """spec.master_source: delta-first (слияние) | master-first (сверка)."""
     try:
-        sys.path.insert(0, str(_HERE.parents[1] / "system-analyst" / "scripts"))
+        _ensure_path(_HERE.parents[1] / "system-analyst" / "scripts")
         import spec_cli
         return spec_cli.master_source(Path(project))
     except Exception:  # noqa: BLE001
@@ -510,6 +589,10 @@ def main(argv=None) -> int:
                 print(f"dry-run: {res['source']} → {res['target']} (ничего не записано)")
             else:
                 print(f"✅ {res['slug']} → {res['target']}")
+                print(f"   стейт прогона → {res['state_target']}")
+                if res.get("checkpoints_deleted"):
+                    print(f"   сняты git-чекпойнты фичи: {res['checkpoints_deleted']} шт. "
+                          f"(restore их не вернёт)")
                 print("   Коммит архива — на тебе, forge не коммитит.")
             return 0
 
@@ -521,6 +604,8 @@ def main(argv=None) -> int:
                 print(f"dry-run: {res['source']} → {res['target']} (ничего не записано)")
             else:
                 print(f"✅ возвращено: {res['target']}")
+                if res.get("state_target"):
+                    print(f"   стейт прогона → {res['state_target']}")
             return 0
     except Fail as e:
         print(f"[archive] DENY: {e}", file=sys.stderr)

@@ -347,8 +347,13 @@ def resolve_spec(project_root: Path, capability: "str | None" = None,
     """Путь мастер-спеки и капабилити через skill_paths (master separate-repo aware)."""
     if explicit:
         return Path(explicit), (capability or "capability")
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "feature-pipeline" / "scripts"))
+    # Без дублей: resolve_spec зовётся не один раз за процесс (archive.delta_state ходит по
+    # прогонам), а голый insert растил sys.path на ДВЕ записи за вызов — 100 записей на
+    # 50 вызовов, и каждый последующий импорт в процессе становился медленнее.
+    for _p in (Path(__file__).resolve().parent,
+               Path(__file__).resolve().parents[2] / "feature-pipeline" / "scripts"):
+        if str(_p) not in sys.path:
+            sys.path.insert(0, str(_p))
     import skill_paths
     cap = capability or skill_paths.master_capability(project_root)
     return skill_paths.master_spec_path(project_root, capability=cap), cap

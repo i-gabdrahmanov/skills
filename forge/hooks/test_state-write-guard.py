@@ -258,6 +258,24 @@ class TBashVector(unittest.TestCase):
         r = _bash("cp /tmp/fake.json ground/statements/feature-pipeline/f1/manifest.json")
         self.assertEqual(r.returncode, 2, r.stderr)
 
+    def test_block_mv_into_state_archive(self):
+        """ground/archive/ — стейт завершённых прогонов: те же манифест/evidence/вердикты.
+
+        Санкционированный писатель — archive.py: он держит гейты готовности (прогон завершён,
+        внутри нет живых прогонов) и уносит доки со стейтом ОДНОЙ операцией. Разложенный руками
+        `mv` обходит и гейты, и парность — стейт в архиве, доки на рабочем столе."""
+        r = _bash("mv ground/statements/feature-pipeline/f1 ground/archive/feature-pipeline/f1")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_pass_archive_script_and_reads(self):
+        """Сам archive.py и чтение архива — не запись: пишет он файловым API изнутри процесса."""
+        for cmd in ("python3 .gigacode/skills/pipeline-state/scripts/archive.py "
+                    "--project . put STOR-100",
+                    "cat ground/archive/feature-pipeline/f1/manifest.json",
+                    "rm -rf ground/archive"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_bash(cmd).returncode, 0)
+
     def test_block_copy_with_trailing_redirect(self):
         """Регресс: `> /dev/null` попадал в argv, и последним аргументом `cp` оказывался он —
         настоящее назначение копии (control-plane) не проверялось вовсе."""
