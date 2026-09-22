@@ -81,6 +81,12 @@ flowchart TD
 ## 3. Манифест шагов (`pipeline-state`)
 
 State намеспейсится по фиче: `<project>/ground/statements/feature-pipeline/<feature>/`.
+Завершённый прогон оттуда уезжает в `<project>/ground/archive/<skill>/<feature>/` (`archive.py`,
+сам по успеху `/forge-merge` либо вручную `/forge-archive`) — сиблинг `statements/`, а не папка
+внутри неё: резолверы активной фичи (`risk_ladder.active_manifest`, `state-recorder`,
+`active_feature_with_skill`) обходят именно `ground/statements/*`, и из сиблинга заархивированный
+прогон выпадает у всех сразу. Не путать с `ground/statements/<skill>/archived/`: туда `init.py
+--force` ВЫТЕСНЯЕТ прогон при переиспользовании слага, в любом статусе.
 
 > **`ground/` — рантайм-каталог данных в ЦЕЛЕВОМ проекте, не в source-репо Forge.** Его создаёт
 > `init.py` (`mkdir(parents=True)`), а `init_pipeline_config.py` кладёт туда `pipeline.json`.
