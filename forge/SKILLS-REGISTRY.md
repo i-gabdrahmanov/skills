@@ -16,7 +16,7 @@
 | feature-pipeline | @team | 2026-12 | Java/Spring фичи end-to-end до верифицированного артефакта (режим full; доставка — на пользователе) | gate-скрипты + hooks/evals |
 | forgelite | @team | 2026-12 | исполнение подготовленной подзадачи Jira (режим lite: grounding→tech-design по спеке→RED→GREEN→verify; доставка — на пользователе) | check_scope.py + record_gate (RED/GREEN) + check_coverage.py |
 | forgefix | @team | 2026-12 | минорный дефект (режим fix: диагностика→**гейт фикс-плана**→RED воспроизводит баг→минимальный фикс→verify→точечная дельта спеки внутри папки стори; доставка — на пользователе) | check_fix_scope.py + find_spec_anchor.py + record_approval (fix-plan) + record_gate (RED/GREEN/verify) + check_fix_delta.py |
-| pipeline-state | @team | 2026-12 | оркестраторы >3 субагентов | косвенно через evals |
+| pipeline-state | @team | 2026-12 | оркестраторы >3 субагентов | test_archive.py + косвенно через evals |
 | project-grounder | @team | 2026-12 | фаза grounding | verify_coverage.py |
 | system-analyst | @team | 2026-12 | скан Java/Spring сервиса | verify_coverage.py |
 | sdd | @team | 2026-12 | BRD → спецификация (sdd.md) | check_sdd_doc.py |

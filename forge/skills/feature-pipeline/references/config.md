@@ -153,6 +153,7 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
     "docs_path": "docs",             // in-repo: база под корнем проекта
     "repo_path": null,               // separate-repo: АБСОЛЮТНЫЙ путь к внешнему репо спеки
     "feature_subdir": "feature-pipeline",       // подпапка фич под docs-базой
+    "archive_subdir": "archive",                // подпапка доков ЗАВЕРШЁННЫХ фич (сиблинг!)
     "system_analysis_subdir": "system-analysis", // подпапка системного обзора под docs-базой
     "master": {                      // МАСТЕР (system-analysis + specs/) ОТДЕЛЬНО от дельт.
                                      // null/нет → мастер там же, где docs (как сегодня).
@@ -174,6 +175,7 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
     "enforce_couplings": false       // новая межмодульная связка требует accepted ADR (05-verify)
   },
   "spec": {                          // ПОВЕДЕНИЕ требований-мастера (где он лежит — в docs.master)
+    "master_source": "delta-first",  // delta-first | master-first — кто первичен, дельта или мастер
     "id_prefix": "REQ",              // префикс стабильных ID требований (### REQ-0007: ...)
     "drift": "warn",                 // off | warn — реакция spec-judge на неслитую дельту
     "scenario_floor": true,          // каждое требование обязано иметь ≥1 Given-When-Then
@@ -347,6 +349,7 @@ Git-политика (forge-no-delivery): forge **пишет** обновлен�
 
 | Поле | Значение |
 |---|---|
+| `spec.master_source` | `delta-first` \| `master-first` — кто первичен (см. ниже). Дефолт `delta-first` |
 | `spec.id_prefix` | префикс стабильных ID требований мастера (`### REQ-0007: <название>`). Дефолт `REQ` |
 | `spec.drift` | `off` \| `warn` — что делает spec-judge, если дельта фичи не слита в мастер. Дефолт `warn` (сообщает, не блокирует фазу) |
 | `spec.scenario_floor` | каждое требование обязано нести ≥1 сценарий Given-When-Then (`check_master_spec`). Дефолт true |
@@ -356,6 +359,52 @@ Git-политика (forge-no-delivery): forge **пишет** обновлен�
 она лишь сообщает о расхождении. Слияние дельты делает пользователь командой `/forge-spec merge
 <slug>` (предпросмотр — `/forge-spec diff <slug>`, состояние — `/forge-spec status`). Запись идёт
 в рабочее дерево клона мастер-репо, коммит/push — на пользователе (forge-no-delivery).
+
+### Кто первичен: дельта или мастер (`spec.master_source`)
+
+Форж по умолчанию собирает мастер ИЗ дельт: фича пишет `sdd.md`, `/forge-merge` дописывает её
+требования в `specs/<cap>/spec.md`. Это `delta-first`.
+
+Бывает наоборот: мастер-спеку ведёт аналитик, и `sdd.md` фичи ВЫДЕЛЯЕТСЯ из неё. Тогда дописывать
+мастер дельтой — значит писать в источник из его же производной. Режим `master-first` переключает
+`/forge-merge` со слияния на **сверку**: план слияния обязан быть пустым, а любая операция
+(`+` — требования нет в мастере, `~` — содержимое разошлось) считается расхождением и даёт
+exit 3. Мастер при этом не трогается вообще; дельту приводят к мастеру, а не наоборот. Если
+требование действительно введено дельтой — явный `--allow-merge` на одну команду.
+
+```bash
+config.py --project <root> set spec.master_source master-first
+```
+
+> `policy.json` immutable, пока в `ground/statements/` лежит хоть один манифест (общее правило
+> для ВСЕХ project-wide ключей, не только этого — `config.py` вернёт `blocked`). Заархивированные
+> прогоны в эту выборку не входят: разберите завершённые фичи (`/forge-archive status`), и
+> запись разблокируется. Если незакрытая фича есть, режим ставят до её старта либо правят
+> `ground/policy.json` руками.
+
+`/forge-spec status` в этом режиме так и пишет — «режим: мастер первичен», и называет несведённые
+дельты расхождениями, а не «не слито».
+
+### Архив завершённых фич (`docs.archive_subdir`)
+
+По успеху `/forge-merge` (слияния — или сверки в `master-first`) завершённая фича уезжает в
+архив ОБЕИМИ половинами:
+
+| Что | Откуда | Куда |
+|---|---|---|
+| доки | `<docs_base>/feature-pipeline/<slug>/` | `<docs_base>/archive/<slug>/` |
+| стейт прогона | `ground/statements/<skill>/<feature>/` | `ground/archive/<skill>/<feature>/` |
+| git-чекпойнты | `refs/forge/checkpoints/<feature>/*` | удаляются (`restore` не вернёт) |
+
+Путь доков сохраняется (у фикса — `<стори>/fixes/<баг>`), рядом кладётся `archive-meta.json` с
+провенансом переноса. Отключается флагом `--no-archive`; разбор архива — `/forge-archive`
+(`status`/`put`/`list`/`restore`).
+
+Оба архива — СИБЛИНГИ исходных каталогов, а не подпапки внутри них. Дельты ищутся обходом
+`<docs_base>/feature-pipeline/` — архив внутри продолжал бы попадать в `/forge-spec status`,
+и заархивированное требование предлагалось бы слить повторно. Активная фича ищется обходом
+`ground/statements/*/*/` по mtime манифеста — завершённые прогоны, оставшись там, повышают
+шанс, что гейты применятся по чужому стейту.
 
 ## Что заполнить вручную после init
 

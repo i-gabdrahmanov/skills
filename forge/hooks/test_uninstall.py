@@ -190,6 +190,127 @@ class DeployUninstallRoundTrip(unittest.TestCase):
         self.assertIn("base", log, "коммиты пользователя откат обвязки трогать не смеет")
 
 
+@unittest.skipIf(_BASH is None or _GIT is None, "нужны bash и git")
+class GitignoreBlock(unittest.TestCase):
+    """deploy кладёт ground/ в .gitignore, uninstall снимает РОВНО свой блок.
+
+    Почему это вообще нужно: ground/ — стейт прогонов, evidence и журналы, производное от кода
+    и переписываемое на каждом шаге. Без правила оно уезжает в историю пользовательского репо
+    и конфликтует на каждый merge. policy.json — исключение: это конфигурация проекта.
+
+    Почему блок размечен маркерами: .gitignore принадлежит оператору. Снос файла целиком или
+    перезапись «своей» версией унесли бы его строки — тот же класс, что инцидент со сметённым
+    rm -rf каталогом самописных скиллов."""
+
+    BEGIN = "# >>> forge: рабочие данные пайплайна >>>"
+    END = "# <<< forge <<<"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.proj = Path(self._tmp.name)
+        subprocess.run([_GIT, "init", "-q", str(self.proj)], check=True, timeout=30)
+        self.gi = self.proj / ".gitignore"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _sh(self, script: Path, *args: str):
+        return subprocess.run([_BASH, str(script), *args],
+                              capture_output=True, text=True, timeout=180)
+
+    def _deploy(self):
+        r = self._sh(DEPLOY, str(self.proj))
+        self.assertEqual(r.returncode, 0, f"deploy.sh упал: {r.stdout}{r.stderr}")
+        return r
+
+    def test_deploy_adds_block(self):
+        self._deploy()
+        text = self.gi.read_text(encoding="utf-8")
+        self.assertIn(self.BEGIN, text)
+        self.assertIn("ground/*", text)
+        self.assertIn("!ground/policy.json", text)
+        self.assertIn(".gigacode/", text)
+        self.assertIn(self.END, text)
+
+    def test_deployed_harness_is_not_git_noise(self):
+        """286 untracked-записей сразу после установки — это не «шум», а рабочий инструмент:
+        в таком статусе не видно собственных изменений проекта. Плюс settings.json внутри
+        держит абсолютные пути этой машины — у коллеги он зовёт несуществующие скрипты."""
+        self._deploy()
+        out = subprocess.run([_GIT, "-C", str(self.proj), "status", "--porcelain",
+                              "--untracked-files=all"],
+                             capture_output=True, text=True, timeout=60).stdout
+        self.assertNotIn(".gigacode", out, "задеплоенный харнес не должен светиться в git")
+
+    def test_operator_can_force_add_own_skill(self):
+        """Игнор каталога не запирает co-located: своё оператор версионирует точечно."""
+        self._deploy()
+        own = self.proj / ".gigacode" / "skills" / "my-own" / "SKILL.md"
+        own.parent.mkdir(parents=True, exist_ok=True)
+        own.write_text("# моё\n", encoding="utf-8")
+        r = subprocess.run([_GIT, "-C", str(self.proj), "add", "-f", str(own)],
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        tracked = subprocess.run([_GIT, "-C", str(self.proj), "ls-files"],
+                                 capture_output=True, text=True, timeout=30).stdout
+        self.assertIn("my-own/SKILL.md", tracked)
+
+    def test_rule_actually_ignores_state_but_not_policy(self):
+        """Проверяем не текст, а поведение git: форма `ground/` re-include не даёт."""
+        self._deploy()
+        (self.proj / "ground" / "statements" / "feature-pipeline" / "F").mkdir(parents=True)
+        (self.proj / "ground" / "statements" / "feature-pipeline" / "F"
+         / "manifest.json").write_text("{}", encoding="utf-8")
+        (self.proj / "ground" / "policy.json").write_text("{}", encoding="utf-8")
+        out = subprocess.run([_GIT, "-C", str(self.proj), "status", "--porcelain",
+                              "--untracked-files=all"],
+                             capture_output=True, text=True, timeout=30).stdout
+        self.assertIn("ground/policy.json", out, "конфигурация проекта обязана остаться видимой")
+        self.assertNotIn("manifest.json", out, "стейт прогона обязан быть проигнорирован")
+
+    def test_deploy_is_idempotent(self):
+        self._deploy()
+        self._deploy()
+        text = self.gi.read_text(encoding="utf-8")
+        self.assertEqual(text.count(self.BEGIN), 1, "повторный деплой не должен дублировать блок")
+
+    def test_operator_lines_survive_both_ways(self):
+        self.gi.write_text("# моё\nbuild/\n*.iml\n", encoding="utf-8")
+        self._deploy()
+        text = self.gi.read_text(encoding="utf-8")
+        self.assertIn("build/", text)
+        self.assertIn("*.iml", text)
+        r = self._sh(UNINSTALL, str(self.proj))
+        self.assertEqual(r.returncode, 0, f"uninstall.sh упал: {r.stdout}{r.stderr}")
+        text = self.gi.read_text(encoding="utf-8")
+        self.assertNotIn(self.BEGIN, text)
+        self.assertNotIn("ground/*", text)
+        self.assertNotIn(".gigacode/", text)
+        self.assertIn("build/", text, "строки оператора uninstall трогать не смеет")
+        self.assertIn("*.iml", text)
+
+    def test_no_trailing_newline_does_not_glue_lines(self):
+        self.gi.write_text("build/", encoding="utf-8")       # без \n в конце
+        self._deploy()
+        lines = self.gi.read_text(encoding="utf-8").split("\n")
+        self.assertIn("build/", lines, "последняя строка оператора склеилась с блоком forge")
+
+    def test_uninstall_without_block_is_noop(self):
+        self.gi.write_text("build/\n", encoding="utf-8")
+        r = self._sh(UNINSTALL, str(self.proj))
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(self.gi.read_text(encoding="utf-8"), "build/\n")
+
+    def test_non_git_project_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as td:
+            plain = Path(td)
+            r = self._sh(DEPLOY, str(plain))
+            self.assertEqual(r.returncode, 0, f"deploy.sh упал: {r.stdout}{r.stderr}")
+            self.assertFalse((plain / ".gitignore").exists(),
+                             "вне git-репо .gitignore заводить незачем")
+            self.assertIn("не git-репозиторий", r.stdout)
+
+
 @unittest.skipIf(_BASH is None, "нет bash в PATH")
 class UninstallArgs(unittest.TestCase):
     """Интерфейс — зеркало deploy.sh: цель обязательна, деплой в себя запрещён."""

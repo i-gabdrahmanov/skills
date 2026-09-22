@@ -210,6 +210,20 @@ def archived_dir(root: Path, skill: str) -> Path:
     return statements_dir(root, skill) / "archived"
 
 
+def state_archive_dir(root: Path, skill: Optional[str] = None) -> Path:
+    """ground/archive/[<skill>/] — стейт ЗАВЕРШЁННЫХ прогонов (archive.py).
+
+    Сиблинг statements/, а не `statements/<skill>/archived/`. Каждый резолвер активной фичи
+    обходит именно `ground/statements/*` (risk_ladder.active_manifest, state-recorder,
+    active_feature_with_skill, config._has_active_feature) — из сиблинга заархивированный
+    прогон выпадает у всех сразу, а не у тех, кто не забыл пропустить папку по имени.
+    `archived/` при этом занято другим смыслом: туда `init.py --force` ВЫТЕСНЯЕТ прогон при
+    переиспользовании слага, в любом статусе.
+    """
+    base = ground_dir(root) / "archive"
+    return base / skill if skill else base
+
+
 def manifest_path(root: Path, skill: str, feature: str) -> Path:
     return state_dir(root, skill, feature) / "manifest.json"
 
@@ -556,6 +570,29 @@ def feature_docs_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) ->
             and not legacy.startswith(("/", "~")) and ".." not in Path(legacy).parts):
         return Path(root) / legacy
     return docs_base(root, cfg) / _clean_subdir(docs.get("feature_subdir"), "feature-pipeline")
+
+
+def archive_docs_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
+    """Доки ЗАВЕРШЁННЫХ строек — СИБЛИНГ каталога доков (при дефолтной раскладке docs/archive).
+
+    Сиблинг feature_docs_dir(), а НЕ подпапка внутри неё. Причина не косметическая: дельты
+    (`sdd.md`) ищутся обходом <docs_base>/feature-pipeline/ (spec_cli._features), и архив внутри
+    этого каталога продолжал бы попадать в `/forge-spec status` — заархивированное требование
+    предлагалось бы слить повторно. Сиблингом архив выпадает из обхода сам собой, и spec-judge
+    («в docs/feature-pipeline только текущая фича») наконец выполним.
+    """
+    root = Path(root) if root else find_project_root()
+    docs = _docs_cfg(cfg, root)
+    # Сиблинг КАТАЛОГА ДОКОВ, а не docs_base: legacy `docs.feature_docs_path` уводит доки в
+    # своё дерево (documentation/features), и архив, привязанный к docs_base, оказался бы в
+    # ДРУГОМ (docs/archive) — форж завёл бы постороннюю папку в корне проекта.
+    fdir = feature_docs_dir(root, cfg)
+    name = _clean_subdir(docs.get("archive_subdir"), "archive")
+    if name == fdir.name:      # архив внутри самого себя — переносить было бы некуда
+        print(f"[forge-paths] docs: archive_subdir={name!r} совпал с каталогом доков → 'archive'",
+              file=sys.stderr)
+        name = "archive"
+    return fdir.parent / name
 
 
 def _master_base(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:

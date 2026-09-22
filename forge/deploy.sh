@@ -9,8 +9,11 @@
 # Что делает:
 #   1. Копирует hooks/ и skills/ (co-located) + доки в <target>/.gigacode/.
 #   2. Кладёт туда deploy-local.sh (in-project фиксер путей, его зовёт preflight.py).
-#   3. Доводит <target>/.gigacode/settings.json (merge блока hooks + бэкап) через deploy-local.sh.
-#   4. Прогоняет preflight.py (advisory).
+#   3. Добавляет в <target>/.gitignore блок с ground/* и .gigacode/ (рабочие данные пайплайна
+#      и задеплоенный харнес в git не едут; ground/policy.json остаётся под версионированием —
+#      это конфигурация проекта).
+#   4. Доводит <target>/.gigacode/settings.json (merge блока hooks + бэкап) через deploy-local.sh.
+#   5. Прогоняет preflight.py (advisory).
 #
 # Usage (из корня склонированного Forge):
 #   bash deploy.sh /path/to/target-project
@@ -132,6 +135,45 @@ if [ -d "$SRC/commands" ]; then
     echo "  ✓ слэш-команда /${base%.md} → $GIG/commands/$base"
   done
   rm -f "$GIG/commands/forge.toml"     # устаревший TOML-вариант → окно миграции qwen-code
+fi
+
+# 3c. .gitignore проекта: рабочие данные пайплайна и сам харнес в git не едут.
+# ground/ — это манифесты прогонов, вердикты судей, evidence, журналы файлов: производное от
+# кода и от прогона, переписывается на каждом шаге. В истории это шум и конфликт на каждый
+# merge. ИСКЛЮЧЕНИЕ — ground/policy.json: это конфигурация проекта (где доки, какие гейты,
+# какая критичность), её команда версионирует наравне с .editorconfig.
+# Форма `ground/*` + `!ground/policy.json`, а не `ground/`: re-include внутри исключённого
+# КАТАЛОГА git не делает, поэтому исключаем содержимое, а не сам каталог.
+# .gigacode/ — задеплоенный харнес (286 файлов сразу после установки). Он генерируется
+# deploy.sh из репозитория forge, а settings.json внутри держит АБСОЛЮТНЫЕ пути к проекту и
+# интерпретатору: у коллеги на другой машине такой файл зовёт несуществующие скрипты, то есть
+# коммит делает хуже, чем отсутствие файла. Свои co-located скиллы оператор при желании
+# версионирует точечно — `git add -f .gigacode/skills/<своё>` (уже отслеживаемые файлы
+# .gitignore не трогает).
+# Блок размечен маркерами — uninstall.sh снимает ровно его, не трогая строки оператора.
+GI_BEGIN="# >>> forge: рабочие данные пайплайна >>>"
+GI_END="# <<< forge <<<"
+if git -C "$TARGET" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  GI="$TARGET/.gitignore"
+  if [ -f "$GI" ] && grep -qF "$GI_BEGIN" "$GI"; then
+    echo "  ✓ .gitignore: блок forge уже на месте"
+  else
+    [ -f "$GI" ] && [ -n "$(tail -c 1 "$GI" 2>/dev/null)" ] && printf '\n' >> "$GI"
+    {
+      printf '%s\n' "$GI_BEGIN"
+      printf '%s\n' "# Стейт прогонов, evidence, журналы, архив — производное, в git не нужно."
+      printf '%s\n' "# policy.json оставлен под версионированием: это конфигурация проекта."
+      printf '%s\n' "ground/*"
+      printf '%s\n' "!ground/policy.json"
+      printf '%s\n' "# Задеплоенный харнес: генерируется deploy.sh, settings.json внутри —"
+      printf '%s\n' "# с абсолютными путями этой машины. Своё: git add -f .gigacode/skills/<своё>"
+      printf '%s\n' ".gigacode/"
+      printf '%s\n' "$GI_END"
+    } >> "$GI"
+    echo "  ✓ .gitignore: ground/ и .gigacode/ исключены из git (policy.json оставлен)"
+  fi
+else
+  echo "  (не git-репозиторий — .gitignore не трогаю; ground/ исключишь сам, когда заведёшь git)"
 fi
 
 # исполняемость

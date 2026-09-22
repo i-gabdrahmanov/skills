@@ -199,9 +199,19 @@ def main() -> int:
         c, _ = run_hook("destructive-blocker.py", {"tool_name": "Bash",
                         "tool_input": {"command": "git status"}})
         check("destructive: git status → allow", c == 0)
-        c, _ = run_hook("destructive-blocker.py", {"tool_name": "Bash",
+        # Граница «уборка vs деструктив» проходит по КОРНЮ ПРОЕКТА, а не по «это не /».
+        # Пин был написан до tasks/011 («опасна только ровно / или ~») и с тех пор краснел:
+        # tasks/011 расширил опасную цель до любого абсолютного пути ради `rm -rf /etc/passwd`,
+        # заодно накрыв штатный `rm -rf <проект>/build`. Теперь обе стороны проверяем явно.
+        c, _ = run_hook("destructive-blocker.py", {"cwd": str(rdj), "tool_name": "Bash",
+                        "tool_input": {"command": f"rm -rf {rdj}/build"}})
+        check("destructive: rm -rf <проект>/build → allow (уборка внутри проекта)", c == 0)
+        c, _ = run_hook("destructive-blocker.py", {"cwd": str(rdj), "tool_name": "Bash",
                         "tool_input": {"command": "rm -rf /Users/x/proj/build"}})
-        check("destructive: rm -rf <abs>/build → allow (не корень)", c == 0)
+        check("destructive: rm -rf <чужой абс. путь> → deny (вне проекта)", c == 2)
+        c, _ = run_hook("destructive-blocker.py", {"cwd": str(rdj), "tool_name": "Bash",
+                        "tool_input": {"command": f"rm -rf {rdj}"}})
+        check("destructive: rm -rf <корень проекта> → deny", c == 2)
 
         # ── pii-boundary ──
         c, _ = run_hook("pii-boundary.py", {"cwd": str(r), "tool_name": "Write",

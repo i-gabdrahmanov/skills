@@ -35,6 +35,7 @@ CONFIG_HELPER_SCRIPTS = SCRIPTS.parent.parent / "config-helper" / "scripts"
 ALL_SCRIPTS = [
     "update.py", "init.py", "record_gate.py", "record_approval.py", "rollback.py",
     "patch_manifest_judges.py", "override_judge.py", "read.py", "add_steps.py",
+    "archive.py",
 ]
 
 # Подтверждаем, что список соответствует реальности — иначе тест пропустит баг.

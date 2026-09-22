@@ -41,7 +41,8 @@ if _cached_util is not None and getattr(_cached_util, "__file__", None) and \
     del sys.modules["_util"]
 
 from _util import (gate_result_path, judges_dir, load_project_config, origins_dir,  # noqa: E402
-                   overrides_dir, repo_root, safe_load_json)
+                   overrides_dir, repo_root, safe_load_json,
+                   task_docs_dir as _task_docs_dir)
 import forge_events as FE  # журнал evidence (импорт _util уже положил hooks/ в sys.path)
 
 # Соглашение «какие фазы обязаны идти через субагента» — ЕДИНЫЙ источник pipeline_phases
@@ -705,15 +706,10 @@ _CANONICAL_ARTIFACTS = {
 def _docs_dir_for(project: Path, skill: str, feature: str):
     """Каталог артефактов задачи: у фикса — <docs>/<стори>/fixes/<баг>, иначе <docs>/<feature>.
 
-    v2: читает inputs.story из манифеста активной фичи (или legacy sources.story через
-    dual-read fallback). Раньше ходил только в pipeline.json — теперь резолвится через
-    единый config_get."""
-    import skill_paths as SP
-    if skill == "forgefix":
-        # v2: приоритет manifest.inputs.story → legacy sources.story (через dual-read в helper).
-        story = _config_get(project, "inputs.story", skill=skill, feature=feature)
-        return SP.fix_docs_dir(project, feature, story)
-    return SP.feature_docs_dir(project) / feature
+    Реализация переехала в `_util.task_docs_dir`: тот же резолвер нужен архивации
+    (`archive.py`), а вторая копия разошлась бы с этой молча. Имя оставлено — на него завязаны
+    `_check_step_artifacts` и тесты."""
+    return _task_docs_dir(project, skill, feature)
 
 
 def _check_step_artifacts(step: dict, project: Path, skill: str, feature: str):

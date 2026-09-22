@@ -8,8 +8,10 @@ deny-first: чёрный список из risk-policy.json (`destructive_blackl
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
+from pathlib import Path
 
 # Импорт форж-модулей — fail-CLOSED. Крэш на импорте отдаёт exit 1, а блокировка —
 # exit 2; рантайм читает exit 1 как «хук не возражает» и ВЫПОЛНЯЕТ вызов. Так уже молча
@@ -45,9 +47,14 @@ _RM_FORCE = _TOK + r"(?:-[a-zA-Z]*f[a-zA-Z]*|--force)(?=\s|$)"
 # (`build/tmp`, `./target`) под рекурсивное удаление не подпадает — это штатная уборка.
 _DANGEROUS_TARGET = _TOK + r"(?:/\S*|~\S*|\$HOME\S*|\*)(?=\s|$)"
 
+# Паттерн «rm -rf по абсолютному пути» держим отдельной ссылкой: у него ЕСТЬ законное
+# исключение (уборка внутри своего же проекта), у остальных — нет. См. _rm_abs_inside_project.
+_RM_ABS_PATTERN = (r"\brm\b(?=.*" + _RM_RECURSIVE + r")(?=.*" + _RM_FORCE + r").*"
+                   + _DANGEROUS_TARGET)
+
 _CORE_BLACKLIST = [
     r"\brm\b(?:\s+(?:-\S+|--\w[\w-]*))*\s+(?:(?:/|~|\$HOME|\*)(?:\s|/|\*|$)|\.(?:\s|$))",  # rm <любые флаги> опасная цель (/, /*, ~, $HOME, *, бар. .) — но НЕ ./subdir
-    r"\brm\b(?=.*" + _RM_RECURSIVE + r")(?=.*" + _RM_FORCE + r").*" + _DANGEROUS_TARGET,
+    _RM_ABS_PATTERN,
     r"\bfind\s+(?:/|~|\$HOME)\S*\s.*-(?:delete|exec\s+rm)\b",  # find в опасном корне + удаление
     # force-push и в короткой форме `-f` (кластер флагов), кроме --force-with-lease
     r"\bgit\s+push\b(?=.*(?:--force\b|\s-[A-Za-z]*f))(?!.*--force-with-lease)",
@@ -77,6 +84,40 @@ def _xargs_rm_from_dangerous_root(cmd: str) -> bool:
     return bool(_DANGEROUS_ROOT_RE.search(cmd.split("|")[0]))
 
 
+# `rm -rf <абсолютный путь>` ВНУТРИ своего проекта — штатная уборка, а не деструктив.
+# tasks/011 расширил опасную цель с «ровно / или ~» до любого абсолютного пути, чтобы ловить
+# `rm -rf /etc/passwd`; побочно под блок попал `rm -rf /путь/к/проекту/build` — то, что
+# gradle-разработчик набирает каждый день. Eval пинил именно это ожидание и с тех пор был
+# красным. Разводим по смыслу: снаружи проекта — деструктив, внутри — уборка.
+_ABS_TOKEN_RE = re.compile(_TOK + r"(/\S*)(?=\s|$)")
+
+
+def _rm_abs_inside_project(cmd: str, root) -> bool:
+    """Все абсолютные цели команды лежат СТРОГО внутри проекта (сам корень — не цель)."""
+    if root is None:
+        return False                      # корень не резолвится → исключение не выдаём
+    try:
+        root = Path(os.path.normpath(str(Path(root).expanduser()))).resolve()
+    except (OSError, ValueError):
+        return False
+    targets = _ABS_TOKEN_RE.findall(cmd)
+    if not targets:
+        return False
+    for t in targets:
+        if "*" in t or "?" in t:          # глоб внутри проекта — цель неизвестна до раскрытия
+            return False
+        try:
+            # resolve с ОБЕИХ сторон: иначе /var vs /private/var (симлинк macOS) разводит
+            # корень и цель по разным деревьям, и уборка своего же build выглядит внешней.
+            # Заодно симлинк изнутри проекта наружу честно резолвится наружу и блокируется.
+            p = Path(os.path.normpath(t)).resolve()
+        except (OSError, ValueError):
+            return False
+        if p == root or root not in p.parents:
+            return False
+    return True
+
+
 def main() -> int:
     try:
         raw = sys.stdin.read()
@@ -101,7 +142,17 @@ def main() -> int:
             print("[destructive-blocker] DENY: `xargs rm` со списком из опасного корня "
                   "(/, ~, $HOME). Уборку делай в пределах рабочего каталога.", file=sys.stderr)
             return 2
+        exempt_rm_abs = False
+        if re.search(_RM_ABS_PATTERN, cmd, re.I):
+            try:
+                # R.project_root — тот же резолвер, что у остальных хуков (_project.find_project_root
+                # с git-фолбэком): «внутри проекта» обязано значить то же самое везде.
+                exempt_rm_abs = _rm_abs_inside_project(cmd, R.project_root(data.get("cwd") or ""))
+            except Exception:  # noqa: BLE001 — резолвер корня не ответил: остаёмся строгими
+                exempt_rm_abs = False
         for pat in list(policy) + _CORE_BLACKLIST:
+            if pat is _RM_ABS_PATTERN and exempt_rm_abs:
+                continue
             if re.search(pat, cmd, re.I):
                 print(f"[destructive-blocker] DENY: команда совпала с запретом /{pat}/. "
                       "Деструктивное действие заблокировано.", file=sys.stderr)
