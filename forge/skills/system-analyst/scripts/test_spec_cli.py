@@ -260,5 +260,151 @@ class FixDeltaInsideStoryTest(unittest.TestCase):
         self.assertEqual(rc, 2)
 
 
+# ── режим мастера + архивация доков на merge ───────────────────────────────
+
+FULL_STEPS = ["02-sdd", "02-design", "05-tests", "06-spec"]
+
+
+def _manifest(skill: str, ids, **status):
+    return {"version": 2, "skill": skill, "pipeline_id": "2026-09-22-100000",
+            "started_at": "2026-09-22T10:00:00Z",
+            "steps": [{"id": i, "title": i, "status": status.get(i, "completed"),
+                       "depends_on": []} for i in ids]}
+
+
+class MergeArchiveBase(unittest.TestCase):
+    """Проект с ЗАВЕРШЁННЫМ прогоном: только у такого merge вправе убрать доки."""
+
+    MASTER_SOURCE = "delta-first"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        cfg = json.loads(json.dumps(PIPELINE))
+        cfg["spec"]["master_source"] = self.MASTER_SOURCE
+        (self.root / "ground").mkdir()
+        (self.root / "ground" / "pipeline.json").write_text(
+            json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+        d = self.root / "docs" / "feature-pipeline" / "report-export"
+        d.mkdir(parents=True)
+        (d / "sdd.md").write_text(SDD_A, encoding="utf-8")
+        st = self.root / "ground" / "statements" / "feature-pipeline" / "report-export"
+        st.mkdir(parents=True)
+        (st / "manifest.json").write_text(
+            json.dumps(_manifest("feature-pipeline", FULL_STEPS), ensure_ascii=False),
+            encoding="utf-8")
+        self.docs = d
+        self.archived = self.root / "docs" / "archive" / "report-export"
+        self.spec = self.root / "docs" / "specs" / "claims" / "spec.md"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _r(self, *argv):
+        return run("--project-root", str(self.root), *argv)
+
+
+class ArchiveOnMergeTest(MergeArchiveBase):
+    """delta-first: слили — и доки уехали с рабочего стола."""
+
+    def test_merge_archives_docs(self):
+        rc, out = self._r("merge", "report-export", "-y")
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.spec.exists())
+        self.assertFalse(self.docs.exists())
+        self.assertTrue((self.archived / "sdd.md").is_file())
+        self.assertIn("доки report-export", out)
+
+    def test_no_archive_keeps_docs(self):
+        rc, _ = self._r("merge", "report-export", "-y", "--no-archive")
+        self.assertEqual(rc, 0)
+        self.assertTrue((self.docs / "sdd.md").is_file())
+        self.assertFalse(self.archived.exists())
+
+    def test_dry_run_touches_nothing(self):
+        rc, out = self._r("merge", "report-export", "-y", "--dry-run")
+        self.assertEqual(rc, 0)
+        self.assertFalse(self.spec.exists())
+        self.assertTrue((self.docs / "sdd.md").is_file())
+        self.assertIn("dry-run", out)
+
+    def test_unfinished_run_keeps_docs_but_merge_succeeds(self):
+        """Архивация — best-effort: её отказ не делает слияние неуспешным."""
+        st = self.root / "ground/statements/feature-pipeline/report-export/manifest.json"
+        st.write_text(json.dumps(_manifest("feature-pipeline", FULL_STEPS,
+                                           **{"05-tests": "pending"}), ensure_ascii=False),
+                      encoding="utf-8")
+        rc, out = self._r("merge", "report-export", "-y")
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.spec.exists())
+        self.assertTrue((self.docs / "sdd.md").is_file())
+        self.assertIn("не заархивированы", out)
+        self.assertIn("/forge-archive put report-export", out)
+
+
+class MasterFirstTest(MergeArchiveBase):
+    """master-first: sdd выделяется ИЗ мастера, поэтому merge сверяет и в мастер не пишет."""
+
+    MASTER_SOURCE = "master-first"
+
+    def test_master_source_is_read_from_config(self):
+        self.assertEqual(spec_cli.master_source(self.root), "master-first")
+
+    def test_divergence_exits_3_and_leaves_master_untouched(self):
+        rc, out = self._r("merge", "report-export", "-y")
+        self.assertEqual(rc, 3)
+        self.assertFalse(self.spec.exists(), "master-first не имеет права писать мастер")
+        self.assertTrue((self.docs / "sdd.md").is_file())
+        self.assertIn("расходится с мастером", out)
+        self.assertIn("--allow-merge", out)
+
+    def test_allow_merge_is_the_explicit_escape(self):
+        rc, _ = self._r("merge", "report-export", "-y", "--allow-merge", "--no-archive")
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.spec.exists())
+
+    def test_matching_delta_is_verified_and_archived(self):
+        self._r("merge", "report-export", "-y", "--allow-merge", "--no-archive")
+        rc, out = self._r("merge", "report-export", "-y")
+        self.assertEqual(rc, 0)
+        self.assertIn("сверка прошла", out)
+        self.assertFalse(self.docs.exists())
+        self.assertTrue((self.archived / "sdd.md").is_file())
+
+    def test_status_calls_it_a_divergence(self):
+        rc, out = self._r("status")
+        self.assertEqual(rc, 0)
+        self.assertIn("мастер первичен", out)
+        self.assertIn("РАСХОЖДЕНИЕ", out)
+
+    def test_status_json_carries_mode(self):
+        rc, out = self._r("status", "--json")
+        self.assertEqual(json.loads(out)["master_source"], "master-first")
+
+    def test_unknown_value_falls_back_to_default(self):
+        cfg = json.loads((self.root / "ground" / "pipeline.json").read_text(encoding="utf-8"))
+        cfg["spec"]["master_source"] = "whatever"
+        (self.root / "ground" / "pipeline.json").write_text(json.dumps(cfg), encoding="utf-8")
+        self.assertEqual(spec_cli.master_source(self.root), "delta-first")
+
+
+class DeltaStateTest(MergeArchiveBase):
+    """Публичный вход, которым архивация проверяет, видел ли мастер эту дельту."""
+
+    def test_new_then_merged(self):
+        self.assertEqual(spec_cli.delta_state(self.root, "report-export"), "new")
+        self._r("merge", "report-export", "-y", "--no-archive")
+        self.assertEqual(spec_cli.delta_state(self.root, "report-export"), "merged")
+
+    def test_unknown_slug_is_no_delta(self):
+        self.assertEqual(spec_cli.delta_state(self.root, "нет-такой"), "no-delta")
+
+    def test_master_disabled_is_no_master(self):
+        cfg = json.loads((self.root / "ground" / "pipeline.json").read_text(encoding="utf-8"))
+        cfg["docs"]["master"]["enabled"] = False
+        (self.root / "ground" / "pipeline.json").write_text(json.dumps(cfg), encoding="utf-8")
+        self.assertEqual(spec_cli.delta_state(self.root, "report-export"), "no-master")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

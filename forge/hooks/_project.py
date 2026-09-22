@@ -558,6 +558,20 @@ def feature_docs_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) ->
     return docs_base(root, cfg) / _clean_subdir(docs.get("feature_subdir"), "feature-pipeline")
 
 
+def archive_docs_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
+    """<docs_base>/archive — доки ЗАВЕРШЁННЫХ строек.
+
+    Сиблинг feature_docs_dir(), а НЕ подпапка внутри неё. Причина не косметическая: дельты
+    (`sdd.md`) ищутся обходом <docs_base>/feature-pipeline/ (spec_cli._features), и архив внутри
+    этого каталога продолжал бы попадать в `/forge-spec status` — заархивированное требование
+    предлагалось бы слить повторно. Сиблингом архив выпадает из обхода сам собой, и spec-judge
+    («в docs/feature-pipeline только текущая фича») наконец выполним.
+    """
+    root = Path(root) if root else find_project_root()
+    docs = _docs_cfg(cfg, root)
+    return docs_base(root, cfg) / _clean_subdir(docs.get("archive_subdir"), "archive")
+
+
 def _master_base(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
     """База МАСТЕРА (system-analysis + specs/). По умолчанию = docs_base (дельты рядом),
     но docs.master.{mode,repo_path} держит мастер в отдельном (в т.ч. удалённом) репо."""

@@ -85,7 +85,8 @@
         "read": ".gigacode/skills/pipeline-state/scripts/read.py",
         "update": ".gigacode/skills/pipeline-state/scripts/update.py",
         "add_steps": ".gigacode/skills/pipeline-state/scripts/add_steps.py",
-        "record_gate": ".gigacode/skills/pipeline-state/scripts/record_gate.py"
+        "record_gate": ".gigacode/skills/pipeline-state/scripts/record_gate.py",
+      "archive": ".gigacode/skills/pipeline-state/scripts/archive.py"
       }
     },
 

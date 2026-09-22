@@ -37,6 +37,7 @@ from _project import (  # noqa: E402
     GROUND,
     approval_path,
     approvals_dir,
+    archive_docs_dir,
     archived_dir,
     docs_base,
     feature_docs_dir,
@@ -129,3 +130,26 @@ def resolve_skill(project, explicit=None) -> str:
     except Exception:
         pass
     return DEFAULT_SKILL
+
+
+# ── Каталог доков задачи ─────────────────────────────────────────────────────────────
+def task_docs_dir(project, skill: str, feature: str) -> Path:
+    """Каталог артефактов задачи: у фикса — <docs>/<стори>/fixes/<баг>, иначе <docs>/<feature>.
+
+    Единая реализация: этим резолвером пользуются и гейт артефактов при закрытии шага
+    (update._docs_dir_for), и архивация (archive.py). Копия в каждом вызывающем разошлась бы
+    молча — ровно тот класс, из-за которого docs-резолвер уже сводили в одну точку (см. шапку
+    модуля). Стори читается из манифеста активной фичи (inputs.story, с dual-read в legacy
+    sources.story) — тем же config_get, что у хуков.
+    """
+    project = Path(project)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "feature-pipeline" / "scripts"))
+    import skill_paths as SP  # noqa: E402
+    if skill != "forgefix":
+        return SP.feature_docs_dir(project) / feature
+    try:
+        import risk_ladder as R  # hooks/ уже в sys.path (см. выше)
+        story = R.config_get(project, "inputs.story", skill=skill, feature=feature)
+    except Exception:  # noqa: BLE001 — конфиг не резолвится: фикс без известной стори
+        story = None
+    return SP.fix_docs_dir(project, feature, story)

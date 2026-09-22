@@ -784,6 +784,29 @@
       ]
     },
     {
+      "id": "spec.master_source",
+      "file": "pipeline",
+      "path": "spec.master_source",
+      "type": "enum",
+      "enum": [
+        "delta-first",
+        "master-first"
+      ],
+      "default": "delta-first",
+      "category": "docs",
+      "sensitive": false,
+      "title": "Кто первичен — дельта или мастер",
+      "description": "delta-first (дефолт) — мастер собирается ИЗ дельт фич: /forge-merge дописывает в него требования. master-first — мастер пишет аналитик ДО sdd.md, и дельта выделяется из мастера; тогда /forge-merge в мастер не пишет, а СВЕРЯЕТ (план слияния обязан быть пустым, любое расхождение — exit 3). Дописать мастер в этом режиме можно только явным --allow-merge",
+      "aliases": [
+        "мастер первичен",
+        "сверка спеки",
+        "master first",
+        "master source",
+        "кто первичен",
+        "verify spec"
+      ]
+    },
+    {
       "id": "adr.enabled",
       "file": "pipeline",
       "path": "adr.enabled",

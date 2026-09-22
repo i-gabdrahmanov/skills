@@ -269,7 +269,9 @@ python <project>/.gigacode/skills/pipeline-state/scripts/read.py \
 - **Не делает merge'ов параллельных запусков.** Один пайплайн — один state.
   Параллельные запуски одного скилла на одном проекте не поддерживаются.
 - **Не чистит старые state'ы.** Старые архивы накапливаются в
-  `ground/statements/<skill>/archived/`, пользователь чистит вручную.
+  `ground/statements/<skill>/archived/`, пользователь чистит вручную. Архивация
+  (`scripts/archive.py`) убирает только ДОКИ завершённых строек — стейт она не трогает: писать
+  в control-plane имеют право лишь `update.py`/`record_*`.
 
 ## Скрипты
 
@@ -281,6 +283,7 @@ python <project>/.gigacode/skills/pipeline-state/scripts/read.py \
 | `scripts/read.py` | Прочитать state, выдать summary или выжимку шага |
 | `scripts/override_judge.py` | Ручной пропуск гейта судьи (`--judge … --feature … --reason …`) — единственный путь закрыть шаг, заблокированный отсутствующим/проваленным вердиктом `required_judges`. **Создание override — R4**: `gate-guard` пропустит команду только при согласии под ключом `gate-override-<judge>` (`record_approval.py`), зафиксированном после ЯВНОГО «да» пользователя (молча — exit 2); `--list`/`--remove` свободны |
 | `scripts/checkpoint.py` | Git-чекпойнты worktree на границах шагов (`refs/forge/checkpoints/<feature>/<step-id>`; ветки/HEAD/индекс не трогаются). Пишутся автоматически: `update.py` на закрытии шага, `init.py` — baseline. Точки восстановления для `rollback.py` |
+| `scripts/archive.py` | Архив доков ЗАВЕРШЁННЫХ строек: `<docs_base>/feature-pipeline/<слаг>` → `<docs_base>/archive/<слаг>` (у фикса путь `<стори>/fixes/<баг>` сохраняется), рядом — `archive-meta.json`. Подкоманды `status`/`put`/`list`/`restore`. Обычно вызывается сам, по успеху `/forge-merge`; вручную — `/forge-archive`. Гейты: стройка завершена (все шаги терминальны И финальный шаг фазы закрыт `completed`), внутри каталога нет живых прогонов, дельта сведена с мастером. Снимаются только `--force --reason` |
 | `scripts/rollback.py` | Откат к шагу X («X переделывается»): X и всё после → `pending`, evidence — в архив `rollbacks/<ts>/` (повторное закрытие по старым доказательствам блокируется), код — точечный `git restore` на чекпойнт по скоупу журнала `file-journal`. **Запуск — R4**: approval-маркер `rollback-<feature>-<to-step>` (одноразовый, потребляется откатом); `--dry-run`/`--list` свободны. См. `feature-pipeline/references/rollback.md` |
 
 См. `scripts/<name>.py --help` для деталей.

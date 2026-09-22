@@ -294,6 +294,18 @@ git-история и связанные `tasks/`.
   `references/phases/<phase>.md`. Дрейф пинится `test_phase_briefs.py`.
 - [BR-15] `GIGACODE_RUN_ID` (env) → стабильный `run-<id>` независимо от `session_id`
   («один прогон = одна папка»).
+- [BR-16] `spec.master_source`: `delta-first` (дефолт — мастер собирается ИЗ дельт) |
+  `master-first` (мастер ведёт аналитик, `sdd.md` выделяется ИЗ него). В `master-first`
+  `/forge-merge` в мастер НЕ пишет, а сверяет: план слияния обязан быть пустым, любая операция
+  `+`/`~` — расхождение и `exit 3`. Эскейп на одну команду — `--allow-merge`.
+- [BR-17] Доки завершённой стройки уезжают в `<docs_base>/archive/<слаг>` по успеху
+  `/forge-merge` (`--no-archive` отключает; ручной разбор — `/forge-archive`). Архив —
+  **сиблинг** `feature-pipeline/`, а не папка внутри: дельты ищутся обходом
+  `<docs_base>/feature-pipeline/` (`spec_cli._features`), и архив внутри него продолжал бы
+  попадать в `/forge-spec status`. Стейт (`ground/statements/…`) архивация не трогает —
+  писать в control-plane вправе только `update.py`/`record_*` (BLOCKER-1). «Готово»
+  вычисляется (`read.summarize` + финальный шаг фазы закрыт `completed`): persisted-поля
+  «прогон завершён» в манифесте нет.
 
 ### BLOCKER и Thrust (компактно)
 
@@ -349,6 +361,8 @@ git-история и связанные `tasks/`.
   отчёты (fail-closed без них), ≥1 выполненный тест, зелёных НОЛЬ.
 - [DVT-06] Baseline зелёного ДО разработки: `module_tests.py snapshot --from-taskplan` пишет
   `test-baseline.json`; `check_regression` блокирует ТОЛЬКО новые регрессии.
+- [DVT-08] Требование spec-judge «в `docs/feature-pipeline/` только текущая фича» стало
+  выполнимым: доки прошлых фич убирает архивация (BR-17), архив-сиблинг в проверку не входит.
 - [DVT-07] Архитектурный граунд + гейт межмодульных зависимостей:
   `check_architecture.py --emit-ground` строит `architecture-ground.json`;
   `check_module_deps` ловит НОВЫЕ межмодульные зависимости. Политика

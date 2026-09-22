@@ -34,7 +34,8 @@ forge/
 │   ├── forge-fix.md        # /forge-fix   → forgefix (минорный дефект, спека правится точечно)
 │   ├── forge-lite.md       # /forge-lite  → forgelite (исполнение готовой задачи)
 │   ├── forge-spec.md       # /forge-spec  → требования-мастер: status/diff/merge/remove/check
-│   └── forge-merge.md      # /forge-merge → ярлык слияния дельты в мастер
+│   ├── forge-merge.md      # /forge-merge → свести дельту с мастером и убрать доки в архив
+│   └── forge-archive.md    # /forge-archive → архив доков готовых строек: status/put/list/restore
 ├── skills/
 │   ├── 20 скиллов/SKILL.md        # router, feature-pipeline, forgelite, forgefix, sdd, tech-design, …
 │   ├── SKILLS-REGISTRY.md         # реестр с owner/validity/evals
@@ -59,7 +60,8 @@ forge/
   `pipeline-state`, `brd-grounder`, `brd-interview`, `business-requirements`, `defect-analyzer`,
   `bugfix-developer`, `minor-defect-fix`, `config-helper`, `harness-verifier`).
   Полный реестр с owner/validity/evals — [`SKILLS-REGISTRY.md`](SKILLS-REGISTRY.md).
-- **Команды:** 5 (`/forge`, `/forge-fix`, `/forge-lite`, `/forge-spec`, `/forge-merge`).
+- **Команды:** 6 (`/forge`, `/forge-fix`, `/forge-lite`, `/forge-spec`, `/forge-merge`,
+  `/forge-archive`).
 - **Хуки:** 15 (`gate-guard`, `tdd-guard`, `eval-guard`, `sod-enforcer`, `inline-phase-guard`,
   `state-write-guard`, `pii-boundary`, `destructive-blocker`, `fork-syntax-guard`,
   `grounding-evidence`, `prompt-guard`, `file-journal`, `state-recorder`, `context-injector`,
