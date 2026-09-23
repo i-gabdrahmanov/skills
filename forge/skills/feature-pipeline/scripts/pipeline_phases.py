@@ -109,6 +109,61 @@ def is_container_step(step_id: str) -> bool:
     return step_id in MAIN_PHASES
 
 
+# ── Готовность шага по depends_on (ЕДИНЫЙ предикат) ───────────────────────────────────
+# Раньше «шаг готов?» считалось в двух местах по РАЗНЫМ правилам, и на висячей зависимости
+# они давали противоположные ответы:
+#   • read.summarize — `all(d in resolved_ids)`: несуществующий шаг никогда не попадёт в
+#     resolved_ids, значит зависящий от него шаг не готов НИКОГДА (пайплайн вставал молча);
+#   • preflight-validate — `if dep and dep.status not in (...)`: несуществующий шаг просто
+#     пропускался, то есть тот же шаг объявлялся готовым.
+# Висячая зависимость — не теория: документированный путь quality.tdd:false не заводит
+# 04-test-<taskId>, а 04-build-<taskId> по контракту манифеста от него зависит.
+# Семантика здесь фейл-клоузд (как у read): нет шага — зависимость НЕ удовлетворена.
+# Сам источник таких зависимостей закрыт валидацией на записи (add_steps/init), это пояс.
+_RESOLVED_STATUSES = ("completed", "skipped")
+
+
+def deps_satisfied(step: dict, status_by_id: dict) -> tuple:
+    """(готов, [причины]) для шага по его depends_on.
+
+    status_by_id: {step_id: status} ВСЕХ шагов манифеста. Причина формулируется так, чтобы
+    её можно было показать как есть: "'04-test-T1' (нет такого шага в манифесте)".
+    """
+    if not isinstance(step, dict):
+        return False, ["шаг не является объектом"]
+    missing = []
+    for dep in step.get("depends_on") or []:
+        if dep not in status_by_id:
+            missing.append(f"'{dep}' (нет такого шага в манифесте)")
+        elif status_by_id.get(dep) not in _RESOLVED_STATUSES:
+            missing.append(f"'{dep}' (status={status_by_id.get(dep, 'unknown')})")
+    return (not missing), missing
+
+
+def unknown_deps(steps: list, known_ids=None) -> list:
+    """Зависимости на несуществующие шаги: [(step_id, dep_id), ...].
+
+    ЕДИНЫЙ валидатор для ВСЕХ трёх писателей манифеста (feature-pipeline/add_steps.py,
+    pipeline-state/add_steps.py, init.py). Битую ссылку ловим в момент объявления, а не при
+    чтении — так же, как оркестраторы задач валидируют DAG на парсинге, вместо того чтобы
+    молча пропускать шаг.
+
+    known_ids: id, которые СЧИТАЮТСЯ существующими помимо самих `steps` — для add_steps это
+    шаги, уже лежащие в манифесте (шаги одной пачки при этом могут ссылаться друг на друга).
+    None → известны только id из `steps` (случай init.py: манифест создаётся с нуля).
+    """
+    known = set(known_ids or ())
+    known |= {s.get("id") for s in steps if isinstance(s, dict) and s.get("id")}
+    out = []
+    for s in steps:
+        if not isinstance(s, dict):
+            continue
+        for dep in s.get("depends_on") or []:
+            if dep not in known:
+                out.append((s.get("id"), dep))
+    return out
+
+
 # ── Соглашения об id динамических шагов (ЕДИНЫЙ источник; копии в хуках пинит ───────────
 #    test_phase_consistency). Раньше эти префиксы были «магическими строками» в eval-guard,
 #    tdd-guard, update._check_subagent_origin, preflight — переименуй в одном месте,

@@ -94,6 +94,20 @@ def main():
         manifest = json.load(f)
 
     existing_ids = {s["id"] for s in manifest.get("steps", [])}
+
+    # Висячий depends_on — отказ на записи (паритет с feature-pipeline/add_steps.py и init.py).
+    # Шаг со ссылкой на несуществующий id не становится готовым никогда, и читатели теперь
+    # fail-closed: пайплайн встанет, а причина будет видна только в blocked_by_unknown_deps.
+    # Правило было заведено в два писателя из трёх — этот оставался дырой.
+    _known = existing_ids | {s.get("id") for s in steps_data if isinstance(s, dict)}
+    _bad = [f"'{s.get('id')}' -> '{d}'" for s in steps_data if isinstance(s, dict)
+            for d in (s.get("depends_on") or []) if d not in _known]
+    if _bad:
+        print(f"ERROR: depends_on ссылается на несуществующие шаги: {', '.join(_bad)}. "
+              f"Заведи недостающий шаг в этом же вызове или убери зависимость.",
+              file=sys.stderr)
+        sys.exit(2)
+
     added, skipped = [], []
     for s in steps_data:
         if "id" not in s:
@@ -129,12 +143,15 @@ def main():
         # Синхронизировать нечего: фазовое состояние выводится из манифеста
         # (pipeline_phases.live_state), кэша gate.json на диске больше нет.
 
+    # `gate_synced` осталось от кэша gate.json, которого больше нет: переменную удалили, а
+    # ссылку в выводе — нет. NameError падал на КАЖДОМ вызове, причём ПОСЛЕ записи манифеста:
+    # вызывающий видел exit 1 «не получилось», а шаги уже были записаны. Тестов на этот файл
+    # нет ни одного, поэтому зелёный прогон дефект не показывал.
     print(json.dumps({
         "status": "updated",
         "added": added,
         "skipped_existing": skipped,
         "steps_total": len(manifest["steps"]),
-        "gate_synced": gate_synced,
     }, ensure_ascii=False))
 
 

@@ -84,49 +84,53 @@ description: >
 
 ## 2. Делегирование
 
+> **⚠️ Почему роутер пишет ТОЛЬКО project-wide конфиг.** `inputs.*`/`decisions.*` живут в
+> `manifest.json` и требуют, чтобы он уже существовал (без него `set` вернёт exit 3), а
+> `init.py` роутер не вызывает — его зовёт бриф ветки. Значит разделение одно:
+> **project-wide — в роутере, per-feature — в брифе ветки после `init.py`**.
+>
+> **Project-wide пиши ДО `init.py`.** `policy.json` пишется всегда, но прогон фиксирует
+> политику на старте (`init.py` кладёт снимок в манифест) и дальше идёт по ней. Запись после
+> `init.py` пройдёт с exit 0 и предупреждением «прогон идёт по снимку» — настройка доедет
+> только до следующего прогона. Применить к идущему — `config.py repin --skill S --feature F`.
+> Сверяй exit-код каждого `set`: 0 = записано, 3 = конфига нет (вернись к §0).
+
+
 ### Выбран **fix**
-1. Выстави fix-конфиг (один общий `.gigacode`; `--project` ДО `set`; `auto_max_risk` sensitive → `--confirm`).
-   **`inputs.mode` + `decisions.mode_task` — записать первыми** (артефакт решения о пути и о том,
-   ДЛЯ КАКОЙ задачи оно принято; universal-режим fail-closed). Per-feature поля (`inputs.*`/
-   `decisions.*`) идут в `manifest.json` активной фичи; project-wide (`quality.*`) — в `policy.json`:
+1. Выстави **project-wide** часть конфига — только её и только ЗДЕСЬ (см. рамку ниже):
    ```
-   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set inputs.mode fix --skill forgefix --feature <KEY|slug>
-   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set decisions.mode_task <KEY|slug> --skill forgefix --feature <KEY|slug>
-   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set decisions.auto_max_risk R2 --confirm --skill forgefix --feature <KEY|slug>
-   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set decisions.criticality medium --skill forgefix --feature <KEY|slug>
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set quality.eval_enabled false
    ```
-2. Пользователь назвал стори («баг по STOR-100») — запиши сразу, это снимет вопрос на `fix-intake`:
-   ```
-   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set inputs.story <STORY> --skill forgefix --feature <KEY|slug>
-   ```
-   Сверяй exit-код каждого `set`: 0 = записано, 3 = конфига нет (вернись к §0 и инициализируй).
-   `update.py` не закроет `fix-intake` с незаписанным `inputs.story` — молча потерять ответ нельзя.
-3. Прочитай и строго следуй: `read_file("<project>/.gigacode/skills/forgefix/SKILL.md")`.
-   Дальше веди дефект по нему (стейт в namespace `forgefix`). У fix два обязательных вопроса
+2. Прочитай и строго следуй: `read_file("<project>/.gigacode/skills/forgefix/SKILL.md")`.
+   Дальше веди дефект по нему (стейт в namespace `forgefix`). Per-feature решения
+   (`inputs.mode`, `decisions.mode_task`, `decisions.criticality`, `decisions.auto_max_risk`,
+   `inputs.story`) пишет бриф ветки — там они идут ПОСЛЕ `init.py`, иначе `config.py` их не
+   примет. Пользователь уже назвал стори («баг по STOR-100») — передай её в бриф, он запишет
+   `inputs.story` и снимет вопрос на `fix-intake`. У fix два обязательных вопроса
    пользователю: стори бага (§2.1) и утверждение мини-плана фикса (§3.1) — оба форсятся хуками.
 
 ### Выбран **lite**
-1. Выстави lite-конфиг (те же правила вызова config.py):
+1. Выстави **project-wide** часть конфига — только её и только ЗДЕСЬ (см. рамку ниже):
    ```
-   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set inputs.mode lite --skill forgelite --feature <JIRA-KEY>
-   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set decisions.mode_task <JIRA-KEY> --skill forgelite --feature <JIRA-KEY>
-   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set decisions.auto_max_risk R2 --confirm --skill forgelite --feature <JIRA-KEY>
-   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set decisions.criticality medium --skill forgelite --feature <JIRA-KEY>
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set quality.eval_enabled false
    ```
-   (R2 → код/тесты/доки идут авто; TDD/SoD держат хуки. eval off — у lite нет eval-plan-фазы.)
+   (eval off — у lite нет eval-plan-фазы.)
 2. Прочитай и строго следуй: `read_file("<project>/.gigacode/skills/forgelite/SKILL.md")`.
-   Дальше веди задачу по нему (стейт в namespace `forgelite`).
+   Дальше веди задачу по нему (стейт в namespace `forgelite`). Per-feature решения
+   (`inputs.mode`, `decisions.mode_task`, `decisions.criticality`, `decisions.auto_max_risk` →
+   R2: код/тесты/доки идут авто, TDD/SoD держат хуки) пишет бриф ветки ПОСЛЕ `init.py`.
 
 ### Выбран **full**
-1. Запиши путь и не переопределяй autonomy — у full свой гейт критичности (после SDD):
+1. Project-wide конфиг у full не переопределяем (eval-plan-фаза нужна, autonomy — свой гейт
+   критичности после SDD), поэтому роутеру здесь писать нечего — сразу делегируй.
+2. Прочитай и строго следуй: `read_file("<project>/.gigacode/skills/feature-pipeline/SKILL.md")`.
+   Дальше веди фичу по нему (стейт в namespace `feature-pipeline`). Путь прогона
+   (`inputs.mode full` + `decisions.mode_task <KEY|slug>`) записывается ПОСЛЕ `init.py`
+   (§0.5 брифа) — до манифеста `config.py` их не примет:
    ```
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set inputs.mode full --skill feature-pipeline --feature <KEY|slug>
    python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set decisions.mode_task <KEY|slug> --skill feature-pipeline --feature <KEY|slug>
    ```
-2. Прочитай и строго следуй: `read_file("<project>/.gigacode/skills/feature-pipeline/SKILL.md")`.
-   Дальше веди фичу по нему (стейт в namespace `feature-pipeline`).
 
 ## 3. Границы роутера
 - Роутер НЕ дублирует фазы, НЕ пишет код, НЕ ходит в Jira/Bitbucket. Только: классифицировать →

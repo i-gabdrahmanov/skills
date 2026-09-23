@@ -89,11 +89,16 @@ def main() -> int:
         rc, j, out = run(_project(td, cfg))
         check("jira off → 03-jira skipped", "03-jira" in _skipped(j) and "03-jira" not in _ids(j), out)
 
-    # 3. quality.tdd=false → 04-tdd в skipped
+    # 3. quality.tdd=false → 04-tdd ОСТАЁТСЯ активной.
+    #    Регресс: раньше фаза была завязана на enabled_by="quality.tdd" и при tdd:false
+    #    вырезалась целиком — оркестратор уходил с дизайна прямо в Verify, ни разу не
+    #    написав код. `quality.tdd` — ручка про ПОРЯДОК (RED до кода), а не про наличие
+    #    фазы Build: её форсят add_steps (не заводит 04-test-*) и tdd-guard.
     with tempfile.TemporaryDirectory() as td:
         cfg = {"jira": {"enabled": True}, "quality": {"tdd": False, "eval_enabled": True}}
         rc, j, out = run(_project(td, cfg))
-        check("tdd off → 04-tdd skipped", "04-tdd" in _skipped(j), out)
+        check("tdd off → 04-tdd ВСЁ РАВНО активна (код пишется)",
+              "04-tdd" in _ids(j) and "04-tdd" not in _skipped(j), out)
 
     # 4. eval_enabled=false → 02-eval-plan в skipped
     with tempfile.TemporaryDirectory() as td:

@@ -51,7 +51,10 @@ commit/push/PR/отчёт в Jira делает пользователь сам.
   пользователя короткий slug вида `fix-npe-empty-email` и используй его.
 - **Стори, к которой относится баг** (`inputs.story`) — спрашивается на `fix-intake` (§2).
   Фикс не заводит новую фичу: он живёт ВНУТРИ папки своей стори.
-- Если тебя вызвал роутер — конфиг уже выставлен. Автономно — выставь сам (§1.1).
+- Роутер выставляет ТОЛЬКО project-wide часть (`quality.eval_enabled=false`). Per-feature
+  решения (`inputs.mode`, `decisions.mode_task`, `decisions.criticality`,
+  `decisions.auto_max_risk`, `inputs.story`) пишешь ТЫ — в §1.1 шаг 3, после `init.py`.
+  Без `decisions.criticality` gate-guard заблокирует любое R2+ действие.
 
 > **Два обязательных вопроса пользователю на этом пути** (оба форсятся хуками, не «по совести»):
 > **(1)** к какой стори относится баг — `fix-diag` не сможет писать без `inputs.story`;
@@ -92,19 +95,32 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config
 `manifest.json` (per-feature `inputs.*`/`decisions.*`) любой `config.py set` ниже вернёт exit 3,
 и решение (в т.ч. `inputs.story`) не запишется — прогон пойдёт дальше с потерянным ответом.
 
-Заведи стейт (namespace forgefix):
+**Порядок важен.** `inputs.*`/`decisions.*` требуют уже существующего `manifest.json`
+(без него exit 3), а project-wide `quality.*` нужно записать ДО `init.py`, потому что прогон
+фиксирует политику на старте и дальше идёт по своему снимку. Запись `quality.*` после
+`init.py` пройдёт (exit 0) с предупреждением «прогон идёт по снимку» и применится только со
+следующего прогона; применить к идущему — `config.py repin --skill <S> --feature <F>`.
+Порядок: project-wide → `init.py` → per-feature. Если конфиг пришёл из роутера — шаг 1
+он уже сделал, начинай с шага 2.
+
+**Шаг 1 — project-wide (`quality.*` → `policy.json`), ДО `init.py`:**
+```
+python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set quality.eval_enabled false
+```
+
+**Шаг 2 — заведи стейт (namespace forgefix):**
 ```
 python3 <project>/.gigacode/skills/pipeline-state/scripts/init.py --project <toplevel> --skill forgefix --feature <KEY|slug> --steps @<project>/.gigacode/skills/forgefix/references/manifest-steps.json
 ```
-Автономный запуск (не из роутера) — выставь fix-конфиг (`--project` ДО подкоманды `set`;
-`auto_max_risk` — sensitive, нужен `--confirm`; per-feature поля идут в `manifest.json` —
-передай `--skill`/`--feature`, project-wide (`quality.*`) — без них, в `policy.json`):
+
+**Шаг 3 — per-feature (`inputs.*`/`decisions.*` → `manifest.json`), ПОСЛЕ `init.py`**
+(`--project` ДО подкоманды `set`; `--skill`/`--feature` обязательны; `auto_max_risk` —
+sensitive, нужен `--confirm`):
 ```
 python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set inputs.mode fix --skill forgefix --feature <KEY|slug>
 python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set decisions.mode_task <KEY|slug> --skill forgefix --feature <KEY|slug>
 python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set decisions.auto_max_risk R2 --confirm --skill forgefix --feature <KEY|slug>
 python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set decisions.criticality medium --skill forgefix --feature <KEY|slug>
-python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set quality.eval_enabled false
 ```
 Закрытие шага — только после прохождения гейта:
 ```

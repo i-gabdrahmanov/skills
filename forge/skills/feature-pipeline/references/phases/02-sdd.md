@@ -101,10 +101,14 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py sdd <sl
 После ответа **запиши критичность скриптом** — он атомарно проставит И `criticality`, И производный
 `auto_max_risk` по карте (`low→R2 / medium→R1 / high→R0`). **Не правь `pipeline.json` руками**:
 ```bash
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/set_criticality.py --criticality <low|medium|high>
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/set_criticality.py \
+    --criticality <low|medium|high> --skill feature-pipeline --feature <slug> --project-root <project>
 ```
-Только теперь иди дальше — `gate-guard` читает `autonomy.auto_max_risk` из конфига и применяет порог
-per-feature.
+`--skill`/`--feature` ОБЯЗАТЕЛЬНЫ (без них argparse падает): решение per-feature, и скрипт пишет
+его в `manifest.json` именно этой фичи. Ту же полную форму печатает `gate-guard` в тексте отказа.
+
+Только теперь иди дальше — `gate-guard` читает `decisions.auto_max_risk` из манифеста активной
+фичи и применяет порог per-feature.
 
 После утверждения обнови `02-sdd` (только при `pass` execution-gate):
 ```bash

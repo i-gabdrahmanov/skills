@@ -45,8 +45,11 @@ description: >
 
 - Java/Spring (gradle или maven). MCP **Atlassian (Jira)** подключён (иначе стоп).
 - cwd = корень репо кода (`<toplevel>`). Харнес развёрнут; preflight должен быть зелёным.
-- Если тебя вызвал роутер — критичность/конфиг уже выставлены (`decisions.auto_max_risk=R2`,
-  `quality.eval_enabled=false`). Если запускаешься автономно — проверь, что они выставлены (см. §1.1).
+- Роутер выставляет ТОЛЬКО project-wide часть (`quality.eval_enabled=false`). Per-feature
+  решения (`inputs.mode`, `decisions.mode_task`, `decisions.criticality`,
+  `decisions.auto_max_risk=R2`) пишешь ТЫ — в §1.1 шаг 3, после `init.py`: до манифеста
+  `config.py` их не примет. Не пропускай этот шаг: без `decisions.criticality` gate-guard
+  заблокирует любое R2+ действие, то есть любую запись в `src/main`.
 - Ключ задачи (`[A-Z]+-\d+`) не передан — спроси один раз, провалидируй.
 
 ## 1. Архитектура (кто что делает)
@@ -86,17 +89,33 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config
 `manifest.json` (per-feature `inputs.*`/`decisions.*`) любой `config.py set` ниже вернёт exit 3,
 и решения прогона (в т.ч. `inputs.spec`) молча не запишутся.
 
-Заведи стейт (namespace forgelite):
+**Порядок важен.** `inputs.*`/`decisions.*` требуют уже существующего `manifest.json`
+(без него exit 3), а project-wide `quality.*` нужно записать ДО `init.py`, потому что прогон
+фиксирует политику на старте и дальше идёт по своему снимку. Запись `quality.*` после
+`init.py` пройдёт (exit 0) с предупреждением «прогон идёт по снимку» и применится только со
+следующего прогона; применить к идущему — `config.py repin --skill <S> --feature <F>`.
+Порядок: project-wide → `init.py` → per-feature. Если конфиг пришёл из роутера — шаг 1
+он уже сделал, начинай с шага 2.
+
+**Шаг 1 — project-wide (`quality.*` → `policy.json`), ДО `init.py`** (у lite нет фазы
+eval-plan):
+```
+python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set quality.eval_enabled false
+```
+
+**Шаг 2 — заведи стейт (namespace forgelite):**
 ```
 python3 <project>/.gigacode/skills/pipeline-state/scripts/init.py --project <toplevel> --skill forgelite --feature <JIRA-KEY> --steps @<project>/.gigacode/skills/forgelite/references/manifest-steps.json
 ```
-Автономный запуск (не из роутера) — выставь lite-конфиг через config-helper (`--project` идёт
-ДО подкоманды `set`; `auto_max_risk` — sensitive, нужен `--confirm`; per-feature поля идут в
-`manifest.json` — передай `--skill`/`--feature`, project-wide (`quality.*`) — без них, в `policy.json`):
+
+**Шаг 3 — per-feature (`inputs.*`/`decisions.*` → `manifest.json`), ПОСЛЕ `init.py`**
+(`--project` ДО подкоманды `set`; `--skill`/`--feature` обязательны; `auto_max_risk` —
+sensitive, нужен `--confirm`):
 ```
+python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set inputs.mode lite --skill forgelite --feature <JIRA-KEY>
+python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set decisions.mode_task <JIRA-KEY> --skill forgelite --feature <JIRA-KEY>
 python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set decisions.auto_max_risk R2 --confirm --skill forgelite --feature <JIRA-KEY>
 python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set decisions.criticality medium --skill forgelite --feature <JIRA-KEY>
-python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set quality.eval_enabled false
 ```
 Закрытие шага — только после прохождения гейта:
 ```

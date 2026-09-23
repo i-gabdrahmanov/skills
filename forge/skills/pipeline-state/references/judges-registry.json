@@ -16,7 +16,7 @@
     "sdd-judge":      {"phase": "sdd",      "kind": "deterministic", "contract": "sdd/scripts/check_sdd_doc.py"},
     "design-judge":   {"phase": "design",   "kind": "deterministic", "contract": "check_taskplan.py + check_sdd.py (link)"},
     "eval-judge":     {"phase": "eval",     "kind": "hybrid",        "contract": "subagent-prompts.md §7.1"},
-    "red-judge":      {"phase": "red",      "kind": "pass-through",  "contract": "subagent-prompts.md §7.2"},
+    "red-judge":      {"phase": "red",      "kind": "hybrid",        "contract": "subagent-prompts.md §7.2 (ингест --from-output) + check_tests_red.py (пол)"},
     "build-judge":    {"phase": "build",    "kind": "hybrid",        "contract": "subagent-prompts.md §7.3"},
     "reuse-judge":    {"phase": "reuse",    "kind": "hybrid",        "contract": "subagent-prompts.md §7.7"},
     "coverage-judge": {"phase": "coverage", "kind": "deterministic", "contract": "check_coverage.py"},

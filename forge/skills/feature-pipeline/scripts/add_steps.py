@@ -67,11 +67,16 @@ _guess_phase = pp.guess_phase
 _TASK_STEP_PREFIXES = ("04-test-", "04-build-")
 _RESERVED_TASK_SUFFIXES = {"task", "tasks", "taskplan", "task-plan", ""}
 
-# Формат task-id: латиница, старт с буквы, дальше буквы/цифры/-/_; длина 3..64.
+# Формат task-id: латиница, старт с буквы, дальше буквы/цифры/-/_; длина 2..64.
 # Покрывает шаблоны: T1 / T-12 / task-foo / KIDPPRB-9254-1. Точка как разделитель (1.2.3)
 # отсечена намеренно — task-id не иерархический, и точка ломает glob/grep по манифесту.
+# Нижняя граница была 3, и это отбивало РОВНО тот id, который во всех доках служит
+# каноническим примером: `T1` (task-plan-schema.md, 🚨-баннер 02-design.md, докстринг этого
+# файла). Любая фича с задачами T1/T2 падала на add_steps с exit 2 «недопустимая длина».
+# Граница нужна не против коротких id, а против вырожденных — а вырожденные («task»,
+# пустой суффикс) ловит _RESERVED_TASK_SUFFIXES отдельно и по смыслу, а не по длине.
 _TASK_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
-_TASK_ID_MIN_LEN = 3
+_TASK_ID_MIN_LEN = 2
 _TASK_ID_MAX_LEN = 64
 
 
@@ -119,6 +124,31 @@ def _validate_step_task_ids(steps: list) -> str | None:
     return None
 
 
+def _validate_depends_on(steps: list, manifest: dict) -> str | None:
+    """Зависимость на НЕСУЩЕСТВУЮЩИЙ шаг — отказ на записи. Причина или None.
+
+    Ловим в момент объявления, а не при чтении. Висячая зависимость не падает и не
+    диагностируется сама: шаг просто никогда не становится готовым, и пайплайн встаёт молча
+    (`next_runnable` пуст, а причина ниоткуда не видна). Штатный источник таких ссылок —
+    выключённые конфигом шаги: при `quality.tdd:false` не заводится `04-test-<taskId>`,
+    при `quality.eval_enabled:false` — `02-eval-plan`, а зависящий от них `04-build-<taskId>`
+    по контракту манифеста их перечисляет. Режим `--from-task-plan` строит зависимости сам и
+    такого не делает; проверка нужна для вызовов с ручным `--steps`.
+
+    Известные id = уже лежащие в манифесте ∪ добавляемые этим вызовом (шаги одной пачки
+    могут ссылаться друг на друга).
+    """
+    existing = {s.get("id") for s in (manifest.get("steps") or []) if isinstance(s, dict)}
+    bad = [f"'{sid}' → '{dep}'" for sid, dep in pp.unknown_deps(steps, existing)]
+    if bad:
+        return (f"depends_on ссылается на несуществующие шаги: {', '.join(bad)}. "
+                f"Такой шаг не станет готовым никогда — пайплайн встанет молча. "
+                f"Либо заведи недостающий шаг в этом же вызове, либо убери зависимость "
+                f"(шаг выключен конфигом — напр. 04-test-* при quality.tdd:false, "
+                f"02-eval-plan при quality.eval_enabled:false).")
+    return None
+
+
 def _validate_step_task_plan(steps: list, plan: dict, feature: str = "") -> str | None:
     """Сверка суффиксов id задачи с task-plan (если передан). Возвращает причину или None.
 
@@ -135,6 +165,98 @@ def _validate_step_task_plan(steps: list, plan: dict, feature: str = "") -> str 
             return (f"Task '{suf}' not found in task-plan{feat_suffix}; "
                     f"available: {avail}")
     return None
+
+
+EVAL_STEP = "02-eval-plan"
+VERIFY_STEP = "05-tests"
+DESIGN_STEP = "02-design"
+
+
+def _load_quality(project_root: Path) -> dict:
+    """quality-секция ЭФФЕКТИВНОГО конфига прогона (снимок политики поверх policy.json).
+
+    Именно эффективного: набор шагов обязан соответствовать политике, под которой прогон
+    стартовал, иначе правка policy.json посреди прогона завела бы RED-шаги, которых гейты
+    этого прогона не ждут.
+    """
+    try:
+        sys.path.append(str(Path(__file__).resolve().parents[3] / "hooks"))
+        from _config_loader import load_project_config
+        cfg = load_project_config(project_root) or {}
+    except Exception:  # noqa: BLE001 — без конфига берём дефолты реестра
+        cfg = {}
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def derive_steps_from_plan(plan: dict, cfg: dict) -> list:
+    """task-plan.json + конфиг → шаги фаз Eval/Build. Это ЕДИНСТВЕННЫЙ способ их заводить.
+
+    ЗАЧЕМ. Раньше набор шагов диктовался прозой брифа: «добавь 02-eval-plan, 04-test-<taskId>
+    (при quality.tdd:true) и 04-build-<taskId> (depends_on 04-test-<taskId> и 02-eval-plan)».
+    Две ручки конфига (quality.tdd, quality.eval_enabled) при этом влияли на НАЛИЧИЕ шага, но
+    не на зависимость от него — то есть документированный путь `quality.tdd:false` предписывал
+    не заводить `04-test-<taskId>` и одновременно ссылаться на него из `04-build-<taskId>`.
+    Получался шаг, который не станет готовым никогда. Здесь ручки читаются один раз и влияют
+    на обе стороны сразу.
+
+    Правила (ровно контракт манифеста SKILL.md, только исполняемый):
+      • 02-eval-plan  — при quality.eval_enabled;
+      • 04-test-<id>  — при quality.tdd, если задача пишет код и не освобождена от тестов
+                        (pipeline_phases.task_is_test_exempt: миграции/DTO/энтити);
+      • 04-build-<id> — всегда; зависит от СУЩЕСТВУЮЩИХ шагов: своего RED (если заведён) и
+                        02-eval-plan (если заведён); иначе — от 02-design.
+
+    Порядок между задачами (task-plan depends_on) в шаги НЕ переносится: контракт манифеста
+    этого не делает, а перенос изменил бы, какие задачи могут идти параллельно. Порядок
+    реализации остаётся в task-plan, где он и описан.
+
+    Регистр task-id сохраняется как в плане — гейты сопоставляют шаг с задачей по суффиксу.
+    """
+    quality = cfg.get("quality") if isinstance(cfg.get("quality"), dict) else {}
+    tdd = quality.get("tdd", True)
+    eval_enabled = quality.get("eval_enabled", True)
+
+    steps: list = []
+    if eval_enabled:
+        steps.append({"id": EVAL_STEP, "title": "Eval-plan generated",
+                      "depends_on": [DESIGN_STEP]})
+
+    for task in (plan.get("tasks") or []):
+        tid = str(task.get("id") or "").strip()
+        if not tid:
+            continue
+        title = str(task.get("title") or "").strip()
+        suffix = f" — {title}" if title else ""
+        needs_red = bool(tdd) and pp.task_touches_code(task) and not pp.task_is_test_exempt(task, cfg)
+        if needs_red:
+            steps.append({"id": f"04-test-{tid}",
+                          "title": f"TDD RED: {tid}{suffix}",
+                          "depends_on": [DESIGN_STEP]})
+        build_deps = ([f"04-test-{tid}"] if needs_red else []) + ([EVAL_STEP] if eval_enabled else [])
+        steps.append({"id": f"04-build-{tid}",
+                      "title": f"TDD GREEN: {tid}{suffix}" if needs_red else f"Build: {tid}{suffix}",
+                      "depends_on": build_deps or [DESIGN_STEP]})
+    return steps
+
+
+def _rewire_verify_step(manifest: dict, derived: list) -> list:
+    """05-tests зависит от ВСЕХ 04-build-*. Возвращает список добавленных зависимостей.
+
+    Единственная правка существующего шага, которую делает этот скрипт, и она вынужденная:
+    контракт манифеста требует такой зависимости, но на init.py задач ещё нет — id build-шагов
+    становятся известны ровно здесь. Без неё 05-tests формально готов сразу после 02-design,
+    то есть полный прогон тестов мог стартовать до того, как код вообще написан.
+    """
+    verify = next((s for s in (manifest.get("steps") or [])
+                   if isinstance(s, dict) and s.get("id") == VERIFY_STEP), None)
+    if verify is None:
+        return []
+    have = list(verify.get("depends_on") or [])
+    added = [s["id"] for s in derived
+             if s["id"].startswith("04-build-") and s["id"] not in have]
+    if added:
+        verify["depends_on"] = have + added
+    return added
 
 
 def _find_task_plan(skill: str, feature: str, project_root: Path) -> tuple[dict | None, bool]:
@@ -157,14 +279,17 @@ def _find_task_plan(skill: str, feature: str, project_root: Path) -> tuple[dict 
     return None, False
 
 
-def add_steps(skill: str, feature: str, steps: list, task_plan: dict | None = None) -> dict:
+def add_steps(skill: str, feature: str, steps: list, task_plan: dict | None = None,
+              project_root: Path | None = None, rewire_verify: bool = False) -> dict:
     """Добавить шаги в manifest.json. Возвращает dict с ключами status/error/...
 
     error_class (если status='error'):
       - 'validation' — task-id неизвестный / малформедный → CLI exit 2
       - 'infra'      — manifest не найден / битый JSON / I/O → CLI exit 1
     """
-    manifest_path = get_manifest_path(skill, feature)
+    # project_root до манифеста доезжает обязательно: раньше --project-root уважался только
+    # при поиске task-plan, а манифест всё равно искался от cwd — флаг работал наполовину.
+    manifest_path = get_manifest_path(skill, feature, project_root)
 
     if not manifest_path.exists():
         return {"status": "error", "error_class": "infra",
@@ -184,6 +309,13 @@ def add_steps(skill: str, feature: str, steps: list, task_plan: dict | None = No
     except (json.JSONDecodeError, OSError) as e:
         return {"status": "error", "error_class": "infra",
                 "error": f"Manifest повреждён ({manifest_path}): {e}"}
+
+    # Проверка depends_on — ПОСЛЕ чтения манифеста: известные id складываются из уже
+    # лежащих шагов и добавляемых сейчас.
+    dep_err = _validate_depends_on(steps, manifest)
+    if dep_err:
+        return {"status": "error", "error_class": "validation", "error": dep_err}
+
     existing_ids = {s["id"] for s in manifest.get("steps", [])}
 
     added = 0
@@ -202,7 +334,9 @@ def add_steps(skill: str, feature: str, steps: list, task_plan: dict | None = No
         manifest["steps"].append(step)
         added += 1
 
-    if added > 0:
+    rewired = _rewire_verify_step(manifest, steps) if rewire_verify else []
+
+    if added > 0 or rewired:
         manifest["last_update"] = __import__("datetime").datetime.now(
             __import__("datetime").timezone.utc
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -221,6 +355,7 @@ def add_steps(skill: str, feature: str, steps: list, task_plan: dict | None = No
             "total": len(manifest["steps"]),
             "current_phase": decision["current_phase"],
             "phase_count": len(decision["phases"]),
+            "verify_depends_on_added": rewired or None,
         }
 
     return {
@@ -238,7 +373,13 @@ if __name__ == "__main__":
     parser.add_argument("--skill", required=True)
     parser.add_argument("--feature", required=True)
     parser.add_argument("--project-root", default=None, help="Корень проекта (по умолчанию cwd)")
-    parser.add_argument("--steps", required=True, help="JSON array string")
+    parser.add_argument("--steps", default=None,
+                        help="JSON array string (взаимоисключающе с --from-task-plan)")
+    parser.add_argument("--from-task-plan", action="store_true",
+                        help="Вывести шаги 02-eval-plan/04-test-*/04-build-* из task-plan.json "
+                             "по quality.tdd и quality.eval_enabled (вместо ручного --steps). "
+                             "Зависимости строятся только на РЕАЛЬНО заводимые шаги, поэтому "
+                             "висячих ссылок не возникает; 05-tests довязывается к build-шагам.")
     parser.add_argument("--task-plan", default=None,
                         help="Путь к task-plan.json — строгая сверка task-id в id шагов (п.9). "
                              "Если не указан, ищем план в docs/<skill>/<feature>/task-plan.json, "
@@ -248,12 +389,23 @@ if __name__ == "__main__":
                         help="Если план не найден — exit 2 вместо warning+продолжения (для CI/гейтов).")
     args = parser.parse_args()
 
-    try:
-        steps = json.loads(args.steps)
-    except json.JSONDecodeError as e:
+    if bool(args.steps) == bool(args.from_task_plan):
         print(json.dumps({"status": "error", "error_class": "infra",
-                          "error": f"Invalid JSON: {e}"}))
+                          "error": "нужен ровно один из --steps / --from-task-plan"},
+                         ensure_ascii=False))
         sys.exit(1)
+
+    root = _resolve_root(args.project_root and Path(args.project_root))
+
+    if args.steps:
+        try:
+            steps = json.loads(args.steps)
+        except json.JSONDecodeError as e:
+            print(json.dumps({"status": "error", "error_class": "infra",
+                              "error": f"Invalid JSON: {e}"}))
+            sys.exit(1)
+    else:
+        steps = None  # соберём ниже, когда резолвнётся task-plan
 
     # Резолв task-plan: явный --task-plan > авто-резолв от --feature.
     plan = None
@@ -276,7 +428,6 @@ if __name__ == "__main__":
         # Авто-резолв: ищем план для текущей фичи. Не нашли → warning в stderr,
         # продолжаем без строгой сверки (п.5: task-plan может генерироваться позже).
         # --strict-task-plan заставляет валиться с exit 2 — для CI/гейта.
-        root = _resolve_root(args.project_root and Path(args.project_root))
         plan, plan_found = _find_task_plan(args.skill, args.feature, root)
         if not plan_found:
             msg = (f"[add_steps] WARNING: task-plan.json для feature '{args.feature}' не найден "
@@ -293,7 +444,23 @@ if __name__ == "__main__":
             # Найден, но нечитаемый — _find_task_plan уже напечатал WARNING.
             pass
 
-    result = add_steps(args.skill, args.feature, steps, task_plan=plan)
+    if args.from_task_plan:
+        if not isinstance(plan, dict) or not plan.get("tasks"):
+            print(json.dumps({"status": "error", "error_class": "validation",
+                              "error": "--from-task-plan: task-plan.json не найден или без "
+                                       "'tasks'. Сначала фаза 02-design (tech-design пишет "
+                                       "task-plan.json), потом заводи шаги."},
+                             ensure_ascii=False))
+            sys.exit(2)
+        steps = derive_steps_from_plan(plan, _load_quality(root))
+        if not steps:
+            print(json.dumps({"status": "error", "error_class": "validation",
+                              "error": "--from-task-plan: из плана не вывелось ни одного шага "
+                                       "(у задач нет id?)"}, ensure_ascii=False))
+            sys.exit(2)
+
+    result = add_steps(args.skill, args.feature, steps, task_plan=plan,
+                       project_root=root, rewire_verify=bool(args.from_task_plan))
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if result["status"] == "ok":
         sys.exit(0)

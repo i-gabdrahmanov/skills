@@ -77,7 +77,21 @@ def load_registry() -> list:
 
 
 def find_entry(params: list, pid: str) -> dict | None:
-    return next((p for p in params if p["id"] == pid), None)
+    """Запись реестра по id, затем по deprecated_aliases (старое имя ключа).
+
+    Алиасы раньше были display-only: их печатал `list`/`describe`, но резолв шёл строго по
+    `id`, поэтому объявленный `sources.story` на самом деле не работал. Теперь старое имя
+    действительно принимается — с предупреждением, чтобы вызывающий перешёл на канон.
+    """
+    hit = next((p for p in params if p["id"] == pid), None)
+    if hit is not None:
+        return hit
+    for p in params:
+        if pid in (p.get("deprecated_aliases") or []):
+            print(f"WARNING: '{pid}' — устаревшее имя параметра, канон: '{p['id']}'. "
+                  f"Старое имя пока принимается, но будет удалено.", file=sys.stderr)
+            return p
+    return None
 
 
 # ── Резолв файлов ─────────────────────────────────────────────────────────────
@@ -275,20 +289,34 @@ def cmd_get(project: Path, params: list, args) -> int:
 
 # ── set ───────────────────────────────────────────────────────────────────────
 
-def _has_active_feature(project: Path) -> bool:
-    """Есть ли хоть один manifest.json в ground/statements/ (т.е. идёт прогон)."""
+def _live_run(project: Path):
+    """(skill, feature) идущего прогона, либо None.
+
+    Раньше здесь был предикат «существует ЛЮБОЙ manifest.json», и по нему запрещалась
+    запись в policy.json. Запрет был одновременно слишком широким и слишком узким:
+    вчерашний ЗАВЕРШЁННЫЙ прогон блокировал конфиг сегодняшнего (второй прогон в репозитории
+    не мог записать project-wide настройку вообще), а правка файла мимо config.py — руками,
+    редактором — по-прежнему меняла правила посреди прогона. Теперь прогон защищён снимком
+    политики в манифесте (см. _config_loader.load_project_config), а этот предикат нужен
+    только чтобы честно сказать: «записано, но к идущему прогону не применится».
+    """
     base = project / "ground" / "statements"
     if not base.is_dir():
-        return False
-    for skill_dir in base.iterdir():
+        return None
+    try:
+        from _config_loader import run_is_live
+    except Exception:  # noqa: BLE001 — без предиката просто не предупреждаем
+        return None
+    for skill_dir in sorted(base.iterdir()):
         if not skill_dir.is_dir():
             continue
-        for d in skill_dir.iterdir():
+        for d in sorted(skill_dir.iterdir()):
             if not d.is_dir() or d.name == "archived":
                 continue
-            if (d / "manifest.json").exists():
-                return True
-    return False
+            man = load_json(d / "manifest.json")
+            if isinstance(man, dict) and run_is_live(man):
+                return skill_dir.name, d.name
+    return None
 
 
 def cmd_set(project: Path, params: list, args) -> int:
@@ -329,17 +357,15 @@ def cmd_set(project: Path, params: list, args) -> int:
             return 2
         section_name = "inputs" if e["path"].startswith("inputs.") else "decisions"
     elif file_key in ("pipeline", "policy"):
-        # Общая конфигурация проекта → policy.json. Immutable на прогоне активной фичи.
-        if _has_active_feature(project):
-            print(json.dumps({
-                "blocked": True,
-                "reason": "policy.json immutable на прогоне активной фичи",
-                "id": e["id"],
-                "hint": "заверши текущий прогон (все шаги completed) или архивируй "
-                        "manifest, потом set. Per-feature входы/решения пишутся в "
-                        "manifest.json (file=manifest, см. реестр).",
-            }, ensure_ascii=False))
-            return 1
+        # Общая конфигурация проекта → policy.json. Пишется всегда: идущий прогон защищён
+        # СНИМКОМ политики в своём манифесте, а не запретом на запись. Правка долетит до
+        # следующего прогона; применить к текущему — `config.py repin`.
+        _live = _live_run(project)
+        if _live:
+            print(f"WARNING: идёт прогон {_live[0]}/{_live[1]} — он работает по снимку "
+                  f"политики, сделанному на init.py, и этой правки НЕ увидит. Настройка "
+                  f"применится со следующего прогона. Применить сейчас: config.py repin "
+                  f"--skill {_live[0]} --feature {_live[1]}", file=sys.stderr)
         target = resolve_file(project, "policy")
         sub_path = e["path"]
         section_name = None
@@ -440,13 +466,12 @@ def _parse_enabled_by(raw: str):
 
 def cmd_phase(project: Path, params: list, args) -> int:
     # phases_override — общая конфигурация (какие фазы включены в принципе), → policy.json.
-    if _has_active_feature(project):
-        print(json.dumps({
-            "blocked": True,
-            "reason": "phases_override (policy.json) immutable на прогоне активной фичи",
-            "hint": "заверши прогон или архивируй manifest",
-        }, ensure_ascii=False))
-        return 1
+    # Как и quality.*: пишется всегда, идущий прогон идёт по снимку (см. cmd_set).
+    _live = _live_run(project)
+    if _live:
+        print(f"WARNING: идёт прогон {_live[0]}/{_live[1]} — набор фаз у него зафиксирован "
+              f"снимком политики на init.py и этой правкой не изменится. Применить сейчас: "
+              f"config.py repin --skill {_live[0]} --feature {_live[1]}", file=sys.stderr)
     target = resolve_file(project, "policy")
     data = load_json(target)
     if data is None:
@@ -700,6 +725,104 @@ def cmd_validate(project: Path, params: list, args) -> int:
     return 1 if failed else 0
 
 
+def cmd_repin(project: Path, params: list, args) -> int:
+    """Переснять снимок политики для идущего прогона текущим policy.json.
+
+    Прогон фиксирует политику на init.py, поэтому правка policy.json к нему не применяется —
+    это и есть защита от «шаги 1-5 закрылись под coverage 80%, шаги 6-10 под 50%». Иногда
+    применить всё-таки надо (настройка была выставлена неверно, а прогон переделывать
+    дорого). Раньше единственным выходом было архивировать прогон; теперь — этот явный акт,
+    который остаётся в журнале прогона рядом с остальным evidence.
+    """
+    try:
+        from _config_loader import load_project_config, policy_digest
+    except Exception as e:  # noqa: BLE001
+        print(json.dumps({"error": f"_config_loader недоступен: {e}"}, ensure_ascii=False))
+        return 2
+    try:
+        mp = _resolve_manifest_path(project, args.skill, args.feature)
+    except FileNotFoundError as ex:
+        print(json.dumps({"error": str(ex)}, ensure_ascii=False))
+        return 3
+    man = load_json(mp)
+    if not isinstance(man, dict):
+        print(json.dumps({"error": f"{mp} не найден или не читается"}, ensure_ascii=False))
+        return 3
+
+    policy = load_project_config(project, raw=True) or {}
+    old_digest = man.get("policy_digest")
+    new_digest = policy_digest(policy)
+    if old_digest == new_digest:
+        print(json.dumps({"status": "unchanged", "manifest": str(mp),
+                          "policy_digest": new_digest,
+                          "note": "снимок уже соответствует policy.json"},
+                         ensure_ascii=False))
+        return 0
+    if args.dry_run:
+        print(json.dumps({"status": "dry-run", "manifest": str(mp),
+                          "old_digest": old_digest, "new_digest": new_digest},
+                         ensure_ascii=False))
+        return 0
+
+    # ── R4: approval обязателен (ВТОРОЙ слой; первый — gate-guard.check_policy_repin) ──
+    # Прогон фиксирует политику на init.py именно для того, чтобы его шаги нельзя было
+    # закрыть под разными правилами. repin эту фиксацию снимает, а правит он пороги, которыми
+    # харнес меряет САМ СЕБЯ (coverage_threshold, max_judge_iterations — лимит ре-итераций
+    # судьи). Без гейта связка `set` + `repin` — две команды R1 — давала модели поднять себе
+    # лимит и снять эскалацию «STOP, спроси пользователя». Проверка продублирована здесь,
+    # чтобы держаться и при запуске мимо харнеса (как у rollback.py и update.py --skip-judges).
+    feat_name = man.get("feature") or args.feature or ""
+    approval_key = f"policy-repin-{feat_name}" if feat_name else "policy-repin"
+    sys.path.append(_HOOKS)
+    try:
+        import forge_events as FE
+    except Exception as e:  # noqa: BLE001 — без журнала маркер не проверить → fail-closed
+        print(json.dumps({"error": f"forge_events недоступен, approval не проверить: {e}"},
+                         ensure_ascii=False))
+        return 2
+    rec = FE.approval(project, approval_key)
+    if not (isinstance(rec, dict) and rec.get("produced_by") == "record_approval"):
+        print(json.dumps({
+            "blocked": True,
+            "reason": "repin — R4-класс: нужен approval-маркер с провенансом record_approval",
+            "approval_key": approval_key,
+            "hint": (f"(1) покажи пользователю расхождение: config.py repin --skill {args.skill} "
+                     f"--feature {args.feature} --dry-run; (2) после явного «да»: "
+                     f"pipeline-state/scripts/record_approval.py --key {approval_key} "
+                     f"--approved-by user --reason \"<почему>\"; (3) повтори. Маркер одноразовый. "
+                     f"Правка policy.json БЕЗ repin не гейтится — применится со следующего прогона."),
+        }, ensure_ascii=False))
+        return 3
+
+    bak = backup(mp, project)
+    man["policy_snapshot"] = policy
+    man["policy_digest"] = new_digest
+    man["last_update"] = iso_now()
+    atomic_write(mp, man)
+
+    # Событие в журнал прогона: переснятие политики — такой же факт о прогоне, как вердикт
+    # судьи или согласие человека, и разбор «почему шаг закрылся под другим порогом»
+    # без него упирается в пустоту.
+    try:
+        FE.append_event(project, man.get("skill", args.skill), man.get("feature", args.feature),
+                        "repin", old_digest=old_digest, new_digest=new_digest,
+                        reason=args.reason or "", approval_key=approval_key)
+    except Exception as e:  # noqa: BLE001 — снимок уже переснят, журнал — best-effort
+        print(f"WARNING: событие repin не записано в журнал прогона: {e}", file=sys.stderr)
+    # Маркер ОДНОРАЗОВЫЙ (как у rollback): одно согласие пользователя = одно переснятие.
+    # Иначе один «да» открывал бы неограниченную правку порогов до конца прогона.
+    try:
+        FE.revoke_approval(project, approval_key,
+                           reason="согласие потрачено на это переснятие политики")
+    except Exception as e:  # noqa: BLE001
+        print(f"WARNING: approval-маркер {approval_key} не отозван: {e}", file=sys.stderr)
+
+    print(json.dumps({"status": "repinned", "manifest": str(mp),
+                      "old_digest": old_digest, "new_digest": new_digest,
+                      "backup": bak}, ensure_ascii=False))
+    return 0
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -743,6 +866,12 @@ def main() -> int:
     pr.add_argument("value", help="паттерн (list) или R-level (cap-set)")
     pr.add_argument("--confirm", action="store_true")
 
+    prp = sub.add_parser("repin", help="Переснять снимок политики для идущего прогона")
+    prp.add_argument("--skill", default=None, help="namespace прогона (по умолчанию — самый свежий)")
+    prp.add_argument("--feature", default=None, help="слаг фичи (по умолчанию — самый свежий)")
+    prp.add_argument("--reason", default=None, help="зачем переснимаем (уходит в журнал прогона)")
+    prp.add_argument("--dry-run", action="store_true")
+
     pv = sub.add_parser("validate", help="Проверить типы/диапазоны конфига + кросс-проверки")
     pv.add_argument("--strict", action="store_true",
                     help="Предупреждения тоже валят (exit 1) — для preflight-гейта")
@@ -762,6 +891,8 @@ def main() -> int:
         return cmd_phase(project, params, args)
     if args.cmd == "risk":
         return cmd_risk(project, params, args)
+    if args.cmd == "repin":
+        return cmd_repin(project, params, args)
     if args.cmd == "validate":
         return cmd_validate(project, params, args)
     return 2

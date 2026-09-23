@@ -61,6 +61,9 @@ PRODUCERS = {
     "approval": "record_approval",
     "approval-revoked": "rollback",
     "grounding": "grounding-evidence",
+    # Переснятие снимка политики под идущим прогоном (config.py repin). Факт о прогоне:
+    # без него разбор «почему шаг закрылся под другим порогом» упирается в пустоту.
+    "repin": "config.py",
 }
 
 
@@ -218,11 +221,34 @@ def gate(root: Path, skill: str, feature: str, step_id: str,
 
 
 def judge(root: Path, skill: str, feature: str, name: str,
-          events: Optional[list[dict]] = None) -> Optional[dict]:
-    """Вердикт судьи (run_judge). None — судья не отработал."""
+          events: Optional[list[dict]] = None, *, layer: Optional[str] = None) -> Optional[dict]:
+    """Вердикт судьи (run_judge). None — судья не отработал.
+
+    `layer` — какой СЛОЙ вердикта нужен. У гибридного судьи их два, и оба живут в одном
+    потоке записей под одним именем судьи:
+      • "llm"   — вердикт, пришедший ОТ СУБАГЕНТА (run_judge --from-output);
+      • "final" — свёртка «детерминированный пол AND вердикт субагента», которую run_judge
+                  пишет обратно тем же именем.
+    Без `layer` (контракт update.py и гейтов) отдаётся ПОСЛЕДНЯЯ запись — то есть итог.
+
+    Фильтр нужен, потому что гибрид читает собственный сохранённый LLM-слой, чтобы смержить
+    его заново на `--recheck`. Без фильтра он вычитывал свою же свёртку и AND-ил её с полом
+    второй раз: детерминированный FAIL превращался в вечный «LLM-FAIL», и уже исправленный
+    артефакт не мог получить PASS никаким числом перепрогонов.
+
+    Записи БЕЗ поля layer (прогоны до тегирования) считаются входными — совместимость.
+    """
     ev = events if events is not None else read_events(root, skill, feature)
     boundary = _reopen_boundary(ev, judge_name=name)
-    rec = _last(ev, "judge", match={"judge": name}, boundary=boundary)
+    if layer is None:
+        rec = _last(ev, "judge", match={"judge": name}, boundary=boundary)
+    else:
+        rec = None
+        for i, r in enumerate(ev):
+            if i <= boundary or not _authentic(r, "judge") or r.get("judge") != name:
+                continue
+            if r.get("layer", layer) == layer:
+                rec = r
     if rec is not None:
         return rec
     if boundary >= 0:

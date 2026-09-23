@@ -170,6 +170,57 @@ class TestStepIdConventions(unittest.TestCase):
             self.assertIn(f'"{ph}"', src, f"{ph} пропал из fallback update._check_subagent_origin")
 
 
+class DepsPredicateFallbacks(unittest.TestCase):
+    """Копии предиката готовности/валидатора depends_on не расходятся с оригиналом.
+
+    Обе копии заведены как inline-fallback «на случай, если feature-pipeline не развёрнут
+    рядом», и обе сопровождались комментарием «копию пинит test_phase_consistency» — которого
+    на деле не существовало. Это ровно тот механизм расхождения, против которого fallback'ы и
+    пинятся в этом файле.
+    """
+
+    def _behaves_like(self, fallback, reference):
+        cases = [
+            ({"id": "b", "depends_on": ["a"]}, {"a": "completed"}),
+            ({"id": "b", "depends_on": ["a"]}, {"a": "skipped"}),
+            ({"id": "b", "depends_on": ["a"]}, {"a": "pending"}),
+            ({"id": "b", "depends_on": ["a"]}, {"a": "failed"}),
+            ({"id": "b", "depends_on": ["ghost"]}, {"a": "completed"}),
+            ({"id": "b", "depends_on": []}, {}),
+            ({"id": "b"}, {"a": "completed"}),
+        ]
+        for step, statuses in cases:
+            with self.subTest(step=step, statuses=statuses):
+                self.assertEqual(fallback(step, statuses)[0], reference(step, statuses)[0])
+
+    def test_read_deps_satisfied_fallback_matches_pp(self):
+        src = _src("skills/pipeline-state/scripts/read.py")
+        self.assertIn("def _deps_satisfied", src,
+                      "inline-fallback deps_satisfied исчез из read.py")
+        ns: dict = {}
+        body = src.split("def _deps_satisfied", 1)[1].split("\n\n", 1)[0]
+        exec("def _deps_satisfied" + body, ns)  # noqa: S102 — исполняем ИМЕННО копию из файла
+        self._behaves_like(ns["_deps_satisfied"], PP.deps_satisfied)
+
+    def test_init_unknown_deps_fallback_matches_pp(self):
+        src = _src("skills/pipeline-state/scripts/init.py")
+        self.assertIn("def _unknown_deps", src,
+                      "inline-fallback unknown_deps исчез из init.py")
+        ns: dict = {}
+        body = src.split("def _unknown_deps", 1)[1].split("\n\n", 1)[0]
+        exec("def _unknown_deps" + body, ns)  # noqa: S102
+        fb = ns["_unknown_deps"]
+        for steps, known in (
+            ([{"id": "b", "depends_on": ["a"]}], None),
+            ([{"id": "b", "depends_on": ["a"]}, {"id": "a"}], None),
+            ([{"id": "b", "depends_on": ["a"]}], {"a"}),
+            ([{"id": "b", "depends_on": ["x", "y"]}, {"id": "x"}], {"z"}),
+            ([{"id": "b"}], None),
+        ):
+            with self.subTest(steps=steps, known=known):
+                self.assertEqual(fb(steps, known), PP.unknown_deps(steps, known))
+
+
 class ResolvePhasesSource(unittest.TestCase):
     """M4: resolve_phases.DEFAULT_PHASES — не второй нескоординированный источник списка фаз.
     Его id обязаны быть подмножеством pipeline_phases.MAIN_PHASES и идти в каноническом порядке."""

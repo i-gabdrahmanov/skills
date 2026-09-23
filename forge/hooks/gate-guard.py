@@ -336,6 +336,60 @@ def check_gate_override(command: str, root: Path) -> str | None:
         return f"deny-first: ошибка проверки gate-override ({e})."
 
 
+def check_policy_repin(command: str, root: Path) -> str | None:
+    """R4-класс: `config.py repin` переснимает политику ИДУЩЕГО прогона — approval обязателен.
+
+    Прогон фиксирует политику снимком на init.py ровно для того, чтобы его шаги нельзя было
+    закрыть под разными правилами. `repin` эту фиксацию снимает, а правит он пороги, которыми
+    харнес меряет САМ СЕБЯ: coverage_threshold и max_judge_iterations (лимит ре-итераций судьи —
+    тот самый «⛔ STOP: остановись и спроси пользователя»). Без гейта связка `set` + `repin` —
+    две команды уровня R1 — позволяла модели поднять себе лимит и снять эскалацию.
+
+    Правка policy.json БЕЗ repin не гейтится намеренно: идущий прогон её не видит (он читает
+    свой снимок), она применится со следующего — это штатный путь, а не обход.
+
+    `--dry-run` (показать расхождение) свободен. Ошибка разбора → fail-CLOSED.
+    """
+    try:
+        policy = R.load_policy().get("policy_repin") or {}
+        pat = policy.get("command_pattern", r"config\.py[^\n]*\brepin\b")
+        if not command or not re.search(pat, command):
+            return None
+        ro_flags = policy.get("readonly_arg_flags") or ["--dry-run"]
+        try:
+            toks = shlex.split(command)
+        except ValueError:
+            toks = command.split()
+        if any(f in toks for f in ro_flags):
+            return None
+        m = re.search(r"--feature[\s=]+[\"']?([\w.-]+)", command)
+        feat = m.group(1) if m else ""
+        prefix = policy.get("approval_prefix", "policy-repin")
+        key = f"{prefix}-{feat}" if feat else prefix
+        if feat and _approval_valid(root, key):
+            return None
+        exists_no_prov = feat and R.approval_exists(root, key) and not _approval_valid(root, key)
+        prov_note = (
+            " Маркер есть, но БЕЗ провенанса record_approval — рукописный маркер не считается "
+            "(его мог выписать сам агент). " if exists_no_prov else " "
+        )
+        args_note = "" if feat else " В команде нет --feature — ключ маркера не резолвится."
+        return (
+            f"переснятие политики прогона (config.py repin) — R4-класс, нужен approval-маркер "
+            f"'{key}' (журнал ground/approvals.jsonl, пишет ТОЛЬКО record_approval.py)."
+            f"{prov_note}{args_note} Прогон идёт по политике, зафиксированной на init.py — это "
+            f"защита от «шаги 1-5 закрылись под одним порогом, шаги 6-10 под другим». Порядок: "
+            f"(1) останови работу и покажи пользователю, ЧТО меняется (`config.py repin "
+            f"--dry-run` печатает расхождение дайджестов); (2) ТОЛЬКО после явного «да» "
+            f"зафиксируй согласие СКРИПТОМ pipeline-state/scripts/record_approval.py "
+            f"--key {key} --approved-by user --reason \"<почему>\"; (3) повтори команду. "
+            f"Маркер одноразовый. Правка policy.json БЕЗ repin не гейтится — она применится "
+            f"со следующего прогона, и это штатный путь."
+        )
+    except Exception as e:
+        return f"deny-first: ошибка проверки policy-repin ({e})."
+
+
 def check_skip_judges(command: str, root: Path) -> str | None:
     """R4-класс: `update.py --skip-judges` снимает ВСЕ гейты закрытия шага (судьи, gate-result,
     subagent-origin, обязательные решения, артефакты) — bypass в одну опцию. Требует
@@ -481,6 +535,12 @@ def main() -> int:
         # ── R4-класс: снятие детерминированного гейта (override_judge) без approval ──
         # ДО auto-early-return: classify даёт таким командам default-R1 → иначе прошли бы авто.
         deny = check_gate_override(command, root)
+        if deny:
+            return _block(deny)
+
+        # ── R4-класс: переснятие политики прогона (config.py repin) без approval ──
+        # Тоже ДО auto-early-return: classify даёт config.py default-R1 → прошёл бы авто.
+        deny = check_policy_repin(command, root)
         if deny:
             return _block(deny)
 

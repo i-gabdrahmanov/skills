@@ -274,6 +274,17 @@ python <project>/.gigacode/skills/pipeline-state/scripts/read.py --skill feature
 python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
     --skill feature-pipeline --feature <slug> --steps '<...>' --context '{"feature":"<slug>","iteration":N}'
 ```
+
+**Сразу после `init.py` запиши путь прогона** (per-feature решения живут в `manifest.json`, и до
+его создания `config.py` их не примет — exit 3). Project-wide `quality.*`, наоборот, пиши ДО
+`init.py`: он фиксирует политику снимком в манифесте, и прогон дальше идёт по ней. Запись после
+пройдёт с exit 0 и предупреждением, но применится со следующего прогона (`config.py repin` —
+применить к идущему):
+```bash
+python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set inputs.mode full --skill feature-pipeline --feature <slug>
+python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set decisions.mode_task <slug> --skill feature-pipeline --feature <slug>
+```
+
 Манифест шагов:
 
 > **Бизнес-анализ (BRD) выключен** (`pipeline_phases.BRD_ENABLED = False`): фаза `00-brd`
@@ -286,16 +297,21 @@ python <project>/.gigacode/skills/pipeline-state/scripts/init.py \
 | `01-grounding` | System overview ensured | — |
 | `02-sdd` | SDD specification (sdd.md) | `01-grounding` |
 | `02-design` | Tech design + task plan | `02-sdd` |
-| `02-eval-plan` | Eval-plan generated (eval-plan.json) | `02-design` |
 | `03-jira` | Jira issues created — УСЛОВНЫЙ: только при `jira.enabled=true` (по умолчанию false, resolve_phases фазу пропустит — тогда шаг в манифест не включай) | `02-design` |
-| `04-test-<taskId>` | TDD RED: тесты компилируются и падают | `02-design` |
-| `04-build-<taskId>` | TDD GREEN: код зеленит тесты задачи | `04-test-<taskId>`, `02-eval-plan` |
-| `05-tests` | Полный прогон + coverage | все `04-build-*` |
+| `05-tests` | Полный прогон + coverage | `[]` (довяжет `add_steps --from-task-plan`) |
 | `06-spec` | Spec updated | `05-tests` |
 
-`04-test-*` и `04-build-*` добавляются после фазы 2 через
-`feature-pipeline/scripts/add_steps.py` (см. бриф `references/phases/02-design.md`),
-когда известна разбивка задач. (При `quality.tdd: false` шаг `04-test-*` опускается.)
+Шаги фазы Build (`02-eval-plan`, `04-test-<taskId>`, `04-build-<taskId>`) **в этот набор не
+входят и руками не пишутся**: они выводятся из `task-plan.json` после фазы 2 одной командой
+`add_steps.py --from-task-plan` (бриф `references/phases/02-design.md`). Скрипт сам читает
+`quality.tdd` и `quality.eval_enabled` и строит зависимости **только на реально заводимые
+шаги**, а также довязывает `05-tests` ко всем `04-build-*` (на `init.py` их id ещё неизвестны).
+
+> Почему не руками: обе ручки влияют на НАЛИЧИЕ шага, и раньше бриф требовал при
+> `quality.tdd:false` не заводить `04-test-<taskId>`, оставляя зависимость `04-build-<taskId>`
+> от него. Шаг со ссылкой в никуда не готов никогда — пайплайн вставал молча. Теперь такую
+> зависимость `add_steps` отбивает на записи (exit 2). Подробности — в брифе `02-design.md`.
+
 `06-spec` — финальный шаг: доставку (commit/push/PR/отчёт) делает пользователь сам.
 
 После каждого завершённого субагента/шага — `update.py --skill feature-pipeline --feature <slug>

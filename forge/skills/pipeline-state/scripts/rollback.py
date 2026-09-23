@@ -509,6 +509,23 @@ def main() -> int:
                   "reopens", "failures"):
             step.pop(f, None)
         kept_steps.append(step)
+    # Снять ссылки на УДАЛЁННЫЕ шаги у выживших. Без этого откат сам порождал висячие
+    # зависимости: `05-tests` переживает откат (сбрасывается в pending), а `04-build-*`,
+    # на которые он ссылается, удаляются вместе с фазой дизайна. Шаг с ссылкой в никуда не
+    # становится готовым НИКОГДА — и после того, как читатели стали fail-closed, из этого
+    # состояния уже не выйти: add_steps умеет только ДОБАВЛЯТЬ зависимости, а править
+    # манифест руками запрещает state-write-guard. После редизайна задачи получают новые id,
+    # так что старые ссылки не «починятся» сами.
+    removed_ids = set(dynamic_removed)
+    deps_pruned: dict = {}
+    if removed_ids:
+        for step in kept_steps:
+            deps = step.get("depends_on") or []
+            stale = [d for d in deps if d in removed_ids]
+            if stale:
+                step["depends_on"] = [d for d in deps if d not in removed_ids]
+                deps_pruned[step.get("id")] = stale
+
     manifest["steps"] = kept_steps
     manifest["last_update"] = now
     manifest.setdefault("rollback_history", []).append({
@@ -516,6 +533,7 @@ def main() -> int:
         "to_step": to_step,
         "reset_steps": reset_ids,
         "dynamic_removed": removed_copies,
+        "deps_pruned": deps_pruned or None,
         "restore_ref": code_plan["ref"],
         "restore_planned": len(code_plan["restore"]),
         "delete_planned": len(code_plan["delete"]),

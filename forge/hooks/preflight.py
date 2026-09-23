@@ -252,6 +252,37 @@ def _carries_forge_hooks(settings_path) -> bool:
     return bool(_referenced_hook_basenames(block) & set(ESSENTIAL_HOOKS))
 
 
+def _check_policy_drift(project_root, raw_cfg: dict, warnings: list) -> None:
+    """policy.json правили ПОД живым прогоном? Прогон идёт по своему снимку — скажи об этом.
+
+    Прогон фиксирует политику на старте (init.py кладёт policy_snapshot/policy_digest), и
+    гейты/судьи читают именно снимок. Это защита от «шаги 1-5 закрылись под coverage 80%,
+    шаги 6-10 — под 50%». Но молчаливая защита путает: оператор правит policy.json, ничего
+    не меняется, и причина ниоткуда не видна. Здесь она становится видна.
+
+    Только WARNING: расхождение легитимно (готовим настройку для следующего прогона), а
+    применить сейчас — `config.py repin`.
+    """
+    try:
+        from _config_loader import policy_digest, run_is_live
+        from _project import load_active_manifest
+        _mp, manifest = load_active_manifest(Path(project_root))
+    except Exception:  # noqa: BLE001 — диагностика не должна ронять preflight
+        return
+    if not manifest or not run_is_live(manifest):
+        return
+    saved = manifest.get("policy_digest")
+    if not saved or saved == policy_digest(raw_cfg):
+        return
+    warnings.append(
+        f"policy.json изменён после старта прогона "
+        f"{manifest.get('skill', '?')}/{manifest.get('feature', '?')}: прогон идёт по снимку, "
+        f"сделанному на init.py, и правка к нему НЕ применится. Применить сейчас: "
+        f"config.py repin --skill {manifest.get('skill', '<S>')} "
+        f"--feature {manifest.get('feature', '<F>')}"
+    )
+
+
 def _check_runtime_settings_dirs(project_root, base, warnings: list) -> None:
     """Рантайм читает settings.json ИЗ СВОЕГО базового каталога — и он может быть не тем,
     куда мы задеплоились.
@@ -537,7 +568,10 @@ def preflight(project_root: str, self_base=None) -> dict:
     #    init_needed, а не errors. Битый JSON — errors. Двойной рид через load_project_config
     #    (policy.json → pipeline.json fallback) — легаси-проекты продолжают работать.
     from _config_loader import load_project_config
-    cfg = load_project_config(project_root)
+    # raw=True — ИМЕННО файл: пустота здесь означает «конфиг не инициализирован». Эффективный
+    # конфиг (со снимком политики живого прогона поверх) сделал бы удалённый policy.json
+    # похожим на живой, и preflight перестал бы звать init_pipeline_config.py.
+    cfg = load_project_config(project_root, raw=True)
     if not cfg:
         init_needed.append("ground/policy.json not found — конфигурация не инициализирована")
     else:
@@ -546,6 +580,7 @@ def preflight(project_root: str, self_base=None) -> dict:
         # отдельно отлавливать здесь нечего — corruption-диагностика на стороне config-helper.
         if cfg.get("_incomplete"):
             init_needed.append(f"policy.json incomplete: {cfg['_incomplete']}")
+        _check_policy_drift(project_root, cfg, warnings)
 
     # 2. Проверяем ТУ раскладку кода, которую реально грузит рантайм.
     layout = resolve_layout(project_root, self_base)
