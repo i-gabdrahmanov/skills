@@ -207,6 +207,133 @@ def _run_capture(project: Path, steps: list, task_plan: str | None = None,
 # чтобы прогон был виден и без pytest.
 # ──────────────────────────────────────────────────────────────────────────
 
+class TestDeriveFromTaskPlan(unittest.TestCase):
+    """--from-task-plan: набор шагов и их зависимости выводятся из плана и конфига.
+
+    Раньше шаги диктовались прозой брифа, и две ручки конфига влияли на НАЛИЧИЕ шага, но не
+    на зависимость от него: при quality.tdd:false бриф предписывал не заводить 04-test-<id>
+    и одновременно ссылаться на него из 04-build-<id>. Получался шаг, не готовый никогда, —
+    read.py показывал пустой next_runnable, preflight-validate тот же шаг пропускал.
+    """
+
+    TASKS = [
+        # migration+entity → test-exempt по quality.no_test_layers: RED не нужен
+        {"id": "T1", "title": "Миграция", "layers": ["migration", "entity"],
+         "artifacts": ["db/changelog/x.xml"]},
+        {"id": "T2", "title": "Сервис", "layers": ["service"],
+         "artifacts": ["src/main/java/a/S.java"]},
+    ]
+
+    def _project(self, quality: dict) -> Path:
+        td = tempfile.mkdtemp()
+        project = Path(td)
+        (project / "ground").mkdir(parents=True)
+        (project / "ground" / "policy.json").write_text(
+            json.dumps({"quality": quality}), encoding="utf-8")
+        d = project / "ground" / "statements" / SKILL / FEATURE
+        d.mkdir(parents=True)
+        (d / "manifest.json").write_text(json.dumps({
+            "skill": SKILL, "feature": FEATURE, "context": {},
+            "steps": [{"id": "02-design", "status": "completed"},
+                      {"id": "05-tests", "status": "pending", "depends_on": []}],
+        }), encoding="utf-8")
+        docs = project / "docs" / SKILL / FEATURE
+        docs.mkdir(parents=True)
+        (docs / "task-plan.json").write_text(json.dumps({"tasks": self.TASKS}),
+                                             encoding="utf-8")
+        return project
+
+    def _derive(self, quality: dict):
+        project = self._project(quality)
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT), "--project-root", str(project),
+             "--skill", SKILL, "--feature", FEATURE, "--from-task-plan"],
+            capture_output=True, text=True, cwd=str(project))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        man = json.loads((project / "ground/statements" / SKILL / FEATURE /
+                          "manifest.json").read_text(encoding="utf-8"))
+        return {s["id"]: s.get("depends_on", []) for s in man["steps"]}
+
+    def test_tdd_on_eval_on(self):
+        steps = self._derive({"tdd": True, "eval_enabled": True})
+        self.assertNotIn("04-test-T1", steps, "test-exempt задача получила RED-шаг")
+        self.assertEqual(steps["04-build-T1"], ["02-eval-plan"])
+        self.assertEqual(steps["04-test-T2"], ["02-design"])
+        self.assertEqual(steps["04-build-T2"], ["04-test-T2", "02-eval-plan"])
+
+    def test_tdd_off_drops_red_step_and_its_dependency(self):
+        """Ядро регрессии: нет RED-шага — нет и ссылки на него."""
+        steps = self._derive({"tdd": False, "eval_enabled": True})
+        self.assertNotIn("04-test-T2", steps)
+        self.assertEqual(steps["04-build-T2"], ["02-eval-plan"])
+
+    def test_eval_off_drops_eval_step_and_its_dependency(self):
+        steps = self._derive({"tdd": True, "eval_enabled": False})
+        self.assertNotIn("02-eval-plan", steps)
+        self.assertEqual(steps["04-build-T2"], ["04-test-T2"])
+        self.assertEqual(steps["04-build-T1"], ["02-design"],
+                         "без RED и без eval build обязан опереться на 02-design")
+
+    def test_verify_step_wired_to_builds(self):
+        steps = self._derive({"tdd": True, "eval_enabled": True})
+        self.assertEqual(sorted(steps["05-tests"]), ["04-build-T1", "04-build-T2"])
+
+    def test_no_dangling_deps_in_any_config(self):
+        for quality in ({"tdd": True, "eval_enabled": True},
+                        {"tdd": False, "eval_enabled": True},
+                        {"tdd": True, "eval_enabled": False},
+                        {"tdd": False, "eval_enabled": False}):
+            with self.subTest(quality=quality):
+                steps = self._derive(quality)
+                for sid, deps in steps.items():
+                    for d in deps:
+                        self.assertIn(d, steps, f"{sid} зависит от несуществующего {d}")
+
+
+class TestDependsOnValidation(unittest.TestCase):
+    def test_unknown_dep_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            project = _project(td)
+            rc, j, out = run(project, [{"id": "04-build-T1", "depends_on": ["04-test-T1"]}])
+            self.assertEqual(rc, 2, out)
+            self.assertEqual(j.get("error_class"), "validation", out)
+            self.assertIn("depends_on", j.get("error", ""), out)
+
+    def test_dep_within_same_batch_ok(self):
+        with tempfile.TemporaryDirectory() as td:
+            project = _project(td)
+            rc, j, out = run(project, [{"id": "04-test-T1"},
+                                       {"id": "04-build-T1", "depends_on": ["04-test-T1"]}])
+            self.assertEqual(rc, 0, out)
+            self.assertEqual(j.get("added"), 2, out)
+
+    def test_canonical_task_id_T1_is_accepted(self):
+        """`T1` — канонический пример во ВСЕХ доках (task-plan-schema, 🚨-баннер 02-design).
+        Нижняя граница длины task-id стояла на 3 и отбивала именно его: любая фича с
+        задачами T1/T2 падала на add_steps с exit 2."""
+        with tempfile.TemporaryDirectory() as td:
+            project = _project(td)
+            rc, j, out = run(project, [{"id": "04-test-T1", "title": "RED T1"}])
+            self.assertEqual(rc, 0, f"канонический task-id T1 отбит: {out}")
+            self.assertEqual(j.get("added"), 1, out)
+
+
+class TestProjectRootFlag(unittest.TestCase):
+    def test_project_root_reaches_manifest(self):
+        """--project-root уважался только при поиске task-plan; манифест искался от cwd."""
+        with tempfile.TemporaryDirectory() as td_proj, tempfile.TemporaryDirectory() as td_cwd:
+            project = _project(td_proj)
+            r = subprocess.run(
+                [sys.executable, str(SCRIPT), "--project-root", str(project),
+                 "--skill", SKILL, "--feature", FEATURE,
+                 "--steps", json.dumps([{"id": "04-test-T1"}])],
+                capture_output=True, text=True, cwd=td_cwd)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            man = _manifest(project)
+            self.assertIn("04-test-T1", [s["id"] for s in man["steps"]],
+                          "шаг ушёл не в тот манифест")
+
+
 def main() -> int:
     print("=== script-style sanity ===")
 

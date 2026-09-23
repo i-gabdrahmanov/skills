@@ -68,9 +68,14 @@ agent(subagent_type="general-purpose", description="eval-judge for <slug>",
       prompt="<вывод `get_prompt.py 7.1` (eval-judge) + пути к task-plan.json и eval-plan.json>")
 ```
 
-Затем выполни детерминированную проверку через run_judge.py:
+**Сохрани JSON-вердикт субагента в файл и ингестни его** — иначе LLM-половина судьи никуда
+не попадёт и «гибрид» выродится в один детерминированный слой (покрытие acceptance, адекватность
+порогов и дубликаты проверяет именно субагент). Ингест сам пересчитывает детерминированный слой
+и AND-ит с вердиктом, поэтому отдельный прогон после него не нужен:
 ```bash
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py eval <slug>
+# verdict.json — JSON, который вернул субагент eval-judge ({"passed":..., "blocking_issues":[...]})
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py eval <slug> --from-output verdict.json
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py eval <slug> --recheck
 ```
 
 - **exit 0** — `passed: true` → шаг `02-eval-plan` можно закрывать (с `--artifacts`):

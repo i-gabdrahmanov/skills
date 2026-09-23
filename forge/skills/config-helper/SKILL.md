@@ -111,6 +111,9 @@ python3 .../config.py validate --strict   # preflight: варнинги = оши
 
 - `feature-gates.json` нет → `set` создаёт его со всеми дефолтами и применяет изменение.
 - `ground/policy.json` (или legacy `pipeline.json`) нет → `set` просит сначала запустить `init_pipeline_config.py` (exit 3).
+- Идёт прогон → `set` project-wide ключа всё равно пройдёт (exit 0), но предупредит: прогон
+  зафиксировал политику снимком на `init.py` и правку не увидит. Настройка применится со
+  следующего прогона; применить к текущему — `repin`.
 - `risk-policy.json` нет → не создаётся автоматически (exit 3).
 
 ## Примеры маппинга запроса → команды
@@ -118,7 +121,8 @@ python3 .../config.py validate --strict   # preflight: варнинги = оши
 | Пользователь сказал | Команда |
 |---|---|
 | «подними покрытие до 90%» | `set quality.coverage_threshold 0.9` |
-| «выключи TDD» | `set quality.tdd false` (гасит и фазу 04-tdd, и tdd-guard; `tdd_enforced` — мёртвый gates-флаг, ничем не читается) |
+| «выключи TDD» | `set quality.tdd false` (убирает RED-шаги `04-test-*` и блок tdd-guard; фазу Build НЕ гасит — код пишется всё равно; `tdd_enforced` — мёртвый gates-флаг, ничем не читается) |
+| «применить настройку к идущему прогону» 🔒 | `repin --skill <S> --feature <F>` — **R4**: сначала `repin --dry-run` (покажи пользователю расхождение), затем после явного «да» `record_approval.py --key policy-repin-<feature> --approved-by user --reason "<почему>"`, и только потом `repin`. Маркер одноразовый |
 | «включи security review» | `set security_review true` |
 | «разреши авто-аппрув до R2» 🔒 | `python3 skills/feature-pipeline/scripts/set_criticality.py --criticality low --skill <skill> --feature <feature>` (фича-уровень; порог R2) — для project-wide уровня: `set risk.autonomy_auto_max R2 --confirm` |
 | «доки клади в отдельный репо /abs/spec» | `set docs.mode separate-repo` + `set docs.repo_path /abs/spec` |

@@ -111,7 +111,7 @@
       "category": "quality",
       "sensitive": false,
       "title": "TDD-цикл (RED→GREEN)",
-      "description": "ЖИВАЯ ручка TDD: выключает и фазу 04-tdd (resolve_phases), и блок tdd-guard (запись в src/main без RED-теста). Гейт-флаг gates.tdd_enforced фазой/хуком НЕ читается",
+      "description": "ЖИВАЯ ручка TDD: убирает RED-шаги 04-test-* (add_steps) и блок tdd-guard (запись в src/main без RED-теста). Фазу 04-tdd НЕ гасит — код пишется в любом случае. Гейт-флаг gates.tdd_enforced фазой/хуком НЕ читается",
       "aliases": [
         "tdd",
         "тдд",
@@ -388,7 +388,7 @@
       ]
     },
     {
-      "id": "autonomy.auto_max_risk",
+      "id": "decisions.auto_max_risk",
       "file": "manifest",
       "path": "decisions.auto_max_risk",
       "type": "enum",
@@ -417,7 +417,7 @@
       ]
     },
     {
-      "id": "autonomy.criticality",
+      "id": "decisions.criticality",
       "file": "manifest",
       "path": "decisions.criticality",
       "type": "enum",

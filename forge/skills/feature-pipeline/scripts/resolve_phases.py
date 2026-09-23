@@ -67,12 +67,31 @@ def _load_policy(root):
         return None
     policy_path = Path(root) / "ground" / "policy.json"
     if policy_path.is_file():
-        return load_json(str(policy_path))
+        return _with_run_snapshot(root, load_json(str(policy_path)))
     legacy_path = Path(root) / "ground" / "pipeline.json"
     if legacy_path.is_file():
         warnings.warn(_LEGACY_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
-        return load_json(str(legacy_path))
+        return _with_run_snapshot(root, load_json(str(legacy_path)))
     return None
+
+
+def _with_run_snapshot(root, cfg):
+    """Наложить снимок политики живого прогона (см. _config_loader.apply_policy_snapshot).
+
+    Резолвер фаз решает, какие фазы вообще существуют в прогоне (quality.eval_enabled,
+    jira.enabled). Читай он текущий policy.json, а гейты — снимок прогона, фазовая машина
+    расходилась бы с enforcement'ом на ровном месте.
+
+    Импорт внутри функции: hooks/ попадает в sys.path при импорте _phase_eligibility ниже
+    по модулю, а _load_policy определён выше него.
+    """
+    if not isinstance(cfg, dict):
+        return cfg
+    try:
+        from _config_loader import apply_policy_snapshot
+    except Exception:  # noqa: BLE001 — кривой деплой не должен ронять резолв фаз
+        return cfg
+    return apply_policy_snapshot(root, cfg)
 
 
 # ── Маппинг mode → допустимые skill (для manifest.inputs.mode ↔ manifest.skill) ─────
@@ -163,6 +182,11 @@ except Exception:
 # id фаз ДОЛЖНЫ быть подмножеством pipeline_phases.MAIN_PHASES и идти в каноническом порядке —
 # это пинит test_phase_consistency (раньше resolve_phases был вторым нескоординированным
 # источником списка фаз).
+# 04-tdd: enabled_by НЕТ намеренно. `quality.tdd` — ручка про ПОРЯДОК внутри фазы (писать
+# ли тесты до кода), а не про наличие фазы: завязка на неё вырезала фазу Build целиком, и
+# при tdd:false пайплайн уходил с дизайна прямо в Verify, ни разу не написав код. Флаг
+# живёт в двух местах, где он и должен: 02-design/add_steps не заводят шаги `04-test-*`,
+# а tdd-guard не требует RED перед записью в src/main.
 # 00-brd: enabled_by завязан на BRD_ENABLED — при выключенном BRD фаза остаётся в списке
 # (подмножество MAIN_PHASES для test_phase_consistency), но резолвится в skipped.
 DEFAULT_PHASES = [
@@ -172,7 +196,7 @@ DEFAULT_PHASES = [
     {"id": "02-design",       "skill": "tech-design",           "enabled_by": None,              "skip_if": None,           "gates": ["design"],     "description": "Tech design + task plan"},
     {"id": "02-eval-plan",    "skill": None,                    "enabled_by": "quality.eval_enabled", "skip_if": None,     "gates": None,           "description": "Eval-plan generated"},
     {"id": "03-jira",         "skill": "jira-task-writer",      "enabled_by": "jira.enabled",     "skip_if": None,           "gates": ["jira"],       "description": "Jira issues created"},
-    {"id": "04-tdd",          "skill": "java-spring-dev",       "enabled_by": "quality.tdd",      "skip_if": None,           "gates": None,           "description": "TDD RED→GREEN per task"},
+    {"id": "04-tdd",          "skill": "java-spring-dev",       "enabled_by": None,              "skip_if": None,           "gates": None,           "description": "Build per task (TDD RED→GREEN при quality.tdd)"},
     {"id": "05-verify",       "skill": None,                    "enabled_by": None,              "skip_if": None,           "gates": None,           "description": "Full test run + coverage"},
     {"id": "06-document",     "skill": None,                    "enabled_by": None,              "skip_if": None,           "gates": None,           "description": "Spec updated"},
 ]

@@ -289,12 +289,11 @@ def main():
     steps = manifest.get("steps", [])
     step = next((s for s in steps if s["id"] == args.step_id), None)
     if step:
-        deps = step.get("depends_on", [])
-        missing = []
-        for dep_id in deps:
-            dep = next((s for s in steps if s["id"] == dep_id), None)
-            if dep and dep.get("status") not in ("completed", "skipped"):
-                missing.append(f"'{dep_id}' (status={dep.get('status', 'unknown')})")
+        # ЕДИНЫЙ предикат с read.summarize (pp.deps_satisfied). Раньше здесь было
+        # `if dep and ...`: зависимость на НЕСУЩЕСТВУЮЩИЙ шаг молча пропускалась, и preflight
+        # объявлял готовым ровно тот шаг, который read.py считал неготовым навсегда.
+        status_by_id = {s["id"]: s.get("status") for s in steps if s.get("id")}
+        _ok, missing = pp.deps_satisfied(step, status_by_id)
         if missing:
             print(
                 f"preflight-validate: FAIL — depends_on not satisfied for '{args.step_id}': "

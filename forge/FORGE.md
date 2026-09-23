@@ -70,7 +70,7 @@ risk ladder, evidence bundle и security-гейты; доставка (commit/pu
 RED/GREEN. **R3** — коммиты, мержа сабветок, push `feature/<slug>`. **R4** — PR-мерджи,
 доставка, push в default, override гейтов, `skip-judges`. **R5** — force-push,
 `--force-with-lease`, деструктивные операции (`destructive-blocker`). `gate-guard` блокирует
-любое R2+ действие, пока `autonomy.criticality` не задана.
+любое R2+ действие, пока `decisions.criticality` не задана.
 
 ### Phases: full vs lite vs fix
 
@@ -209,8 +209,47 @@ ground/
 ```
 ground/
 ├── policy.json                                # только project-wide (build/conventions/quality/jira/docs/...)
-└── statements/<skill>/<feature>/manifest.json # только per-feature (inputs/decisions/steps)
+└── statements/<skill>/<feature>/manifest.json # только per-feature (inputs/decisions/steps
+                                               # + policy_snapshot: политика прогона)
 ```
+
+### Политика фиксируется на прогон (run-scoped snapshot)
+
+`init.py` кладёт в манифест `policy_snapshot` (копию `policy.json` на момент старта) и
+`policy_digest`. Читатели конфига получают ЭФФЕКТИВНЫЙ конфиг — снимок ЖИВОГО прогона поверх
+файла; оверлей один на всех, в `hooks/_config_loader.load_project_config` (`raw=True` отдаёт
+файл как есть — это нужно `preflight`, `init.py` и писателям `config.py`).
+
+Зачем: без фиксации правка `policy.json` посреди прогона разъезжается с уже закрытыми шагами
+(«шаги 1-5 закрылись под coverage 80%, шаги 6-10 — под 50%»), и постфактум не восстановить, по
+каким правилам собран артефакт. Раньше это обеспечивалось запретом на запись в `policy.json`,
+пока в `ground/statements/` лежал ЛЮБОЙ манифест. Запрет был слишком широким (завершённый
+вчерашний прогон блокировал конфиг сегодняшнего — второй прогон в репозитории не мог записать
+project-wide настройку вообще) и слишком слабым (правка мимо `config.py` всё равно проходила).
+
+Снимок ЗАМЕЩАЕТ политику, а не мержится поверх неё: ключ, которого не было в `policy.json` на
+момент `init.py`, до живого прогона не доедет. Иначе `set` нового ключа менял бы поведение
+прогона мимо `repin`, то есть мимо approval-гейта (дефолты живут в коде читателей, а не в
+`policy.json`, так что отсутствующий ключ и так читается как дефолт).
+
+Следствия:
+- `policy.json` пишется всегда; правка касается СЛЕДУЮЩЕГО прогона. `config.py set` при живом
+  прогоне даёт exit 0 + предупреждение и на текущий прогон не влияет — поэтому не гейтится;
+- применить к идущему прогону — `config.py repin --skill <S> --feature <F>`. Это **R4-класс**:
+  repin снимает фиксацию, то есть правит пороги, которыми харнес меряет сам себя
+  (`coverage_threshold`, `max_judge_iterations` — лимит ре-итераций судьи). Нужен
+  approval-маркер `policy-repin-<feature>` с провенансом `record_approval`; маркер
+  ОДНОРАЗОВЫЙ. Два слоя: `gate-guard.check_policy_repin` + сам `config.py`. `--dry-run` свободен;
+- `preflight` предупреждает, если `policy.json` разошёлся с `policy_digest` живого прогона;
+- завершённый прогон ничего не маскирует; выбирается САМЫЙ СВЕЖИЙ ЖИВОЙ прогон (а не «самый
+  свежий, и проверим, живой ли он» — иначе завершённая соседняя фича снимала фиксацию с живой);
+- манифест без `policy_snapshot` (прогон начат до этого изменения) читает `policy.json` напрямую.
+
+> **Принятый риск.** Без явных `skill`/`feature` снимок берётся у самого свежего ЖИВОГО
+> прогона. При двух одновременно живых фичах это может оказаться не тот прогон, из которого
+> идёт вызов — та же модель «активная фича = самый свежий манифест», по которой работают
+> `gate-guard` и `risk_ladder`. Вызывающий, знающий координаты, обязан передать их:
+> `load_project_config(root, skill=..., feature=...)`.
 
 ### Auto-migration
 
@@ -282,7 +321,9 @@ git-история и связанные `tasks/`.
 - [BR-07] `/forge` → `router` (классификация fix/lite/full); `/forge-lite`/`/forge-fix` минуя
   router. Команды `commands/*.md` (Markdown+frontmatter), без `!{cat all skills}`.
 - [BR-08] TDD по умолчанию (`quality.tdd:true`): per-task RED→GREEN, форсится `tdd-guard`.
-  `tdd_enforced` — мёртвый флаг; живой `quality.tdd`.
+  `tdd_enforced` — мёртвый флаг; живой `quality.tdd`. Он же определяет НАБОР шагов фазы Build:
+  `add_steps.py --from-task-plan` выводит `04-test-*`/`04-build-*` из `task-plan.json` и строит
+  зависимости только на реально заводимые шаги (руками эти шаги не пишутся).
 - [BR-09] Pre-flight self-check (`preflight.py`) ловит «0 hook entries» ДО старта; exit 1 =
   ENFORCEMENT OFF.
 - [BR-10] Субагент = явный вызов `agent`, не inline.

@@ -105,6 +105,12 @@
     "05-tests": ["run_judge.py", "check_coverage.py", "gradlew", "mvn"]
   },
 
+  "policy_repin": {
+    "_comment": "config.py repin переснимает policy_snapshot ИДУЩЕГО прогона текущим policy.json — R4-класс, deny-first. Прогон фиксирует политику на init.py именно для того, чтобы его шаги нельзя было закрыть под разными правилами; repin эту фиксацию снимает, то есть меняет пороги, которыми харнес меряет собственную работу (coverage_threshold, max_judge_iterations — лимит ре-итераций судьи, тот самый «STOP, спроси пользователя»). Без гейта модель могла двумя R1-командами (set + repin) поднять себе лимит и снять эскалацию. Требует approval-маркера policy-repin-<feature> с провенансом record_approval. Маркер ОДНОРАЗОВЫЙ — cmd_repin потребляет его. --dry-run свободен. Два слоя: gate-guard блокирует команду, config.py сам валидирует маркер — гейт держится и при запуске мимо харнеса.",
+    "command_pattern": "config\\.py[^\\n]*\\brepin\\b",
+    "readonly_arg_flags": ["--dry-run"],
+    "approval_prefix": "policy-repin"
+  },
   "skip_judges": {
     "_comment": "update.py --skip-judges снимает ВСЕ гейты закрытия шага (судьи, gate-result, subagent-origin, решения, артефакты) — это R4-класс, а не служебный флаг. Легитимный случай один: восстановление стейта после init --force. Требует approval-маркера ground/approvals/skip-judges-<feature>.json с провенансом record_approval (то есть явного «да» пользователя). Два слоя: gate-guard блокирует команду с флагом, update.py дополнительно валидирует маркер сам — гейт держится и при запуске мимо харнеса.",
     "command_pattern": "update\\.py",

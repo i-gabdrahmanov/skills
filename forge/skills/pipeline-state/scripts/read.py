@@ -30,6 +30,26 @@ if _cached_util is not None and getattr(_cached_util, "__file__", None) and \
 
 from _util import repo_root, safe_load_json  # noqa: E402
 
+# Готовность шага по depends_on — ЕДИНЫЙ предикат с preflight-validate (pipeline_phases).
+# Раньше правило жило здесь инлайном и расходилось: на зависимости от НЕСУЩЕСТВУЮЩЕГО шага
+# read считал шаг неготовым навсегда, а preflight — готовым. Импорт best-effort с
+# inline-fallback (тот же приём, что у update.py для _SUBAGENT_PREFIXES); копию пинит
+# test_phase_consistency.py.
+_FP_SCRIPTS = _HERE.parents[1] / "feature-pipeline" / "scripts"
+if str(_FP_SCRIPTS) not in sys.path:
+    sys.path.append(str(_FP_SCRIPTS))
+try:
+    from pipeline_phases import deps_satisfied as _deps_satisfied  # noqa: E402
+except Exception:  # noqa: BLE001 — feature-pipeline не развёрнут рядом
+    def _deps_satisfied(step, status_by_id):
+        missing = []
+        for dep in step.get("depends_on") or []:
+            if dep not in status_by_id:
+                missing.append(f"'{dep}' (нет такого шага в манифесте)")
+            elif status_by_id.get(dep) not in ("completed", "skipped"):
+                missing.append(f"'{dep}' (status={status_by_id.get(dep, 'unknown')})")
+        return (not missing), missing
+
 
 # База данных скиллов внутри проекта (НЕ dot-папка — иначе рантайм режет доступ).
 DATA_DIR = "ground"
@@ -67,14 +87,20 @@ def summarize(manifest: dict) -> dict:
     for s in steps:
         by_status.setdefault(s["status"], []).append(s["id"])
 
-    # resolved = completed + skipped (skipped считается выполненным для depends_on)
-    resolved_ids = {s["id"] for s in steps if s["status"] in ("completed", "skipped")}
+    # Готовность — через общий предикат (completed + skipped считаются выполненными;
+    # зависимость на несуществующий шаг НЕ удовлетворена — fail-closed).
+    status_by_id = {s["id"]: s["status"] for s in steps if s.get("id")}
     runnable = []
+    blocked_by_unknown = {}
     for s in steps:
         if s["status"] in ("pending", "failed"):
-            deps = s.get("depends_on", [])
-            if all(d in resolved_ids for d in deps):
+            ok, missing = _deps_satisfied(s, status_by_id)
+            if ok:
                 runnable.append(s["id"])
+            else:
+                unknown = [m for m in missing if "нет такого шага" in m]
+                if unknown:
+                    blocked_by_unknown[s["id"]] = unknown
 
     # Collect artifacts for completed steps
     artifacts_map = {}
@@ -107,6 +133,10 @@ def summarize(manifest: dict) -> dict:
         },
         "by_status": by_status,
         "next_runnable": runnable,
+        # Шаги, застрявшие на ССЫЛКЕ В НИКУДА, а не на незакрытой зависимости. Без этого поля
+        # пустой next_runnable выглядел как «всё сделано» либо как «непонятно почему стоим»:
+        # оркестратор видел пустоту и не имел ни одной зацепки, что чинить.
+        "blocked_by_unknown_deps": blocked_by_unknown or None,
         "artifacts": artifacts_map if artifacts_map else None,
     }
 

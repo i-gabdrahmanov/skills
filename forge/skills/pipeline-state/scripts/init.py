@@ -63,7 +63,25 @@ if _cached_util is not None and getattr(_cached_util, "__file__", None) and \
     del sys.modules["_util"]
 
 import judges_registry  # noqa: E402
+
+# Валидатор висячих depends_on — ЕДИНЫЙ с обоими add_steps (pipeline_phases.unknown_deps).
+# best-effort импорт + inline-fallback: feature-pipeline может быть не развёрнут рядом, но
+# терять валидацию из-за этого нельзя — правило пинит test_phase_consistency.
+try:
+    sys.path.insert(0, str(_HERE.parents[1] / "feature-pipeline" / "scripts"))
+    from pipeline_phases import unknown_deps as _unknown_deps  # noqa: E402
+except Exception:  # noqa: BLE001
+    def _unknown_deps(steps, known_ids=None):
+        known = set(known_ids or ())
+        known |= {s.get("id") for s in steps if isinstance(s, dict) and s.get("id")}
+        return [(s.get("id"), d) for s in steps if isinstance(s, dict)
+                for d in (s.get("depends_on") or []) if d not in known]
+
 from _util import repo_root, feature_docs_dir, safe_slug, safe_load_json, is_jira_key  # noqa: E402
+# Снимок политики на прогон: читаем ИСТОЧНИК (raw=True) — эффективный конфиг здесь означал бы
+# «снимок поверх снимка», а digest считаем по тому же каноникализованному виду, что и
+# preflight при сверке дрейфа.
+from _config_loader import load_project_config, policy_digest  # noqa: E402
 
 
 def load_json_arg(value: str):
@@ -284,9 +302,19 @@ def main():
 
     now = iso_now()
     pipeline_id = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
+    policy_at_start = load_project_config(project, raw=True) or {}
 
     # Маска required_judges — из единого реестра references/judges-registry.json
     # (judges_registry.match_step). Раньше дублировалась здесь и в patch_manifest_judges.py.
+    # Висячий depends_on — отказ на записи, а не молчаливый стопор при чтении: шаг с
+    # зависимостью на несуществующий id не станет готовым никогда (см. add_steps.
+    # _validate_depends_on и pipeline_phases.deps_satisfied).
+    _bad_deps = [f"'{sid}' → '{dep}'" for sid, dep in _unknown_deps(steps_data)]
+    if _bad_deps:
+        print(f"ERROR: depends_on ссылается на шаги вне набора: {', '.join(_bad_deps)}. "
+              f"Пайплайн встал бы молча — добавь шаг или убери зависимость.", file=sys.stderr)
+        sys.exit(2)
+
     steps = []
     for s in steps_data:
         if "id" not in s:
@@ -315,6 +343,15 @@ def main():
         "context": context_data,
         "inputs": dict(inputs_data),         # копия, чтобы --inputs не шерился по ссылке
         "decisions": {},                      # заполняется в процессе прогона (mode_task, criticality, ...)
+        # Политика, под которой прогон стартовал. Гейты и судьи читают ЕЁ, а не текущий
+        # policy.json (оверлей в _config_loader.load_project_config), поэтому правка файла
+        # посреди прогона не может разъехаться с уже закрытыми шагами: «шаги 1-5 под
+        # coverage 80%, шаги 6-10 под 50%» перестаёт быть достижимым состоянием.
+        # Снимается ВСЯ политика, не только quality.*: одно правило вместо списка
+        # исключений, который пришлось бы пополнять при каждом новом ключе.
+        # Применить свежий policy.json к идущему прогону — явный `config.py repin`.
+        "policy_snapshot": policy_at_start,
+        "policy_digest": policy_digest(policy_at_start),
         "steps": steps,
     }
 

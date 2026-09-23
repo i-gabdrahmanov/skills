@@ -110,9 +110,13 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/record_approval.py \
 на прошлых прогонах модель дописывала только `criticality`, а `auto_max_risk` оставался дефолтным
 `R1`, и для low/high порог риска был неверным:
 ```bash
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/set_criticality.py --criticality <low|medium|high>
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/set_criticality.py \
+    --criticality <low|medium|high> --skill feature-pipeline --feature <slug> --project-root <project>
 ```
-Только теперь иди дальше — `gate-guard` читает `autonomy.auto_max_risk` из конфига и применяет порог
-per-feature.
+`--skill`/`--feature` ОБЯЗАТЕЛЬНЫ (без них argparse падает): решение per-feature, и скрипт пишет
+его в `manifest.json` именно этой фичи.
+
+Только теперь иди дальше — `gate-guard` читает `decisions.auto_max_risk` из манифеста активной
+фичи и применяет порог per-feature.
 
 ---

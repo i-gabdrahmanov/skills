@@ -134,7 +134,7 @@ def find_project_root(start: Path) -> Path | None:
     return None
 
 
-def load_project_config(root: Path) -> dict:
+def _load_policy_file(root: Path) -> dict:
     """Read project-wide config from ``<root>/ground/`` with a 3-tier fallback.
 
     Priority order:
@@ -191,6 +191,183 @@ def load_project_config(root: Path) -> dict:
             )
             return {}
     return {}
+
+
+# ── Run-scoped policy snapshot ────────────────────────────────────────────────
+# Прогон обязан целиком идти по той политике, под которой стартовал. Раньше это
+# обеспечивалось запретом: `config.py set` на policy-ключ отбивался, пока в
+# ground/statements/ лежал ЛЮБОЙ manifest.json. Запрет был и слишком широким (вчерашний
+# завершённый прогон блокировал конфиг сегодняшнего), и слишком слабым (правка мимо
+# config.py — руками, другим инструментом — по-прежнему меняла правила посреди прогона).
+#
+# Теперь наоборот: init.py кладёт снимок политики в манифест, а читатели получают
+# «эффективный» конфиг — снимок ЖИВОГО прогона поверх файла. policy.json снова пишется
+# свободно, правка касается следующего прогона; применить её к текущему — явный
+# `config.py repin` (он же пишет событие в журнал прогона).
+#
+# Оверлей живёт ЗДЕСЬ, потому что load_project_config — единственная точка чтения конфига
+# для хуков и скриптов (tdd-guard, eval-guard, run_judge, update.py, record_gate,
+# _phase_eligibility, check_tests_red, …). Пиши он в каждом читателе — половина бы отстала.
+
+_LIVE_STEP_STATUSES = frozenset({"pending", "in_progress", "failed"})
+
+
+def run_is_live(manifest: dict) -> bool:
+    """Идёт ли прогон: есть ли шаг в незавершённом статусе.
+
+    Завершённый (или пустой) прогон живым НЕ считается, и это не косметика. Во-первых,
+    именно это чинит «второй прогон в том же репозитории»: манифест вчерашней фичи лежит
+    на месте, пока её не заархивировали. Во-вторых, это закрывает окно между «роутер
+    записал project-wide конфиг» и «бриф ветки вызвал init.py»: в этот момент активным
+    манифестом ещё числится вчерашний, и его снимок замаскировал бы свежую запись.
+    """
+    if not isinstance(manifest, dict):
+        return False
+    steps = manifest.get("steps")
+    if not isinstance(steps, list):
+        return False
+    return any(isinstance(s, dict) and s.get("status") in _LIVE_STEP_STATUSES for s in steps)
+
+
+def _apply_snapshot(base: dict, snapshot: dict) -> dict:
+    """Снимок ЗАМЕЩАЕТ политику целиком, а не мержится поверх неё.
+
+    Сначала здесь был глубокий мерж — «ключ, которого в снимке нет, пусть доезжает из файла,
+    иначе прогон поедет на пустом значении вместо дефолта». Рассуждение неверное, и дыру оно
+    открывало настоящую: дефолты живут в КОДЕ читателей (`cfg.get(k, default)`), а не в
+    policy.json, поэтому отсутствующий ключ и так читается как дефолт. Зато при мерже любой
+    ключ, которого не было в policy.json на момент init.py, оставался НЕ зафиксированным — и
+    `config.py set quality.max_judge_iterations 20` посреди прогона менял лимит ре-итераций
+    судьи мимо всякого repin, то есть мимо approval-гейта.
+
+    Замещение делает инвариант честным: прогон видит РОВНО ту политику, под которой стартовал.
+    Ключ, появившийся в файле позже, до него не доедет — это и есть цель. Применить свежий
+    policy.json к идущему прогону можно только через `config.py repin` (R4, approval).
+    """
+    return dict(snapshot)
+
+
+def _iter_manifests(root: Path):
+    """(mtime, dict) всех манифестов ground/statements/*/*/ — новые первыми."""
+    base = Path(root) / "ground" / "statements"
+    if not base.is_dir():
+        return []
+    out = []
+    try:
+        skill_dirs = list(base.iterdir())
+    except OSError:
+        return []
+    for skill_dir in skill_dirs:
+        if not skill_dir.is_dir():
+            continue
+        try:
+            feature_dirs = list(skill_dir.iterdir())
+        except OSError:
+            continue
+        for d in feature_dirs:
+            if not d.is_dir() or d.name == "archived":
+                continue
+            mp = d / "manifest.json"
+            if not mp.exists():
+                continue
+            try:
+                mtime = mp.stat().st_mtime
+                data = json.loads(mp.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(data, dict):
+                out.append((mtime, data))
+    return sorted(out, key=lambda t: -t[0])
+
+
+def active_policy_snapshot(root: Path, skill: str | None = None,
+                           feature: str | None = None) -> dict | None:
+    """Снимок политики ЖИВОГО прогона, либо None.
+
+    `skill`/`feature` — точный адрес прогона, если вызывающий его знает. Без них берётся
+    САМЫЙ СВЕЖИЙ ЖИВОЙ прогон.
+
+    Важно: именно «свежий живой», а не «свежий, и проверим, живой ли он». Второе — то, как
+    это было написано сначала, — давало дыру: завершённый прогон с более новым mtime
+    перекрывал живой, `run_is_live` возвращал False, оверлей не применялся вообще, и живая
+    фича молча съезжала на текущий policy.json. То есть фиксация политики отваливалась ровно
+    тогда, когда рядом заканчивали соседнюю фичу.
+
+    ОГРАНИЧЕНИЕ (унаследованное, не чинится здесь): при ДВУХ живых прогонах без явных
+    skill/feature выбирается свежий по mtime — он может оказаться не тем, из которого идёт
+    вызов. Это та же модель «активная фича = самый свежий манифест», по которой работают
+    gate-guard и risk_ladder (принятый риск, см. FORGE.md). Вызывающий, знающий координаты,
+    обязан их передать.
+
+    None = накладывать нечего: живых прогонов нет, либо у найденного нет `policy_snapshot`
+    (прогон начат до появления снимков — читает policy.json напрямую).
+    """
+    try:
+        if skill and feature:
+            mp = manifest_path(root, skill, feature)
+            if not mp.exists():
+                return None
+            manifest = json.loads(mp.read_text(encoding="utf-8"))
+            candidates = [manifest] if isinstance(manifest, dict) else []
+        else:
+            candidates = [m for _mt, m in _iter_manifests(root)]
+    except (OSError, json.JSONDecodeError):
+        return None
+    except Exception:  # noqa: BLE001 — конфиг обязан читаться даже при кривом деплое
+        return None
+
+    for manifest in candidates:
+        if not run_is_live(manifest):
+            continue
+        snap = manifest.get("policy_snapshot")
+        return snap if isinstance(snap, dict) and snap else None
+    return None
+
+
+def apply_policy_snapshot(root: Path, cfg: dict, skill: str | None = None,
+                          feature: str | None = None) -> dict:
+    """``cfg`` с наложенным снимком живого прогона (если он есть), иначе ``cfg`` как был.
+
+    Для вызывающих, которые читают policy.json САМИ, потому что им нужна своя обработка
+    ошибок (resolve_phases валится с exit 1 на битом JSON — loader его глотает и отдаёт {},
+    а «активных фаз нет» — негодная диагностика для сломанного конфига). Оверлей им всё
+    равно обязателен: иначе резолвер фаз окажется единственным читателем мимо снимка, и
+    quality.eval_enabled/jira.enabled разъедутся с гейтами.
+    """
+    snap = active_policy_snapshot(root, skill, feature)
+    return _apply_snapshot(cfg, snap) if snap else cfg
+
+
+def load_project_config(root: Path, *, raw: bool = False, skill: str | None = None,
+                        feature: str | None = None) -> dict:
+    """Эффективный конфиг проекта: снимок живого прогона поверх ground/policy.json.
+
+    ``raw=True`` отдаёт файл как записан, без оверлея. Так обязаны читать ровно четыре
+    типа вызывающих, и у каждого своя причина:
+      • preflight — детектит «конфиг не инициализирован» по пустоте; со снимком удалённый
+        policy.json выглядел бы живым;
+      • init.py — сам снимает снимок, читать собственный вывод бессмысленно;
+      • config.py (get/set/validate) — работает с ИСТОЧНИКОМ, иначе `get` показывал бы не
+        то, что лежит в файле, а `validate` проверял бы не тот документ;
+      • init_pipeline_config.py — писатель.
+
+    Всем остальным (гейты, судьи, резолвер фаз) нужен именно эффективный конфиг: они
+    принимают решения ВНУТРИ прогона и обязаны видеть его политику.
+    """
+    base = _load_policy_file(Path(root))
+    return base if raw else apply_policy_snapshot(root, base, skill, feature)
+
+
+def policy_digest(policy: dict) -> str:
+    """Отпечаток политики для детекта дрейфа (init.py пишет, preflight сверяет).
+
+    Каноникализация — sort_keys + компактные разделители: перестановка ключей при
+    перезаписи файла не должна выглядеть как смена правил.
+    """
+    import hashlib
+    blob = json.dumps(policy or {}, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def load_manifest(root: Path, skill: str, feature: str) -> dict:

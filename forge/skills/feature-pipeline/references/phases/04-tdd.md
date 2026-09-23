@@ -84,10 +84,17 @@ agent(
 agent(subagent_type="general-purpose", description="red-judge for <taskId>",
       prompt="<вывод `get_prompt.py 7.2` (red-judge)>")
 ```
-Затем:
+red-judge — гибрид: детерминированный пол (прогон тестов фичи — они обязаны падать) плюс
+вердикт субагента (тесты специфицируют acceptance, а не являются пустышками). **Сохрани
+JSON субагента в файл и ингестни** — ингест сам пересчитывает пол и AND-ит с вердиктом:
 ```bash
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py red <slug> --recheck
+# verdict.json — JSON, который вернул субагент red-judge ({"passed":..., "blocking_issues":[...]})
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py red <slug> --from-output verdict.json
 ```
+> Отдельный `--recheck` здесь НЕ нужен: ингест уже прогнал детерминированный слой, а он
+> запускает тестовый сьют — второй прогон стоит времени и ничего не добавляет. Ре-итерация
+> после FAIL — новый вердикт субагента через `--from-output` (§0.6), а не повторный запуск
+> судьи на том же артефакте.
 
 **При PASS — зафиксируй RED-гейт через раннер и закрой `04-test-<taskId>`** (без evidence от
 `record_gate` update.py шаг не закроет — самоотчёт субагента не доказательство):

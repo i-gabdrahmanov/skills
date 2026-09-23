@@ -169,26 +169,69 @@ class TestConfigRouting(unittest.TestCase):
         self.assertEqual(applied.get("file", "").endswith("policy.json"), True,
                          f"set указал не policy.json: {applied}")
 
-    # ── 5. policy.json immutable, когда есть активная фича ───────────────────
+    # ── 5. policy.json пишется и под живым прогоном, но прогон идёт по снимку ──
+    #
+    # Раньше здесь пинился ЗАПРЕТ: `set` на policy-ключ отбивался, пока в
+    # ground/statements/ лежал любой manifest.json. Запрет снят вместе с причиной —
+    # прогон защищён снимком политики в своём манифесте, а не блокировкой файла.
+    # Запрет к тому же был и слишком широким (завершённый вчерашний прогон блокировал
+    # конфиг сегодняшнего), и слишком слабым (правка файла мимо config.py всё равно
+    # меняла правила посреди прогона).
 
-    def test_policy_immutable_when_active_feature_exists(self) -> None:
+    def test_policy_write_under_live_run_warns_but_succeeds(self) -> None:
+        _seed_policy(self.tmpdir, body={"quality": {"coverage_threshold": 0.8}})
         _seed_manifest(self.tmpdir, "forgefix", "fix-x",
-                       body={"feature": "fix-x", "skill": "forgefix"})
-        # policy.json можно не создавать — immutability-проверка стреляет раньше
-        # загрузки файла.
+                       body={"feature": "fix-x", "skill": "forgefix",
+                             "steps": [{"id": "fix-diag", "status": "pending"}],
+                             "policy_snapshot": {"quality": {"coverage_threshold": 0.8}}})
 
         r = _run(self.tmpdir, "set", "quality.coverage_threshold", "0.5")
 
-        self.assertNotEqual(r.returncode, 0,
-                            f"ожидался nonzero exit при активной фиче, "
-                            f"получили {r.returncode}; stdout={r.stdout!r}")
-        # JSON-блок пишется в stdout (не stderr) — print(json.dumps({...})).
-        combined = (r.stdout or "") + (r.stderr or "")
-        self.assertTrue(
-            "immutable" in combined.lower() or "active feature" in combined.lower(),
-            f"в выводе нет 'immutable'/'active feature': stdout={r.stdout!r} "
-            f"stderr={r.stderr!r}",
-        )
+        self.assertEqual(r.returncode, 0,
+                         f"запись под живым прогоном должна проходить: rc={r.returncode} "
+                         f"stdout={r.stdout!r} stderr={r.stderr!r}")
+        data = json.loads((self.tmpdir / "ground" / "policy.json").read_text(encoding="utf-8"))
+        self.assertAlmostEqual(data["quality"]["coverage_threshold"], 0.5, places=6)
+        self.assertIn("repin", (r.stderr or "").lower(),
+                      f"нет предупреждения про снимок/repin: stderr={r.stderr!r}")
+
+    def test_live_run_snapshot_masks_policy_write(self) -> None:
+        """Записали в файл — но идущий прогон продолжает видеть своё значение."""
+        _seed_policy(self.tmpdir, body={"quality": {"coverage_threshold": 0.8}})
+        _seed_manifest(self.tmpdir, "forgefix", "fix-x",
+                       body={"feature": "fix-x", "skill": "forgefix",
+                             "steps": [{"id": "fix-diag", "status": "pending"}],
+                             "policy_snapshot": {"quality": {"coverage_threshold": 0.8}}})
+        _run(self.tmpdir, "set", "quality.coverage_threshold", "0.5")
+
+        sys.path.insert(0, str(HOOKS_DIR))
+        import importlib
+        cl = importlib.import_module("_config_loader")
+        eff = cl.load_project_config(self.tmpdir)["quality"]["coverage_threshold"]
+        raw = cl.load_project_config(self.tmpdir, raw=True)["quality"]["coverage_threshold"]
+        self.assertAlmostEqual(eff, 0.8, places=6,
+                               msg="живой прогон увидел правку — снимок не применился")
+        self.assertAlmostEqual(raw, 0.5, places=6, msg="raw обязан отдавать файл как есть")
+
+    def test_completed_run_does_not_mask_policy(self) -> None:
+        """Исходная жалоба: второй прогон в том же репозитории. Завершённый манифест
+        прошлой фичи больше не блокирует конфиг и не подменяет его собой."""
+        _seed_policy(self.tmpdir, body={"quality": {"coverage_threshold": 0.8}})
+        _seed_manifest(self.tmpdir, "forgefix", "fix-old",
+                       body={"feature": "fix-old", "skill": "forgefix",
+                             "steps": [{"id": "fix-diag", "status": "completed"}],
+                             "policy_snapshot": {"quality": {"coverage_threshold": 0.8}}})
+
+        r = _run(self.tmpdir, "set", "quality.coverage_threshold", "0.5")
+        self.assertEqual(r.returncode, 0,
+                         f"завершённый прогон блокирует конфиг: stdout={r.stdout!r}")
+
+        sys.path.insert(0, str(HOOKS_DIR))
+        import importlib
+        cl = importlib.import_module("_config_loader")
+        eff = cl.load_project_config(self.tmpdir)["quality"]["coverage_threshold"]
+        self.assertAlmostEqual(eff, 0.5, places=6,
+                               msg="снимок завершённого прогона всё ещё маскирует policy.json")
 
     # ── 6. policy.json пишется, когда нет активной фичи ─────────────────────
 

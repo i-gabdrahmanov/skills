@@ -144,13 +144,21 @@ def _find_judge_verdict(slug: str, judge_name: str) -> Path:
     return GROUND_DIR / "statements" / SKILL_NAME / slug / "judges" / f"{judge_name}.json"
 
 
-def _save_verdict(slug: str, judge_name: str, verdict: dict) -> Path:
+def _save_verdict(slug: str, judge_name: str, verdict: dict, layer: str = "final") -> Path:
     """Пишет вердикт судьи строкой в журнал прогона (раньше: judges/<name>.json на судью).
 
     produced_by проставляет журнал по kind — поле из самого вердикта убираем, чтобы
-    провенанс нельзя было подделать содержимым."""
+    провенанс нельзя было подделать содержимым.
+
+    `layer` различает две записи, которые гибридный судья делает под ОДНИМ именем:
+      • "llm"   — сырой вердикт субагента (--from-output), ВХОД для слияния;
+      • "final" — свёртка «пол AND субагент», ИТОГ (его читают update.py и гейты).
+    Без метки слияние вычитывало собственный итог как «вердикт субагента» и AND-ило его
+    второй раз — детерминированный FAIL залипал навсегда (см. FE.judge(layer=...)).
+    """
     payload = {k: v for k, v in verdict.items() if k != "judge"}
-    FE.append_event(PROJECT_ROOT, SKILL_NAME, slug, "judge", judge=judge_name, **payload)
+    FE.append_event(PROJECT_ROOT, SKILL_NAME, slug, "judge",
+                    judge=judge_name, layer=layer, **payload)
     return FE.events_path(PROJECT_ROOT, SKILL_NAME, slug)
 
 
@@ -248,6 +256,79 @@ def _maybe_escalate(slug: str, judge_name: str, project_root: Path) -> bool:
     print(f"⛔ ESCALATE: {judge_name} {count}/{limit} iterations exhausted — stop and ask user",
           file=sys.stderr)
     return True
+
+
+def _dedup(seq: list) -> list:
+    """Стабильная дедупликация (dict в checks нехешируем — сравниваем по repr)."""
+    seen, out = set(), []
+    for item in seq:
+        key = repr(item)
+        if key not in seen:
+            seen.add(key)
+            out.append(item)
+    return out
+
+
+def _merge_saved_llm(judge_name: str, slug: str, det: dict) -> dict:
+    """AND детерминированного слоя с СОХРАНЁННЫМ вердиктом LLM-судьи.
+
+    Зачем. Гибридный судья — это два слоя, и оба обязаны доживать до закрытия шага. Пол
+    (детерминированный) ингест применял, а вот обратную сторону — нет: `check_brd`/`check_eval`/
+    `check_reuse` сохранённый LLM-вердикт не читали вовсе, и `--recheck`, который брифы
+    предписывают запускать СРАЗУ после `--from-output`, пересчитывал слой с нуля и дописывал
+    в журнал свежий PASS. `FE.judge` отдаёт последнюю запись — LLM-FAIL с его blocking_issues
+    исчезал, `_clear_errors` сносил errors.json, и `update.py` закрывал шаг. Для `reuse` это
+    снимало судью целиком: вся семантика («новый helper дублирует util проекта») живёт только
+    в LLM-слое, детерминированный — это несколько regex'ов.
+
+    `check_build` этим не болел ровно потому, что перечитывал свой вердикт через `FE.judge`.
+    Здесь та же логика, вынесенная для остальных гибридов.
+
+    Вердикта нет → возвращаем `det` как есть: у `eval` (первый прогон) и `reuse` из
+    minor-defect-fix (advisory) LLM-слоя может не быть по дизайну, и требовать его — значит
+    ломать документированный поток. Пол при этом никуда не девается.
+
+    ОГРАНИЧЕНИЕ (принятое, не чинится здесь). Вердикты ключуются ИМЕНЕМ судьи, а не задачей,
+    поэтому у пер-задачных судей (`red` на `04-test-<taskId>`, `build`/`reuse` на
+    `04-build-<taskId>`) ингест для T2 перекрывает вердикт T1. Это держится тем, что шаги
+    задач идут последовательно: к моменту ингеста T2 шаг T1 уже закрыт своим вердиктом, а
+    откат фазы (`rollback`) ставит в журнале границу и обнуляет оба. Параллельная работа над
+    двумя задачами одной фичи эту схему сломает — тогда вердикты нужно ключевать парой
+    (судья, шаг), и менять это придётся в `forge_events.judge`, а не тут.
+
+    Залипает между прогонами ровно ОДИН слой — LLM: сохранённый вердикт субагента мержится
+    снова, пока субагент не пришлёт новый через `--from-output`. Детерминированный слой
+    пересчитывается на каждом `--recheck` с нуля, поэтому починка артефакта снимает его FAIL
+    сама. Читаем при этом ИМЕННО слой "llm" (FE.judge(layer=...)), а не последнюю запись:
+    свёртка пишется в тот же поток под тем же именем судьи, и без фильтра слияние вычитывало
+    собственный итог — детерминированный FAIL AND-ился сам с собой и не снимался уже никогда.
+    """
+    llm = FE.judge(PROJECT_ROOT, SKILL_NAME, slug, judge_name, layer="llm")
+    if not llm:
+        return det
+
+    ok, verr = validate_verdict(llm)
+    if not ok:
+        # Fail-closed: невалидный вердикт неотличим от подделки, а молча считать его
+        # отсутствующим — значит пропустить шаг по одному детерминированному слою.
+        return _make_verdict(
+            judge_name, slug, False,
+            list(det.get("checks", [])) + [
+                {"name": f"Вердикт {judge_name} валиден", "status": "FAIL",
+                 "detail": "; ".join(verr), "severity": "error"}],
+            list(det.get("blocking_issues", [])) + [
+                f"вердикт {judge_name} невалиден: {'; '.join(verr)}"],
+            list(det.get("warnings", [])),
+            f"{judge_name}: невалидный вердикт субагента (fail-closed)")
+
+    passed = bool(det.get("passed")) and bool(llm.get("passed"))
+    llm_note = "OK" if llm.get("passed") else f"{len(llm.get('blocking_issues') or [])} blocking"
+    return _make_verdict(
+        judge_name, slug, passed,
+        _dedup(list(det.get("checks", [])) + list(llm.get("checks", []))),
+        _dedup(list(det.get("blocking_issues", [])) + list(llm.get("blocking_issues", []))),
+        _dedup(list(det.get("warnings", [])) + list(llm.get("warnings", []))),
+        f"det: {det.get('summary', '')} | LLM: {llm_note}")
 
 
 def _make_verdict(
@@ -517,7 +598,8 @@ def check_eval(slug: str, feature_dir: Path | None) -> dict:
     if warnings:
         summary += f" {len(warnings)} warning(s)."
 
-    return _make_verdict("eval-judge", slug, passed, checks, blocking_issues, warnings, summary)
+    det = _make_verdict("eval-judge", slug, passed, checks, blocking_issues, warnings, summary)
+    return _merge_saved_llm("eval-judge", slug, det)
 
 
 def _canon_module(m: "str | None") -> "str | None":
@@ -641,12 +723,13 @@ def check_red(slug: str, feature_dir: Path | None) -> dict:
         _relevant = [t for t in _tp.get("tasks", [])
                      if _pp.task_touches_code(t) and not _pp.task_is_test_exempt(t, _cfg)]
         if not _relevant:
-            return _make_verdict(
+            det = _make_verdict(
                 "red-judge", slug, True,
                 [{"name": "test:exempt", "status": "PASS",
                   "detail": "все задачи фичи test-exempt (no_test_layers/no_test) — RED не требуется",
                   "severity": "info"}],
                 [], [], "0/0 — нет задач, требующих RED (test-exempt)")
+            return _merge_saved_llm("red-judge", slug, det)
 
     checks = []
     blocking_issues = []
@@ -787,7 +870,8 @@ def check_red(slug: str, feature_dir: Path | None) -> dict:
     if blocking_issues:
         summary += f", {len(blocking_issues)} blocking"
 
-    return _make_verdict("red-judge", slug, all_passed, checks, blocking_issues, warnings, summary)
+    det = _make_verdict("red-judge", slug, all_passed, checks, blocking_issues, warnings, summary)
+    return _merge_saved_llm("red-judge", slug, det)
 
 
 def _changed_src_files(base: str = "HEAD", main_only: bool = True) -> list:
@@ -1038,7 +1122,7 @@ def check_build(slug: str, feature_dir: Path | None) -> dict:
         )
     # Вердикт субагента — из журнала прогона (при отсутствии записи фолбэк на старый
     # judges/build-judge.json делает сам FE.judge).
-    verdict = FE.judge(PROJECT_ROOT, SKILL_NAME, slug, "build-judge")
+    verdict = FE.judge(PROJECT_ROOT, SKILL_NAME, slug, "build-judge", layer="llm")
 
     if not verdict:
         return _make_verdict(
@@ -1852,7 +1936,8 @@ def check_brd(slug: str, feature_dir: Path | None) -> dict:
     if warnings:
         summary += f" {len(warnings)} warning(s)."
 
-    return _make_verdict("brd-judge", slug, passed, checks, blocking_issues, warnings, summary)
+    det = _make_verdict("brd-judge", slug, passed, checks, blocking_issues, warnings, summary)
+    return _merge_saved_llm("brd-judge", slug, det)
 
 
 # Детерминированный слой reuse-judge: «велосипеды» — код, дублирующий доступные библиотеки/stdlib.
@@ -1940,8 +2025,9 @@ def check_reuse(slug: str, feature_dir: Path | None) -> dict:
         checks.append({"name": "Изменённый production-код", "status": "SKIP",
                        "detail": f"нет добавленных строк в src/main (base={DIFF_BASE})",
                        "severity": "info"})
-        return _make_verdict("reuse-judge", slug, True, checks, [], [],
-                             "Нет production-изменений для проверки")
+        det = _make_verdict("reuse-judge", slug, True, checks, [], [],
+                            "Нет production-изменений для проверки")
+        return _merge_saved_llm("reuse-judge", slug, det)
 
     deps = _load_reuse_deps()
     if not deps:
@@ -1982,7 +2068,8 @@ def check_reuse(slug: str, feature_dir: Path | None) -> dict:
         summary += f" {len(blocking_issues)} blocking issue(s)."
     if warnings:
         summary += f" {len(warnings)} warning(s)."
-    return _make_verdict("reuse-judge", slug, passed, checks, blocking_issues, warnings, summary)
+    det = _make_verdict("reuse-judge", slug, passed, checks, blocking_issues, warnings, summary)
+    return _merge_saved_llm("reuse-judge", slug, det)
 
 
 # ====== MAIN ======
@@ -2003,14 +2090,28 @@ PHASE_MAP = {
 # Гибридные судьи, чей детерминированный слой пересчитывается ПРЯМО на ингесте LLM-вердикта
 # (--from-output). Иначе штамп «PASS» от LLM-судьи на мусорном артефакте сохранялся как
 # passed:true и update.py закрывал шаг, ни разу не выполнив детерминированные проверки
-# (--recheck не обязателен и мог не запускаться). Две семантики слоя:
-#   "standalone"   — check_* не знает про LLM-вердикт (brd/eval) → AND-им явно;
-#   "merges_saved" — check_* САМ читает СОХРАНЁННЫЙ вердикт и применяет пол (build: stubs)
-#                    → его результат уже финальный (сохранять ДО пересчёта).
+# (--recheck не обязателен и мог не запускаться).
+#
+# Все гибриды теперь "merges_saved": их check_* САМ читает СОХРАНЁННЫЙ вердикт субагента
+# (build — через FE.judge напрямую, brd/eval/reuse — через _merge_saved_llm) и AND-ит с полом,
+# поэтому результат check_* уже финальный, а LLM-вердикт надо сохранить ДО пересчёта.
+#
+# Раньше brd/eval стояли здесь как "standalone" (их check_* про LLM-вердикт не знал, и AND
+# делался прямо тут, на ингесте). Это чинило только ингест: следующий же `--recheck`, который
+# брифы предписывают запускать сразу после, пересчитывал слой с нуля БЕЗ LLM-половины и
+# дописывал в журнал свежий PASS поверх LLM-FAIL. Ветка "standalone" снята вместе с причиной.
 INGEST_FLOOR_PHASES = {
-    "brd": "standalone",
-    "eval": "standalone",
+    "brd": "merges_saved",
+    "eval": "merges_saved",
+    "reuse": "merges_saved",
     "build": "merges_saved",
+    # red был единственным судьёй, чей LLM-слой вызывался, но НИКУДА не сохранялся: бриф
+    # звал субагента §7.2, а следующей строкой делал `--recheck`, который пересчитывает
+    # только детерминированный слой (прогон тестов). Ответ субагента — «тесты покрывают
+    # acceptance, а не являются пустышками» — оплачивался и выбрасывался, и реестр судей
+    # при этом объявлял red-judge как pass-through. Теперь ингест обязателен, как у
+    # остальных гибридов: прогон тестов — решающий пол, вердикт субагента — второй слой.
+    "red": "merges_saved",
 }
 
 
@@ -2135,7 +2236,7 @@ def main():
         )
         # Сохраняем LLM-вердикт ДО пересчёта пола: гибридный check_build
         # читает сохранённый вердикт с диска и мержит его с полом сам.
-        out_path = _save_verdict(args.slug, judge_name, verdict)
+        out_path = _save_verdict(args.slug, judge_name, verdict, layer="llm")
         # Детерминированный пол на ингесте (INGEST_FLOOR_PHASES): LLM-вердикт сам по себе
         # шаг не закрывает — пересчитываем детерминированный слой.
         if args.phase in INGEST_FLOOR_PHASES:
@@ -2145,19 +2246,9 @@ def main():
                 print(f"ERROR: детерминированный слой {args.phase} упал при ингесте: {e}",
                       file=sys.stderr)
                 sys.exit(2)
-            if INGEST_FLOOR_PHASES[args.phase] == "merges_saved":
-                # check_* уже прочитал сохранённый LLM-вердикт и применил пол — результат финальный
-                verdict = det
-            else:
-                # standalone-слой (brd/eval) про LLM-вердикт не знает — AND-им явно
-                verdict = _make_verdict(
-                    judge_name, args.slug,
-                    bool(verdict.get("passed")) and bool(det.get("passed")),
-                    det.get("checks", []) + verdict.get("checks", []),
-                    det.get("blocking_issues", []) + verdict.get("blocking_issues", []),
-                    det.get("warnings", []) + verdict.get("warnings", []),
-                    f"det: {det.get('summary', '')} | LLM: {verdict.get('summary', '')}",
-                )
+            # Все гибриды — "merges_saved": check_* сам прочитал сохранённый LLM-вердикт
+            # и применил к нему пол, поэтому его результат уже финальный.
+            verdict = det
             out_path = _save_verdict(args.slug, judge_name, verdict)
         if verdict["passed"]:
             _clear_errors(args.slug)
@@ -2167,6 +2258,11 @@ def main():
         print(f"  Verdict saved: {out_path}")
         for issue in verdict.get("blocking_issues", []):
             print(f"  BLOCKING: {issue}")
+        # Лимит ре-итераций форсится и здесь. Ингест был единственной веткой run_judge, которая
+        # НИКОГДА не отдавала exit 3, хотя SKILL.md §0.6 обещает «run_judge сам это форсит»:
+        # оркестратор, гоняющий судью через --from-output, крутил ре-итерации без тормоза.
+        if not verdict["passed"] and _maybe_escalate(args.slug, judge_name, project_root):
+            sys.exit(3)
         sys.exit(0 if verdict["passed"] else 1)
 
     # --recheck: перепроверяем реально (для eval/spec/red с детерминированными проверками)
