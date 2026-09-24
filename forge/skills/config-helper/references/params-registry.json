@@ -1123,6 +1123,211 @@
         "command substitution",
         "форк-синтаксис"
       ]
+    },
+    {
+      "id": "spec.profile",
+      "file": "pipeline",
+      "path": "spec.profile",
+      "type": "string",
+      "default": "forge",
+      "category": "docs",
+      "sensitive": false,
+      "title": "Состав разделов мастера",
+      "description": "Какой СОСТАВ разделов требует гейт мастера: forge (дефолт — разделы форже-шаблона, включая ДКБ: границы доверия, модель угроз, регуляторка) | detected (состав не навязывается, проверяются только требования и сценарии) | minimal (то же плюс обязателен раздел требований). Форму блока требования держит spec.grammar.*",
+      "aliases": [
+        "профиль спеки",
+        "состав разделов",
+        "spec profile"
+      ],
+      "enum": [
+        "forge",
+        "detected",
+        "minimal"
+      ]
+    },
+    {
+      "id": "spec.grammar.requirement_kind",
+      "file": "pipeline",
+      "path": "spec.grammar.requirement_kind",
+      "type": "string",
+      "default": "id-colon",
+      "category": "docs",
+      "sensitive": false,
+      "title": "Вид заголовка требования",
+      "description": "Форма блока требования в мастере: id-colon (### REQ-0007: <название>) | title-only (## Requirement: <название>, тождество по названию) | numbered (### 3.1 <название>) | bullet-id (- **REQ-0007** — <название>). Снимается ресерчем: /forge-spec research",
+      "aliases": [
+        "форма требования",
+        "вид заголовка требования",
+        "requirement kind",
+        "грамматика спеки"
+      ],
+      "enum": [
+        "id-colon",
+        "title-only",
+        "numbered",
+        "bullet-id"
+      ]
+    },
+    {
+      "id": "spec.grammar.requirement_level",
+      "file": "pipeline",
+      "path": "spec.grammar.requirement_level",
+      "type": "int",
+      "default": 3,
+      "category": "docs",
+      "sensitive": false,
+      "title": "Уровень заголовка требования",
+      "description": "Сколько решёток у заголовка требования в мастере (### → 3). Дефолт 3 — форже-родная форма",
+      "aliases": [
+        "уровень требования",
+        "requirement level",
+        "глубина заголовка требования"
+      ],
+      "min": 1,
+      "max": 6
+    },
+    {
+      "id": "spec.grammar.requirement_lead",
+      "file": "pipeline",
+      "path": "spec.grammar.requirement_lead",
+      "type": "string",
+      "default": "",
+      "category": "docs",
+      "sensitive": false,
+      "title": "Ведущее слово заголовка требования",
+      "description": "Слово перед названием у формы title-only: «Requirement» для «## Requirement: <название>». Пусто — заголовок несёт только название (тогда требования ищутся лишь внутри раздела требований)",
+      "aliases": [
+        "лид требования",
+        "requirement lead",
+        "ведущее слово"
+      ]
+    },
+    {
+      "id": "spec.grammar.requirement_scope",
+      "file": "pipeline",
+      "path": "spec.grammar.requirement_scope",
+      "type": "string",
+      "default": "document",
+      "category": "docs",
+      "sensitive": false,
+      "title": "Где искать требования",
+      "description": "document (дефолт) — по всему мастеру; section — только внутри раздела требований. Нужно безыдентификаторной форме, иначе требованием станет каждый заголовок файла",
+      "aliases": [
+        "скоуп требований",
+        "requirement scope",
+        "где искать требования"
+      ],
+      "enum": [
+        "document",
+        "section"
+      ]
+    },
+    {
+      "id": "spec.grammar.scenario_style",
+      "file": "pipeline",
+      "path": "spec.grammar.scenario_style",
+      "type": "string",
+      "default": "gwt-inline",
+      "category": "docs",
+      "sensitive": false,
+      "title": "Форма сценариев",
+      "description": "Как записаны приёмочные сценарии: gwt-inline (строка Given-When-Then внутри блока, дефолт) | gwt-block (подзаголовок «#### Scenario: …») | bullet (список строк) | none (сценарии не ведутся — пол spec.scenario_floor снимается)",
+      "aliases": [
+        "форма сценариев",
+        "scenario style",
+        "стиль сценариев"
+      ],
+      "enum": [
+        "gwt-inline",
+        "gwt-block",
+        "bullet",
+        "none"
+      ]
+    },
+    {
+      "id": "spec.grammar.scenario_level",
+      "file": "pipeline",
+      "path": "spec.grammar.scenario_level",
+      "type": "int",
+      "default": 4,
+      "category": "docs",
+      "sensitive": false,
+      "title": "Уровень подзаголовка сценария",
+      "description": "Сколько решёток у «#### Scenario: …» при scenario_style=gwt-block. Дефолт 4",
+      "aliases": [
+        "уровень сценария",
+        "scenario level"
+      ],
+      "min": 2,
+      "max": 6
+    },
+    {
+      "id": "spec.grammar.requirements_section",
+      "file": "pipeline",
+      "path": "spec.grammar.requirements_section",
+      "type": "string",
+      "default": "требования и сценарии",
+      "category": "docs",
+      "sensitive": false,
+      "title": "Якорь раздела требований",
+      "description": "Кусок заголовка раздела, в который merge дописывает требования («требования и сценарии», «requirements»). Пусто — раздела нет, требования лежат на верхнем уровне",
+      "aliases": [
+        "раздел требований",
+        "якорь требований",
+        "requirements section"
+      ]
+    },
+    {
+      "id": "spec.grammar.audit_section",
+      "file": "pipeline",
+      "path": "spec.grammar.audit_section",
+      "type": "string",
+      "default": "журнал изменений",
+      "category": "docs",
+      "sensitive": false,
+      "title": "Якорь журнала изменений",
+      "description": "Кусок заголовка раздела, куда merge пишет строку журнала («журнал изменений», «changelog»). Пусто — журнал не ведётся",
+      "aliases": [
+        "журнал изменений",
+        "audit section",
+        "раздел журнала"
+      ]
+    },
+    {
+      "id": "spec.grammar.provenance",
+      "file": "pipeline",
+      "path": "spec.grammar.provenance",
+      "type": "string",
+      "default": "from-bracket",
+      "category": "docs",
+      "sensitive": false,
+      "title": "Провенанс требования",
+      "description": "Как помечается происхождение требования: from-bracket (дефолт — тег [from: <фича> <дата>], по нему spec-judge и forgefix находят след дельты) | none (мастер тегов не несёт)",
+      "aliases": [
+        "провенанс",
+        "from тег",
+        "provenance"
+      ],
+      "enum": [
+        "from-bracket",
+        "none"
+      ]
+    },
+    {
+      "id": "docs.master.spec_path",
+      "file": "pipeline",
+      "path": "docs.master.spec_path",
+      "type": "string",
+      "default": "specs/{capability}/spec.md",
+      "category": "docs",
+      "sensitive": false,
+      "title": "Путь мастер-спеки",
+      "description": "Путь файла мастера относительно master-базы, шаблон с {capability}. Дефолт specs/{capability}/spec.md; у проекта со своей раскладкой, например requirements/SRS.md",
+      "aliases": [
+        "путь мастера",
+        "spec path",
+        "где лежит мастер-спека"
+      ]
     }
   ]
 }

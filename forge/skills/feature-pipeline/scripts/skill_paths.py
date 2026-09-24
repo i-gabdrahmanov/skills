@@ -236,6 +236,7 @@ from _project import (  # noqa: E402
     step_output_path,
     system_analysis_dir,
     test_conventions_path,
+    spec_conventions_path,
 )
 
 

@@ -43,6 +43,7 @@ sys.path.insert(0, str(SCRIPT_DIR.parents[1] / "feature-pipeline" / "scripts"))
 
 import check_master_spec as gate          # noqa: E402
 import merge_delta_to_master as engine    # noqa: E402
+import spec_grammar as SG                 # noqa: E402
 
 
 def _skill_paths():
@@ -59,6 +60,44 @@ def _resolve(args) -> "tuple[Path, Path, str, dict]":
 
 def _prefix(opts: dict, cli: "str | None") -> str:
     return cli or opts.get("id_prefix") or engine.DEFAULT_ID_PREFIX
+
+
+_GRAMMAR_CACHE: dict = {}
+
+
+def grammar(root: Path, prefix: "str | None" = None) -> "SG.Grammar":
+    """Профиль формы мастера для этого проекта (NATIVE ← детект ← policy.json).
+
+    Перед первым обращением снимается ресерч формата (`analyze_spec --if-missing`): без него
+    проект со своей спекой разбирался бы форже-грамматикой — то есть никак. Скан идемпотентен
+    и по отпечатку мастера, поэтому дешёвый; его отказ не должен ронять команду, поэтому
+    best-effort.
+    """
+    key = str(root)
+    if key not in _GRAMMAR_CACHE:
+        try:
+            import analyze_spec
+            analyze_spec.ensure(root)
+        except Exception:  # noqa: BLE001 — детект не поднялся: работаем на policy + NATIVE
+            pass
+        _GRAMMAR_CACHE[key] = SG.load_profile(root)
+    g = _GRAMMAR_CACHE[key]
+    if prefix and prefix != g.id_prefix:
+        g.id_prefix = prefix
+    return g
+
+
+def _unsupported(g: "SG.Grammar", root: Path) -> int:
+    """Единый отказ «форма мастера не описана профилем» — exit 3 (нужно решение человека)."""
+    ok, why = g.supported()
+    if ok:
+        return 0
+    print("✗ формат требований-мастера не описан профилем:", file=sys.stderr)
+    for r in why:
+        print(f"   - {r}", file=sys.stderr)
+    print(g.describe(), file=sys.stderr)
+    print("   Разбор и готовые команды: /forge-spec research", file=sys.stderr)
+    return 3
 
 
 def _features(root: Path) -> list[tuple[str, Path]]:
@@ -155,20 +194,25 @@ def _classify(kinds: list[str]) -> str:
     return "merged"
 
 
-def _state_of(slug: str, sdd: Path, spec_path: Path, capability: str, prefix: str) -> str:
-    """Состояние дельты по плану слияния (dry-run): new | drifted | merged.
+def _state_of(slug: str, sdd: Path, spec_path: Path, capability: str, prefix: str,
+              g: "SG.Grammar | None" = None) -> str:
+    """Состояние дельты по плану слияния (dry-run): new | drifted | merged | unknown-format.
 
     `status == "error"` (в дельте нет требований) считаем «делать нечего» — так эта ветка
     вела себя с самого начала, и на ней же стоит гейт архивации."""
     plan = engine.merge(sdd, spec_path, engine.default_template(), slug, capability,
-                        prefix=prefix, dry_run=True)
+                        prefix=prefix, dry_run=True, grammar=g)
+    if plan["status"] == "unsupported":
+        # Форму мастера не разобрали — «слито» это или нет, неизвестно. Врать «merged»
+        # нельзя: на этом состоянии стоит гейт архивации, и требование уехало бы мимо мастера.
+        return "unknown-format"
     if plan["status"] == "error":
         return "merged"
     return _classify(plan.get("kinds", []))
 
 
 def delta_state(project_root, slug: str) -> str:
-    """Публичный вход для archive.py: new | drifted | merged | no-master | no-delta.
+    """Публичный вход для archive.py: new | drifted | merged | unknown-format | no-master | no-delta.
 
     Архивация не имеет права утащить в архив дельту, которую мастер ещё не видел: доки уезжают
     из обхода `_features`, и требование пропало бы молча."""
@@ -180,9 +224,10 @@ def delta_state(project_root, slug: str) -> str:
     except Exception:  # noqa: BLE001 — мастер не резолвится: гейт не давим
         return "no-master"
     prefix = _prefix(engine.spec_options(root), None)
+    g = grammar(root, prefix)
     for s, sdd in _features(root):
         if s == slug:
-            return _state_of(s, sdd, spec_path, capability, prefix)
+            return _state_of(s, sdd, spec_path, capability, prefix, g)
     return "no-delta"
 
 
@@ -218,14 +263,15 @@ def cmd_status(args) -> int:
     root, spec_path, capability, opts = _resolve(args)
     text = _master_text(spec_path)
     prefix = _prefix(opts, args.id_prefix)
-    reqs = engine.parse_master(text, prefix) if text else []
+    g = grammar(root, prefix)
+    reqs = engine.parse_master(text, prefix, g) if text else []
     scen = sum(len(r["scenarios"]) for r in reqs)
 
     # «Слито» определяем ПЛАНОМ, а не подстрокой провенанса: отредактированная после merge
     # дельта провенанс сохраняет, но мастер уже расходится с ней.
-    state: dict[str, list[str]] = {"new": [], "drifted": [], "merged": []}
+    state: dict[str, list[str]] = {"new": [], "drifted": [], "merged": [], "unknown-format": []}
     for slug, sdd in _features(root):
-        state[_state_of(slug, sdd, spec_path, capability, prefix)].append(slug)
+        state[_state_of(slug, sdd, spec_path, capability, prefix, g)].append(slug)
     total = sum(len(v) for v in state.values())
     mode = master_source(root, opts)
 
@@ -233,8 +279,12 @@ def cmd_status(args) -> int:
         print(json.dumps({"spec": str(spec_path), "exists": spec_path.exists(),
                           "capability": capability, "requirements": len(reqs),
                           "scenarios": scen, "features": total, "master_source": mode,
+                          "grammar_native": g.is_native(),
+                          "grammar_supported": g.supported()[0],
                           "new": state["new"], "drifted": state["drifted"],
-                          "merged": state["merged"]}, ensure_ascii=False, indent=2))
+                          "merged": state["merged"],
+                          "unknown_format": state["unknown-format"]},
+                         ensure_ascii=False, indent=2))
         return 0
 
     print(f"Требования-мастер [{capability}]: {spec_path}")
@@ -242,6 +292,13 @@ def cmd_status(args) -> int:
         print("   мастера ещё нет — создастся из шаблона при первом merge")
     else:
         print(f"   требований: {len(reqs)}, сценариев: {scen}")
+    ok_fmt, why_fmt = g.supported()
+    if not ok_fmt:
+        print("   ФОРМАТ МАСТЕРА НЕ ОПИСАН ПРОФИЛЕМ: " + "; ".join(why_fmt))
+        print("   → /forge-spec research — разбор формы спеки проекта")
+    elif not g.is_native():
+        print(f"   формат: свой (профиль проекта) — «{g.requirements_section[0] if g.requirements_section else 'без раздела'}», "
+              f"{g.kind}/{g.scenario_style}; разбор: /forge-spec research")
     if not total:
         print("   дельт фич не найдено")
         return 0
@@ -258,6 +315,10 @@ def cmd_status(args) -> int:
     if state["merged"]:
         label = "сверено" if verify else "актуально"
         print(f"   {label} ({len(state['merged'])}): {', '.join(state['merged'])}")
+    if state["unknown-format"]:
+        print(f"   ФОРМАТ МАСТЕРА НЕ РАЗОБРАН ({len(state['unknown-format'])}): "
+              f"{', '.join(state['unknown-format'])}")
+        print("   → /forge-spec research — снять профиль формата и применить его")
     todo = state["new"] + state["drifted"]
     if todo:
         feats = _features(root)
@@ -266,21 +327,28 @@ def cmd_status(args) -> int:
 
 
 def _run_merge(args, slug: str, sdd: Path, spec_path: Path, capability: str,
-               prefix: str, dry: bool) -> dict:
+               prefix: str, dry: bool, g: "SG.Grammar | None" = None) -> dict:
     return engine.merge(sdd, spec_path, engine.default_template(), _provenance(slug), capability,
                         prefix=prefix, dry_run=dry, allow_modify=args.allow_modify,
-                        modify_ids=set(args.modify or []))
+                        modify_ids=set(args.modify or []), grammar=g)
 
 
 def cmd_diff(args) -> int:
     root, spec_path, capability, opts = _resolve(args)
     prefix = _prefix(opts, args.id_prefix)
+    g = grammar(root, prefix)
+    if _unsupported(g, root):
+        return 3
     targets = _targets(root, args)
     if targets is None:
         return 2
     rc = 0
     for slug, sdd in targets:
-        res = _run_merge(args, slug, sdd, spec_path, capability, prefix, dry=True)
+        res = _run_merge(args, slug, sdd, spec_path, capability, prefix, dry=True, g=g)
+        if res["status"] == "unsupported":
+            print(f"✗ {slug}: {res['error']}")
+            rc = 3
+            continue
         if res["status"] == "error":
             print(f"✗ {slug}: {res['error']}")
             rc = 2
@@ -332,6 +400,11 @@ def _targets(root: Path, args) -> "list[tuple[str, Path]] | None":
 def cmd_merge(args) -> int:
     root, spec_path, capability, opts = _resolve(args)
     prefix = _prefix(opts, args.id_prefix)
+    g = grammar(root, prefix)
+    # Fail-closed ДО любых записей: неразобранная форма мастера — решение человека, а не
+    # повод дописать чужой документ форже-блоками.
+    if _unsupported(g, root):
+        return 3
     # master-first: sdd выделяется ИЗ мастера, значит merge обязан сверять, а не дописывать.
     # --allow-merge — явное исключение для требования, действительно введённого дельтой.
     verify_only = master_source(root, opts) == "master-first" and not args.allow_merge
@@ -343,7 +416,12 @@ def cmd_merge(args) -> int:
     settled: list[str] = []          # сведено или сверено → доки можно убирать в архив
     rc = 0
     for slug, sdd in targets:
-        plan = _run_merge(args, slug, sdd, spec_path, capability, prefix, dry=True)
+        plan = _run_merge(args, slug, sdd, spec_path, capability, prefix, dry=True, g=g)
+        if plan["status"] == "unsupported":
+            print(f"✗ {slug}: {plan['error']}")
+            print("   Разбор формата спеки проекта: /forge-spec research")
+            rc = 3
+            continue
         if plan["status"] == "error":
             print(f"✗ {slug}: {plan['error']}")
             rc = 2
@@ -377,7 +455,7 @@ def cmd_merge(args) -> int:
                 skipped.append(slug)
                 continue
 
-        res = _run_merge(args, slug, sdd, spec_path, capability, prefix, dry=False)
+        res = _run_merge(args, slug, sdd, spec_path, capability, prefix, dry=False, g=g)
         if res["status"] == "error":
             print(f"✗ {slug}: {res['error']}")
             rc = 2
@@ -411,9 +489,12 @@ def cmd_remove(args) -> int:
     if not spec_path.exists():
         print(f"✗ мастера нет: {spec_path}", file=sys.stderr)
         return 2
+    g = grammar(root, prefix)
+    if _unsupported(g, root):
+        return 3
     res = engine.remove_requirement(_master_text(spec_path), args.req_id,
                                     reason=args.reason, today=date.today().isoformat(),
-                                    prefix=prefix)
+                                    prefix=prefix, grammar=g)
     if res["status"] != "ok":
         print(f"✗ {res['error']}", file=sys.stderr)
         return 2
@@ -426,13 +507,62 @@ def cmd_remove(args) -> int:
     return 0
 
 
+def cmd_research(args) -> int:
+    """Ресерч формата: что за спека у проекта, насколько уверен детект, что применить.
+
+    Читает, не пишет в мастер: результат — `ground/inventory/spec-conventions.json` плюс
+    готовые команды `config.py set spec.grammar.…`, которые применяет человек.
+    """
+    root = Path(args.project_root).resolve()
+    try:
+        import analyze_spec
+    except Exception as e:  # noqa: BLE001
+        print(f"✗ детектор недоступен: {e}", file=sys.stderr)
+        return 2
+
+    if args.apply_research:
+        raw = Path(args.apply_research)
+        try:
+            research = json.loads(raw.read_text(encoding="utf-8") if raw.exists()
+                                  else args.apply_research)
+        except (OSError, json.JSONDecodeError, ValueError) as e:
+            print(f"✗ не читается JSON ресерчера: {e}", file=sys.stderr)
+            return 2
+        path = analyze_spec.out_path(root)
+        result = analyze_spec.load_cache(path) or analyze_spec.analyze(root)
+        result["research"] = research
+        result = analyze_spec._apply_research(result, research)
+        analyze_spec.write(result, path)
+    else:
+        result = analyze_spec.ensure(root, refresh=args.refresh)
+    _GRAMMAR_CACHE.pop(str(root), None)
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    print(analyze_spec.describe(result))
+    print(f"\nПрофиль: {analyze_spec.out_path(root)}")
+    g = grammar(root)
+    ok, why = g.supported()
+    if not ok:
+        print("\n✗ работать с мастером нельзя, пока форма не описана: " + "; ".join(why))
+        return 3
+    if "no_master" in result.get("warnings", []):
+        return 0
+    if not result.get("matches_native") and not g.layers:
+        print("\n! профиль ещё не подтверждён в policy.json — merge/check идут по детекту; "
+              "закрепи его командами выше, чтобы прогон видел те же правила")
+    return 0 if float(result.get("confidence") or 0) >= analyze_spec.CONFIDENCE_FLOOR else 3
+
+
 def cmd_check(args) -> int:
     root, spec_path, capability, opts = _resolve(args)
     # Phase 0 v2 refactor: убран хардкод ground/pipeline.json — gate._cfg делает
     # двойной рид policy.json → pipeline.json через load_project_config.
-    policy = gate._load_policy(None, args.policy)
-    prefix, floor = gate._load_spec_opts(None, args.id_prefix, None)
-    v = gate.check(spec_path, policy, id_prefix=prefix, scenario_floor=floor)
+    policy = gate._load_policy(None, args.policy, root)
+    prefix, floor, profile = gate._load_spec_opts(None, args.id_prefix, None, root)
+    v = gate.check(spec_path, policy, id_prefix=prefix, scenario_floor=floor,
+                   grammar=grammar(root, prefix), profile=profile)
     if args.json:
         print(json.dumps(v, ensure_ascii=False, indent=2))
     else:
@@ -453,12 +583,22 @@ def cmd_migrate(args) -> int:
 
     Сценарии привязываются к требованию по совпадению провенанса `[from: <feature> ...]`.
     Сценарии без пары уходят в требование-хвост, чтобы ничего не потерять молча.
+
+    Только для форже-родной формы: переписать чужой мастер в форже-грамматику — это не
+    миграция, а подмена формата проекта.
     """
     root, spec_path, capability, opts = _resolve(args)
     prefix = _prefix(opts, args.id_prefix)
     if not spec_path.exists():
         print(f"✗ мастера нет: {spec_path}", file=sys.stderr)
         return 2
+    g = grammar(root, prefix)
+    if not g.is_native():
+        print("✗ у проекта своя форма мастера — migrate её не переписывает:", file=sys.stderr)
+        print(g.describe(), file=sys.stderr)
+        print("   Легаси-переход на ID имеет смысл только для форже-родного формата.",
+              file=sys.stderr)
+        return 3
     text = _master_text(spec_path)
     if engine.parse_master(text, prefix):
         print("Мастер уже в формате требований с ID — миграция не нужна.")
@@ -596,6 +736,13 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--dry-run", action="store_true")
     _common_flags(g, sub=True)
     g.set_defaults(func=cmd_migrate)
+
+    rs = sub.add_parser("research", help="как устроена спека проекта (профиль формы мастера)")
+    rs.add_argument("--refresh", action="store_true", help="пересканировать мастер")
+    rs.add_argument("--apply-research", default=None,
+                    help="JSON субагента-ресерчера: вмержить в детект")
+    _common_flags(rs, sub=True)
+    rs.set_defaults(func=cmd_research)
     return ap
 
 

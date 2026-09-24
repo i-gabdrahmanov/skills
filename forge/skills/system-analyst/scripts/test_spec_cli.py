@@ -94,10 +94,20 @@ class SpecCliTest(unittest.TestCase):
         self.spec = self.root / "docs" / "specs" / "claims" / "spec.md"
 
     def tearDown(self):
+        spec_cli._GRAMMAR_CACHE.clear()   # профиль кэшируется по корню
         self._tmp.cleanup()
 
     def _r(self, *argv):
+        spec_cli._GRAMMAR_CACHE.pop(str(self.root), None)
         return run("--project-root", str(self.root), *argv)
+
+    def _set_grammar(self, **grammar):
+        """Подтверждённый профиль формы мастера в policy (как это делает config.py set)."""
+        cfg = json.loads((self.root / "ground" / "pipeline.json").read_text(encoding="utf-8"))
+        cfg.setdefault("spec", {})["grammar"] = grammar
+        (self.root / "ground" / "pipeline.json").write_text(json.dumps(cfg, ensure_ascii=False),
+                                                            encoding="utf-8")
+        spec_cli._GRAMMAR_CACHE.clear()
 
     # ── status ─────────────────────────────────────────────────────────
     def test_status_reports_pending_before_merge(self):
@@ -199,6 +209,74 @@ class SpecCliTest(unittest.TestCase):
 # отдельную «фичу». Пины ниже держат три свойства этой раскладки: дельта видна CLI, слаг бага
 # сам по себе достаточен для merge/diff, а в мастер правка уходит с провенансом СТОРИ —
 # иначе find_spec_anchor следующего бага потеряет связь «это требование стори STOR-100».
+    # ── чужой формат мастера ───────────────────────────────────────────
+    def test_unsupported_grammar_blocks_merge_without_writing(self):
+        """Форма не описана профилем → exit 3 и НИ ОДНОЙ записи в мастер."""
+        self._set_grammar(requirement_kind="table-like")
+        rc, _ = self._r("merge", "--all", "-y")
+        self.assertEqual(rc, 3)
+        self.assertFalse(self.spec.exists(), "в мастер писать было нельзя")
+
+    def test_unsupported_grammar_blocks_diff(self):
+        self._set_grammar(scenario_style="table")
+        self.assertEqual(self._r("diff", "report-export")[0], 3)
+
+    def test_unsupported_grammar_gives_unknown_format_state(self):
+        self._set_grammar(requirement_kind="table-like")
+        self.assertEqual(spec_cli.delta_state(self.root, "report-export"), "unknown-format")
+
+    def test_project_grammar_merges_in_project_shape(self):
+        """Профиль проекта — merge пишет ЕГО формой, а не форже-блоками."""
+        self.spec.parent.mkdir(parents=True)
+        self.spec.write_text(
+            "# Claims\n\n## Requirements\n\n"
+            "## Requirement: Журнал действий оператора\nДействия попадают в журнал.\n\n"
+            "#### Scenario: приват\n- **Given** действие привилегированное **When** транзакция "
+            "закрыта **Then** запись создана\n\n## Changelog\n- 2026-01-01\n",
+            encoding="utf-8")
+        self._set_grammar(requirement_kind="title-only", requirement_level=2,
+                          requirement_lead="Requirement", scenario_style="gwt-block",
+                          requirements_section="requirements", audit_section="changelog",
+                          provenance="none")
+        rc, out = self._r("merge", "report-export", "-y", "--no-archive")
+        self.assertEqual(rc, 0, out)
+        text = self.spec.read_text(encoding="utf-8")
+        self.assertIn("## Requirement: Экспорт отчёта по заявкам", text)
+        self.assertNotIn("### REQ-", text)
+        self.assertIn("#### Scenario: ", text)
+        self.assertEqual(text.count("## Requirement: Журнал действий оператора"), 1)
+
+    def test_project_grammar_merge_is_idempotent(self):
+        self.test_project_grammar_merges_in_project_shape()
+        rc, out = self._r("merge", "report-export", "-y", "--no-archive")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("актуален", out)
+
+    def test_research_writes_profile(self):
+        self.spec.parent.mkdir(parents=True)
+        self.spec.write_text(
+            "# Claims\n\n## Requirements\n\n"
+            "## Requirement: Раз\nТекст.\n\n#### Scenario: a\n- **WHEN** x **THEN** y\n\n"
+            "## Requirement: Два\nТекст.\n\n#### Scenario: b\n- **WHEN** x **THEN** y\n",
+            encoding="utf-8")
+        rc, _ = self._r("research")
+        self.assertIn(rc, (0, 3))
+        prof = json.loads((self.root / "ground" / "inventory" / "spec-conventions.json")
+                          .read_text(encoding="utf-8"))
+        self.assertEqual(prof["grammar"]["requirement"]["kind"], "title-only")
+        self.assertFalse(prof["matches_native"])
+
+    def test_migrate_refuses_foreign_format(self):
+        """migrate — про легаси форже-формат; чужой мастер он не переписывает."""
+        self.spec.parent.mkdir(parents=True)
+        self.spec.write_text(LEGACY_MASTER, encoding="utf-8")
+        self._set_grammar(requirement_kind="title-only", requirement_level=2,
+                          requirement_lead="Requirement")
+        rc, _ = self._r("migrate")
+        self.assertEqual(rc, 3)
+        self.assertIn("## 5. Требования (Requirements)",
+                      self.spec.read_text(encoding="utf-8"), "мастер не тронут")
+
 FIX_DELTA = """# SDD: Экспорт отчёта по заявкам
 
 ## 1. Назначение и результат (Purpose & Outcomes)
@@ -208,7 +286,6 @@ FIX_DELTA = """# SDD: Экспорт отчёта по заявкам
 - **Given** есть заявки **When** оператор запросил отчёт **Then** отчёт сформирован
 - **Given** заявок за период нет **When** оператор запросил отчёт **Then** отчёт пуст, ошибки нет
 """
-
 
 class FixDeltaInsideStoryTest(unittest.TestCase):
     def setUp(self):
@@ -229,6 +306,7 @@ class FixDeltaInsideStoryTest(unittest.TestCase):
         self._tmp.cleanup()
 
     def _r(self, *argv):
+        spec_cli._GRAMMAR_CACHE.pop(str(self.root), None)
         return run("--project-root", str(self.root), *argv)
 
     def test_nested_fix_delta_is_discovered(self):
@@ -301,6 +379,7 @@ class MergeArchiveBase(unittest.TestCase):
         self._tmp.cleanup()
 
     def _r(self, *argv):
+        spec_cli._GRAMMAR_CACHE.pop(str(self.root), None)
         return run("--project-root", str(self.root), *argv)
 
 

@@ -578,7 +578,11 @@ def build_config(root):
             "id_prefix": "REQ",           # префикс стабильных ID требований (### REQ-0007: ...)
             "drift": "warn",              # off | warn — реакция spec-judge на неслитую дельту
             "scenario_floor": True,       # каждое требование обязано иметь ≥1 Given-When-Then
-            "profile": "forge",           # состав разделов мастера (forge = разделы с ДКБ)
+            "profile": "forge",           # СОСТАВ разделов мастера (forge = разделы с ДКБ);
+                                          # detected — не навязывать состав чужому мастеру.
+            # spec.grammar.* (ФОРМА требования) в скелет НЕ пишется намеренно: записанное
+            # значение перекрыло бы детект формы (policy > детект), и ресерч спеки проекта
+            # перестал бы применяться. Дефолты живут в spec_grammar.NATIVE.
         },
         "jira": {
             "enabled": None,                  # TODO: true/false

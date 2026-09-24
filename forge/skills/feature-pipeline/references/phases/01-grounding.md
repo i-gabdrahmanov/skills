@@ -41,6 +41,23 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.p
 курируемый: архитектор может уточнить правила в `ground/architecture-policy.json`
 (`module_deps.forbidden`/`allowed_new`).
 
+**Формат спеки проекта (только при `docs.master.enabled`).** Как устроен требования-мастер —
+свойство ПРОЕКТА, а не форжа: у одного это `### REQ-0007: …` со строками Given-When-Then, у
+другого `## Requirement: …` с блоками `#### Scenario:`, у третьего нумерованный СРС. Пока форма
+не снята, `/forge-merge` разбирал бы чужой мастер форже-грамматикой — то есть не находил бы в
+нём ни одного требования и дописывал свои блоки:
+```bash
+python3 <project>/.gigacode/skills/system-analyst/scripts/analyze_spec.py \
+    --root "<project>" --if-missing
+```
+- **exit 0** — профиль снят (`ground/inventory/spec-conventions.json`), идемпотентно по
+  отпечатку мастера. Если формат не форже-родной, скрипт печатает готовые команды
+  (`config.py set` по ключам секции `spec.grammar`) — покажи их пользователю, применяет их он.
+- **exit 2** — форма не распознана уверенно. Вызови субагента-ресерчера (контракт §4.0b в
+  `subagent-prompts.md`), его JSON примени:
+  `analyze_spec.py --root "<project>" --apply-research <файл.json>`. Гейт фазы этим не
+  блокируется: без мастера пайплайн работает, ломается только `/forge-merge`.
+
 **Человеческий обзор системы — отдельно и не здесь.** MD с диаграммами (`system-analyst`,
 `docs/system-analysis/`) — документация для людей, а не топливо гейтов. Пайплайн её не
 требует и не обновляет; пользователь зовёт `system-analyst` сам, когда она нужна.

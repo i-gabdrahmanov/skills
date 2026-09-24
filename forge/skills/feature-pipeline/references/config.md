@@ -162,6 +162,8 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
       "repo_url": null,              // origin для гайд-клона (forge авто-clone НЕ делает)
       "enabled": false,              // вести требования-мастер specs/<cap>/spec.md (обновляется командой)
       "capability": null,            // имя капабилити (spec.md); null → project.name
+      "spec_path": null,             // путь мастера относительно master-базы, шаблон с
+                                     //   {capability}; null → specs/{capability}/spec.md
       "adr_subdir": "adr"            // подпапка ADR под master-базой (<master_base>/adr)
     }
   },
@@ -179,7 +181,19 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
     "id_prefix": "REQ",              // префикс стабильных ID требований (### REQ-0007: ...)
     "drift": "warn",                 // off | warn — реакция spec-judge на неслитую дельту
     "scenario_floor": true,          // каждое требование обязано иметь ≥1 Given-When-Then
-    "profile": "forge"               // состав разделов мастера (forge = разделы с ДКБ)
+    "profile": "forge",              // СОСТАВ разделов мастера: forge | detected | minimal
+    "grammar": {                     // ФОРМА мастера; дефолты = форже-родные, их не пишут в
+                                     //   policy.json — иначе детект уже не применится
+      "requirement_kind": "id-colon",        // id-colon | title-only | numbered | bullet-id
+      "requirement_level": 3,                // сколько решёток у заголовка требования
+      "requirement_lead": "",                // слово перед названием («Requirement»)
+      "requirement_scope": "document",       // document | section — где искать требования
+      "scenario_style": "gwt-inline",        // gwt-inline | gwt-block | bullet | none
+      "scenario_level": 4,                   // уровень «#### Scenario:» при gwt-block
+      "requirements_section": "требования и сценарии",  // якорь раздела требований
+      "audit_section": "журнал изменений",   // якорь журнала изменений
+      "provenance": "from-bracket"           // from-bracket | none — тег [from: …]
+    }
   },
   "jira": {
     "enabled": null,                 // TODO
@@ -353,7 +367,39 @@ Git-политика (forge-no-delivery): forge **пишет** обновлен�
 | `spec.id_prefix` | префикс стабильных ID требований мастера (`### REQ-0007: <название>`). Дефолт `REQ` |
 | `spec.drift` | `off` \| `warn` — что делает spec-judge, если дельта фичи не слита в мастер. Дефолт `warn` (сообщает, не блокирует фазу) |
 | `spec.scenario_floor` | каждое требование обязано нести ≥1 сценарий Given-When-Then (`check_master_spec`). Дефолт true |
-| `spec.profile` | профиль состава разделов мастера. Дефолт `forge` (разделы с ДКБ: границы доверия, модель угроз, регуляторка) |
+| `spec.profile` | СОСТАВ разделов мастера: `forge` (дефолт — разделы форже-шаблона с ДКБ: границы доверия, модель угроз, регуляторка) \| `detected` (состав не навязывается, проверяются только требования и сценарии) \| `minimal` (то же плюс обязателен раздел требований). У проекта со своей спекой — `detected`, иначе гейт валится за чужую структуру |
+| `spec.grammar.*` | ФОРМА требований-мастера (см. ниже). Снимается ресерчем `/forge-spec research`, подтверждается `config.py set` |
+| `docs.master.spec_path` | путь мастера относительно master-базы, шаблон с `{capability}`. Дефолт `specs/{capability}/spec.md` |
+
+### Форма требований-мастера (`spec.grammar.*`)
+
+`spec.profile` отвечает на вопрос, КАКИЕ РАЗДЕЛЫ обязаны быть; `spec.grammar` — на вопрос, как
+выглядит ОДНО требование. Раньше форма была зашита литералами в трёх местах
+(`merge_delta_to_master`, `check_master_spec`, резолвер путей), и мастер проекта, устроенный
+иначе, не разбирался вовсе: `/forge-merge` не находил в нём ни одного требования, считал все
+требования дельты новыми и дописывал в чужой документ форже-блоки.
+
+| Ручка | Значение |
+|---|---|
+| `spec.grammar.requirement_kind` | `id-colon` (`### REQ-0007: <название>`, дефолт) \| `title-only` (`## Requirement: <название>`, тождество по названию) \| `numbered` (`### 3.1 <название>`) \| `bullet-id` (`- **REQ-0007** — <название>`) |
+| `spec.grammar.requirement_level` | сколько решёток у заголовка требования. Дефолт 3 |
+| `spec.grammar.requirement_lead` | слово перед названием у `title-only` (`Requirement`). Регистр не значим |
+| `spec.grammar.requirement_scope` | `document` (дефолт) \| `section` — искать требования по всему мастеру или только в разделе требований (нужно форме без ID и без ведущего слова) |
+| `spec.grammar.scenario_style` | `gwt-inline` (строка Given-When-Then, дефолт) \| `gwt-block` (подзаголовок `#### Scenario:`) \| `bullet` \| `none` (тогда `spec.scenario_floor` снимается) |
+| `spec.grammar.scenario_level` | уровень подзаголовка сценария при `gwt-block`. Дефолт 4 |
+| `spec.grammar.requirements_section` | якорь раздела, куда merge дописывает требования. Пусто — раздела нет |
+| `spec.grammar.audit_section` | якорь журнала изменений. Пусто — журнал не ведётся |
+| `spec.grammar.provenance` | `from-bracket` (тег `[from: <фича> <дата>]`, по нему spec-judge и forgefix находят след дельты) \| `none` |
+
+**Профиль собирается тремя слоями**, приоритет сверху вниз: `policy.json` (подтверждено
+человеком) → детект `ground/inventory/spec-conventions.json` (снял `analyze_spec.py` на
+01-grounding, применяется только при уверенности ≥ 0.6) → форже-родные дефолты. Поэтому ручки
+НЕ пишутся в скелет policy.json: записанное значение перекрыло бы детект.
+
+**Форма, которая профилем не выражается, — отказ, а не «попробуем как обычно»:**
+`/forge-spec merge|diff|remove` дают exit 3, `delta_state` — состояние `unknown-format`, и
+архивация фичи блокируется (иначе требование уехало бы в архив мимо мастера). Разбор и готовые
+команды — `/forge-spec research`.
 
 **Мастер обновляется по запросу, а не пайплайном.** Фаза 06 в `specs/<cap>/spec.md` не пишет —
 она лишь сообщает о расхождении. Слияние дельты делает пользователь командой `/forge-spec merge

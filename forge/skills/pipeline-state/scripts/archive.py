@@ -240,7 +240,7 @@ def live_runs_inside(project: Path, target: Path, exclude) -> list:
 
 
 def delta_state(project: Path, slug: str):
-    """Состояние дельты относительно мастера: merged|new|drifted|no-master (или None)."""
+    """Состояние дельты относительно мастера: merged|new|drifted|unknown-format|no-master."""
     try:
         _ensure_path(_HERE.parents[1] / "system-analyst" / "scripts")
         import spec_cli
@@ -309,6 +309,12 @@ def archive_feature(project, slug, skill=None, force: bool = False, reason=None,
         raise Fail("дельта '{}' не сведена с мастером (состояние: {}).\n"
                    "   Сначала /forge-merge {} — иначе требования уедут в архив, минуя мастер."
                    .format(slug, ds, feature))
+    if ds == "unknown-format" and not force:
+        # Форма мастера не разобрана: сведена дельта или нет — НЕИЗВЕСТНО. Пропустить архивацию
+        # значит увезти требование из обхода _features мимо мастера и молча его потерять.
+        raise Fail("формат мастера не описан профилем, состояние дельты '{}' неизвестно.\n"
+                   "   Сначала /forge-spec research — снять профиль формата спеки проекта."
+                   .format(slug))
 
     dest_base = archive_docs_dir(project)
     target = dest_base / slug
@@ -515,7 +521,8 @@ def _print_status(data: dict) -> None:
     if ready:
         print(f"\nГотово к архивации ({len(ready)}):")
         for r in ready:
-            ds = r["delta_state"] if r["delta_state"] in ("merged", "new", "drifted") else None
+            ds = r["delta_state"] if r["delta_state"] in ("merged", "new", "drifted",
+                                                          "unknown-format") else None
             print(f"   ✓ {r['slug']}  [{r['skill']}]{'  дельта: ' + ds if ds else ''}")
         print("   Перенести: /forge-archive put <слаг>  (или само на /forge-merge)")
     if held:

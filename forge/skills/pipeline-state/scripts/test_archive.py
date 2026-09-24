@@ -275,6 +275,22 @@ class TestDeltaGate(Base):
             archive.archive_feature(self.root, "STOR-100")
         self.assertIn("не сведена", str(cm.exception))
 
+    def test_unknown_master_format_blocks(self):
+        """Форма мастера не разобрана → состояние дельты неизвестно, архивировать нельзя."""
+        self.policy["docs"]["master"]["enabled"] = True
+        self.policy.setdefault("spec", {})["grammar"] = {"requirement_kind": "table-like"}
+        self._write_policy()
+        sys.path.insert(0, str(SCRIPTS.parents[1] / "system-analyst" / "scripts"))
+        import spec_cli
+        spec_cli._GRAMMAR_CACHE.clear()
+        self.assertEqual(archive.delta_state(self.root, "STOR-100"), "unknown-format")
+        with self.assertRaises(archive.Fail) as cm:
+            archive.archive_feature(self.root, "STOR-100")
+        self.assertIn("формат мастера", str(cm.exception))
+        self.assertTrue((self.root / "docs" / "feature-pipeline" / "STOR-100").is_dir(),
+                        "доки остались на месте")
+        spec_cli._GRAMMAR_CACHE.clear()
+
     def test_archived_delta_leaves_spec_scan(self):
         sys.path.insert(0, str(SCRIPTS.parents[1] / "system-analyst" / "scripts"))
         import spec_cli
