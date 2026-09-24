@@ -488,8 +488,19 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/verify_coverage.py \
 
 - `scripts/spec_cli.py` — пользовательский вход: `status` (что в мастере + какие дельты не слиты
   или разошлись), `diff <slug>` (план операций без записи), `merge <slug>|--all` (слияние),
-  `remove <ID> --reason` (снять требование), `check`, `migrate` (плоский легаси-мастер → ID).
-  Весь разбор аргументов здесь, слэш-команда — тонкая обёртка.
+  `remove <ID> --reason` (снять требование), `check`, `migrate` (плоский легаси-мастер → ID),
+  `research` (форма спеки проекта). Весь разбор аргументов здесь, слэш-команда — тонкая обёртка.
+- `scripts/spec_grammar.py` — ФОРМА мастера одним модулем: вид и уровень заголовка требования,
+  схема ID, стиль сценариев, якоря разделов, провенанс. Профиль собирается слоями
+  `policy.json (spec.grammar.*) → детект → форже-родной дефолт`; форма, которая профилем не
+  выражается, — отказ (`unsupported`), а не запись форже-блоками в чужой документ. До этого
+  модуля форма жила тремя копиями (движок, гейт, резолвер путей) и проект со своей спекой не
+  разбирался вовсе.
+- `scripts/analyze_spec.py` — ресерч формы: детерминированный детект мастера (частоты
+  заголовков, вложенность разделов, стиль сценариев) → `ground/inventory/spec-conventions.json`
+  с уверенностью, эталонами и готовыми командами `config.py set`. Идемпотентен по отпечатку
+  мастера (`--if-missing`); exit 2 = форма не распознана, нужен субагент-ресерчер
+  (`--apply-research <json>`).
 - `scripts/merge_delta_to_master.py` — движок под `spec_cli`: разбор мастера и дельты, план
   операций (`add` / `modify` / `same`), применение, снятие требования. Единица мастера —
   `### <PREFIX>-NNNN: <название>` с утверждением и вложенными сценариями; тождество держит ID,
@@ -497,7 +508,9 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/verify_coverage.py \
   **коммит/push — на пользователе** (forge-no-delivery).
 - `scripts/check_master_spec.py` — валидатор состава мастер-спеки (та же политика `sdd.security_gate`)
   плюс пол сценариев (`spec.scenario_floor`: у каждого требования ≥1 Given-When-Then);
-  вшит в spec-judge (`run_judge spec`) и доступен как `/forge-spec check`.
+  вшит в spec-judge (`run_judge spec`) и доступен как `/forge-spec check`. СОСТАВ разделов —
+  ручка `spec.profile` (`forge` | `detected` | `minimal`): на чужом мастере разделы форже-шаблона
+  не требуются, иначе гейт валится за структуру, которой у проекта никогда не было.
 - `references/master-spec-template.md` — обязательный состав мастер-спеки.
 - `scripts/check_adr.py` + `references/adr-template.md` — ADR (Architecture Decision Records,
   «почему так решили»: rationale+статус). ADR-файлы живут в `<master_base>/adr/`, автор — фаза

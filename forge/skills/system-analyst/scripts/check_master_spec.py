@@ -34,6 +34,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import spec_grammar as SG  # noqa: E402  (форма требований — один источник правды)
 from common import find_project_root  # noqa: E402  (co-локейд резолвер корня данных)
 # Phase 0 v2 refactor: load_project_config — двойной рид policy.json → pipeline.json.
 # common.py уже проложил путь к hooks/ через sys.path (см. его блок импортов).
@@ -64,6 +65,13 @@ REGULATORY_SECTIONS = [
 _POLICIES = ("hard", "applicability", "soft")
 _DEFAULT_POLICY = "applicability"
 _DEFAULT_ID_PREFIX = "REQ"
+
+# spec.profile — СОСТАВ разделов мастера (грамматику блока держит spec.grammar.*):
+#   forge    — разделы форже-шаблона, как было (ДКБ: границы доверия, модель угроз, регуляторка)
+#   detected — состав не навязываем: проверяются только требования и сценарии
+#   minimal  — то же, что detected, плюс обязателен раздел требований
+_PROFILES = ("forge", "detected", "minimal")
+_DEFAULT_PROFILE = "forge"
 
 _GWT = re.compile(r"(?i)given.*when.*then")
 _NOT_APPLICABLE = re.compile(r"(?i)не\s+примен|not\s+applicable|\bn/?a\b")
@@ -155,29 +163,43 @@ def _has_gwt(raw: str) -> bool:
     return False
 
 
+def _grammar(prefix: str, grammar: "SG.Grammar | None" = None) -> "SG.Grammar":
+    """Грамматика проверки: переданный профиль либо форже-родной с нужным префиксом ID."""
+    if grammar is not None:
+        return grammar
+    profile = json.loads(json.dumps(SG.NATIVE))
+    profile["requirement"]["id_prefix"] = prefix or _DEFAULT_ID_PREFIX
+    return SG.Grammar(profile)
+
+
 def _req_heading(prefix: str) -> "re.Pattern[str]":
-    """`### REQ-0007: <название>` — подзаголовок требования со стабильным ID."""
-    return re.compile(r"^\s{0,3}###\s+(" + re.escape(prefix) + r"-(\d+))\s*:\s*(.+?)\s*$")
+    """Подзаголовок требования — форма из профиля (дефолт `### REQ-0007: <название>`)."""
+    return _grammar(prefix).req_pattern()
 
 
-def _parse_requirements(raw: str, prefix: str) -> list[dict]:
-    """Блоки требований [{id, num, title, body}]; тело — до следующего заголовка уровня ###
-    и выше. Вложенные под-заголовки (`#### …`) остаются ЧАСТЬЮ требования: иначе требование,
-    расписанное подпунктами, теряло тело и валилось как «нет проверяемого утверждения»."""
-    pat = _req_heading(prefix)
+def _parse_requirements(raw: str, prefix: str,
+                        grammar: "SG.Grammar | None" = None) -> list[dict]:
+    """Блоки требований [{id, num, title, body}]; тело — до следующего заголовка уровня
+    требования и выше. Вложенные под-заголовки (`#### …`) остаются ЧАСТЬЮ требования: иначе
+    требование, расписанное подпунктами, теряло тело и валилось как «нет проверяемого
+    утверждения»."""
+    g = _grammar(prefix, grammar)
+    lo, hi = g._scope_span(raw.splitlines())
+    lines = raw.splitlines()
     out: list[dict] = []
     cur: "dict | None" = None
-    for line in raw.splitlines():
-        m = pat.match(line)
-        if m:
+    for i in range(lo, hi):
+        line = lines[i]
+        hit = g.match_requirement(line)
+        if hit:
             if cur is not None:
                 out.append(cur)
-            cur = {"id": m.group(1), "num": int(m.group(2)), "title": m.group(3), "body": []}
+            cur = {"id": hit[0], "num": hit[1], "title": hit[2], "body": []}
             continue
         if cur is None:
             continue
         h = _HEADING.match(line)
-        if h and len(h.group(1)) <= 3:  # заголовок уровня ### и выше закрывает блок
+        if h and len(h.group(1)) <= g.level:   # заголовок уровня требования и выше закрывает блок
             out.append(cur)
             cur = None
         else:
@@ -189,24 +211,35 @@ def _parse_requirements(raw: str, prefix: str) -> list[dict]:
     return out
 
 
-def _check_requirements(raw, sections, text_lower, prefix, scenario_floor, errors, warnings):
-    """§5: раздел на месте, ≥1 требование с ID, ID уникальны, у каждого — утверждение и сценарий."""
-    if not _present(text_lower, sections, REQUIREMENTS_SECTION):
-        errors.append("нет обязательный раздел мастера: «требования и сценарии»")
+def _check_requirements(raw, sections, text_lower, prefix, scenario_floor, errors, warnings,
+                        grammar=None):
+    """Раздел на месте, ≥1 требование, ID уникальны, у каждого — утверждение и сценарий."""
+    g = _grammar(prefix, grammar)
+    markers = g.requirements_section or REQUIREMENTS_SECTION
+    # Профиль вправе сказать «раздела требований нет» (требования на верхнем уровне) — тогда
+    # требовать заголовок нечестно: проверяем только сами требования.
+    if g.requirements_section and not _present(text_lower, sections, markers):
+        errors.append(f"нет обязательный раздел мастера: «{markers[0]}»")
 
-    reqs = _parse_requirements(raw, prefix)
+    reqs = _parse_requirements(raw, prefix, g)
     if not reqs:
+        shape = g.heading(f"{g.id_prefix}-{'N' * g.id_width}" if g.kind != "title-only" else None,
+                          "<название>")
         errors.append(
-            f"нет ни одного требования вида «### {prefix}-NNNN: <название>» — мастер наполняет "
-            f"/forge-spec merge (плоский легаси-формат переносится /forge-spec migrate)")
+            f"нет ни одного требования вида «{shape}» — мастер наполняет "
+            f"/forge-spec merge (плоский легаси-формат переносится /forge-spec migrate; "
+            f"чужая форма описывается spec.grammar.* — разбор: /forge-spec research)")
         return
 
     counts: dict[str, int] = {}
     for r in reqs:
-        counts[r["id"]] = counts.get(r["id"], 0) + 1
+        key = r["id"] if g.kind != "title-only" else _norm_title(r["title"])
+        counts[key] = counts.get(key, 0) + 1
+    unit = "ID" if g.kind != "title-only" else "название"
     for rid, n in sorted(counts.items()):
         if n > 1:
-            errors.append(f"ID {rid} встречается {n} раза — идентификаторы требований уникальны")
+            errors.append(f"{unit} {rid} встречается {n} раза — "
+                          f"{'идентификаторы' if unit == 'ID' else 'названия'} требований уникальны")
 
     for r in reqs:
         title = r["title"].strip()
@@ -217,8 +250,21 @@ def _check_requirements(raw, sections, text_lower, prefix, scenario_floor, error
                                if not _GWT.search(l) and not _GWT_STEP.match(l))
         if not _has_content(statement):
             errors.append(f"{r['id']} «{title}»: нет проверяемого утверждения (что система делает)")
-        if scenario_floor and not _has_gwt(r["body"]):
+        if scenario_floor and not _has_scenario(r["body"], g):
             errors.append(f"{r['id']} «{title}»: нет ни одного сценария Given-When-Then")
+
+
+def _norm_title(t: str) -> str:
+    return re.sub(r"\s+", " ", t).strip().lower()
+
+
+def _has_scenario(body: str, g: "SG.Grammar") -> bool:
+    """Пол сценариев по профилю: строка GWT, блок «#### Scenario:» либо список под требованием."""
+    if g.scenario_style == "none":
+        return True                        # профиль говорит «сценарии не ведутся» — пол снят
+    if _has_gwt(body):
+        return True
+    return bool(g.scenarios_of(body.splitlines()))
 
 
 def _present(text_lower: str, sections: list[tuple[str, str]], markers: list[str]) -> bool:
@@ -227,7 +273,7 @@ def _present(text_lower: str, sections: list[tuple[str, str]], markers: list[str
     return any(mk in text_lower for mk in markers)
 
 
-def _cfg(pipeline_config: Path | None) -> dict:
+def _cfg(pipeline_config: Path | None, root: Path | None = None) -> dict:
     """ground/{policy.json|pipeline.json} (явный путь или из cwd). Никогда не бросает.
 
     Phase 0 v2 refactor: явный --pipeline-config путь читается как есть (для совместимости
@@ -240,23 +286,28 @@ def _cfg(pipeline_config: Path | None) -> dict:
         except (json.JSONDecodeError, OSError):
             pass
     # Фолбэк через _config_loader (доступен через sys.path, добавленный common.py).
-    return load_project_config(find_project_root())
+    # Корень передаётся явно, когда вызывающий его знает (--project-root у CLI, spec_cli):
+    # иначе резолвер ищет его от CWD и на чужом cwd читает не тот проект.
+    return load_project_config(Path(root) if root else find_project_root())
 
 
-def _load_policy(pipeline_config: Path | None, explicit: str | None) -> str:
+def _load_policy(pipeline_config: Path | None, explicit: str | None,
+                 root: Path | None = None) -> str:
     if explicit in _POLICIES:
         return explicit
-    val = (_cfg(pipeline_config).get("sdd") or {}).get("security_gate")
+    val = (_cfg(pipeline_config, root).get("sdd") or {}).get("security_gate")
     return val if val in _POLICIES else _DEFAULT_POLICY
 
 
 def _load_spec_opts(pipeline_config: Path | None, id_prefix: str | None,
-                    scenario_floor: bool | None) -> tuple[str, bool]:
-    """Ручки требований: CLI > ground/pipeline.json → spec.* > дефолты (REQ, floor включён)."""
-    spec = _cfg(pipeline_config).get("spec") or {}
+                    scenario_floor: bool | None,
+                    root: Path | None = None) -> tuple[str, bool, str]:
+    """Ручки требований: CLI > ground/policy.json → spec.* > дефолты (REQ, floor, profile=forge)."""
+    spec = _cfg(pipeline_config, root).get("spec") or {}
     prefix = id_prefix or spec.get("id_prefix") or _DEFAULT_ID_PREFIX
     floor = scenario_floor if scenario_floor is not None else spec.get("scenario_floor", True)
-    return str(prefix), bool(floor)
+    profile = spec.get("profile") if spec.get("profile") in _PROFILES else _DEFAULT_PROFILE
+    return str(prefix), bool(floor), profile
 
 
 def _check_group(group, text_lower, sections, *, hard, allow_na, errors, warnings):
@@ -280,22 +331,35 @@ def _check_group(group, text_lower, sections, *, hard, allow_na, errors, warning
 
 
 def check(spec_path: Path, policy: str, *, id_prefix: str = _DEFAULT_ID_PREFIX,
-          scenario_floor: bool = True) -> dict:
+          scenario_floor: bool = True, grammar: "SG.Grammar | None" = None,
+          profile: str = _DEFAULT_PROFILE) -> dict:
     errors: list[str] = []
     warnings: list[str] = []
+    g = _grammar(id_prefix, grammar)
+    profile = profile if profile in _PROFILES else _DEFAULT_PROFILE
 
     if not spec_path.exists():
         errors.append(f"нет мастер-спеки: {spec_path}")
         return {"status": "fail", "spec": str(spec_path), "policy": policy,
                 "id_prefix": id_prefix, "scenario_floor": scenario_floor, "requirements": 0,
-                "errors": errors, "warnings": warnings}
+                "profile": profile, "errors": errors, "warnings": warnings}
+
+    ok, why = g.supported()
+    if not ok:
+        errors.append("формат требований-мастера не описан профилем: " + "; ".join(why))
+        return {"status": "fail", "spec": str(spec_path), "policy": policy,
+                "id_prefix": id_prefix, "scenario_floor": scenario_floor, "requirements": 0,
+                "profile": profile, "errors": errors, "warnings": warnings}
 
     raw = spec_path.read_text(encoding="utf-8", errors="replace")
     text = raw.lower()
     sections = _parse_sections(raw)
 
-    _check_group(CORE_SECTIONS, text, sections,
-                 hard=True, allow_na=False, errors=errors, warnings=warnings)
+    # Состав разделов — форже-шаблон только при profile=forge: у проекта со своей спекой
+    # требовать «Границы охвата» и «Модель угроз» значит валить гейт за чужую структуру.
+    if profile == "forge":
+        _check_group(CORE_SECTIONS, text, sections,
+                     hard=True, allow_na=False, errors=errors, warnings=warnings)
 
     if policy == "hard":
         sec_hard, sec_na, ctx_hard, reg_hard = True, True, True, True
@@ -304,14 +368,15 @@ def check(spec_path: Path, policy: str, *, id_prefix: str = _DEFAULT_ID_PREFIX,
     else:  # soft
         sec_hard, sec_na, ctx_hard, reg_hard = False, True, False, False
 
-    _check_group(SECURITY_ARCH_SECTIONS, text, sections,
-                 hard=sec_hard, allow_na=sec_na, errors=errors, warnings=warnings)
-    _check_group(CONTEXTUAL_SECTIONS, text, sections,
-                 hard=ctx_hard, allow_na=True, errors=errors, warnings=warnings)
-    _check_group(REGULATORY_SECTIONS, text, sections,
-                 hard=reg_hard, allow_na=True, errors=errors, warnings=warnings)
+    if profile == "forge":
+        _check_group(SECURITY_ARCH_SECTIONS, text, sections,
+                     hard=sec_hard, allow_na=sec_na, errors=errors, warnings=warnings)
+        _check_group([g.audit_section or CONTEXTUAL_SECTIONS[0]], text, sections,
+                     hard=ctx_hard, allow_na=True, errors=errors, warnings=warnings)
+        _check_group(REGULATORY_SECTIONS, text, sections,
+                     hard=reg_hard, allow_na=True, errors=errors, warnings=warnings)
 
-    _check_requirements(raw, sections, text, id_prefix, scenario_floor, errors, warnings)
+    _check_requirements(raw, sections, text, id_prefix, scenario_floor, errors, warnings, g)
 
     if _CODE_FENCE.search(raw):
         errors.append("в spec.md есть код-блок (```java/diff/sql/...) — мастер описывает "
@@ -323,8 +388,9 @@ def check(spec_path: Path, policy: str, *, id_prefix: str = _DEFAULT_ID_PREFIX,
 
     status = "pass" if not errors else "fail"
     return {"status": status, "spec": str(spec_path), "policy": policy,
-            "id_prefix": id_prefix, "scenario_floor": scenario_floor,
-            "requirements": len(_parse_requirements(raw, id_prefix)),
+            "id_prefix": id_prefix, "scenario_floor": scenario_floor, "profile": profile,
+            "grammar_native": g.is_native(),
+            "requirements": len(_parse_requirements(raw, id_prefix, g)),
             "errors": errors, "warnings": warnings}
 
 
@@ -332,6 +398,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Master spec composition gate.")
     ap.add_argument("spec", help="путь к specs/<cap>/spec.md")
     ap.add_argument("--pipeline-config", default=None)
+    ap.add_argument("--project-root", default=None, help="корень проекта (профиль грамматики)")
     ap.add_argument("--policy", choices=_POLICIES, default=None)
     ap.add_argument("--id-prefix", default=None, help="префикс ID требований (дефолт spec.id_prefix)")
     ap.add_argument("--no-scenario-floor", dest="scenario_floor", action="store_false", default=None,
@@ -340,9 +407,14 @@ def main() -> int:
     args = ap.parse_args()
 
     pcfg = Path(args.pipeline_config) if args.pipeline_config else None
-    policy = _load_policy(pcfg, args.policy)
-    prefix, floor = _load_spec_opts(pcfg, args.id_prefix, args.scenario_floor)
-    verdict = check(Path(args.spec), policy, id_prefix=prefix, scenario_floor=floor)
+    root = Path(args.project_root).resolve() if args.project_root else find_project_root()
+    policy = _load_policy(pcfg, args.policy, root)
+    prefix, floor, profile = _load_spec_opts(pcfg, args.id_prefix, args.scenario_floor, root)
+    grammar = SG.load_profile(root)
+    if args.id_prefix:
+        grammar.id_prefix = args.id_prefix
+    verdict = check(Path(args.spec), policy, id_prefix=prefix, scenario_floor=floor,
+                    grammar=grammar, profile=profile)
 
     if args.json:
         print(json.dumps(verdict, ensure_ascii=False, indent=2))

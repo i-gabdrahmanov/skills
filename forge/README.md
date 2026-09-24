@@ -33,7 +33,7 @@ forge/
 │   ├── forge.md            # /forge       → router (классификация fix | lite | full)
 │   ├── forge-fix.md        # /forge-fix   → forgefix (минорный дефект, спека правится точечно)
 │   ├── forge-lite.md       # /forge-lite  → forgelite (исполнение готовой задачи)
-│   ├── forge-spec.md       # /forge-spec  → требования-мастер: status/diff/merge/remove/check
+│   ├── forge-spec.md       # /forge-spec  → требования-мастер: status/diff/merge/remove/check/research
 │   ├── forge-merge.md      # /forge-merge → свести дельту с мастером и убрать доки в архив
 │   └── forge-archive.md    # /forge-archive → архив доков готовых строек: status/put/list/restore
 ├── skills/

@@ -1260,7 +1260,18 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
             master_spec = None
         if master_spec and master_spec.exists():
             mtext = master_spec.read_text(encoding="utf-8", errors="replace")
-            if f"from: {slug}" in mtext:
+            # След дельты ищем формой из профиля: у мастера без провенанс-тега «from: <slug>»
+            # не появится никогда, и судья вечно писал бы «не слито».
+            _mg = _spec_grammar(PROJECT_ROOT)
+            _supported = _mg.supported()[0] if _mg is not None else True
+            _probe = _mg.provenance_query(slug) if _mg is not None else f"from: {slug}"
+            if not _supported:
+                checks.append({"name": "Master spec grammar", "status": "WARN",
+                               "detail": "формат мастера не описан профилем — /forge-spec research",
+                               "severity": "warning"})
+                warnings.append("формат требований-мастера не разобран — /forge-spec research; "
+                                "состояние дельты относительно мастера неизвестно")
+            elif _probe in mtext:
                 checks.append({"name": "Master spec updated with delta", "status": "PASS",
                                "detail": str(master_spec), "severity": "warning"})
             elif drift != "off":
@@ -1277,7 +1288,8 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
                 # ground/pipeline.json обходил v2-приоритет и на частично мигрированных проектах
                 # читал legacy-файл в обход policy.json.
                 r = subprocess.run(
-                    [sys.executable, str(cms), str(master_spec), "--json"],
+                    [sys.executable, str(cms), str(master_spec), "--json",
+                     "--project-root", str(PROJECT_ROOT)],
                     capture_output=True, text=True, timeout=60)
                 if r.returncode == 0:
                     checks.append({"name": "check_master_spec", "status": "PASS",
@@ -1293,7 +1305,7 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
                 warnings.append(f"check_master_spec не выполнен: {e}")
         elif drift != "off":
             checks.append({"name": "Master spec exists", "status": "WARN",
-                           "detail": "specs/<cap>/spec.md не найден", "severity": "warning"})
+                           "detail": f"мастер не найден: {master_spec}", "severity": "warning"})
             warnings.append(
                 f"требования-мастер ещё не заведён — /forge-spec merge {slug} создаст его")
 
@@ -2114,6 +2126,18 @@ INGEST_FLOOR_PHASES = {
     "red": "merges_saved",
 }
 
+
+
+def _spec_grammar(root):
+    """Профиль формы мастера (spec_grammar). None — движок недоступен: ведём себя как раньше."""
+    try:
+        scripts = skill_paths.script(root, "system-analyst", "check_master_spec").parent
+        if str(scripts) not in sys.path:
+            sys.path.insert(0, str(scripts))
+        import spec_grammar
+        return spec_grammar.load_profile(root)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _fail_detail(proc, limit: int = 800) -> str:

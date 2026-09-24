@@ -654,9 +654,53 @@ def test_conventions_path(root: Optional[Path] = None, cfg: Optional[dict] = Non
     return inventory_dir(root, cfg) / "test-conventions.json"
 
 
+def spec_conventions_path(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
+    """ground/inventory/spec-conventions.json — детект формата требований-мастера.
+
+    Производное от мастер-спеки, а не документация: как и остальной инвентарь, снимается
+    заново (analyze_spec.py) и в git не едет. Подтверждённые ручки живут отдельно — в
+    policy.json (spec.grammar.*), потому что их правит человек и они снапшотятся на прогон.
+    """
+    return inventory_dir(root, cfg) / "spec-conventions.json"
+
+
+_DEFAULT_SPEC_TPL = "specs/{capability}/spec.md"
+
+
+def _spec_tpl(root: Path, cfg: Optional[dict] = None) -> str:
+    """docs.master.spec_path — путь мастера относительно <master_base>, шаблон с {capability}.
+
+    Форже-дефолт `specs/<cap>/spec.md` был зашит литералом, и мастер проекта, который лежит
+    иначе (`requirements/SRS.md`), не резолвился вовсе — merge молча считал, что мастера нет,
+    и создавал свой по шаблону. Небезопасный шаблон (абсолютный путь, `..`) игнорируется.
+    """
+    docs = _docs_cfg(cfg, root)
+    m = docs.get("master")
+    tpl = m.get("spec_path") if isinstance(m, dict) else None
+    if isinstance(tpl, str) and tpl.strip():
+        s = tpl.strip().replace("\\", "/")
+        if not s.startswith(("/", "~")) and ".." not in Path(s).parts:
+            return s
+        print(f"[forge-paths] docs.master.spec_path {tpl!r} выходит за базу мастера → "
+              f"'{_DEFAULT_SPEC_TPL}'", file=sys.stderr)
+    return _DEFAULT_SPEC_TPL
+
+
 def master_specs_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
-    """<master_base>/specs — требования-мастер (OpenSpec-style)."""
-    return _master_base(root, cfg) / "specs"
+    """Каталог требований-мастера — статический префикс docs.master.spec_path.
+
+    Для дефолтного шаблона это прежний `<master_base>/specs`. Обход капабилити ходит сюда,
+    поэтому берём часть пути ДО первого плейсхолдера: `specs/{capability}/spec.md` → `specs`,
+    `requirements/SRS.md` → `requirements`.
+    """
+    root = Path(root) if root else find_project_root()
+    parts = []
+    for seg in Path(_spec_tpl(root, cfg)).parts[:-1]:
+        if "{" in seg:
+            break
+        parts.append(seg)
+    base = _master_base(root, cfg)
+    return base.joinpath(*parts) if parts else base
 
 
 def master_capability(root: Optional[Path] = None, cfg: Optional[dict] = None) -> str:
@@ -678,10 +722,12 @@ def master_capability(root: Optional[Path] = None, cfg: Optional[dict] = None) -
 
 def master_spec_path(root: Optional[Path] = None, cfg: Optional[dict] = None,
                      capability: Optional[str] = None) -> Path:
-    """<master_base>/specs/<capability>/spec.md."""
+    """Мастер-спека по шаблону docs.master.spec_path (дефолт specs/<capability>/spec.md)."""
+    root = Path(root) if root else find_project_root()
     cap = capability if (isinstance(capability, str) and capability.strip()) \
         else master_capability(root, cfg)
-    return master_specs_dir(root, cfg) / _clean_subdir(cap, "capability") / "spec.md"
+    rel = _spec_tpl(root, cfg).format(capability=_clean_subdir(cap, "capability"))
+    return _master_base(root, cfg) / rel
 
 
 def master_adr_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:

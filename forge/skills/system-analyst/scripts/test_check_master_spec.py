@@ -197,18 +197,18 @@ class MasterGateTest(unittest.TestCase):
         self.assertEqual(gate._load_policy(None, None), "applicability")
 
     def test_spec_opts_defaults(self):
-        self.assertEqual(gate._load_spec_opts(None, None, None), ("REQ", True))
+        self.assertEqual(gate._load_spec_opts(None, None, None), ("REQ", True, "forge"))
 
     def test_spec_opts_from_pipeline_config(self):
         cfg = Path(self._tmp.name) / "pipeline.json"
         cfg.write_text(json.dumps({"spec": {"id_prefix": "KE", "scenario_floor": False}}),
                        encoding="utf-8")
-        self.assertEqual(gate._load_spec_opts(cfg, None, None), ("KE", False))
+        self.assertEqual(gate._load_spec_opts(cfg, None, None), ("KE", False, "forge"))
 
     def test_spec_opts_cli_wins(self):
         cfg = Path(self._tmp.name) / "pipeline.json"
         cfg.write_text(json.dumps({"spec": {"id_prefix": "KE"}}), encoding="utf-8")
-        self.assertEqual(gate._load_spec_opts(cfg, "REQ", None), ("REQ", True))
+        self.assertEqual(gate._load_spec_opts(cfg, "REQ", None), ("REQ", True, "forge"))
 
 
 if __name__ == "__main__":

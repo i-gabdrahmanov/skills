@@ -335,6 +335,20 @@ git-история и связанные `tasks/`.
   `references/phases/<phase>.md`. Дрейф пинится `test_phase_briefs.py`.
 - [BR-15] `GIGACODE_RUN_ID` (env) → стабильный `run-<id>` независимо от `session_id`
   («один прогон = одна папка»).
+- [BR-18] Форма требований-мастера — СВОЙСТВО ПРОЕКТА, а не форжа. Была зашита тремя копиями
+  (`merge_delta_to_master._SEC_*`/`_req_pat`, `check_master_spec.CORE_SECTIONS`/`_req_heading`,
+  `_project.master_spec_path`), и мастер, устроенный иначе, не разбирался вовсе: merge не
+  находил ни одного требования, считал все требования дельты новыми и дописывал в чужой
+  документ форже-блоки; архивация при этом вечно видела `new`/`drifted`. Теперь форму держит
+  `spec_grammar.Grammar` (один модуль на движок, гейт и судью), снимает её ресерч
+  `analyze_spec.py` → `ground/inventory/spec-conventions.json` (эфемерно, по отпечатку мастера),
+  а подтверждает человек — `spec.grammar.*` в policy.json. Слои: policy → детект (только при
+  уверенности ≥ 0.6) → форже-родной дефолт, поэтому проект без профиля ничего не замечает.
+  Форма вне профиля = отказ (`unsupported` → exit 3, `delta_state: unknown-format`, архивация
+  блокируется), а не «попробуем как обычно». Состав разделов отделён от формы ручкой
+  `spec.profile` (`forge` | `detected` | `minimal`), раскладка файла — `docs.master.spec_path`.
+  Пины: `test_spec_grammar.py` (паритет NATIVE с прежними литералами), `test_analyze_spec.py`,
+  `test_spec_cli.py`, `test_archive.py::test_unknown_master_format_blocks`.
 - [BR-16] `spec.master_source`: `delta-first` (дефолт — мастер собирается ИЗ дельт) |
   `master-first` (мастер ведёт аналитик, `sdd.md` выделяется ИЗ него). В `master-first`
   `/forge-merge` в мастер НЕ пишет, а сверяет: план слияния обязан быть пустым, любая операция
