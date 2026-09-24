@@ -273,12 +273,14 @@ def _drop_checkpoints(project: Path, feature: str) -> int:
 
 
 def archive_feature(project, slug, skill=None, force: bool = False, reason=None,
-                    dry_run: bool = False, delta_checked: bool = False) -> dict:
+                    dry_run: bool = False, assume_merged: bool = False) -> dict:
     """Перенести доки завершённой стройки в <docs_base>/archive/<слаг>. Отказ — Fail.
 
-    delta_checked=True ставит вызывающий, который САМ только что свёл или сверил дельту
-    (/forge-merge). Иначе состояние дельты пересчитывается здесь — и на dry-run слияния оно
-    ещё до-мерджевое, то есть отказ был бы про уже решённую проблему."""
+    assume_merged честится ТОЛЬКО на dry_run: там мастер ещё не записан, пересчитанное
+    состояние заведомо до-мерджевое, и отказ был бы про уже решённую проблему. На РЕАЛЬНОМ
+    переносе состояние пересчитывается всегда, что бы ни передал вызывающий: доверие слову
+    вызывающего и было дырой в гейте — ошибись он, и требования уехали бы в архив мимо
+    мастера, а заметить это было бы уже нечем."""
     project = Path(project)
     slug = resolve_slug(project, slug)
     feature = slug.split("/")[-1]
@@ -304,7 +306,7 @@ def archive_feature(project, slug, skill=None, force: bool = False, reason=None,
                        "   Архивация утащила бы их доки вместе с папкой."
                        .format(slug, "; ".join(live)))
 
-    ds = "checked-by-caller" if delta_checked else delta_state(project, slug)
+    ds = "assumed-merged" if (assume_merged and dry_run) else delta_state(project, slug)
     if ds in ("new", "drifted") and not force:
         raise Fail("дельта '{}' не сведена с мастером (состояние: {}).\n"
                    "   Сначала /forge-merge {} — иначе требования уедут в архив, минуя мастер."
@@ -372,7 +374,6 @@ def archive_feature(project, slug, skill=None, force: bool = False, reason=None,
         "checkpoints_deleted": dropped,
         "steps": st["steps"],
         "delta_state": ds,
-        "master_source": _master_source(project),
     }
     if force:
         meta["forced"] = True
@@ -450,16 +451,6 @@ def restore_feature(project, slug, dry_run: bool = False) -> dict:
     return plan
 
 
-def _master_source(project) -> str:
-    """spec.master_source: delta-first (слияние) | master-first (сверка)."""
-    try:
-        _ensure_path(_HERE.parents[1] / "system-analyst" / "scripts")
-        import spec_cli
-        return spec_cli.master_source(Path(project))
-    except Exception:  # noqa: BLE001
-        return "delta-first"
-
-
 def list_archived(project) -> list:
     arc = archive_docs_dir(Path(project))
     out = []
@@ -509,7 +500,6 @@ def status(project) -> dict:
                      "status": st["summary"].get("status"), "delta_state": ds,
                      "archivable": not blockers, "blockers": blockers})
     return {"docs_base": str(base), "archive": str(archive_docs_dir(project)),
-            "master_source": _master_source(project),
             "candidates": rows, "archived": list_archived(project)}
 
 
@@ -517,7 +507,7 @@ def status(project) -> dict:
 def _print_status(data: dict) -> None:
     ready = [r for r in data["candidates"] if r["archivable"]]
     held = [r for r in data["candidates"] if not r["archivable"]]
-    print(f"Архив: {data['archive']}  [режим мастера: {data['master_source']}]")
+    print(f"Архив: {data['archive']}")
     if ready:
         print(f"\nГотово к архивации ({len(ready)}):")
         for r in ready:

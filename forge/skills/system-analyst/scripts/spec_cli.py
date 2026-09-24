@@ -8,17 +8,22 @@
 Подкоманды:
   status                     что в мастере + какие дельты фич ещё не слиты
   diff <slug>                план операций (+ / ~ / =), ничего не пишет
-  merge <slug> [--all]       слить дельту в мастер — либо СВЕРИТЬ её с ним (master-first)
+  merge <slug> [--all]       слить дельту в мастер — либо СВЕРИТЬ её с ним (--master-first)
   remove <ID> --reason R     снять требование с указанием причины
   check                      гейт состава мастера (check_master_spec)
   migrate                    перенести плоский легаси-мастер (§Требования + §Сценарии) на ID
 
-Два потока, ключ `spec.master_source` в ground/policy.json:
-  delta-first (дефолт)  мастер собирается ИЗ дельт: merge дописывает в него требования фичи.
-  master-first          мастер пишет аналитик ДО sdd.md, и дельта выделяется из мастера.
-                        Тогда merge в мастер не пишет, а СВЕРЯЕТ: план слияния обязан быть
-                        пустым, любая операция (+/~) — расхождение (exit 3). Явное исключение —
-                        `--allow-merge`, когда требование действительно введено дельтой.
+Режим — ФЛАГ КОМАНДЫ, а не ключ конфига: это выбор на одну операцию, и ждать перепинивания
+политики прогона он не обязан.
+  (без флага, дефолт)   мастер собирается ИЗ дельт: merge дописывает в него требования фичи.
+  --master-first        мастер ведёт аналитик, дельта выделяется ИЗ него. Тогда merge в мастер
+                        не пишет, а СВЕРЯЕТ: план слияния обязан быть пустым, любая операция
+                        (+/~) — расхождение (exit 3). Требование действительно введено дельтой —
+                        значит это обычное слияние: запусти без флага.
+
+Присутствие задачи в мастере проверяется В ЛЮБОМ РЕЖИМЕ и печатается отчётом — до операции и
+ещё раз после записи. Доки уезжают в архив только на ПОДТВЕРЖДЁННОМ merged; всё, что не
+сошлось, — exit 3 с диагнозом и списком вариантов, выбирает пользователь.
 
 По успеху слияния/сверки доки фичи уезжают в <docs_base>/archive/ (archive.py; `--no-archive`
 отключает). Архивация — best-effort: её отказ не меняет код выхода самого слияния.
@@ -159,18 +164,19 @@ def _remind(spec_path: Path) -> None:
 
 # ── подкоманды ─────────────────────────────────────────────────────────
 
-MASTER_SOURCES = ("delta-first", "master-first")
-DEFAULT_MASTER_SOURCE = "delta-first"
+def _in_master(master_text: str, slug: str, g: "SG.Grammar") -> "bool | None":
+    """Помнит ли мастер эту задачу — по провенансу. None: формат провенанса не ведёт.
 
+    Тем же пробником ищет след дельты судья (run_judge.check_spec), поэтому ответ у них один.
+    Запрос строится от `_provenance(slug)`, а не от сырого слага: у дельты фикса провенанс —
+    `<стори> fix/<баг>`, и поиск по `STOR-100/fixes/BUG-512` не нашёл бы ничего никогда.
 
-def master_source(root: Path, opts: "dict | None" = None) -> str:
-    """`spec.master_source`: кто первичен — дельта или мастер. Неизвестное значение → дефолт."""
-    try:
-        o = opts if opts is not None else engine.spec_options(Path(root))
-    except Exception:  # noqa: BLE001 — конфиг не поднялся: ведём себя как раньше
-        return DEFAULT_MASTER_SOURCE
-    v = (o or {}).get("master_source")
-    return v if v in MASTER_SOURCES else DEFAULT_MASTER_SOURCE
+    Гейтом это НЕ служит: у мастера с `provenance: none` тега нет и не будет, и блокировать по
+    нему значило бы запретить такому проекту архивацию навсегда. Гейт — состояние дельты.
+    """
+    if getattr(g, "provenance", "from-bracket") == "none":
+        return None
+    return g.provenance_query(_provenance(slug)) in master_text
 
 
 def _master_enabled(root: Path) -> bool:
@@ -231,32 +237,28 @@ def delta_state(project_root, slug: str) -> str:
     return "no-delta"
 
 
-def _archive_merged(root: Path, slugs: list, dry_run: bool = False) -> None:
-    """Убрать доки сведённых/сверенных фич в архив. Best-effort: отказ гейта архивации —
-    не провал слияния (типичный отказ — сверку запустили посреди незавершённого прогона)."""
-    if not slugs:
-        return
+def _archive_one(root: Path, slug: str, dry_run: bool = False) -> dict:
+    """Убрать доки сведённой/сверенной фичи в архив. Best-effort: отказ гейта архивации — не
+    провал слияния (типичный отказ — сверку запустили посреди незавершённого прогона).
+
+    Гейт состояния дельты архивация пересчитывает САМА: `assume_merged` честится только на
+    dry-run, где мастер ещё не записан. На реальном переносе она смотрит на мастер, а не на
+    слово вызывающего."""
     _ps = str(SCRIPT_DIR.parents[1] / "pipeline-state" / "scripts")
     if _ps not in sys.path:
         sys.path.insert(0, _ps)
+    fail = {"ok": False, "target": None, "source": None}
     try:
         import archive
     except Exception as e:  # noqa: BLE001
-        print(f"\n! архивация недоступна ({e}) — доки остались на месте")
-        return
-    print("")
-    for slug in slugs:
-        try:
-            res = archive.archive_feature(root, slug, dry_run=dry_run, delta_checked=True)
-            if dry_run:
-                print(f"   dry-run архива: {res['source']} → {res['target']}")
-            else:
-                print(f"   🗄  доки {slug} → {res['target']}")
-        except archive.Fail as e:
-            print(f"   · доки {slug} не заархивированы: {e}")
-            print(f"     когда будет готово: /forge-archive put {slug}")
-        except SystemExit:
-            print(f"   · доки {slug} не заархивированы: манифест прогона нечитаем")
+        return dict(fail, error=f"архивация недоступна ({e})")
+    try:
+        res = archive.archive_feature(root, slug, dry_run=dry_run, assume_merged=dry_run)
+        return {"ok": True, "error": None, "target": res["target"], "source": res["source"]}
+    except archive.Fail as e:
+        return dict(fail, error=str(e).split("\n")[0].strip())
+    except SystemExit:
+        return dict(fail, error="манифест прогона нечитаем")
 
 
 def cmd_status(args) -> int:
@@ -270,17 +272,23 @@ def cmd_status(args) -> int:
     # «Слито» определяем ПЛАНОМ, а не подстрокой провенанса: отредактированная после merge
     # дельта провенанс сохраняет, но мастер уже расходится с ней.
     state: dict[str, list[str]] = {"new": [], "drifted": [], "merged": [], "unknown-format": []}
+    seen: dict = {}
     for slug, sdd in _features(root):
-        state[_state_of(slug, sdd, spec_path, capability, prefix, g)].append(slug)
+        st = _state_of(slug, sdd, spec_path, capability, prefix, g)
+        state[st].append(slug)
+        seen[slug] = _in_master(text, slug, g)
     total = sum(len(v) for v in state.values())
-    mode = master_source(root, opts)
+    # План говорит «слито», а следа дельты в мастере нет — значит совпали названия, а не
+    # происхождение. Молчать об этом нельзя: на «слито» стоит гейт архивации.
+    ghosts = [sl for sl in state["merged"] if seen.get(sl) is False]
 
     if args.json:
         print(json.dumps({"spec": str(spec_path), "exists": spec_path.exists(),
                           "capability": capability, "requirements": len(reqs),
-                          "scenarios": scen, "features": total, "master_source": mode,
+                          "scenarios": scen, "features": total,
                           "grammar_native": g.is_native(),
                           "grammar_supported": g.supported()[0],
+                          "in_master": seen,
                           "new": state["new"], "drifted": state["drifted"],
                           "merged": state["merged"],
                           "unknown_format": state["unknown-format"]},
@@ -302,27 +310,25 @@ def cmd_status(args) -> int:
     if not total:
         print("   дельт фич не найдено")
         return 0
-    verify = mode == "master-first"
-    if verify:
-        print("   режим: мастер первичен — дельты сверяются с ним, а не дописывают его")
     if state["new"]:
-        label = "РАСХОЖДЕНИЕ, нет в мастере" if verify else "НЕ слито"
-        print(f"   {label} ({len(state['new'])} из {total}): {', '.join(state['new'])}")
+        print(f"   НЕ слито ({len(state['new'])} из {total}): {', '.join(state['new'])}")
     if state["drifted"]:
-        label = "РАСХОЖДЕНИЕ, дельта разошлась с мастером" if verify \
-            else "РАЗОШЛОСЬ после слияния"
-        print(f"   {label} ({len(state['drifted'])}): {', '.join(state['drifted'])}")
+        print(f"   РАЗОШЛОСЬ после слияния ({len(state['drifted'])}): "
+              f"{', '.join(state['drifted'])}")
     if state["merged"]:
-        label = "сверено" if verify else "актуально"
-        print(f"   {label} ({len(state['merged'])}): {', '.join(state['merged'])}")
+        print(f"   актуально ({len(state['merged'])}): {', '.join(state['merged'])}")
+    if ghosts:
+        print(f"   ! провенанс не подтверждает ({len(ghosts)}): {', '.join(ghosts)} — "
+              f"план говорит «актуально», следа дельты в мастере нет")
     if state["unknown-format"]:
         print(f"   ФОРМАТ МАСТЕРА НЕ РАЗОБРАН ({len(state['unknown-format'])}): "
               f"{', '.join(state['unknown-format'])}")
         print("   → /forge-spec research — снять профиль формата и применить его")
     todo = state["new"] + state["drifted"]
     if todo:
-        feats = _features(root)
-        print(f"   → /forge-merge {_short(todo[0], feats)}   (или /forge-merge --all)")
+        first = _short(todo[0], _features(root))
+        print(f"   → /forge-merge {first}   (или /forge-merge --all)")
+        print(f"     мастер ведёт аналитик — сверка без записи: /forge-merge {first} --master-first")
     return 0
 
 
@@ -357,6 +363,10 @@ def cmd_diff(args) -> int:
               f"{' (мастер будет создан из шаблона)' if res['created'] else ''}")
         for line in res["ops"] or ["   (в дельте нет требований)"]:
             print(f"   {line}")
+        if args.master_first and _classify(res["kinds"]) != "merged":
+            print("   ! расхождение с мастером — мастер первичен, дельту приводят к нему")
+            rc = rc or 3
+            continue
         if res["blocked"]:
             short = _short(slug, _features(root))
             print(f"   ! modify требует подтверждения: {', '.join(res['blocked'])}")
@@ -397,6 +407,134 @@ def _targets(root: Path, args) -> "list[tuple[str, Path]] | None":
     return None
 
 
+# ── отчёт о слиянии/сверке ─────────────────────────────────────────────
+
+_STATE_WHY = {
+    "new": "требований дельты в мастере нет",
+    "drifted": "дельта разошлась с мастером после слияния",
+    "merged": "дельта и мастер совпадают",
+    "unknown-format": "форма мастера не разобрана — состояние неизвестно",
+}
+
+
+def _presence(v) -> str:
+    if v is None:
+        return "не определяется (формат мастера не ведёт провенанс)"
+    return "да" if v else "нет"
+
+
+def _choices(row: dict) -> list:
+    """Варианты решения по диагнозу — и в текст отчёта, и в --json.
+
+    Выбирает ПОЛЬЗОВАТЕЛЬ: ни один из них команда не применяет сама. Поэтому вариантов всегда
+    несколько и среди них есть «ничего не сливать»: односложная подсказка читалась бы как
+    указание, а это ровно то место, где угадывать нельзя."""
+    slug, short = row["slug"], row["short"]
+    p = row.get("problem")
+    if p == "divergence":
+        return [
+            {"id": "align-delta", "slug": slug, "title": "Привести дельту к мастеру",
+             "detail": "мастер первичен — правится sdd.md фичи, а не мастер", "command": None},
+            {"id": "merge-anyway", "slug": slug,
+             "title": "Всё-таки слить эти требования в мастер",
+             "detail": "требование действительно введено дельтой",
+             "command": f"/forge-merge {short}"},
+            {"id": "archive-force", "slug": slug, "title": "Убрать доки мимо мастера",
+             "detail": "требования останутся только в дельте — осознанный шаг",
+             "command": f"/forge-archive put {short} --force --reason '<почему>'"},
+        ]
+    if p == "blocked-modify":
+        blocked = row.get("blocked") or []
+        return [
+            {"id": "allow-modify", "slug": slug, "title": "Применить все ~ (modify)",
+             "detail": "содержимое требований мастера заменится содержимым дельты",
+             "command": f"/forge-merge {short} --allow-modify"},
+            {"id": "modify-one", "slug": slug, "title": "Применить точечно",
+             "detail": f"блокированы: {', '.join(blocked) or '—'}",
+             "command": f"/forge-merge {short} --modify {blocked[0] if blocked else '<ID>'}"},
+            {"id": "align-delta", "slug": slug, "title": "Привести дельту к мастеру",
+             "detail": "мастер остаётся как есть", "command": None},
+        ]
+    if p == "unknown-format":
+        return [
+            {"id": "research", "slug": slug, "title": "Снять профиль формы мастера",
+             "detail": "без него движок не разбирает чужую спеку и не пишет в неё",
+             "command": "/forge-spec research"},
+        ]
+    if p == "not-confirmed":
+        return [
+            {"id": "diff", "slug": slug, "title": "Посмотреть, что осталось несведённым",
+             "detail": "мастер записан, но проверка не подтвердила требования",
+             "command": f"/forge-spec diff {short}"},
+            {"id": "research", "slug": slug, "title": "Снять профиль формы мастера",
+             "detail": "разбор мог не увидеть только что записанное",
+             "command": "/forge-spec research"},
+            {"id": "archive-force", "slug": slug, "title": "Заархивировать осознанно",
+             "detail": "доки уедут, хотя присутствие в мастере не подтверждено",
+             "command": f"/forge-archive put {short} --force --reason '<почему>'"},
+        ]
+    return []
+
+
+def _print_report(rows: list, spec_path: Path, capability: str, verify: bool, dry: bool) -> None:
+    """Отчёт печатается ВСЕГДА, в обоих режимах и при любом исходе.
+
+    Пользователь обязан видеть три вещи по каждой задаче: помнит ли её мастер, что стало с
+    мастером и что стало с доками. Раньше гладкий прогон печатал только «✅ добавлено N» —
+    и вопрос «а доехало ли требование до мастера» оставался без ответа."""
+    mode = "сверка (--master-first)" if verify else "слияние"
+    if dry:
+        mode += ", dry-run"
+    print(f"\nОтчёт /forge-merge — {mode}     мастер: {spec_path} [{capability}]")
+    for r in rows:
+        print(f"\n  {r['short']}")
+        if r["problem"] == "error":
+            print(f"     ✗ {r['error']}")
+            continue
+        was, now = r["in_master_before"], r["in_master_after"]
+        line = _presence(was)
+        if now is not None and now != was:
+            line += f" → {_presence(now)}"
+        print(f"     в мастере:   {line}")
+        st, after = r["delta_state_before"], r["delta_state_after"]
+        arrow = f" → {after}" if after and after != st else ""
+        # Поясняем ИТОГОВОЕ состояние: после стрелки пояснение к исходному читалось бы как
+        # противоречие («new → merged — требований дельты в мастере нет»).
+        final = after or st
+        print(f"     дельта:      {st}{arrow} — {_STATE_WHY.get(final, final)}")
+        print(f"     мастер:      {r['master_note']}")
+        print(f"     доки:        {r['docs_note']}")
+        if r["ops"] and (r["problem"] or r["master_written"] or dry):
+            for op in r["ops"]:
+                print(f"        {op}")
+        ch = _choices(r)
+        if ch:
+            print(f"     ! нужно решение — {r['problem']}")
+            for i, c in enumerate(ch, 1):
+                print(f"        {i}) {c['title']} ({c['detail']})")
+                if c["command"]:
+                    print(f"           {c['command']}")
+            print("        Выбор за тобой: forge сам не выбирает.")
+    tally = {k: sum(1 for r in rows if r.get("did") == k)
+             for k in ("merged", "verified", "actual", "skipped")}
+    todo = sum(1 for r in rows if r["problem"] and r["problem"] != "error")
+    errs = sum(1 for r in rows if r["problem"] == "error")
+    arch = sum(1 for r in rows if r["archived"])
+    print(f"\nИтог: слито {tally['merged']}, сверено {tally['verified']}, "
+          f"актуально {tally['actual']}, отменено {tally['skipped']}, "
+          f"требует решения {todo}, ошибок {errs}; доки в архив — {arch}.")
+
+
+def _row(slug: str, short: str) -> dict:
+    return {"slug": slug, "short": short,
+            "in_master_before": None, "in_master_after": None,
+            "delta_state_before": None, "delta_state_after": None,
+            "ops": [], "added": [], "modified": [], "blocked": [],
+            "master_written": False, "archived": False, "archive_target": None,
+            "archive_error": None, "problem": None, "error": None, "did": None,
+            "master_note": "не тронут", "docs_note": "остались на месте"}
+
+
 def cmd_merge(args) -> int:
     root, spec_path, capability, opts = _resolve(args)
     prefix = _prefix(opts, args.id_prefix)
@@ -405,81 +543,106 @@ def cmd_merge(args) -> int:
     # повод дописать чужой документ форже-блоками.
     if _unsupported(g, root):
         return 3
-    # master-first: sdd выделяется ИЗ мастера, значит merge обязан сверять, а не дописывать.
-    # --allow-merge — явное исключение для требования, действительно введённого дельтой.
-    verify_only = master_source(root, opts) == "master-first" and not args.allow_merge
+    # --master-first: sdd выделяется ИЗ мастера, значит merge обязан сверять, а не дописывать.
+    # Это выбор на одну операцию, поэтому он флаг команды, а не ключ политики проекта.
+    verify = bool(args.master_first)
     targets = _targets(root, args)
     if targets is None:
         return 2
 
-    skipped: list[str] = []
-    settled: list[str] = []          # сведено или сверено → доки можно убирать в архив
+    prompt = sys.stderr if args.json else sys.stdout   # --json: stdout остаётся машиночитаемым
+    feats = _features(root)
+    rows: list = []
     rc = 0
     for slug, sdd in targets:
+        row = _row(slug, _short(slug, feats))
+        rows.append(row)
+        row["in_master_before"] = _in_master(_master_text(spec_path), slug, g)
+
         plan = _run_merge(args, slug, sdd, spec_path, capability, prefix, dry=True, g=g)
         if plan["status"] == "unsupported":
-            print(f"✗ {slug}: {plan['error']}")
-            print("   Разбор формата спеки проекта: /forge-spec research")
+            row.update(problem="unknown-format", error=plan["error"],
+                       delta_state_before="unknown-format")
             rc = 3
             continue
         if plan["status"] == "error":
-            print(f"✗ {slug}: {plan['error']}")
+            row.update(problem="error", error=plan["error"])
             rc = 2
             continue
-        if _classify(plan["kinds"]) == "merged":
-            print(f"= {slug}: " + ("сверка прошла — дельта совпадает с мастером" if verify_only
-                                   else "мастер актуален, делать нечего"))
-            settled.append(slug)
-            continue
-        if verify_only:
-            print(f"✗ {slug}: дельта расходится с мастером ({spec_path.name})")
-            for line in plan["ops"]:
-                print(f"   {line}")
-            print("   Мастер первичен (spec.master_source=master-first): дельта выделяется ИЗ "
-                  "него, поэтому forge его не дописывает.")
-            print(f"   Приведи дельту к мастеру — либо, если требование действительно новое: "
-                  f"/forge-merge {_short(slug, _features(root))} --allow-merge")
+        row["ops"] = plan["ops"]
+        state = _classify(plan["kinds"])
+        row["delta_state_before"] = state
+
+        if state == "merged":
+            row["did"] = "verified" if verify else "actual"
+            row["master_note"] = ("не тронут (сверка прошла — дельта совпадает с мастером)"
+                                  if verify else "не тронут (мастер актуален, делать нечего)")
+        elif verify:
+            row["problem"] = "divergence"
+            row["master_note"] = "не тронут (режим сверки — мастер первичен)"
             rc = rc or 3
             continue
-        if args.dry_run:
-            print(f"{slug} → {spec_path} (dry-run, ничего не записано)")
-            for line in plan["ops"]:
-                print(f"   {line}")
-            settled.append(slug)
-            continue
-        if not args.yes:
-            print(f"{slug} → {spec_path}")
-            for line in plan["ops"]:
-                print(f"   {line}")
-            if not _confirm("Применить?"):
-                skipped.append(slug)
+        elif args.dry_run:
+            row["did"] = "dry-run"
+            row["master_note"] = f"будет записано операций: {len(plan['ops'])} (dry-run)"
+        else:
+            if not args.yes:
+                print(f"{slug} → {spec_path}", file=prompt)
+                for op in plan["ops"]:
+                    print(f"   {op}", file=prompt)
+                if not _confirm("Применить?", prompt):
+                    row["did"] = "skipped"
+                    row["master_note"] = "не тронут (отменено пользователем)"
+                    continue
+            res = _run_merge(args, slug, sdd, spec_path, capability, prefix, dry=False, g=g)
+            if res["status"] == "error":
+                row.update(problem="error", error=res["error"])
+                rc = 2
                 continue
+            row.update(ops=res["ops"], added=res["added"], modified=res["modified"],
+                       blocked=res["blocked"], master_written=True)
+            row["master_note"] = (f"записано: добавлено {len(res['added'])}, "
+                                  f"изменено {len(res['modified'])}"
+                                  + (" (мастер создан из шаблона)" if res["created"] else ""))
+            # Пост-проверка: мастер перечитывается и состояние ПЕРЕСЧИТЫВАЕТСЯ. Доки уезжают
+            # только на подтверждённом merged — иначе требование ушло бы с рабочего стола, так
+            # и не попав в мастер, а обнаружить это было бы уже нечем.
+            row["in_master_after"] = _in_master(_master_text(spec_path), slug, g)
+            row["delta_state_after"] = _state_of(slug, sdd, spec_path, capability, prefix, g)
+            if res["blocked"]:
+                row["problem"] = "blocked-modify"
+                rc = rc or 3
+                continue
+            if row["delta_state_after"] != "merged":
+                row["problem"] = "not-confirmed"
+                rc = rc or 3
+                continue
+            row["did"] = "merged"
 
-        res = _run_merge(args, slug, sdd, spec_path, capability, prefix, dry=False, g=g)
-        if res["status"] == "error":
-            print(f"✗ {slug}: {res['error']}")
-            rc = 2
+        if args.no_archive:
+            row["docs_note"] = "остались на месте (--no-archive)"
             continue
-        mark = "✅" if (res["added"] or res["modified"]) else "·"
-        print(f"{mark} {slug}: добавлено {len(res['added'])}, изменено {len(res['modified'])}"
-              f"{' (мастер создан из шаблона)' if res['created'] else ''}")
-        for line in res["ops"]:
-            print(f"   {line}")
-        if not res["blocked"]:
-            settled.append(slug)
-        if res["blocked"]:
-            # --all не валится целиком: конфликтную дельту пропускаем и перечисляем в конце
-            skipped.append(f"{_short(slug, _features(root))} "
-                           f"(modify: {', '.join(res['blocked'])})")
-            rc = rc or 3
+        a = _archive_one(root, slug, dry_run=args.dry_run)
+        row.update(archived=a["ok"], archive_target=a["target"], archive_error=a["error"])
+        if a["ok"]:
+            row["docs_note"] = (f"{'dry-run: ' if args.dry_run else ''}"
+                                f"{a['source']} → {a['target']}")
+        else:
+            row["docs_note"] = (f"остались на месте: {a['error']}"
+                                f"  (когда будет готово: /forge-archive put {row['short']})")
 
-    if skipped:
-        print(f"\n! пропущено: {'; '.join(skipped)}")
-        print("  modify применяется явно: /forge-merge <слаг> --allow-modify (все) "
-              "или --modify <ID> (точечно)")
+    if args.json:
+        print(json.dumps({"mode": "master-first" if verify else "delta-first",
+                          "spec": str(spec_path), "capability": capability,
+                          "dry_run": bool(args.dry_run), "exit": rc,
+                          "features": [{k: v for k, v in r.items()
+                                        if k not in ("master_note", "docs_note")} for r in rows],
+                          "choices": [c for r in rows for c in _choices(r)]},
+                         ensure_ascii=False, indent=2))
+        return rc
+
+    _print_report(rows, spec_path, capability, verify, bool(args.dry_run))
     _remind(spec_path)
-    if not args.no_archive:
-        _archive_merged(root, settled, dry_run=args.dry_run)
     return rc
 
 
@@ -666,9 +829,12 @@ def cmd_migrate(args) -> int:
     return 0
 
 
-def _confirm(question: str) -> bool:
+def _confirm(question: str, stream=None) -> bool:
+    """Вопрос идёт в `stream` (дефолт stdout). При --json — в stderr: приглашение в stdout
+    сделало бы вывод команды неразбираемым."""
     try:
-        return input(f"{question} [y/N] ").strip().lower() in ("y", "yes", "д", "да")
+        print(f"{question} [y/N] ", end="", file=stream or sys.stdout, flush=True)
+        return input().strip().lower() in ("y", "yes", "д", "да")
     except EOFError:
         return False
 
@@ -696,6 +862,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--allow-modify", action="store_true", help="применить все ~ (modify)")
         p.add_argument("--modify", action="append", default=[], help="применить modify только для ID")
         p.add_argument("--sdd", default=None, help="явный путь к дельте sdd.md")
+        p.add_argument("--master-first", action="store_true",
+                       help="мастер первичен: не дописывать его, а СВЕРИТЬ с ним дельту")
 
     s = sub.add_parser("status", help="что в мастере и какие дельты не слиты")
     _common_flags(s, sub=True)
@@ -707,14 +875,12 @@ def build_parser() -> argparse.ArgumentParser:
     _merge_flags(d)
     d.set_defaults(func=cmd_diff)
 
-    m = sub.add_parser("merge", help="слить дельту в мастер (master-first — сверить с ним)")
+    m = sub.add_parser("merge", help="слить дельту в мастер (--master-first — сверить с ним)")
     m.add_argument("slug", nargs="?")
     m.add_argument("--all", action="store_true", help="слить все неслитые дельты")
     m.add_argument("--yes", "-y", action="store_true", help="не спрашивать подтверждения")
     m.add_argument("--dry-run", action="store_true",
                    help="показать план слияния и предстоящий перенос доков, ничего не записать")
-    m.add_argument("--allow-merge", action="store_true",
-                   help="master-first: всё-таки дописать мастер (требование введено дельтой)")
     m.add_argument("--no-archive", action="store_true",
                    help="не убирать доки сведённой фичи в <docs_base>/archive/")
     _merge_flags(m)

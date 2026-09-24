@@ -349,10 +349,24 @@ git-история и связанные `tasks/`.
   `spec.profile` (`forge` | `detected` | `minimal`), раскладка файла — `docs.master.spec_path`.
   Пины: `test_spec_grammar.py` (паритет NATIVE с прежними литералами), `test_analyze_spec.py`,
   `test_spec_cli.py`, `test_archive.py::test_unknown_master_format_blocks`.
-- [BR-16] `spec.master_source`: `delta-first` (дефолт — мастер собирается ИЗ дельт) |
-  `master-first` (мастер ведёт аналитик, `sdd.md` выделяется ИЗ него). В `master-first`
-  `/forge-merge` в мастер НЕ пишет, а сверяет: план слияния обязан быть пустым, любая операция
-  `+`/`~` — расхождение и `exit 3`. Эскейп на одну команду — `--allow-merge`.
+- [BR-16] Режим `/forge-merge` — ФЛАГ КОМАНДЫ, а не ключ конфига. Был `spec.master_source`
+  в `policy.json`, и это неверно трижды: выбор нужен на одну операцию, а жил в политике проекта
+  (снимок в манифест прогона → идущий прогон правку не видит, нужен `config.py repin` под R4);
+  ключ был висячим (`init_pipeline_config.build_config` его не писал — существовал только
+  фолбэк `delta-first`); а проверка «есть ли задача в мастере» была привязана к режиму и перед
+  архивацией вовсе пропускалась (`archive_feature(delta_checked=True)` верил слову
+  вызывающего). Теперь: без флага — слияние дельты (дефолт), `--master-first` — сверка
+  и архивация, мастер не пишется, любая операция `+`/`~` = расхождение и `exit 3`. Отдельного
+  эскейпа нет: запуск БЕЗ флага и есть разрешение слить. Присутствие задачи в мастере
+  проверяется в ОБОИХ режимах — до операции и ещё раз ПОСЛЕ записи (`_in_master` по
+  `Grammar.provenance_query`, тем же пробником, что у spec-judge) — и печатается отчётом;
+  в архив доки едут только на пересчитанном `merged`. Гейт стоит на состоянии дельты, а не на
+  провенансе: у мастера с `provenance: none` тега нет и не будет. `assume_merged` в
+  `archive_feature` честится ТОЛЬКО при `dry_run`. Любой незакрытый случай = `exit 3` с
+  диагнозом (`divergence` | `blocked-modify` | `unknown-format` | `not-confirmed`) и списком
+  вариантов (текстом и в `--json` как `choices[]`) — выбирает пользователь.
+  Пины: `test_spec_cli.py` (`MasterFirstFlagTest`, `MergeReportTest`, `PostCheckGateTest`),
+  `test_archive.py::TestAssumeMergedIsDryRunOnly`.
 - [BR-17] Завершённая стройка уезжает в архив по успеху `/forge-merge` (`--no-archive`
   отключает; ручной разбор — `/forge-archive`): доки → `<docs_base>/archive/<слаг>`, стейт →
   `ground/archive/<skill>/<feature>/`, git-чекпойнты фичи удаляются (`restore` их не вернёт).

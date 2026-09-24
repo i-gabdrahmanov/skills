@@ -510,6 +510,43 @@ class TestSlugSafety(Base):
         self.assertIn("нет прогона", str(cm.exception))
 
 
+class TestAssumeMergedIsDryRunOnly(Base):
+    """`assume_merged` — послабление ТОЛЬКО для dry-run, где мастер ещё не записан.
+
+    На реальном переносе состояние дельты пересчитывается всегда: доверие слову вызывающего
+    и было дырой — ошибись он, и требования уехали бы в архив мимо мастера."""
+
+    def setUp(self):
+        super().setUp()
+        self._run("feature-pipeline", "STOR-100", _steps(FULL_STEPS))
+        self._docs("STOR-100")
+
+    def _pin(self, state):
+        """Подменить состояние дельты: сам мастер тут не заводится."""
+        real = archive.delta_state
+        archive.delta_state = lambda *a, **kw: state
+        self.addCleanup(lambda: setattr(archive, "delta_state", real))
+
+    def test_real_archive_recomputes_and_refuses(self):
+        self._pin("new")
+        with self.assertRaises(archive.Fail) as cm:
+            archive.archive_feature(self.root, "STOR-100", assume_merged=True)
+        self.assertIn("не сведена с мастером", str(cm.exception))
+        self.assertTrue((self.root / "docs" / "feature-pipeline" / "STOR-100").is_dir())
+
+    def test_dry_run_honours_assume_merged(self):
+        self._pin("new")
+        plan = archive.archive_feature(self.root, "STOR-100", dry_run=True, assume_merged=True)
+        self.assertEqual(plan["delta_state"], "assumed-merged")
+        self.assertFalse(plan["moved"])
+
+    def test_real_archive_passes_when_state_is_merged(self):
+        self._pin("merged")
+        plan = archive.archive_feature(self.root, "STOR-100")
+        self.assertTrue(plan["moved"])
+        self.assertEqual(plan["delta_state"], "merged")
+
+
 class TestStatusAndCli(Base):
     def setUp(self):
         super().setUp()
@@ -526,7 +563,7 @@ class TestStatusAndCli(Base):
         held = [r["slug"] for r in data["candidates"] if not r["archivable"]]
         self.assertEqual(ready, ["STOR-100"])
         self.assertEqual(held, ["STOR-200"])
-        self.assertEqual(data["master_source"], "delta-first")
+        self.assertNotIn("master_source", data)   # режим — флаг /forge-merge, не свойство архива
 
     def test_cli_put_and_exit_codes(self):
         self.assertEqual(archive.main(["--project", str(self.root), "put", "STOR-100"]), 0)

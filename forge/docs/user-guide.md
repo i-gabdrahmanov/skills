@@ -209,7 +209,7 @@ Given-When-Then, где-то `## Requirement: …` с блоками `#### Scena
 ### Когда стройка закончена
 
 Завершённая фича не остаётся на рабочем столе. По успеху `/forge-merge` (слияния дельты с
-требованиями-мастером — или сверки с ним, если `spec.master_source=master-first`) доки и
+требованиями-мастером — или сверки с ним, если запустить с `--master-first`) доки и
 состояние прогона уезжают в архив: `docs/<slug>` → `docs/archive/<slug>`,
 `ground/statements/<skill>/<feature>` → `ground/archive/<skill>/<feature>`, git-чекпойнты фичи
 снимаются. Отменить перенос на этот раз — `--no-archive`.
