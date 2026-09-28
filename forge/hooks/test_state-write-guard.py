@@ -85,7 +85,7 @@ class TWriteVector(unittest.TestCase):
         self.assertIn("control-plane", r.stderr)
 
     def test_block_overrides(self):
-        r = _write("ground/statements/forgelite/f1/overrides/subagent-origin.json")
+        r = _write("ground/statements/forgefix/f1/overrides/subagent-origin.json")
         self.assertEqual(r.returncode, 2, r.stderr)
 
     def test_block_gates(self):
@@ -192,7 +192,7 @@ class TBashVector(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_block_redirect_into_judges(self):
-        r = _bash("echo '{}' > ground/statements/forgelite/f1/judges/coverage-judge.json")
+        r = _bash("echo '{}' > ground/statements/forgefix/f1/judges/coverage-judge.json")
         self.assertEqual(r.returncode, 2, r.stderr)
 
     def test_block_python_write_phase_gate(self):
@@ -303,10 +303,6 @@ class TContract(unittest.TestCase):
         r = subprocess.run([sys.executable, str(HOOK)], input="",
                            capture_output=True, text=True, timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 HARNESS = Path(__file__).resolve().parent.parent  # корень харнеса (forge/)
@@ -432,3 +428,44 @@ class TSanctionedScriptsNotBlocked(unittest.TestCase):
     def test_still_blocks_cp_over_harness_file(self):
         r = self._bash_in_run(f"cp /tmp/evil.md {HARNESS}/skills/forgefix/SKILL.md")
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+
+
+class TStateMasterKey(unittest.TestCase):
+    """Мастер-ключ к состоянию: регистр пути, удаление манифеста, незащищённые цели.
+
+    Без manifest.json фазовая машина не резолвится и ВСЕ хуки становятся noop, поэтому
+    `rm`/`mv`/`touch` манифеста снимали enforcement целиком — дешевле, чем любая подделка.
+    Регистр: ФС macOS/Windows регистронезависимы, а regex гарда был регистрозависимым."""
+
+    def test_uppercase_path_is_blocked(self):
+        for path in ("GROUND/statements/forgefix/STOR-1/manifest.json",
+                     "Ground/Statements/f/s/events.jsonl",
+                     "ground/POLICY.json"):
+            self.assertEqual(_write(path).returncode, 2, f"регистр открыл обход: {path}")
+
+    def test_unlink_of_manifest_is_blocked(self):
+        for cmd in ("rm ground/statements/forgefix/STOR-1/manifest.json",
+                    "rm -f Ground/Statements/f/s/manifest.json",
+                    "mv ground/statements/forgefix/STOR-1/manifest.json /tmp/x.json",
+                    "touch ground/approvals.jsonl"):
+            self.assertEqual(_bash(cmd).returncode, 2, f"не закрыт: {cmd}")
+
+    def test_control_plane_taskplan_and_inventory_blocked(self):
+        for path in ("ground/statements/forgefix/STOR-1/task-plan.json",
+                     "ground/inventory/grounding-excerpt.json",
+                     "ground/inventory/scan/entities.json"):
+            self.assertEqual(_write(path).returncode, 2, f"не защищено: {path}")
+
+    def test_artifacts_and_normal_work_still_free(self):
+        """Копия плана в docs/ — артефакт фазы дизайна (её пишет субагент), не control-plane."""
+        for path in ("docs/feature-pipeline/STOR-1/task-plan.json",
+                     "docs/feature-pipeline/STOR-1/sdd.md",
+                     "src/main/java/A.java"):
+            self.assertEqual(_write(path).returncode, 0, f"ложный блок: {path}")
+        for cmd in ("rm -rf build/",
+                    "mv src/main/java/A.java src/main/java/B.java"):
+            self.assertEqual(_bash(cmd).returncode, 0, f"ложный блок: {cmd}")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -14,10 +14,47 @@ PASSED = 0
 FAILED = 0
 
 
-def run(project: Path, *args, stdin: str | None = None):
+def run(project: Path, *args, stdin: str | None = None, approve_gated: bool = True):
+    """Запуск config.py. По умолчанию заранее выдаёт approval, если правится переключатель
+    enforcement (см. approve() ниже): тесты в этом файле проверяют приведение типов, роутинг
+    и маркеры _incomplete, а не класс согласия. Сам гейт пинится отдельно —
+    test_enforcement_switches_are_r4() здесь и TQualityDowngradeIsR4 в hooks/test_gate-guard.py;
+    им передаётся approve_gated=False."""
+    if approve_gated and len(args) >= 2 and args[0] == "set" and _is_gated(args[1]):
+        approve(project, args[1])
     r = subprocess.run([sys.executable, str(SCRIPT), "--project", str(project), *args],
                        capture_output=True, text=True)
     return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+
+# Переключатели enforcement (quality.tdd, coverage_threshold, coverage_exclude_globs, …)
+# с недавних пор R4: `config.py set` по ним требует approval-маркера с цитатой пользователя
+# (risk-policy.json:quality_downgrade + gate-guard.check_quality_downgrade + второй слой в
+# самом config.py). Тесты ниже проверяют ПРИВЕДЕНИЕ ТИПОВ и работу маркеров _incomplete, а
+# не класс согласия, поэтому фикстура выдаёт маркер заранее. Нейтральной замены нет: оба
+# list-параметра реестра гейтятся. Сам гейт пинится TestEnforcementSwitchesAreR4 ниже и
+# hooks/test_gate-guard.py:TQualityDowngradeIsR4.
+_RECORD_APPROVAL = (Path(__file__).resolve().parents[1].parent
+                    / "pipeline-state" / "scripts" / "record_approval.py")
+
+
+def _is_gated(param_id: str) -> bool:
+    import json as _json
+    pol = Path(__file__).resolve().parents[3] / "hooks" / "risk-policy.json"
+    try:
+        block = _json.loads(pol.read_text(encoding="utf-8")).get("quality_downgrade") or {}
+    except Exception:
+        return False
+    return (param_id in set(block.get("params") or ())
+            or param_id.startswith(tuple(block.get("param_prefixes") or ("security.",))))
+
+
+def approve(project: Path, param_id: str):
+    subprocess.run(
+        [sys.executable, str(_RECORD_APPROVAL), "--project", str(project),
+         "--key", f"policy-downgrade-{param_id}", "--approved-by", "user",
+         "--reason", "фикстура теста", "--evidence", "да, меняй параметр для теста"],
+        capture_output=True, text=True, check=False)
 
 
 def check(name: str, cond: bool, detail: str = ""):
@@ -269,8 +306,46 @@ def main():
         check("set jira.project_key none → null (обычный string-параметр)",
               cfg.get("jira", {}).get("project_key") is None, str(cfg.get("jira")))
 
+    test_enforcement_switches_are_r4()
+
     print(f"\n{PASSED} passed, {FAILED} failed")
     return 1 if FAILED else 0
+
+
+
+def test_enforcement_switches_are_r4():
+    """ВТОРОЙ слой гейта: config.py сам требует approval на переключателях enforcement.
+
+    Первый слой — gate-guard.check_quality_downgrade. Этот держится и при запуске мимо
+    харнеса, как у repin. Регрессия, которую он пинит: прямая запись в ground/policy.json
+    резалась state-write-guard, а санкционный скрипт не гейтился ничем — `set quality.tdd
+    false` снимал TDD-гейт с exit 0, причём на ВЕСЬ проект (policy.json переживает прогон).
+    """
+    with tempfile.TemporaryDirectory() as d:
+        project = Path(d)
+        (project / "ground").mkdir(parents=True, exist_ok=True)
+        (project / "ground" / "policy.json").write_text(
+            json.dumps({"quality": {"tdd": True}}), encoding="utf-8")
+
+        for param, value in (("quality.tdd", "false"),
+                             ("quality.eval_enabled", "false"),
+                             ("quality.coverage_threshold", "0.5"),
+                             ("quality.coverage_exclude_globs", "**/*")):
+            rc, out, _ = run(project, "set", param, value, approve_gated=False)
+            check(f"без approval {param} → rc 2", rc == 2, out)
+
+        # ФАКТЫ о проекте в том же namespace гейтиться НЕ должны — это работа config-helper
+        for param, value in (("quality.build_command", "./gradlew build"),
+                             ("quality.test_command", "./gradlew test"),
+                             ("quality.jacoco_configured", "true")):
+            rc, out, _ = run(project, "set", param, value, approve_gated=False)
+            check(f"факт о проекте {param} свободен", rc == 0, out)
+
+        # с маркером — проходит и пишет
+        approve(project, "quality.tdd")
+        rc, out, _ = run(project, "set", "quality.tdd", "false", approve_gated=False)
+        body = json.loads((project / "ground" / "policy.json").read_text(encoding="utf-8"))
+        check("с approval quality.tdd пишется", rc == 0 and body["quality"]["tdd"] is False, out)
 
 
 if __name__ == "__main__":

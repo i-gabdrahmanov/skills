@@ -126,6 +126,40 @@ def _load_batch_file(path: Path) -> list[dict]:
         f"(либо ключ 'approvals:' со списком, либо баре-список)")
 
 
+# ── Ключи, СНИМАЮЩИЕ enforcement: цитата пользователя обязательна ────────────────────
+# Второй слой гейта (первый — gate-guard.check_record_approval, он ещё и сверяет цитату с
+# транскриптом сессии). Держится здесь, чтобы инвариант не пропадал при запуске мимо
+# харнеса — ровно как у update.py --skip-judges и config.py repin.
+#
+# Почему именно цитата. Докстринг выше честно предупреждал: «скрипт НЕ доказывает согласие
+# сам по себе». Этого предупреждения не хватило — approval оставался самомаркируемым, и
+# цепочка «баннер подсказал команду → модель её выполнила → гейт снят» проходила без
+# человека. Дословная фраза пользователя — единственное, что модель не может сочинить
+# незаметно: она сверяется с транскриптом и остаётся в журнале под аудит.
+_CONSENT_BYPASS_PREFIXES = ("gate-override", "rollback", "skip-judges", "policy-repin")
+_EVIDENCE_MIN_CHARS = 12          # «да», «ок», «+» цитатой пользователя не являются
+
+
+def _evidence_required(key: str) -> bool:
+    return any(key == p or key.startswith(p + "-") for p in _CONSENT_BYPASS_PREFIXES)
+
+
+def _check_evidence(key: str, evidence: "str | None") -> "str | None":
+    """Причина отказа, если для ключа нужна цитата пользователя, а её нет; иначе None."""
+    if not _evidence_required(key):
+        return None
+    ev = (evidence or "").strip()
+    if len(ev) < _EVIDENCE_MIN_CHARS:
+        return (f"--evidence обязателен для ключа '{key}': он снимает enforcement, поэтому "
+                f"согласие фиксируется ДОСЛОВНОЙ фразой пользователя (не короче "
+                f"{_EVIDENCE_MIN_CHARS} символов; «да»/«ок» цитатой не считаются).\n"
+                f"  Сначала покажи пользователю, ЧТО не сходится, и спроси прямо; затем "
+                f"повтори команду с --evidence \"<его фраза из этого диалога>\".\n"
+                f"  gate-guard сверяет цитату с транскриптом сессии — пересказ своими словами "
+                f"не пройдёт.")
+    return None
+
+
 def _validate_approval_item(item: dict, idx: int, total: int) -> tuple[str, dict]:
     """Валидация одной записи approval. Возвращает (key, payload).
 
@@ -165,6 +199,12 @@ def _validate_approval_item(item: dict, idx: int, total: int) -> tuple[str, dict
     if not approver or not isinstance(approver, str):
         raise ValueError(f"запись #{idx + 1}/{total}: обязательное поле approver "
                          f"(строка) для ключа {key!r}")
+    # Тот же инвариант, что в одиночном режиме: batch не должен быть обходным путём
+    # для ключей, снимающих enforcement. Хук их в batch-файле не видит (он читает только
+    # командную строку), поэтому здесь это ЕДИНСТВЕННЫЙ слой — валидация строгая.
+    problem = _check_evidence(norm_key, evidence if isinstance(evidence, str) else None)
+    if problem:
+        raise ValueError(f"запись #{idx + 1}/{total}: {problem}")
 
     payload = {
         "approved_by": approver,
@@ -246,6 +286,10 @@ def cmd_single(args) -> int:
         return 2
     if not (args.reason or "").strip():
         print("ERROR: --reason обязателен (аудит согласия)", file=sys.stderr)
+        return 2
+    problem = _check_evidence(key, args.evidence)
+    if problem:
+        print("ERROR: " + problem, file=sys.stderr)
         return 2
 
     project = Path(args.project or repo_root()).resolve()

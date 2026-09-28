@@ -172,23 +172,23 @@ BUILD_STEP_PREFIX = "04-build-"      # 04-build-<taskId> — GREEN-фаза за
 TEST_STEP_PREFIX = "04-test-"        # 04-test-<taskId>  — RED-фаза задачи (пишет src/test)
 
 # Фазы, ОБЯЗАННЫЕ исполняться субагентом (не inline). Совпадает с префиксами шагов.
-# Хвост lite-* — плоские шаги lite-ветки (forgelite): RED/GREEN/verify тоже идут субагентом.
 # Хвост fix-* — плоские шаги fix-ветки (forgefix, минорный дефект): диагностика/RED/GREEN/
-# verify/дельта спеки. fix-intake (чтение тикета + скоуп-чек) — инлайн, как lite-jira.
+# verify/дельта спеки. fix-intake (чтение тикета + скоуп-чек) — инлайн.
 SUBAGENT_PHASE_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
-                           "lite-design", "lite-red", "lite-green", "lite-verify",
                            "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec")
 
 # Фазы, закрытие которых требует gate-result артефакта (gates/<step_id>.json от record_gate.py):
 # «шаг закрыт, потому что детерминированный гейт РЕАЛЬНО прошёл», а не потому что субагент
-# вернул status:"completed". Код/тесты/сборка + lite-контроль: lite-jira (скоуп-чек check_scope —
-# иначе его молча пропускали) и lite-design (check_taskplan + check_sdd по sources.spec — иначе
-# шаг закрывался со слов субагента: судей у lite-* нет по дизайну, evidence — единственный пол).
+# вернул status:"completed". Код/тесты/сборка.
 # fix-* — вся ветка целиком: судей у неё нет по дизайну (дешёвый путь), поэтому evidence
 # детерминированного гейта — единственный пол под закрытием шага, включая инлайн-скоуп-чек
 # fix-intake (иначе «это баг или фича» решалось бы прозой) и дельту спеки fix-spec.
-GATE_RESULT_PREFIXES = ("04-test", "04-build", "05-tests",
-                        "lite-jira", "lite-design", "lite-red", "lite-green", "lite-verify",
+# 03-jira — единственная фаза с НЕОБРАТИМЫМ внешним эффектом (задачи в трекере создаются
+# насовсем). При этом гейтов у неё не было вообще: ни в SUBAGENT_PHASE_PREFIXES, ни здесь,
+# ни в judges-registry, ни в phase_approvals — а state-recorder закрывает шаг как completed
+# по умолчанию (статус «failed» он выводит только из полей status/result/ok/passed).
+# Пол под закрытием — evidence check_jira.py (сверка созданных ключей с task-plan).
+GATE_RESULT_PREFIXES = ("03-jira", "04-test", "04-build", "05-tests",
                         "fix-intake", "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec")
 
 
@@ -200,7 +200,6 @@ def requires_gate_result(step_id) -> bool:
 # Обязательные шаги: их НЕЛЬЗЯ тихо пропустить (status=skipped) без override — иначе fallback
 # «не смог спросить → пропущу фазу» тихо выкидывает качество-гейты (Thrust 1: fallback=STOP).
 # grounding/brd сюда НЕ входят (grounding легитимно reuse-skip).
-# lite-design уже в SUBAGENT_PHASE_PREFIXES (tech-design обязан идти субагентом).
 REQUIRED_STEP_PREFIXES = SUBAGENT_PHASE_PREFIXES
 
 
@@ -246,7 +245,7 @@ def task_is_test_exempt(task: dict, cfg: dict) -> bool:
 
 
 def all_tasks_test_exempt(plan: Optional[dict], cfg: dict) -> bool:
-    """Ни одной задачи, которая пишет код и НЕ освобождена от RED (для плоских lite/fix-ветвей).
+    """Ни одной задачи, которая пишет код и НЕ освобождена от RED (для плоской fix-ветки).
 
     ЕДИНЫЙ предикат: им пользуются и tdd-guard (пропустить запись src/main без RED-шага), и
     update.py (разрешить `skipped` для RED-шага). Пустой/нечитаемый план → False (fail-closed).

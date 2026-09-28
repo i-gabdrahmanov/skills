@@ -60,7 +60,6 @@ except Exception as _e:  # pragma: no cover — сломанный бандл/и
 # best-effort импорт + inline-fallback (как в update.py), чтобы переименование префикса
 # в одном месте не отключало enforcement молча.
 _SUBAGENT_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
-                      "lite-design", "lite-red", "lite-green", "lite-verify",
                       "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec")
 try:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "feature-pipeline" / "scripts"))
@@ -79,8 +78,8 @@ BUILD_CMD_RE = r"(?:\./gradlew\s+|\bmvn\b|\b(?:checkstyle|ktlint|detekt|spotless
 # Python-subprocess обёртка над build-командой. Escape-hatch для двух путей:
 #   1. orchestrator (main agent) → Bash(`python3 -c "import subprocess; subprocess.run('./gradlew test', ...)"`).
 #      Inline-запуск build/test-команд в subagent-only фазах (04-test/04-build/05-tests/
-#      lite-*/fix-*) через python-обёртку — для окружений, где субагент-рантайм режет
-#      детерминированные команды (preview/lite/fix-ветки), а `autonomy.allow_inline_build`
+#      fix-*) через python-обёртку — для окружений, где субагент-рантайм режет
+#      детерминированные команды (preview/fix-ветка), а `autonomy.allow_inline_build`
 #      не выставлен (двойной контур: явный флаг всегда побеждает).
 #   2. subagent → Bash(`python3 check_tests_red.py ...`) → внутри Python вызов gradlew.
 #      Сам субагентский bash-вызов хука не достигает (agent_type != "" → return 0),
@@ -207,19 +206,6 @@ def _phase_artifact(step_id: str, norm: str) -> str | None:
     elif step_id.startswith("06-spec"):
         if (norm.endswith(".md") or norm.endswith(".puml")) and ("docs/" in norm or "ground/system-analysis" in norm):
             return "запись артефактов спецификации"
-    # Lite-ветка (forgelite)
-    elif step_id.startswith("lite-design"):
-        if re.search(r"(^|/)(tech-design\.md|task-plan\.json)$", norm):
-            return "запись tech-design.md / task-plan.json"
-    elif step_id.startswith("lite-red"):
-        if "src/test/" in norm:
-            return "запись RED-тестов в src/test/"
-    elif step_id.startswith("lite-green"):
-        if "src/main/" in norm or norm.endswith(".java"):
-            return "запись кода в src/main/ (*.java)"
-    elif step_id.startswith("lite-verify"):
-        if "src/" in norm:
-            return "правка src/ в фазе прогона тестов"
     # Fix-ветка (forgefix): минорный дефект.
     elif step_id.startswith("fix-diag"):
         if re.search(r"(^|/)(fix-plan\.md|task-plan\.json)$", norm):
@@ -308,7 +294,6 @@ def _is_phase_work(step_id: str, tool_name: str, tool_input: dict, root: Path) -
             if PYTHON_SUBPROCESS_RE.search(norm):
                 return None
             if step_id.startswith(("04-test", "04-build", "05-tests",
-                                   "lite-red", "lite-green", "lite-verify",
                                    "fix-red", "fix-green", "fix-verify")):
                 return f"запуск сборки/тестов ({BUILD_CMD_RE})"
         return None

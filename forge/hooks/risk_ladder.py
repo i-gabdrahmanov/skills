@@ -513,9 +513,9 @@ def agent_cap(agent_type: str | None) -> str | None:
 # ── проверки выполнения требований уровня ─────────────────────────────────────────────
 def active_manifest(root: Path) -> Path | None:
     """Активная фича = самый свежий manifest под statements/*/*/ ПО ВСЕМ skill-namespace
-    (feature-pipeline, forgelite, forgefix), кроме archived. Резолв glob-овый, а не по списку
+    (feature-pipeline, forgefix), кроме archived. Резолв glob-овый, а не по списку
     имён, поэтому новая ветка forge подхватывается хуками без правки этого модуля. Так один
-    общий control-plane обслуживает full-, lite- и fix-ветку: активна та, чей manifest свежее."""
+    общий control-plane обслуживает full- и fix-ветку: активна та, чей manifest свежее."""
     base = root / "ground" / "statements"
     newest, mt = None, -1.0
     try:
@@ -556,7 +556,7 @@ def manifest_exists(root: Path) -> bool:
 
 def active_feature_name(root: Path) -> str | None:
     """Слаг активной фичи (каталог самого свежего манифеста ПО ВСЕМ namespace).
-    В отличие от _project.active_feature смотрит все ветки (fix/lite/full), а не только
+    В отличие от _project.active_feature смотрит все ветки (fix/full), а не только
     feature-pipeline — им пользуются гейты, привязывающие approval-маркер к фиче."""
     p = active_manifest(root)
     return p.parent.name if p else None
@@ -603,15 +603,15 @@ def evidence_ok(root: Path, threshold: float = 0.95) -> tuple[bool, str]:
     return (worst >= threshold), f"min completeness={worst:.2f} (порог {threshold})"
 
 
-# Одна и та же ФАЗА называется по-разному в трёх ветках forge: full (02-design), lite
-# (lite-design), fix (fix-diag). level_requirements.steps ссылается на full-имя, а
-# check_requirement резолвил его буквально — в fix/lite такого шага нет НИКОГДА, значит
+# Одна и та же ФАЗА называется по-разному в двух ветках forge: full (02-design) и
+# fix (fix-diag). level_requirements.steps ссылается на full-имя, а
+# check_requirement резолвил его буквально — в fix такого шага нет НИКОГДА, значит
 # требование R2 (`src/main/**.java`!) было невыполнимо в принципе: любая запись прод-кода
 # упиралась в «шаг 02-design не completed (=None)» без легального выхода. Резолвим по фазе.
 _STEP_PHASE_ALIASES = {
-    "02-design": ("02-design", "lite-design", "fix-diag"),
+    "02-design": ("02-design", "fix-diag"),
     "02-sdd": ("02-sdd",),
-    "01-grounding": ("01-grounding", "lite-ground"),
+    "01-grounding": ("01-grounding",),
 }
 
 

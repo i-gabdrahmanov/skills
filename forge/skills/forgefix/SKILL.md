@@ -9,8 +9,8 @@ description: >
   их выполняет пользователь сам после завершения. Используй когда пользователь говорит
   «почини баг», «исправь дефект», «fix STOR-123», «баг из jira», «не работает X — поправь»,
   или передаёт тикет типа Bug. Отличие от feature-pipeline (full) — тот пишет спецификацию
-  с нуля для НОВОЙ фичи; от forgelite (lite) — тот исполняет готовую подзадачу по спеке и
-  спеку не правит. Обычно вызывается роутером (skills/router), работает и автономно.
+  с нуля для НОВОЙ фичи, здесь же спека правится точечной дельтой. Обычно вызывается
+  роутером (skills/router), работает и автономно.
 ---
 
 # Forgefix — fix-ветка: минорный дефект
@@ -31,7 +31,7 @@ description: >
 **вход → диагностика → RED → GREEN → verify → дельта спеки**. На этом пайплайн заканчивается:
 commit/push/PR/отчёт в Jira делает пользователь сам.
 
-Шаги стейта (`fix-*`, отдельно от `04-*` full-пути и `lite-*`):
+Шаги стейта (`fix-*`, отдельно от `04-*` full-пути):
 `fix-intake → fix-diag → fix-red → fix-green → fix-verify → fix-spec`.
 
 > **Философия ветки — минимальное изменение.** Ни код, ни спека не переписываются: фикс правит
@@ -51,9 +51,13 @@ commit/push/PR/отчёт в Jira делает пользователь сам.
   пользователя короткий slug вида `fix-npe-empty-email` и используй его.
 - **Стори, к которой относится баг** (`inputs.story`) — спрашивается на `fix-intake` (§2).
   Фикс не заводит новую фичу: он живёт ВНУТРИ папки своей стори.
-- Роутер выставляет ТОЛЬКО project-wide часть (`quality.eval_enabled=false`). Per-feature
-  решения (`inputs.mode`, `decisions.mode_task`, `decisions.criticality`,
-  `decisions.auto_max_risk`, `inputs.story`) пишешь ТЫ — в §1.1 шаг 3, после `init.py`.
+- Project-wide конфиг эта ветка НЕ трогает. Раньше здесь стояла запись
+  `quality.eval_enabled=false` — чтобы молчал `eval-guard`, у fix ведь нет фазы eval-plan.
+  Теперь ветку `eval-guard` определяет сам (по namespace стейта и префиксу шага), а
+  `quality.*`/`security.*` стали R4-классом: это пороги, которыми харнес меряет собственную
+  работу, и `policy.json` действует на весь проект, а не на один прогон.
+- Per-feature решения (`inputs.mode`, `decisions.mode_task`, `decisions.criticality`,
+  `decisions.auto_max_risk`, `inputs.story`) пишешь ТЫ — в §1.1 шаг 2, после `init.py`.
   Без `decisions.criticality` gate-guard заблокирует любое R2+ действие.
 
 > **Два обязательных вопроса пользователю на этом пути** (оба форсятся хуками, не «по совести»):
@@ -96,24 +100,19 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config
 и решение (в т.ч. `inputs.story`) не запишется — прогон пойдёт дальше с потерянным ответом.
 
 **Порядок важен.** `inputs.*`/`decisions.*` требуют уже существующего `manifest.json`
-(без него exit 3), а project-wide `quality.*` нужно записать ДО `init.py`, потому что прогон
-фиксирует политику на старте и дальше идёт по своему снимку. Запись `quality.*` после
-`init.py` пройдёт (exit 0) с предупреждением «прогон идёт по снимку» и применится только со
-следующего прогона; применить к идущему — `config.py repin --skill <S> --feature <F>`.
-Порядок: project-wide → `init.py` → per-feature. Если конфиг пришёл из роутера — шаг 1
-он уже сделал, начинай с шага 2.
+(без него exit 3), поэтому идут ПОСЛЕ `init.py`. Порядок: `init.py` → per-feature.
 
-**Шаг 1 — project-wide (`quality.*` → `policy.json`), ДО `init.py`:**
-```
-python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> set quality.eval_enabled false
-```
+Project-wide `quality.*`/`security.*` эта ветка не пишет вовсе — они R4-класс (approval
+с цитатой пользователя), и менять их посреди задачи незачем: прогон всё равно идёт по
+снимку политики, снятому на `init.py`. Применить новую политику к идущему прогону —
+только `config.py repin --skill <S> --feature <F>` (тоже R4).
 
-**Шаг 2 — заведи стейт (namespace forgefix):**
+**Шаг 1 — заведи стейт (namespace forgefix):**
 ```
 python3 <project>/.gigacode/skills/pipeline-state/scripts/init.py --project <toplevel> --skill forgefix --feature <KEY|slug> --steps @<project>/.gigacode/skills/forgefix/references/manifest-steps.json
 ```
 
-**Шаг 3 — per-feature (`inputs.*`/`decisions.*` → `manifest.json`), ПОСЛЕ `init.py`**
+**Шаг 2 — per-feature (`inputs.*`/`decisions.*` → `manifest.json`), ПОСЛЕ `init.py`**
 (`--project` ДО подкоманды `set`; `--skill`/`--feature` обязательны; `auto_max_risk` —
 sensitive, нужен `--confirm`):
 ```
@@ -176,8 +175,8 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --proje
 
 - **exit 0** — минорный дефект, продолжай fix.
 - **exit 1** (внутри exit 3 ESCALATE, причины в артефакте гейта) — СТОП, спроси пользователя:
-  «Похоже, это не минорный дефект (причины: …). Взять fix, lite (готовая подзадача по спеке) или
-  full (фича с нуля)?» Не решай молча. Явное «продолжаем fix» — это R4: сначала
+  «Похоже, это не минорный дефект (причины: …). Взять fix или full (фича с нуля)?»
+  Не решай молча. Явное «продолжаем fix» — это R4: сначала
   `record_approval.py --key gate-override-gate-result-fix-intake --approved-by user --reason "..."`,
   затем `override_judge.py --judge gate-result-fix-intake --reason "..."`, после чего закрывай шаг.
 - Нечитаемый вход — перечитай issue из MCP и повтори раннер.
@@ -306,7 +305,7 @@ python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <to
      фичи. Прямая запись в `ground/approvals*` заблокирована `state-write-guard`.)
    - **«Правки»** — верни `fix-diag` субагенту с правками (переоткрытие шага считается,
      `quality.max_step_reopens`). Маркер НЕ выписывай, пока план не согласован.
-   - **«Сменить путь»** — СТОП, это lite или full: новый прогон в другом namespace.
+   - **«Сменить путь»** — СТОП, это full: новый прогон в другом namespace.
 4. Вопрос не отрендерился (headless/форк) — НЕ выписывай маркер сам: остановись и попроси
    пользователя либо ответить, либо предзаписать согласие тем же `record_approval.py` до прогона.
 
@@ -496,7 +495,7 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/spec_cli.py --project-
 
 ## Связь
 Ветка forge: вызывается роутером (`skills/router`) при выборе «баг»; фича с нуля —
-`feature-pipeline`, готовая подзадача по спеке — `forgelite`. Анализ — `defect-analyzer`,
+`feature-pipeline`. Анализ — `defect-analyzer`,
 правка кода — `bugfix-developer`, тесты — `test-writer`. Стейт — `pipeline-state`
 (namespace `forgefix`). Мастер требований — `/forge-spec`.
 
@@ -523,8 +522,11 @@ python3 <project>/.gigacode/skills/system-analyst/scripts/spec_cli.py --project-
 python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> \
   set inputs.story STOR-100 --skill forgefix --feature fix-proj-123
 ```
-Пример (project-wide `quality.eval_enabled`, без `--skill`/`--feature`):
+Пример (project-wide параметр, без `--skill`/`--feature`):
 ```
 python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <toplevel> \
-  set quality.eval_enabled false
+  set jira.enabled false
 ```
+> `quality.*`/`security.*` тоже project-wide, но они **R4-класс**: `config.py set` по ним
+> требует approval-маркера `policy-downgrade-<параметр>` с цитатой пользователя. Это пороги,
+> которыми харнес меряет собственную работу, и `policy.json` действует на весь проект.

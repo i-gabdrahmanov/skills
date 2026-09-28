@@ -29,7 +29,7 @@ FORGE.md ссылаются на него односторонне. Дрейф �
 | `destructive-blocker.py` | PreToolUse `run_shell_command` | чёрный список (`rm -rf /`, force-push `-f`/`--force`, DROP, base64→sh, xargs rm, rmtree корня) | exit 2 |
 | `fork-syntax-guard.py` | PreToolUse `run_shell_command` | инструктивный блок синтаксиса, который режет нативный сейфти форка (`$(...)`, backticks, `find -exec`, `ls -R`) — объясняет замену (Glob/Grep/Read) вместо молчаливого deny | exit 2 |
 | `pii-boundary.py` | PreToolUse Write/Edit/Bash | блок записи PII/секретов вне scope (вкл. inline-python `open()`/`write_text`) | exit 2 |
-| `state-write-guard.py` | PreToolUse Write/Edit/Bash | запрет прямой записи моделью в control-plane state (`manifest.json`/`_origins`/`gates`/`overrides`/`approvals`/`pipeline.json`) — только через санкц. скрипты; + запрет писать артефакты фазы в каталог харнеса (skills/hooks/commands), пока идёт прогон | exit 2 |
+| `state-write-guard.py` | PreToolUse Write/Edit/Bash | запрет прямой записи моделью в control-plane state (`manifest.json`, `policy.json`, `approvals.jsonl`, `events.jsonl`, `evals.json`, `feature-gates.json`, `task-plan.json`, `ground/inventory/**`, `ground/archive/**`) — только через санкц. скрипты; сравнение регистронезависимое; отдельно ловится УДАЛЕНИЕ живого control-plane (`rm`/`mv`/`touch`/`shred`) — без манифеста все хуки становятся noop; + запрет писать артефакты фазы в каталог харнеса (skills/hooks/commands), пока идёт прогон | exit 2 |
 | `sod-enforcer.py` | PreToolUse Write/Edit/Bash | separation of duties: роль из активного шага (test не пишет src/main; design/spec/jira не билдят). git commit/push не гейтится — доставка на пользователе | exit 2 |
 | `inline-phase-guard.py` | PreToolUse Write/Edit/Bash | actor-guard: ГЛАВНЫЙ агент (пустой `agent_type`) не производит артефакты/код subagent-фазы inline | exit 2 |
 | `grounding-evidence.py` | PreToolUse Read | пишет запись `grounding` в журнал прогона при чтении grounding-excerpt — `gate-guard` снимает по нему блок фазы `01-grounding` | нет |
@@ -74,11 +74,20 @@ canonicalToolName)` — Claude-имя `Bash` лишь входной алиас,
 `preflight._check_matchers_canonical`. **Порядок в массивах значим** — блокирующие
 на PreToolUse идут sequential.
 
+Write/Edit-цепочка матчит ещё и `mcp__.*`: создание задач в Jira идёт MCP-инструментом, и
+без этого фаза `03-jira` — единственная с необратимым внешним эффектом — проходила мимо
+ВСЕХ хуков.
+
+Группы `SubagentStart`/`SubagentStop` matcher'а не имеют вовсе (как `UserPromptSubmit` и
+`Stop`). Раньше там стояло `"*"` — это **невалидный** regex: `new RegExp("*")` падает с
+«nothing to repeat», то есть `context-injector` и `state-recorder` могли не попадать в
+план вообще. «На всё» в этом формате выражается отсутствием поля, а не звёздочкой.
+
 ## Расположение
 
 | Каталог | Зачем |
 |---|---|
-| исходный репо `forgeExt/` (родитель `hooks/`) | **source-of-truth**: `hooks/` + `skills/` + `commands/` + манифест; отсюда `deploy.sh` копирует в проект |
+| исходный репо `forge/` (родитель `hooks/`) | **source-of-truth**: `hooks/` + `skills/` + `commands/` + манифест; отсюда `deploy.sh` копирует в проект |
 | `<project>/.gigacode/` | куда развёрнут харнес: co-located `hooks/` + `skills/` + `commands/` + сгенерированный `settings.json` — боевой каталог рантайма |
 | `~/.gigacode/skills/`, `~/.gigacode/hooks/`, `~/.qwen/extensions/forge` | остатки ПРЕЖНЕЙ extension-раскладки, если остались на машине; ПЕРЕКРЫВАЮТ project-деплой и ломают проводку; снимаются `cleanup-legacy.sh` |
 
@@ -156,19 +165,47 @@ Exit-коды:
 - `0` — армирован, можно работать.
 - `1` — ENFORCEMENT OFF (essential-хук не подключён / settings / risk-policy):
   стоп-и-предупреди; переустанови `deploy.sh`.
-- `2` — `ground/pipeline.json` не инициализирован (нормальный первый запуск): создай
+- `2` — `ground/policy.json` не инициализирован (нормальный первый запуск): создай
   конфиг и перезапусти preflight.
 
-## Конфиг проекта (`ground/pipeline.json`)
+## Конфиг проекта (`ground/policy.json`)
 
-Где живёт: `<project>/ground/pipeline.json`. Создаёт
-`skills/feature-pipeline/scripts/init_pipeline_config.py` (вызывается первым запуском
-пайплайна; preflight при `exit 2` подсказывает готовую команду `init_command` в выводе
-JSON). PDLC v3.5 добавил новые блоки:
-- `evidence.threshold` — порог прохождения evidence-бандла для фазы.
-- `risk.{policy,deny_first}` — подключение `risk-policy.json` и режим deny-first.
-- `security.{destructive_blocker,pii_boundary,prompt_guard}` — гейты security-хуков.
-- `autonomy.{level,auto_max_risk}` — критичность фичи и потолок авто-прохода (R2/R1/R0).
+> **v2.** Конфиг разделён: project-wide живёт в `<project>/ground/policy.json`
+> (`$schema: "feature-pipeline/config@2"`), per-feature решения — в `inputs.*`/`decisions.*`
+> манифеста фичи. Единый v1-файл `ground/pipeline.json` снят; он ещё читается dual-read
+> шимом для старых проектов, но НЕ создаётся. Раздел ниже раньше описывал именно v1 —
+> расхождение с кодом найдено аудитом 2026-09-28.
+
+Создаёт `skills/feature-pipeline/scripts/init_pipeline_config.py` (вызывается первым
+запуском пайплайна; preflight при `exit 2` подсказывает готовую команду `init_command`
+в выводе JSON). Правится только через `config-helper/scripts/config.py set` — прямая
+запись режется `state-write-guard`.
+
+**Живые блоки** (их реально читают хуки и скрипты):
+- `project.*` — build_system, модули, package_root, default_branch, is_git.
+- `conventions.*` — миграции, changelog.
+- `quality.*` — пороги и команды сборки/тестов. Делятся на два класса:
+  - **факты о проекте** (`build_command`, `test_command`, `coverage_report`,
+    `jacoco_configured`, `test_layer`) — настраиваются свободно, это работа `config-helper`;
+  - **переключатели enforcement** (`tdd`, `eval_enabled`, `coverage_threshold`,
+    `eval_threshold`, `max_judge_iterations`, `max_step_reopens`, `*_check`,
+    `module_dep_policy`, `coverage_exclude_globs`, `no_test_layers`) — **R4**: `config.py set`
+    по ним требует approval-маркера `policy-downgrade-<параметр>` с цитатой пользователя.
+    Список — `risk-policy.json:quality_downgrade.params`.
+- `docs.*` — куда пишутся артефакты фаз.
+- `jira.*` — включение Jira-фазы и ключ проекта.
+
+**Инертные блоки.** `init_pipeline_config.py` их всё ещё пишет, но **читателей у них нет**
+(проверено grep'ом по дереву) — не опирайся на них как на переключатели:
+- `security.{destructive_blocker,pii_boundary,prompt_guard}` — соответствующие хуки
+  подключаются/отключаются только через `settings.json`, эти флаги не читает никто;
+- `risk.deny_first` — deny-first вшит в `gate-guard`/`risk_ladder`, флагом не управляется;
+- `evidence.threshold` — `risk_ladder.evidence_ok` берёт порог из аргумента по умолчанию;
+- `autonomy.{level,auto_max_risk}` — v1-имена. В v2 потолок авто-прохода живёт в манифесте
+  как `decisions.auto_max_risk` (+ `decisions.criticality`), и читает его `gate-guard`.
+
+`risk.policy` — путь к `risk-policy.json`; фактически хуки резолвят её co-located рядом
+с собой, так что значение справочное.
 
 ## Выключение / тюнинг
 

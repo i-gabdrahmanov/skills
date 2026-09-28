@@ -407,7 +407,7 @@ prompt:
 Вход (прочитай файлы сам по путям):
 - task-plan: <папка фичи>/task-plan.json
 - brd: <папка фичи>/brd.md
-- pipeline-config: <project>/ground/pipeline.json  (бери jira.* — project_key, issue_type_*,
+- pipeline-config: <project>/ground/policy.json  (бери jira.* — project_key, issue_type_*,
   epic_link_field, sprint_field; флаг jira.enabled / auto_discovered)
 - answers (если перезапуск): <ответы на прошлые pending_questions или «нет»>
 - revision (если перезапуск с правкой): <что изменить в черновике, напр. «нужна 1 задача

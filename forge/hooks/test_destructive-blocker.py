@@ -12,6 +12,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import time
 import tempfile
 import unittest
 from pathlib import Path
@@ -169,6 +170,53 @@ class TestPrecision(unittest.TestCase):
     def test_destructive_blocked(self):
         for cmd in self.BLOCK:
             self.assertEqual(_run(cmd).returncode, 2, f"пропущен деструктив: {cmd}")
+
+
+class TNoReDoS(unittest.TestCase):
+    """Время проверки линейно по длине команды.
+
+    Паттерн `\brm\b(?:\s+(?:-\S+|--\w[\w-]*))*…` имел двусмысленную альтернативу под `*`
+    (`--recursive` подходит обеим ветвям) → экспоненциальный перебор: `rm --recursive`×28
+    занимал 131.8 с при таймауте хука 40 с. Рантайм читает таймаут как «возражений нет»,
+    то есть одна длинная строка флагов снимала блокировщик целиком."""
+
+    BUDGET_S = 5.0        # с запасом на холодный старт интерпретатора (сам матч — единицы мс)
+
+    def test_long_flag_run_is_fast(self):
+        for n in (28, 32, 64):
+            with self.subTest(n=n):
+                cmd = "rm " + " ".join(["--recursive"] * n) + " X"
+                t0 = time.time()
+                r = _run(cmd)
+                elapsed = time.time() - t0
+                self.assertLess(elapsed, self.BUDGET_S,
+                                f"ReDoS: n={n} занял {elapsed:.1f}s (таймаут хука 40 s)")
+                self.assertEqual(r.returncode, 0, "относительная цель — не деструктив")
+
+    def test_long_pathological_target_is_fast(self):
+        t0 = time.time()
+        _run("rm " + " ".join(["-abc"] * 40) + " " + "a" * 500)
+        self.assertLess(time.time() - t0, self.BUDGET_S)
+
+
+class TBareDangerousTargets(unittest.TestCase):
+    """Голая опасная цель ловится разбором argv (замена ReDoS-регулярки)."""
+
+    def test_blocked(self):
+        for cmd in ("rm -rf /", "rm -rf ~", "rm -rf $HOME", "rm -rf *", "rm -rf /*",
+                    "rm -fr .", "rm --recursive --force /", "rm -rf '${HOME}'"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_run(cmd).returncode, 2, f"не заблокировано: {cmd}")
+
+    def test_relative_cleanup_still_allowed(self):
+        for cmd in ("rm -rf build/", "rm -rf ./target", "rm -f src/main/java/A.java",
+                    "rm -rf build/tmp ./out"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_run(cmd).returncode, 0, f"ложный блок: {cmd}")
+
+    def test_absolute_outside_project_still_blocked(self):
+        """Регресс tasks/011: `rm -rf /etc/passwd` держит _RM_ABS_PATTERN, не эта проверка."""
+        self.assertEqual(_run("rm -rf /etc/passwd").returncode, 2)
 
 
 if __name__ == "__main__":

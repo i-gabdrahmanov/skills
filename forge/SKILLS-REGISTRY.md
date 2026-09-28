@@ -3,7 +3,7 @@
 Концепция (стр. 180, 294): AGENTS.md / skills / evals — это **supply chain**. У каждого артефакта
 должен быть **owner**, **validity** (срок переоценки), **scope** (где применим) и **eval coverage**.
 Иначе они тихо устаревают и начинают вредить. Этот реестр — лёгкая реализация: один источник правды
-по жизненному циклу скиллов forge (без правки 18 frontmatter).
+по жизненному циклу скиллов forge (без правки 19 frontmatter).
 
 - **Owner**: `@team` — заменить на реального владельца на целевой машине.
 - **Validity**: дата следующей ревизии (пересмотреть актуальность к этой дате).
@@ -12,17 +12,16 @@
 
 | Skill | Owner | Validity | Scope | Evals |
 |---|---|---|---|---|
-| router | @team | 2026-12 | точка входа: выбор режима fix/lite/full, делегация на общий control-plane | — (вход не форсится рантаймом; смягчения — preflight, check_fix_scope/check_scope) |
+| router | @team | 2026-12 | точка входа: выбор режима fix/full, делегация на общий control-plane | — (вход не форсится рантаймом; смягчения — preflight, check_fix_scope) |
 | feature-pipeline | @team | 2026-12 | Java/Spring фичи end-to-end до верифицированного артефакта (режим full; доставка — на пользователе) | gate-скрипты + hooks/evals |
-| forgelite | @team | 2026-12 | исполнение подготовленной подзадачи Jira (режим lite: grounding→tech-design по спеке→RED→GREEN→verify; доставка — на пользователе) | check_scope.py + record_gate (RED/GREEN) + check_coverage.py |
 | forgefix | @team | 2026-12 | минорный дефект (режим fix: диагностика→**гейт фикс-плана**→RED воспроизводит баг→минимальный фикс→verify→точечная дельта спеки внутри папки стори; доставка — на пользователе) | check_fix_scope.py + find_spec_anchor.py + record_approval (fix-plan) + record_gate (RED/GREEN/verify) + check_fix_delta.py |
 | pipeline-state | @team | 2026-12 | оркестраторы >3 субагентов | test_archive.py + косвенно через evals |
-| project-grounder | @team | 2026-12 | фаза grounding | verify_coverage.py |
+| project-grounder | @team | 2026-12 | фаза 1: инвентарь для гейтов дизайна (своих скриптов нет — зовёт system-analyst) | ensure_inventory.py, verify_coverage.py |
 | system-analyst | @team | 2026-12 | скан Java/Spring сервиса; требования-мастер (spec_cli/merge/check) и ресерч ФОРМЫ спеки проекта (analyze_spec → spec-conventions.json, spec_grammar) | verify_coverage.py, test_spec_grammar.py, test_analyze_spec.py |
 | sdd | @team | 2026-12 | BRD → спецификация (sdd.md) | check_sdd_doc.py |
 | tech-design | @team | 2026-12 | SDD → план + слои | check_taskplan.py, check_sdd.py |
 | java-spring-dev | @team | 2026-12 | генерация Java-кода | check_build.py |
-| test-writer | @team | 2026-12 | тестописатель RED/GREEN (feature-pipeline §4.1/§4.4, forgelite lite-red); кэш конвенций тестовой базы scan/test-conventions.json | test_analyze_tests.py + check_tests_red.py / check_tautological_tests.py |
+| test-writer | @team | 2026-12 | тестописатель RED/GREEN (feature-pipeline §4.1/§4.4, forgefix fix-red); кэш конвенций тестовой базы scan/test-conventions.json | test_analyze_tests.py + check_tests_red.py / check_tautological_tests.py |
 | jira-task-writer | @team | 2026-12 | создание задач Jira | check_jira.py |
 | minor-defect-fix | @team | 2026-12 | LEGACY-путь дефекта (со своей доставкой commit/PR/отчёт); в forge-пайплайне заменён `forgefix`. Живой артефакт — общий `scripts/check_coverage.py`, его зовут все ветки | check_coverage.py |
 | defect-analyzer | @team | 2026-12 | анализ дефекта | — |
@@ -44,6 +43,10 @@
 | sod-enforcer / inline-phase-guard | @team | 2026-12 | separation of duties / блок inline-работы в subagent-фазах | run-evals.py |
 | pii-boundary | @team | 2026-12 | граница PII при записи | run-evals.py |
 | prompt-guard | @team | 2026-12 | детект prompt-injection | run-evals.py |
+| state-write-guard | @team | 2026-12 | единственный легальный писатель control-plane: блок прямой записи И удаления (`rm`/`mv`/`touch`) манифеста, approvals, evals, inventory, task-plan | run-evals.py, test_state-write-guard.py |
+| fork-syntax-guard | @team | 2026-12 | читаемый отказ вместо молчаливого deny нативного сейфти форка (`$(...)`, backticks, `find -exec`) | run-evals.py |
+| grounding-evidence | @team | 2026-12 | пишет evidence чтения grounding-excerpt — по нему gate-guard снимает блок фазы `01-grounding` | test_grounding-evidence.py |
+| file-journal | @team | 2026-12 | журнал изменённых файлов фичи — скоуп восстановления кода для `rollback.py` | test_file-journal.py |
 | state-recorder / context-injector / phase-gate | @team | 2026-12 | state/context/stop | run-evals.py |
 
 > При изменении любого скилла/хука — обнови строку (validity, evals). Реестр ревьюится на каждой

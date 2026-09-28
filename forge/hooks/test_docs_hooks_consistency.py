@@ -132,5 +132,44 @@ class TestDocsHooksConsistency(unittest.TestCase):
                          f"Хуки проведены в settings, но отсутствуют в ростер-таблице FORGE.md: {missing}")
 
 
+class TestSkillsRegistryConsistency(unittest.TestCase):
+    """Две копии SKILLS-REGISTRY.md не расходятся, и таблица хуков покрывает ВСЕ хуки.
+
+    Обе находки — из аудита харнеса 2026-09-28. Копии (`forge/SKILLS-REGISTRY.md` и
+    `forge/skills/SKILLS-REGISTRY.md`) разъехались по содержанию, и обе едут в целевой
+    проект — какая из них «правда», было неопределено. Таблица control-plane при этом
+    описывала 11 хуков из 15: не хватало ровно тех, что держат самые дорогие инварианты
+    (`state-write-guard`), и тех, без которых не снимается фазовый блок
+    (`grounding-evidence`) и не собирается скоуп отката (`file-journal`).
+    """
+
+    ROOT_COPY = REPO / "SKILLS-REGISTRY.md"
+    SKILLS_COPY = REPO / "skills" / "SKILLS-REGISTRY.md"
+
+    def test_copies_are_identical(self):
+        a = self.ROOT_COPY.read_text(encoding="utf-8")
+        b = self.SKILLS_COPY.read_text(encoding="utf-8")
+        self.assertEqual(a, b,
+                         "копии SKILLS-REGISTRY.md разошлись — обе едут в целевой проект, "
+                         "выбор становится недетерминированным")
+
+    def test_hook_table_covers_every_hook(self):
+        """Каждый хук из settings.hooks.json упомянут в таблице control-plane реестра."""
+        registry = self.ROOT_COPY.read_text(encoding="utf-8")
+        table = registry.split("## Control-plane")[-1]
+        wired = set()
+        block = json.loads((HOOKS / "settings.hooks.json").read_text(encoding="utf-8"))["hooks"]
+        for groups in block.values():
+            for g in groups:
+                for h in g.get("hooks", []):
+                    name = _basename(h.get("command", ""))
+                    if name:
+                        wired.add(name)
+                    
+        missing = sorted(n for n in wired if n not in table)
+        self.assertFalse(missing,
+                         f"хуки подключены, но не описаны в реестре: {missing}")
+
+
 if __name__ == "__main__":
     unittest.main()

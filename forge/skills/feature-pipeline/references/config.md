@@ -1,24 +1,37 @@
-# Параметр-стор конвейера: `<project>/ground/pipeline.json`
+# Параметр-стор конвейера: `<project>/ground/policy.json`
 
 Единое место для всех параметров, от которых зависит конвейер в конкретном проекте.
 Делает конвейер **переносимым**: скиллы не хардкодят пути/пороги/конвенции, а читают их
 из файла, который лежит в самом проекте и версионируется вместе с кодом.
 
+> **v2.** Конфиг разделён на два слоя: project-wide — `<project>/ground/policy.json`
+> (`$schema: "feature-pipeline/config@2"`), per-feature решения прогона —
+> `inputs.*`/`decisions.*` в `manifest.json` активной фичи. Единый v1-файл
+> `ground/pipeline.json` снят: он ещё дочитывается dual-read шимом ради старых проектов,
+> но не создаётся и источником правды не является. Ниже `pipeline.json` встречается только
+> там, где речь о legacy.
+
 ## Где живёт и как разрешается
 
 | Слой | Путь | Роль |
 |---|---|---|
-| **Параметры проекта** | `<project>/ground/pipeline.json` | **источник правды** для всех скиллов |
+| **Параметры проекта** | `<project>/ground/policy.json` | **источник правды** для всех скиллов |
+| **Решения прогона** | `manifest.json` фичи (`inputs.*`, `decisions.*`) | что решили именно в этой задаче |
+| Legacy | `<project>/ground/pipeline.json` | только чтение, для проектов до миграции |
 | Рантайм-оверрайд | аргумент в диалоге | разовое переопределение на прогон |
 
 Идентичность проекта = текущая директория (или `git rev-parse --show-toplevel`). Реестра
 по абсолютным путям нет — поэтому ничего не ломается при переезде/переименовании проекта.
 
+**Прогон идёт по снимку.** `init.py` кладёт снимок политики в манифест, и читатели видят
+`policy_snapshot` поверх файла. Правка `policy.json` посреди прогона применится со
+СЛЕДУЮЩЕГО; применить к идущему — `config.py repin` (R4, approval).
+
 ## Как скиллы это потребляют
 
-Любой скилл читает `<project>/ground/pipeline.json` **напрямую** (обычный JSON, через
-Read). Скрипт не нужен для чтения. Если файла нет — скилл откатывается к прежнему
-поведению (спросить у пользователя). Что берёт каждый:
+Скиллы читают эффективный конфиг через `_config_loader.load_project_config` (он и делает
+оверлей снимка). Прямое чтение файла — только для справки. Если конфига нет — скилл
+откатывается к прежнему поведению (спросить у пользователя). Что берёт каждый:
 
 | Скилл | Поля |
 |---|---|
@@ -44,7 +57,7 @@ Read). Скрипт не нужен для чтения. Если файла н�
 Каждая фаза имеет:
 - `id` — стабильный идентификатор (используется в pipeline-state manifest)
 - `skill` — какой скилл отвечает за фазу (null если встроенная)
-- `enabled_by` — условие включения (путь к полю в pipeline.json или `gates.*`)
+- `enabled_by` — условие включения (путь к полю в `policy.json` или `gates.*`)
 - `skip_if` — условие пропуска (если уже выполнено, grounding.exists и т.п.)
 - `gates` — список гейтов, требующих подтверждения пользователя
 - `description` — человекочитаемое описание
@@ -142,7 +155,7 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
     "eval_enabled": true,            // Eval-Driven Development: eval-guard хук блокирует
                                       // запись в src/main/ пока eval'ы задачи не пройдены
     "eval_threshold": 0.95,          // Порог прохождения eval'ов по умолчанию
-    "architecture_check": false,     // вкл. ArchUnit-lite гейт слоёв в verify (check_architecture.py)
+    "architecture_check": false,     // вкл. облегчённый ArchUnit-гейт слоёв в verify (check_architecture.py)
     "tautology_check": false,        // вкл. детектор пустых/тавтологичных тестов (check_tautological_tests.py)
     "traceability_check": false      // вкл. сквозной judge трассируемости (check_traceability.py)
   },
@@ -204,7 +217,7 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
 }
 ```
 
-## Гейт архитектуры (ArchUnit-lite, `quality.architecture_check`)
+## Гейт архитектуры (облегчённый ArchUnit, `quality.architecture_check`)
 
 Детерминированная проверка слоёв БЕЗ запуска Java/ArchUnit — статический разбор изменённых
 `.java` (`check_architecture.py`). Ловит то, что покрытие и компиляция не видят:
@@ -222,7 +235,7 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
 ```bash
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.py \
     --root <project> --base <branch-base> \
-    --pipeline-config <project>/ground/pipeline.json [--strict] [--json]
+    --pipeline-config <project>/ground/policy.json [--strict] [--json]
 # exit 2 → есть нарушения слоёв (error); --strict делает warning тоже блокирующими.
 ```
 
@@ -272,7 +285,7 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_traceability.p
 явная пометка «не применимо: <причина>» — раздел закрывают осознанно, а не молча выпускают.
 Меняется через `config-helper` (`config.py set sdd.security_gate <hard|applicability|soft>`);
 `run_judge.py sdd` прокидывает путь конфига в гейт, автономный вызов гейта берёт политику из
-`<cwd>/ground/pipeline.json` или дефолт.
+`<cwd>/ground/policy.json` или дефолт.
 
 ## Гейт тавтологичных тестов (`quality.tautology_check`)
 
@@ -305,7 +318,7 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_tautological_t
   `feature-pipeline` / `system-analysis`).
 - В режиме `separate-repo` спецадаптер и system-analyst работают в `repo_path` через
   `git -C <repo_path>` (отдельная ветка/коммит спеки).
-- **Два способа настроить:** (1) прописать `docs` в `ground/pipeline.json`; (2) просто сказать
+- **Два способа настроить:** (1) прописать `docs` в `ground/policy.json`; (2) просто сказать
   агенту, куда класть артефакты — он впишет `docs` в нужном формате (init/обновление конфига),
   после чего весь пайплайн (скрипты, хуки, судьи) подхватит расположение из резолвера.
 - **Legacy:** старые ключи `docs.feature_docs_path` / `docs.system_analysis_path` (полные
@@ -467,9 +480,9 @@ exit 3. Мастер при этом не трогается вообще; де�
 ## Обратная совместимость
 
 Старый `~/.gigacode/skills/minor-defect-fix/config.json` (path-keyed `docs_path`) остаётся
-рабочим. `feature-pipeline` при наличии `pipeline.json` берёт `docs.docs_path` из него;
+рабочим. `feature-pipeline` при наличии конфига берёт `docs.docs_path` из него;
 если старый конфиг содержит запись для проекта — импортирует её. Миграция остальных скиллов
-на `pipeline.json` — постепенная, ломать ничего не нужно.
+на `policy.json` — постепенная, ломать ничего не нужно.
 
 ## Переносимость скиллов (не параметр, а упаковка)
 
@@ -495,7 +508,7 @@ coverage воркфлоу). `deploy.sh` раскладывает ВСЕ скил
       "id": "compile-t1",             // уникальный ID eval'а
       "type": "compile",              // compile | coverage | test_pass
       "task_id": "T1",                // привязка к задаче из task-plan
-      "command": "./gradlew compileJava", // команда из pipeline.json (Maven: "mvn -q compile")
+      "command": "./gradlew compileJava", // команда из policy.json (Maven: "mvn -q compile")
       "threshold": 0,                 // для compile: 0 (просто exit code)
       "binary": true,
       "description": "Проект компилируется"
@@ -512,7 +525,7 @@ coverage воркфлоу). `deploy.sh` раскладывает ВСЕ скил
       "id": "test_pass-t1",
       "type": "test_pass",
       "task_id": "T1",
-      "command": "./gradlew test",        // команда из pipeline.json (Maven: "mvn -q test ...")
+      "command": "./gradlew test",        // команда из policy.json (Maven: "mvn -q test ...")
       "threshold": 0,                      // бинарный gate (exit-код), не ratio
       "binary": true,
       "description": "Вся тест-сюита зелёная после задачи T1 (регрессия)"

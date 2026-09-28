@@ -205,7 +205,7 @@ class TestCompletionGate(Base):
                          ["06-spec"])
 
     def test_final_steps_come_from_registries(self):
-        for skill, expect in (("forgefix", "fix-spec"), ("forgelite", "lite-verify")):
+        for skill, expect in (("forgefix", "fix-spec"),):
             reg = SCRIPTS.parents[1] / skill / "references" / "manifest-steps.json"
             ids = [s["id"] for s in json.loads(reg.read_text(encoding="utf-8"))]
             self.assertEqual(archive.final_step_ids(skill, {"steps": _steps(ids)}), [expect],
@@ -552,9 +552,9 @@ class TestStatusAndCli(Base):
         super().setUp()
         self._run("feature-pipeline", "STOR-100", _steps(FULL_STEPS))
         self._docs("STOR-100")
-        self._run("forgelite", "STOR-200",
-                  _steps(["lite-jira", "lite-design", "lite-red", "lite-green", "lite-verify"],
-                         **{"lite-verify": "pending"}))
+        self._run("forgefix", "STOR-200",
+                  _steps(["fix-intake", "fix-diag", "fix-red", "fix-green", "fix-verify",
+                          "fix-spec"], **{"fix-spec": "pending"}))
         self._docs("STOR-200")
 
     def test_status_splits_ready_and_held(self):

@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """record_gate.py — запускает детерминированный гейт шага и пишет evidence-артефакт.
 
-Зачем: update.py при закрытии build/verify-шагов (04-test/04-build/05-tests, lite-red/
-lite-green/lite-verify) требует gates/<step_id>.json с провенансом produced_by:"record_gate".
+Зачем: update.py при закрытии build/verify-шагов (04-test/04-build/05-tests, fix-red/
+fix-green/fix-verify) требует gates/<step_id>.json с провенансом produced_by:"record_gate".
 Артефакт пишет ЭТОТ скрипт по фактическому exit-коду команды гейта — слово субагента
 («status: completed») доказательством не является.
 
 Usage:
     # обычный гейт (сборка/тесты/coverage должны пройти): passed = exit 0
-    record_gate.py --project <root> --skill <skill> --feature <slug> --step-id lite-green \
+    record_gate.py --project <root> --skill <skill> --feature <slug> --step-id fix-green \
         --cmd "./gradlew build"
 
     # RED-гейт TDD: компиляция проходит, ВСЕ тесты прогона падают (по-тестово, JUnit XML)
-    record_gate.py --project <root> --skill <skill> --feature <slug> --step-id lite-red \
+    record_gate.py --project <root> --skill <skill> --feature <slug> --step-id fix-red \
         --expect red --compile-cmd "./gradlew compileTestJava" \
         --cmd "./gradlew test --tests 'FooTest'"
 

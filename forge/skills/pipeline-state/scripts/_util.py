@@ -111,8 +111,8 @@ def resolve_skill(project, explicit=None) -> str:
     """Namespace (`--skill`) для резолвинга ground/statements/<skill>/<feature>/.
 
     Пять скриптов (`override_judge`, `run_judge`, `run_pending_evals`, `check_paths`,
-    `preflight-validate`) держали `--skill` с дефолтом "feature-pipeline". На forgefix/
-    forgelite это молча уводило запись/чтение в ЧУЖОЙ namespace: e2e-прогон показал, что
+    `preflight-validate`) держали `--skill` с дефолтом "feature-pipeline". На forgefix
+    это молча уводило запись/чтение в ЧУЖОЙ namespace: e2e-прогон показал, что
     `override_judge.py --judge subagent-origin --feature BUG-1` (фича forgefix) создавал
     `ground/statements/feature-pipeline/BUG-1/overrides/...`, печатал «Теперь можно закрыть
     шаг» с rc=0 — а `update.py`, который смотрит в forgefix/BUG-1, продолжал блокировать.

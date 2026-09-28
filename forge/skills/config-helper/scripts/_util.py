@@ -102,7 +102,7 @@ FILE_KEY_TO_FILENAME = {
 
 # Префиксы путей, которые пишутся в manifest.json активной фичи (а не в policy.json).
 # Это per-feature входы и решения: они переживают только прогон, и разные скиллы
-# (forgefix/forgelite/feature-pipeline) пишут свои — конкуренция снимается тем, что
+# (forgefix/feature-pipeline) пишут свои — конкуренция снимается тем, что
 # у каждой фичи свой manifest.json.
 MANIFEST_PATH_PREFIXES = ("inputs.", "decisions.")
 

@@ -111,8 +111,8 @@ python3 <project>/.gigacode/skills/test-writer/scripts/analyze_tests.py --root <
 
 ## 4. Выходной контракт
 
-Формат выходного JSON задаёт вызывающий пайплайн (feature-pipeline §4.1/§4.4, forgelite
-lite-red) — верни ровно его. Если формат не задан, верни:
+Формат выходного JSON задаёт вызывающий пайплайн (feature-pipeline §4.1/§4.4, forgefix
+fix-red) — верни ровно его. Если формат не задан, верни:
 
 ```json
 { "mode": "red|green", "test_files": ["src/test/java/.../FooServiceTest.java"],

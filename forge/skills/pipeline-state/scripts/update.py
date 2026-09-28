@@ -49,10 +49,8 @@ import forge_events as FE  # журнал evidence (импорт _util уже п
 # (co-located feature-pipeline). best-effort импорт + inline-fallback, чтобы переименование
 # префикса в одном месте не отключало enforcement молча.
 _SUBAGENT_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
-                      "lite-design", "lite-red", "lite-green", "lite-verify",
                       "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec")
 _GATE_RESULT_PREFIXES = ("04-test", "04-build", "05-tests",
-                         "lite-jira", "lite-design", "lite-red", "lite-green", "lite-verify",
                          "fix-intake", "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec")
 _REQUIRED_STEP_PREFIXES = _SUBAGENT_PREFIXES
 try:
@@ -334,9 +332,8 @@ def _check_doc_approval(step: dict, project: Path, skill: str, feature: str):
 
 
 # Фаза grounding: закрыть 01-grounding можно только при СОДЕРЖАТЕЛЬНОЙ выжимке системы.
-# Шаги, снимающие инвентарь: полный пайплайн и lite-ветка. forgelite гоняет тот же
-# check_taskplan, поэтому пустой инвентарь роняет его гейты ровно так же — прикрывать надо оба.
-_GROUNDING_STEP_PREFIX = ("01-grounding", "lite-ground")
+# Шаг, снимающий инвентарь, — полный пайплайн (01-grounding).
+_GROUNDING_STEP_PREFIX = ("01-grounding",)
 
 
 def _grounding_excerpt_path(project: Path) -> Path:
@@ -401,7 +398,7 @@ _gate_result_path = gate_result_path
 def _check_gate_result(step: dict, project: Path, skill: str, feature: str):
     """Гарантия «шаг закрыт, потому что детерминированный гейт РЕАЛЬНО прошёл».
 
-    Для build/verify-шагов (04-test/04-build/05-tests, lite-red/green/verify) слово субагента
+    Для build/verify-шагов (04-test/04-build/05-tests, fix-red/green/verify) слово субагента
     («status: completed» в его JSON) — не доказательство: слабая модель возвращает completed
     при упавшей сборке. Требуем evidence с провенансом record_gate и passed:true — его пишет
     record_gate.py по фактическому exit-коду команды гейта.
@@ -525,13 +522,13 @@ def _check_failure_limit(step: dict, project: Path, skill: str, feature: str) ->
     return True
 
 
-_RED_STEP_PREFIXES = ("lite-red", "fix-red", "04-test")
+_RED_STEP_PREFIXES = ("fix-red", "04-test")
 
 
 def _red_step_test_exempt(step_id: str, project: Path, skill: str, feature: str) -> bool:
     """Можно ли ЛЕГАЛЬНО пропустить RED-шаг: задача(и) не пишут тестируемый код.
 
-    Брифы lite/fix предлагали для такой задачи «не заводи шаг RED» — но манифест этих ветвей
+    Бриф fix предлагал для такой задачи «не заводи шаг RED» — но манифест этой ветки
     СТАТИЧЕСКИЙ (init.py берёт весь список из references/manifest-steps.json), шаг всегда есть,
     а `skipped` для него блокировался как для обязательного. Эскейп был невыполним: шаг висел в
     `pending` до конца прогона либо снимался R4-override'ом. Теперь решает тот же детерминированный
@@ -694,10 +691,9 @@ _CANONICAL_ARTIFACTS = {
     # step-id → файлы, которые фаза ОБЯЗАНА положить в docs-каталог задачи под этими именами.
     # Имя — часть контракта, а не оформление: `/forge-spec` ищет дельту строго как `sdd.md`,
     # а следующие фазы (RED/GREEN) читают `tech-design.md`/`fix-plan.md` по имени. На прогоне
-    # lite-документ уехал под именем слага задачи — гейты фазы этого не заметили (им путь
-    # передаёт сама модель), и дельта выпала из `merge`/`diff`. Full-путь здесь не перечислен:
+    # документ ветки уезжал под именем слага задачи — гейты фазы этого не замечали (им путь
+    # передаёт сама модель), и дельта выпадала из `merge`/`diff`. Full-путь здесь не перечислен:
     # там те же имена держат судьи фаз (sdd-judge/design-judge) и `check_traceability`.
-    "lite-design": ("tech-design.md", "task-plan.json"),
     "fix-diag": ("fix-plan.md", "task-plan.json"),
     "fix-spec": ("sdd.md",),
 }

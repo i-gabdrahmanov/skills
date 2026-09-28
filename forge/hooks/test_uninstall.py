@@ -79,7 +79,7 @@ class DeployUninstallRoundTrip(unittest.TestCase):
     def test_deploy_installs_slash_commands_as_markdown(self):
         # обе слэш-команды едут в .gigacode/commands/ как .md (не TOML — иначе окно миграции qwen)
         self.assertTrue((self.gig / "commands" / "forge.md").exists(), "/forge не задеплоен")
-        self.assertTrue((self.gig / "commands" / "forge-lite.md").exists(), "/forge-lite не задеплоен")
+        self.assertTrue((self.gig / "commands" / "forge-fix.md").exists(), "/forge-fix не задеплоен")
         self.assertFalse((self.gig / "commands" / "forge.toml").exists(), "TOML-команда не должна деплоиться")
 
     def test_uninstall_removes_forge_and_keeps_operator_data(self):

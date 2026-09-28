@@ -11,7 +11,7 @@ Pre-flight check для feature-pipeline.
 Exit 0 — харнес активен, можно продолжать.
 Exit 1 — ENFORCEMENT OFF (essential-хук не подключён / settings / risk-policy).
          Стоп-и-предупреди: deploy ещё раз, потом заново.
-Exit 2 — конфиг не инициализирован (ground/pipeline.json нет/неполон). Нормальный
+Exit 2 — конфиг не инициализирован (ground/policy.json нет/неполон). Нормальный
          первый запуск: инициализируй конфиг и перезапусти preflight до exit 0.
 """
 from __future__ import annotations
@@ -521,7 +521,7 @@ def _run_doctor(base: Path, project_root, errors: list[str], warnings: list[str]
                 for prob in detail["problems"]:
                     # Битые межскилловые пути (skill-paths.json) — ЖЁСТКАЯ ошибка: гейты,
                     # которые скиллы зовут по этим путям, молча отвалятся в рантайме
-                    # (например forgelite → minor-defect-fix/scripts/check_coverage.py).
+                    # (например forgefix → minor-defect-fix/scripts/check_coverage.py).
                     if str(prob).startswith("registry-paths-exist"):
                         errors.append(f"doctor: {prob}")
                     else:

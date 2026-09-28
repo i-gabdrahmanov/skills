@@ -290,6 +290,52 @@ def check_phase_gate(tool_name: str, tool_input: dict, agent_type: str | None,
     return True
 
 
+# ── Разбор команды: argv ГЕЙТЯЩЕГОСЯ сегмента, а не токены всей строки ────────────────
+# Все четыре R4-проверки ниже искали readonly-флаг (`--list`/`--dry-run`) среди токенов
+# ВСЕЙ командной строки: `shlex.split` не срезает комментарии и не разделяет операторы
+# оболочки. Флаг можно было дописать где угодно — гейт снимался, ничего не запуская:
+#   `override_judge.py --judge coverage-judge  # не использую --list`  → rc 0 (было)
+#   `rollback.py --to-step 02-sdd && echo done --dry-run`              → rc 0 (было)
+#   `config.py repin # --dry-run`                                      → rc 0 (было)
+# Устоял только check_skip_judges — и то случайно (он требует флаг, а не отсутствие).
+# Флаг обязан читаться из argv ТОГО сегмента, который запускает гейтящийся скрипт.
+_SHELL_OPS = frozenset(("&&", "||", ";", "|", "&", ">", ">>", "<", "<<", "(", ")", "\n"))
+
+
+def _command_segments(command: str) -> "list[list[str]]":
+    """Команда → argv по сегментам оболочки; комментарии отсечены, пустые сегменты убраны."""
+    try:
+        lex = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        lex.commenters = "#"
+        toks = list(lex)
+    except ValueError:  # незакрытая кавычка — грубый разбор, но комментарий всё равно режем
+        toks = []
+        for t in command.split():
+            if t.startswith("#"):
+                break
+            toks.append(t)
+    segments: "list[list[str]]" = [[]]
+    for t in toks:
+        if t in _SHELL_OPS:
+            segments.append([])
+        else:
+            segments[-1].append(t)
+    return [s for s in segments if s]
+
+
+def _gated_argv(command: str, pattern: str) -> "list[str]":
+    """argv сегмента, запускающего гейтящийся скрипт (`pattern` по тексту сегмента).
+
+    Пустой список = сегмент не опознан, ХОТЯ по всей строке совпадение было. Вызывающие
+    обязаны трактовать это как «флага нет» (то есть идти к deny), а не как readonly:
+    нераспознанный разбор не должен снимать R4-гейт."""
+    for argv in _command_segments(command):
+        if re.search(pattern, " ".join(argv)):
+            return argv
+    return []
+
+
 def check_gate_override(command: str, root: Path) -> str | None:
     """R4-класс: снятие детерминированного гейта через override_judge.py требует
     approval-маркера ground/approvals/gate-override-<judge>.json (кладётся ТОЛЬКО после
@@ -306,11 +352,7 @@ def check_gate_override(command: str, root: Path) -> str | None:
         # readonly (--list/--remove) свободны — но проверяем по РЕАЛЬНЫМ токенам-аргументам,
         # а не подстрокой: иначе `--reason "cleanup --list"` ложно трактуется как readonly (обход).
         ro_flags = policy.get("readonly_arg_flags") or ["--list", "--remove"]
-        try:
-            toks = shlex.split(command)
-        except ValueError:
-            toks = command.split()
-        if any(f in toks for f in ro_flags):
+        if any(f in _gated_argv(command, pat) for f in ro_flags):
             return None
         m = re.search(r"--judge[\s=]+[\"']?([\w./-]+)", command)
         judge = m.group(1) if m else ""
@@ -328,12 +370,109 @@ def check_gate_override(command: str, root: Path) -> str | None:
             f" (журнал ground/approvals.jsonl, пишет ТОЛЬКО record_approval.py).{prov_note}Порядок: (1) останови работу и спроси "
             f"пользователя (покажи, что не сходится); (2) ТОЛЬКО после явного «да» зафиксируй "
             f"согласие СКРИПТОМ pipeline-state/scripts/record_approval.py --key {key} "
-            f"--approved-by user --reason \"<кто/почему>\" (он штампует провенанс; прямой Write "
+            f"--approved-by user --reason \"<кто/почему>\" --evidence \"<дословная цитата пользователя>\" (он штампует провенанс; прямой Write "
             f"в approvals/ заблокирован state-write-guard); (3) повтори команду. "
             f"Молча снимать гейт нельзя. --list/--remove не гейтятся."
         )
     except Exception as e:
         return f"deny-first: ошибка проверки gate-override ({e})."
+
+
+# ── R4-класс: запись САМОГО согласия человека ────────────────────────────────────────
+# Самый опасный отказ харнеса: согласие было самомаркируемым. `record_approval.py` не гейтил
+# НИ ОДИН хук (проверено прогоном: gate-guard / state-write-guard / destructive-blocker /
+# sod-enforcer — все exit 0), а DENY-баннеры соседних R4-гейтов печатали готовую к вставке
+# команду. Цепочка «прочитал баннер → выписал себе маркер → снял гейт» проходила целиком
+# внутри модели, человека в ней не было ни на одном шаге.
+#
+# Чинится тем, что согласие обязано ПРИЙТИ ИЗВНЕ: `--evidence` с дословной цитатой
+# пользователя, и цитата сверяется с транскриптом сессии. Транскрипт модель не пишет — это
+# единственный доступный хуку канал, куда она не может дописать строку (на PreToolUse поле
+# `transcript_path` есть; замерено e2e на qwen-code 0.21.14, docs/v2/01-runtime-config-surface.md).
+#
+# Гейт стоит на классах, которые СНИМАЮТ enforcement. Approval'ы плана (fix-plan-*,
+# jira-plan-*, <doc>-approved-*) не гейтятся: они двигают прогон вперёд, а не убирают защиту,
+# и их брифы и так проводят через явный вопрос.
+_CONSENT_BYPASS_RE = re.compile(r"^(?:gate-override|rollback|skip-judges|policy-repin)\b")
+_EVIDENCE_MIN_CHARS = 12          # «да», «ок», «+» цитатой пользователя не являются
+
+
+def _transcript_text(transcript_path: str, limit: int = 200000) -> str | None:
+    """Хвост транскрипта сессии; None — прочитать не удалось."""
+    if not transcript_path:
+        return None
+    try:
+        return Path(transcript_path).read_text(encoding="utf-8", errors="replace")[-limit:]
+    except Exception:  # noqa: BLE001 — рантайм не отдал путь/файл недоступен
+        return None
+
+
+def _evidence_in_transcript(evidence: str, transcript: str) -> bool:
+    """Цитата встречается в транскрипте (по нормализованным пробелам, регистронезависимо)."""
+    norm = lambda s: re.sub(r"\s+", " ", s).strip().lower()
+    return norm(evidence) in norm(transcript)
+
+
+def _opt_value(argv: "list[str]", name: str) -> str:
+    """Значение опции из argv: `--opt value` и `--opt=value`. Пусто — опции нет.
+
+    Читать значение регуляркой по склеенной строке нельзя: shlex уже снял кавычки, и
+    `--evidence "цитата из нескольких слов"` обрезалось бы по первому пробелу.
+    """
+    for i, a in enumerate(argv):
+        if a == name and i + 1 < len(argv):
+            return argv[i + 1].strip()
+        if a.startswith(name + "="):
+            return a[len(name) + 1:].strip()
+    return ""
+
+
+def check_record_approval(command: str, root: Path, transcript_path: str) -> str | None:
+    """R4-класс: `record_approval.py` для ключей, снимающих enforcement, требует `--evidence`
+    с цитатой пользователя, сверяемой с транскриптом. Возвращает причину блокировки или None.
+
+    Второй слой — сам record_approval.py валидирует `--evidence` (гейт держится и мимо
+    харнеса). Ошибка разбора → fail-CLOSED."""
+    try:
+        if not command or not re.search(r"record_approval\.py", command):
+            return None
+        argv = _gated_argv(command, r"record_approval\.py")
+        if not argv:
+            return None
+        if "--batch" in argv or any(a.startswith("--batch=") for a in argv):
+            # Ключи лежат в YAML/JSON, командной строки хук не хватает. Инвариант держит
+            # сам record_approval: _validate_approval_item требует цитату для тех же
+            # классов ключей, и валидация батча атомарна (одна плохая запись → ни одной).
+            return None
+        key = _safe_key(_opt_value(argv, "--key"))
+        if not key or not _CONSENT_BYPASS_RE.match(key):
+            return None                    # approval плана/документа — не этот класс
+
+        evidence = _opt_value(argv, "--evidence")
+        head = (f"запись согласия по ключу '{key}' снимает enforcement — цитата пользователя "
+                f"обязательна. ")
+        tail = ("\n  Порядок: (1) покажи пользователю, ЧТО не сходится, и спроси прямо; "
+                "(2) повтори команду с --evidence \"<дословная фраза пользователя из этого "
+                "диалога>\". Цитата сверяется с транскриптом сессии — своими словами её "
+                "заменить нельзя, это и есть смысл гейта.")
+        if len(evidence) < _EVIDENCE_MIN_CHARS:
+            return head + (f"В команде нет --evidence (или он короче {_EVIDENCE_MIN_CHARS} "
+                           f"символов: «да»/«ок» цитатой не считаются).") + tail
+
+        transcript = _transcript_text(transcript_path)
+        if transcript is None:
+            # Транскрипт недоступен — сверить нельзя. Не запираем единственный аварийный
+            # выход наглухо: --evidence уже обязателен и уходит в журнал под аудит.
+            print(f"[gate-guard] WARN: транскрипт сессии недоступен — цитата --evidence для "
+                  f"'{key}' записана БЕЗ сверки. Проверяется постфактум по ground/approvals.jsonl.",
+                  file=sys.stderr)
+            return None
+        if not _evidence_in_transcript(evidence, transcript):
+            return head + ("Переданная цитата в транскрипте сессии НЕ найдена — значит, "
+                           "пользователь этого не говорил.") + tail
+        return None
+    except Exception as e:
+        return f"deny-first: ошибка проверки record_approval ({e})."
 
 
 def check_policy_repin(command: str, root: Path) -> str | None:
@@ -356,11 +495,7 @@ def check_policy_repin(command: str, root: Path) -> str | None:
         if not command or not re.search(pat, command):
             return None
         ro_flags = policy.get("readonly_arg_flags") or ["--dry-run"]
-        try:
-            toks = shlex.split(command)
-        except ValueError:
-            toks = command.split()
-        if any(f in toks for f in ro_flags):
+        if any(f in _gated_argv(command, pat) for f in ro_flags):
             return None
         m = re.search(r"--feature[\s=]+[\"']?([\w.-]+)", command)
         feat = m.group(1) if m else ""
@@ -382,12 +517,102 @@ def check_policy_repin(command: str, root: Path) -> str | None:
             f"(1) останови работу и покажи пользователю, ЧТО меняется (`config.py repin "
             f"--dry-run` печатает расхождение дайджестов); (2) ТОЛЬКО после явного «да» "
             f"зафиксируй согласие СКРИПТОМ pipeline-state/scripts/record_approval.py "
-            f"--key {key} --approved-by user --reason \"<почему>\"; (3) повтори команду. "
+            f"--key {key} --approved-by user --reason \"<почему>\" --evidence \"<дословная цитата пользователя>\"; (3) повтори команду. "
             f"Маркер одноразовый. Правка policy.json БЕЗ repin не гейтится — она применится "
             f"со следующего прогона, и это штатный путь."
         )
     except Exception as e:
         return f"deny-first: ошибка проверки policy-repin ({e})."
+
+
+# Переключатели enforcement, правка которых требует approval. Дублируют
+# risk-policy.json:quality_downgrade.params — удаление секции из политики не должно молча
+# открывать обход. В том же namespace quality.* живут ФАКТЫ о проекте (build_command,
+# test_command, jacoco_configured, test_layer): их настройка — штатная работа config-helper,
+# и под гейт они НЕ попадают. Обходные ослабления (coverage_exclude_globs, no_test_layers)
+# попадают: вывести код из-под гейта можно и не выключая флаг.
+_QUALITY_GATED_PARAMS = frozenset((
+    "quality.tdd", "quality.eval_enabled", "quality.coverage_threshold",
+    "quality.eval_threshold", "quality.max_judge_iterations", "quality.max_step_reopens",
+    "quality.architecture_check", "quality.tautology_check", "quality.traceability_check",
+    "quality.module_dep_policy", "quality.coverage_exclude_globs", "quality.no_test_layers",
+    "sdd.security_gate", "autonomy.mode",
+    "risk.autonomy_auto_max", "risk.default_level", "security_review",
+))
+
+
+def _positional_param(argv: "list[str]") -> str:
+    """Первый позиционный аргумент после подкоманды `set` — id параметра.
+
+    Именно позиционный: `--reason "выключаю quality.tdd"` не должен считаться правкой."""
+    try:
+        i = argv.index("set")
+    except ValueError:
+        return ""
+    skip_next = False
+    for a in argv[i + 1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if a.startswith("--"):
+            if "=" not in a and a not in ("--confirm", "--dry-run", "--json"):
+                skip_next = True      # опция со значением: `--skill S`
+            continue
+        return a
+    return ""
+
+
+def check_quality_downgrade(command: str, root: Path) -> str | None:
+    """R4-класс: `config.py set quality.*|security.*` — правка собственных порогов харнеса.
+
+    Прямая запись в ground/policy.json режется state-write-guard, а санкционный скрипт не
+    гейтился ничем: `set quality.tdd false` / `set quality.eval_enabled false` проходили все
+    хуки с exit 0. Снимок политики тут не защита — он фиксируется на init.py, а окно ДО него
+    открыто, и policy.json переживает прогон, то есть отключение едет и в соседние.
+
+    Чтение (`get`/`list`) под pattern не подпадает, `--dry-run` свободен.
+    Ошибка разбора → fail-CLOSED."""
+    try:
+        policy = R.load_policy().get("quality_downgrade") or {}
+        pat = policy.get("command_pattern", r"config\.py[^\n]*\bset\b")
+        if not command or not re.search(pat, command):
+            return None
+        ro_flags = policy.get("readonly_arg_flags") or ["--dry-run"]
+        argv = _gated_argv(command, pat)
+        if any(f in argv for f in ro_flags):
+            return None
+        # Гейтится КОНКРЕТНЫЙ параметр, а не namespace: в quality.* живут и факты о проекте
+        # (build_command, test_command, jacoco_configured) — их настройка не должна требовать
+        # approval. Дефолты продублированы в коде: удаление секции из risk-policy.json не
+        # должно молча снимать enforcement.
+        gated = set(policy.get("params") or _QUALITY_GATED_PARAMS)
+        prefixes = tuple(policy.get("param_prefixes") or ("security.",))
+        param = _positional_param(argv)
+        if not param or not (param in gated or param.startswith(prefixes)):
+            return None
+        prefix = policy.get("approval_prefix", "policy-downgrade")
+        key = _safe_key(f"{prefix}-{param}")
+        if _approval_valid(root, key):
+            return None
+        exists_no_prov = R.approval_exists(root, key) and not _approval_valid(root, key)
+        prov_note = (
+            " Маркер есть, но БЕЗ провенанса record_approval — рукописный маркер не считается "
+            "(его мог выписать сам агент). " if exists_no_prov else " "
+        )
+        return (
+            f"правка '{param}' — переключатель enforcement, R4-класс: нужен approval-маркер '{key}' (журнал "
+            f"ground/approvals.jsonl, пишет ТОЛЬКО record_approval.py).{prov_note}"
+            f"quality.*/security.* — это пороги, которыми харнес меряет СОБСТВЕННУЮ работу: "
+            f"понижение снимает enforcement с себя же, и не на прогон, а на весь проект "
+            f"(policy.json действует и на соседние прогоны). Порядок: (1) прогони гейт, "
+            f"а не снимай его; (2) гейт объективно неприменим — покажи пользователю, ЧТО "
+            f"меняется, и спроси; (3) после явного «да» — pipeline-state/scripts/"
+            f"record_approval.py --key {key} --approved-by user --reason \"<почему>\" "
+            f"--evidence \"<дословная цитата пользователя>\"; (4) повтори команду. "
+            f"Чтение (`config.py get`) и `--dry-run` не гейтятся."
+        )
+    except Exception as e:
+        return f"deny-first: ошибка проверки quality/security-downgrade ({e})."
 
 
 def check_skip_judges(command: str, root: Path) -> str | None:
@@ -403,12 +628,10 @@ def check_skip_judges(command: str, root: Path) -> str | None:
         flag = policy.get("arg_flag", "--skip-judges")
         if not command or flag not in command or not re.search(pat, command):
             return None
-        try:
-            toks = shlex.split(command)
-        except ValueError:
-            toks = command.split()
-        if flag not in toks:
+        argv = _gated_argv(command, pat)
+        if argv and flag not in argv:
             return None                      # флаг лишь упомянут в строке-аргументе
+        # argv пуст = сегмент не опознан при совпадении по строке → к deny (fail-CLOSED)
         m = re.search(r"--feature[\s=]+[\"']?([\w.-]+)", command)
         feat = m.group(1) if m else ""
         prefix = policy.get("approval_prefix", "skip-judges")
@@ -422,7 +645,7 @@ def check_skip_judges(command: str, root: Path) -> str | None:
             f"'{key}' (журнал ground/approvals.jsonl, пишет ТОЛЬКО record_approval.py).{prov_note}Легитимный случай один: восстановление "
             f"статусов после init.py --force. Порядок: (1) объясни пользователю, зачем обходить "
             f"гейты, и спроси; (2) после явного «да» — pipeline-state/scripts/record_approval.py "
-            f"--key {key} --approved-by user --reason \"<зачем обход>\"; (3) повтори команду. "
+            f"--key {key} --approved-by user --reason \"<зачем обход>\" --evidence \"<дословная цитата пользователя>\"; (3) повтори команду. "
             f"Штатное закрытие шага этого флага НЕ требует — прогони гейт фазы."
         )
     except Exception as e:
@@ -447,11 +670,7 @@ def check_rollback(command: str, root: Path) -> str | None:
         # readonly по РЕАЛЬНЫМ токенам-аргументам, не подстрокой (обход через
         # `--feature "x --dry-run"` не должен трактоваться как readonly)
         ro_flags = policy.get("readonly_arg_flags") or ["--dry-run", "--list"]
-        try:
-            toks = shlex.split(command)
-        except ValueError:
-            toks = command.split()
-        if any(f in toks for f in ro_flags):
+        if any(f in _gated_argv(command, pat) for f in ro_flags):
             return None
         m = re.search(r"--feature[\s=]+[\"']?([\w.-]+)", command)
         feat = m.group(1) if m else ""
@@ -476,7 +695,7 @@ def check_rollback(command: str, root: Path) -> str | None:
             f"отката (rollback.py ... --dry-run: какие шаги сбросятся, какой код "
             f"восстановится, какие сироты останутся); (2) ТОЛЬКО после явного «да» зафиксируй "
             f"согласие СКРИПТОМ pipeline-state/scripts/record_approval.py --key {key} "
-            f"--approved-by user --reason \"<кто/почему>\" (он штампует провенанс; прямой Write "
+            f"--approved-by user --reason \"<кто/почему>\" --evidence \"<дословная цитата пользователя>\" (он штампует провенанс; прямой Write "
             f"в approvals/ заблокирован state-write-guard); (3) повтори команду. Маркер "
             f"одноразовый — потребляется откатом.{args_note} --dry-run/--list не гейтятся."
         )
@@ -532,6 +751,13 @@ def main() -> int:
                 f"действие ({kind}) заблокировано вне пайплайна до починки policy."
             )
 
+        # ── R4-класс: запись самого согласия (record_approval) без цитаты пользователя ──
+        # Первым в ряду R4: остальные гейты ссылаются на approval-маркер как на доказательство
+        # человеческого «да», и если выписать маркер может сама модель, они все декоративны.
+        deny = check_record_approval(command, root, str(data.get("transcript_path") or ""))
+        if deny:
+            return _block(deny)
+
         # ── R4-класс: снятие детерминированного гейта (override_judge) без approval ──
         # ДО auto-early-return: classify даёт таким командам default-R1 → иначе прошли бы авто.
         deny = check_gate_override(command, root)
@@ -541,6 +767,12 @@ def main() -> int:
         # ── R4-класс: переснятие политики прогона (config.py repin) без approval ──
         # Тоже ДО auto-early-return: classify даёт config.py default-R1 → прошёл бы авто.
         deny = check_policy_repin(command, root)
+        if deny:
+            return _block(deny)
+
+        # ── R4-класс: понижение собственных порогов (config.py set quality/security) ──
+        # Тоже ДО auto-early-return: classify даёт config.py default-R1 → прошёл бы авто.
+        deny = check_quality_downgrade(command, root)
         if deny:
             return _block(deny)
 
@@ -560,7 +792,7 @@ def main() -> int:
             return 2  # блокировка уже выдана в check_phase_gate
 
         # ── Fail-closed решения: продуктивная запись фазы блокируется, пока требуемое
-        #    решение не записано (напр. sources.spec для lite-design). Только write-инструменты,
+        #    решение не записано (напр. inputs.story для fix-diag). Только write-инструменты,
         #    чтобы не заблокировать config.py set / ask, которыми решение и записывается.
         if tool_name in _WRITE_TOOLS:
             miss = _required_decisions_missing(root)
@@ -585,7 +817,7 @@ def main() -> int:
                     f"Порядок: (1) покажи план (что сломано → как чиним, где правим, риск "
                     f"регресса, какое требование спеки затронуто) и спроси «делаем так или "
                     f"правки?»; (2) ТОЛЬКО после явного «да» — pipeline-state/scripts/"
-                    f"record_approval.py --key {key} --approved-by user --reason \"<кто/почему>\" "
+                    f"record_approval.py --key {key} --approved-by user --reason \"<кто/почему>\" --evidence \"<дословная цитата пользователя>\" "
                     f"(прямая запись в approvals/ заблокирована state-write-guard); (3) повтори "
                     f"действие. Правки — верни фазу плана на доработку, маркер не выписывай."
                 )

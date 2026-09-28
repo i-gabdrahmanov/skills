@@ -8,7 +8,7 @@
 Три найденных на аудите случая (все воспроизведены запуском):
   • `config.py set decisions.criticality …` → exit 3: в реестре id был `autonomy.criticality`
     (у него совпадал только `path`), а `find_entry` матчит по `id`. Критичность не писалась,
-    и `gate-guard` блокировал любое R2+ действие fix/lite-ветки;
+    и `gate-guard` блокировал любое R2+ действие fix-ветки;
   • `set_criticality.py --criticality …` без `--skill`/`--feature` → argparse error: у скрипта
     они `required=True`;
   • `config.py set quality.eval_enabled false` стоял ПОСЛЕ `init.py` → exit 1 «policy.json

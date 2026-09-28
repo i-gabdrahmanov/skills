@@ -73,7 +73,7 @@ def main() -> int:
     ap.add_argument("--criticality", required=True,
                     help="low | medium | high")
     ap.add_argument("--skill", required=True,
-                    help="Имя скилла (напр. forgefix, forgelite, feature-pipeline). "
+                    help="Имя скилла (напр. forgefix, feature-pipeline). "
                          "Входит в путь manifest.json: ground/statements/<skill>/<feature>/.")
     ap.add_argument("--feature", required=True,
                     help="Slug фичи или Jira-ключ (напр. STOR-123). Входит в путь manifest.json.")

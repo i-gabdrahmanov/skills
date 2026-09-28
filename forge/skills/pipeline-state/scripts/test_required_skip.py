@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for update.py — запрет тихого skip обязательного шага (Thrust 1: fallback=STOP).
 
-Обязательный шаг (REQUIRED_STEP_PREFIXES: 02-sdd/02-design/04-*/05-*/06-spec/lite-*) нельзя
+Обязательный шаг (REQUIRED_STEP_PREFIXES: 02-sdd/02-design/04-*/05-*/06-spec/fix-*) нельзя
 перевести в status=skipped без override — иначе fallback «не спросил → пропущу фазу» молча
 выкидывает качество-гейты. Escape: overrides/step-skip-<step_id>.json.
 """
@@ -59,10 +59,10 @@ class TestRequiredSkip(unittest.TestCase):
 
     def test_required_step_skip_override_allows(self):
         with tempfile.TemporaryDirectory() as d:
-            tmp = Path(d); _make(tmp, "lite-design")
-            self.assertEqual(_run(tmp, "lite-design", "skipped").returncode, 3)
-            _write_skip_override(tmp, "lite-design")
-            r = _run(tmp, "lite-design", "skipped")
+            tmp = Path(d); _make(tmp, "fix-diag")
+            self.assertEqual(_run(tmp, "fix-diag", "skipped").returncode, 3)
+            _write_skip_override(tmp, "fix-diag")
+            r = _run(tmp, "fix-diag", "skipped")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(_step(tmp)["status"], "skipped")
             self.assertTrue(_step(tmp).get("override_warnings"))

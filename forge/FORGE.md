@@ -22,8 +22,9 @@ git-история и `tasks/`.
    гейты/политики форсятся хуками (`gate-guard`/`risk_ladder`, `phase-gate`, security).
    Блокировка — `exit 2` + причина в `stderr`.
 2. **Fail-closed на отсутствии решения.** Решение (критичность, путь, спека) — обязательный
-   артефакт в `pipeline.json`. Нет артефакта → `gate-guard._required_decisions_missing`
-   блокирует запись фазы. Пустой ответ → `exit 3` (STOP).
+   артефакт: project-wide в `ground/policy.json`, per-feature в `inputs.*`/`decisions.*`
+   манифеста. Нет артефакта → `gate-guard._required_decisions_missing` блокирует запись
+   фазы. Пустой ответ → `exit 3` (STOP).
 3. **Детерминизм > LLM-судьи.** LLM-вердикт сам шаг не закрывает. Шаг закрывается по
    evidence детерминированного гейта (`gates/<step_id>.json` с провенансом
    `produced_by:"record_gate"` + `passed:true`). Полы `INGEST_FLOOR_PHASES` AND-ят LLM-вердикт
@@ -32,8 +33,9 @@ git-история и `tasks/`.
    fail-closed при битой policy). `criticality` → `auto_max_risk` атомарно через
    `set_criticality.py` (`low→R2 / medium→R1 / high→R0`). TDD/EDD по умолчанию, escape —
    только через явный approval (R4 + маркер).
-5. **Провенанс обязателен.** Каждый stateful-артефакт (`manifest.json`, `_origins`, `gates`,
-   `overrides`, `approvals`, `pipeline.json`, `judges/`, `ground/phases/`) пишется только
+5. **Провенанс обязателен.** Каждый stateful-артефакт (`manifest.json`, `policy.json`,
+   `approvals.jsonl`, `events.jsonl`, `evals.json`, `task-plan.json`, `ground/inventory/`,
+   `_origins`, `gates`, `overrides`, `judges/`) пишется только
    санкционированным скриптом с `produced_by:<script>`. Прямая запись моделью (Write/Edit,
    shell-редирект, `python -c open()`) запрещена (`state-write-guard.py`). Approval-маркеры
    пишет только `record_approval.py`.
@@ -43,7 +45,7 @@ git-история и `tasks/`.
 
 ## Архитектура PDLC v3.5
 
-Pipeline = оркестратор + control-plane из 15 хуков + 20 скиллов; общее состояние —
+Pipeline = оркестратор + control-plane из 15 хуков + 19 скиллов; общее состояние —
 `<project>/ground/`, артефакты фаз — `<project>/docs/feature-pipeline/...`. PDLC v3.5 ввёл
 risk ladder, evidence bundle и security-гейты; доставка (commit/push/PR/отчёт) остаётся на
 пользователе — пайплайн её не делает и не гейтит.
@@ -67,12 +69,19 @@ risk ladder, evidence bundle и security-гейты; доставка (commit/pu
 Политика-as-code в `hooks/risk-policy.json` (`risk_ladder.py` — потребитель). Deny-first:
 **R0** — чтение, навигация, ground. **R1** — авто-мутация state через санкц. скрипты
 (`update.py`, `record_gate.py`, `record_approval.py`). **R2** — запись артефактов, тесты,
-RED/GREEN. **R3** — коммиты, мержа сабветок, push `feature/<slug>`. **R4** — PR-мерджи,
-доставка, push в default, override гейтов, `skip-judges`. **R5** — force-push,
-`--force-with-lease`, деструктивные операции (`destructive-blocker`). `gate-guard` блокирует
-любое R2+ действие, пока `decisions.criticality` не задана.
+RED/GREEN. **R3** — создание задач во внешнем трекере (`command_risk.R3`: `jira … create`,
+`acli … create`, `rest/api/N/issue`) и security-sensitive пути (`path_risk.R3`).
+**R4** — действия, СНИМАЮЩИЕ enforcement: `override_judge`, `rollback`, `update --skip-judges`,
+`config.py repin`, `config.py set` по переключателю enforcement. Каждое — со своим
+approval-маркером (см. §Approval markers). **R5** — деструктивные операции
+(`destructive-blocker`), миграции и прод-конфиги (`path_risk.R5/R4`).
+`gate-guard` блокирует любое R2+ действие, пока `decisions.criticality` не задана.
 
-### Phases: full vs lite vs fix
+> **git не классифицируется намеренно.** `command_risk` не содержит правил для
+> `git commit`/`push`/PR: доставку делает пользователь сам, пайплайн её не выполняет и не
+> гейтит. Если где-то встретишь «push в main — R4» — это остаток снятого delivery-слоя.
+
+### Phases: full vs fix
 
 Точка входа — скилл `router` (`skills/router/SKILL.md`); классифицирует задачу и делегирует
 на общий control-plane (один `.gigacode`, одни хуки):
@@ -80,19 +89,16 @@ RED/GREEN. **R3** — коммиты, мержа сабветок, push `feature
 - **full** (`feature-pipeline`) — фича с нуля: `идея/Jira → BRD → grounding → SDD →
   tech-design → Jira → build → verify → document`. Шаги `04-test-<id>` / `04-build-<id>`,
   state в namespace `feature-pipeline`.
-- **lite** (`forgelite`) — исполнение подготовленной подзадачи Jira по существующей спеке:
-  grounding → tech-design по `sources.spec` → RED → GREEN → verify. Шаги плоские `lite-*`.
-  Профиль: `autonomy.auto_max_risk=R2`, `criticality=medium`, `quality.eval_enabled=false`.
 - **fix** (`forgefix`) — минорный дефект: диагностика → гейт фикс-плана → RED воспроизводит
   баг → минимальный фикс → verify → точечная дельта спеки внутри папки стори
   (`<стори>/fixes/<баг>`). Шаги плоские `fix-*`. Два обязательных вопроса: «к какой стори
   относится баг?» (`sources.story`) и утверждение фикс-плана (approval `fix-plan-<KEY|slug>`
   через `record_approval.py`).
 
-Доставка (commit/push/PR/отчёт) — на пользователе. **Multi-vocabulary хуков:** все три
+Доставка (commit/push/PR/отчёт) — на пользователе. **Multi-vocabulary хуков:** обе
 ветки делят control-plane; активный skill/feature резолвится по самому свежему манифесту в
-`ground/statements/*/*/` (не по фикс-namespace). Lite/fix-ids намеренно не пересекаются с
-масками `judges-registry` и `PREFIX_PHASE` full-пути → лёгкие ветки не тянут судей.
+`ground/statements/*/*/` (не по фикс-namespace). Fix-ids намеренно не пересекаются с
+масками `judges-registry` и `PREFIX_PHASE` full-пути → лёгкая ветка не тянет судей.
 Инвариант «каждая subagent-фаза покрыта хуком» пинится `test_phase_enforcement_coverage.py`.
 
 ### Evidence bundle
@@ -111,7 +117,7 @@ RED/GREEN. **R3** — коммиты, мержа сабветок, push `feature
 | Control plane (хуки) | `<project>/.gigacode/hooks/` | Блоки (`exit 2`) + логирование. Полный ростер → `hooks/DEPLOY.md`. |
 | Guidance (скиллы) | `<project>/.gigacode/skills/` | SKILL.md, брифы `references/phases/*.md`, скрипты фаз. Реестр → `SKILLS-REGISTRY.md`. |
 
-Тяжёлые гейты (`check_taskplan`, `check_delivery`, coverage-judge) запускает **оркестратор**
+Тяжёлые гейты (`check_taskplan`, `check_coverage`, coverage-judge) запускает **оркестратор**
 как execution-gate (`record_gate.py`), а хуки — лёгкие file-reads. Это закрывает
 ограничение «command-хуки fail-open при таймауте >60с».
 
@@ -166,14 +172,34 @@ PR-доставка, change-advisory). Физически — запись в п
 совпадению `key` внутри записи.
 
 Карта маркеров — `hooks/risk-policy.json` (`phase_approvals`, `level_requirements`):
-`fix-red`/`fix-green` → `fix-plan-{feature}`, `R3` → `security-review`, `R4` →
-`human-approval`, `R5` → `change-advisory`, override гейта → `gate-override-<judge>`,
-закрытие BRD/SDD → `<doc>-approved-<feature>`.
+`fix-red`/`fix-green` → `fix-plan-{feature}`, `03-jira` → `jira-plan-{feature}`,
+`R3` → `security-review`, `R4` → `human-approval`, `R5` → `change-advisory`,
+override гейта → `gate-override-<judge>`, закрытие BRD/SDD → `<doc>-approved-<feature>`,
+понижение порогов → `policy-downgrade-<параметр>`.
+
+#### Согласие приходит ИЗВНЕ модели: `--evidence`
+
+Сам `record_approval.py` долго не гейтился ничем — модель читала DENY-баннер соседнего
+R4-гейта, копировала оттуда готовую команду и снимала гейт, не спросив никого. Цепочка
+целиком помещалась внутри модели.
+
+Поэтому для ключей, которые СНИМАЮТ enforcement — `gate-override-*`, `rollback-*`,
+`skip-judges-*`, `policy-downgrade-*` — обязателен `--evidence "<дословная фраза
+пользователя>"`, и цитата сверяется с транскриптом сессии
+(`gate-guard.check_record_approval`; на `PreToolUse` рантайм отдаёт `transcript_path`).
+Транскрипт модель не пишет — это единственный канал, куда она не может дописать строку.
+Не найдена цитата в транскрипте → deny. Транскрипт недоступен → предупреждение и пропуск:
+`--evidence` всё равно обязателен и уходит в журнал под аудит, а запирать единственный
+аварийный выход наглухо нельзя.
+
+Approval'ы ПЛАНА (`fix-plan-*`, `jira-plan-*`, `<doc>-approved-*`) цитаты не требуют: они
+двигают прогон вперёд, а не убирают защиту. Второй слой — сам `record_approval.py`
+(`_check_evidence`), в том числе в `--batch`: гейт держится и при запуске мимо харнеса.
 
 Легитимные пути записи (полный список — `docs/approval-markers.md`):
 
-* `record_approval.py --project <root> --key <key> --approver <name> --reason "..."`
-  — одиночное согласие; пишет в `.jsonl` через `FE.append_approval`.
+* `record_approval.py --project <root> --key <key> --approver <name> --reason "..."
+  [--evidence "<цитата>"]` — одиночное согласие; пишет в `.jsonl` через `FE.append_approval`.
 * `record_approval.py --project <root> --batch approvals.yaml` — атомарный батч
   (KIDPPRB-9254 п.6): flock, всё-или-ничего, идемпотентность по ключу.
 * `override_judge.py --project <root> --judge <name> --feature <slug> --reason "..."`
@@ -270,8 +296,9 @@ python3 skills/feature-pipeline/scripts/init_pipeline_config.py \
 ### Manual migration (если `--migrate` не справляется)
 
 1. Прочитайте `ground/pipeline.json`.
-2. Перенесите `quality.*`, `docs.*`, `jira.*`, `bitbucket.*`, `delivery.*`,
-   `conventions.*`, `project.*` → `ground/policy.json`.
+2. Перенесите `quality.*`, `docs.*`, `jira.*`, `conventions.*`, `project.*`
+   → `ground/policy.json`. Секции `bitbucket.*`/`delivery.*` из v1 переносить НЕ нужно:
+   доставки в пайплайне нет, читателей у них не осталось.
 3. Для каждой записи `features.<key>`: создайте
    `ground/statements/<skill>/<feature>/manifest.json` со следующим маппингом:
 
@@ -318,7 +345,7 @@ git-история и связанные `tasks/`.
 - [BR-05] Инвентарь эфемерный (`ensure_inventory.py` → `ground/inventory/`, не в git).
 - [BR-06] BRD на языке бизнеса (никаких классов/SQL); grounding-выжимка в
   `ground/brd-grounding/`.
-- [BR-07] `/forge` → `router` (классификация fix/lite/full); `/forge-lite`/`/forge-fix` минуя
+- [BR-07] `/forge` → `router` (классификация fix/full); `/forge-fix` минуя
   router. Команды `commands/*.md` (Markdown+frontmatter), без `!{cat all skills}`.
 - [BR-08] TDD по умолчанию (`quality.tdd:true`): per-task RED→GREEN, форсится `tdd-guard`.
   `tdd_enforced` — мёртвый флаг; живой `quality.tdd`. Он же определяет НАБОР шагов фазы Build:
@@ -397,22 +424,20 @@ git-история и связанные `tasks/`.
   легальный писатель; whitelist R1-auto для `judges/` и `ground/phases/`.
 - [Thrust-1 / universal] Решение = обязательный артефакт `pipeline.json`; пустой ответ →
   `update._check_required_skip` → `exit 3`.
-- [Thrust-2] `forgelite` исполняет готовую подзадачу Jira по `sources.spec` (BRD/SDD не
-  переписываются); `check_scope.py` ловит Epic/Story/рефактор-слова → `exit 3 ESCALATE`.
 - [Thrust-3] `check_brd_doc.py` (детерминированный: бизнес-секции, отсутствие кода/SQL) —
   хард-гейт `00-brd`; brd-judge понижен до advisory; `--from-output` AND-ит LLM с полом.
 - [Thrust-4] `checkstyle/ktlint/detekt/spotless` в `BUILD_CMD_RE`
   (inline-phase-guard + sod).
-- [Thrust-5 / 2026-07-04] Lite-jira/lite-design в `GATE_RESULT_PREFIXES`; `INGEST_FLOOR_PHASES`
-  расширен (brd/eval standalone AND, build/delivery гибрид); тавтология-floor вшит;
-  `evidence-enforcer` запрещает `Co-Authored-By`, для forgelite требует ключ Jira
+- [Thrust-5 / 2026-07-04] Скоуп-чек и дизайн-шаг ветки в `GATE_RESULT_PREFIXES`;
+  `INGEST_FLOOR_PHASES` расширен (brd/eval standalone AND, build/delivery гибрид);
+  тавтология-floor вшит; `evidence-enforcer` запрещал `Co-Authored-By`
   (сам хук снят позже вместе с доставкой — BR-13).
 - [Thrust-6 / 2026-08-10] `risk_ladder.current_step_id` ставит `in_progress`; `phase_approvals`
   требуют `fix-plan-<feature>` для `fix-red`/`fix-green`; `sources.story` — required_decisions
   `fix-diag`; `pipeline.mode` действует только в паре с `pipeline.mode_task`.
 - [Thrust-7 / 2026-08-12] `state-write-guard` извлекает реальные ЦЕЛИ записи в Bash
   (`_write_targets`); `required_decisions_on_close` форсит решение в точке вопроса;
-  `update.py` не закрывает `lite-design`/`fix-diag`/`fix-spec` без канонических имён;
+  `update.py` не закрывает `fix-diag`/`fix-spec` без канонических имён;
   промпты содержат ЯВНЫЕ ПУТИ к артефактам плана + правило «расходишься с планом —
   `status:"failed"`»; `spec_cli` подсказывает короткую форму.
 - [Thrust-8 / 2026-08-12] `inline-phase-guard` смотрит не один шаг
@@ -425,20 +450,53 @@ git-история и связанные `tasks/`.
   `--compile-cmd`) — отказ ДО запуска, если гейта фазы нет в команде; `update.py --skip-judges`
   теперь R4 с approval-маркером `skip-judges-<feature>`; пропуск RED-шага — детерминированно
   по task-plan (`all_tasks_test_exempt`/`task_is_test_exempt`).
+- [Thrust-10 / 2026-09-28] Закрыты шесть обходов, найденных внешним аудитом харнеса.
+  Каждый — «enforcement снимается дешевле, чем выполняется»:
+  - **R4-гейты читали всю строку.** `shlex.split` не срезает комментарии и не делит
+    команду по операторам, поэтому дописанный где угодно `--list`/`--dry-run` снимал гейт,
+    ничего не запуская: `override_judge … # не использую --list` → rc 0. Так открывались
+    ТРИ гейта из четырёх (`gate_override`, `policy_repin`, `rollback`). Теперь общий
+    `gate-guard._gated_argv` берёт argv ТОГО сегмента, который запускает гейтящийся скрипт.
+    Пины: `TSegmentedArgv`.
+  - **Согласие было самомаркируемым** — см. «Approval markers → `--evidence`» выше.
+    Пины: `TConsentIsExternal`, `TestConsentEvidenceRequired`.
+  - **Мастер-ключ к состоянию.** `_CP_RE` был регистрозависимым при регистронезависимой ФС
+    (`GROUND/…/manifest.json` проходил), `rm`/`mv`/`touch` манифеста не ловились вовсе — а
+    без манифеста ВСЕ хуки становятся noop. Добавлены `re.IGNORECASE`, отдельная ветка
+    `_unlink_targets` (живой control-plane; `ground/archive/` чистить по-прежнему можно) и
+    цели `ground/inventory/**`, `ground/statements/*/*/task-plan.json`.
+    Пины: `TStateMasterKey`.
+  - **ReDoS вместо блокировки.** Паттерн `\brm\b(?:\s+(?:-\S+|--\w[\w-]*))*…` имел
+    двусмысленную альтернативу под `*`: `rm --recursive`×28 считался **131.8 с** при
+    таймауте хука 40 с, а таймаут рантайм читает как «возражений нет». Заменён разбором
+    argv (`_rm_bare_dangerous_target`), 0.03 с. Пины: `TNoReDoS`, `TBareDangerousTargets`.
+  - **Модель отключала enforcement штатной командой.** `config.py set quality.tdd false`
+    проходил все хуки с exit 0. Теперь переключатели enforcement — R4
+    (`risk-policy.json:quality_downgrade`, явный СПИСОК параметров: в `quality.*` живут и
+    факты о проекте — `build_command`/`test_command`/`jacoco_configured`, их гейтить нельзя).
+    Два слоя: `gate-guard.check_quality_downgrade` + сам `config.py`.
+    Пины: `TQualityDowngradeIsR4`, `test_enforcement_switches_are_r4`.
+  - **`03-jira` не гейтилась ничем** — единственная фаза с необратимым внешним эффектом.
+    Добавлены gate-result (`check_jira.py`), `phase_approvals["03-jira"]` и матчер `mcp__.*`
+    в write-цепочке `settings.hooks.json` (иначе создание задач шло мимо всех хуков).
+  Попутно: `matcher: "*"` на `SubagentStart`/`SubagentStop` — невалидный regex
+  (`new RegExp("*")` падает), заменён на отсутствие matcher'а, как в соседних группах;
+  `eval-guard` определяет ветку сам (namespace стейта + префикс шага) вместо
+  project-wide `quality.eval_enabled=false`, который брифы писали ради его молчания.
 
-### Документно/веточные гейты
+### Документные гейты
 
-- [DVT-01] Override гейтов = R4 с approval-маркером (`gate-override-<judge>.json`).
+> **[DVT-02…04] СНЯТЫ вместе с доставкой.** Пайплайн заканчивается верифицированным
+> артефактом: commit/push/PR/отчёт в Jira делает пользователь сам. В дереве нет и не должно
+> быть `doc_review_push.py`, `story_branch_push.py`, `check_delivery`,
+> `gate-guard.check_branch_protection`, пинов `TDocReview`/`TBranchProtection` и фаз
+> `07-deliver`/`07-report`. Если встретишь их упоминание — это доковый мусор, а не контракт.
+
+- [DVT-01] Override гейтов = R4 с approval-маркером (`gate-override-<judge>`).
   Пины: `TGateOverride`.
-- [DVT-02] `doc_review_push.py --doc brd|sdd`: коммитит только `<doc>.md` поверх
-  `docs/<slug>` (идемпотентен, без force); требует approval + PASS `<doc>-judge` + secret-scan.
-  Закрыть `00-brd`/`02-sdd` нельзя без `<doc>-approved-<slug>`. Пины: `TDocReview`.
-- [DVT-03] Интеграционная ветка `feature/<slug>`: прямые коммиты ЗАПРЕЩЕНЫ — только PR-мерджи
-  сабветок; `gate-guard.check_branch_protection` блокирует history-команды при HEAD на
-  `feature/<slug>` + любой push; `git -C` не обходит; `story_branch_push.py` — санкц.
-  создатель. Пины: `TBranchProtection`.
-- [DVT-04] Stacked-доставка: корневые сабветки PR'ятся в `feature/<slug>`, в default —
-  финальный PR `feature/<slug>` → main.
+- [DVT-01a] Закрыть `00-brd`/`02-sdd` нельзя без approval-маркера `<doc>-approved-<slug>`
+  (`update._check_doc_approval`, `_DOC_APPROVAL_STEPS`) и без PASS `<doc>-judge`. Документ
+  при этом остаётся в рабочем дереве — коммитить его пайплайн не пытается.
 - [DVT-05] RED-гейт по-тестовый: 1 red + N green ≠ успех. Общий `junit_report.py` требует
   отчёты (fail-closed без них), ≥1 выполненный тест, зелёных НОЛЬ.
 - [DVT-06] Baseline зелёного ДО разработки: `module_tests.py snapshot --from-taskplan` пишет
@@ -469,7 +527,7 @@ git-история и связанные `tasks/`.
 - **`$(...)`/backticks/`find -exec`/`ls -R` РЕЖЕТСЯ** → в SKILL.md/доках заменены на
   `Glob`/`Grep`/`Read`. `fork-syntax-guard.py` объясняет замену.
 - **Вход через `router` не форсится** (нет события «скилл выбран»). Смягчения: `gate-guard`
-  форсит критичность, `check_scope.py` ловит неверный выбор lite.
+  форсит критичность, `check_fix_scope.py` ловит неверный выбор fix.
 - **Блокировки работают ТОЛЬКО если хук попал в execution-plan** — матчер против КАНОН-имени
   (`run_shell_command`/`write_file`/`edit`).
 - **Payload-схема хуков подтверждена по snake_case** (`hook_event_name`/`session_id`/`cwd`/
@@ -481,7 +539,7 @@ git-история и связанные `tasks/`.
 ### Принятые риски
 
 - **Активная фича — по mtime манифеста.** `risk_ladder.active_manifest` берёт самый свежий
-  `ground/statements/*/*/manifest.json` по ВСЕМ namespace (full/lite/fix). Если в репозитории
+  `ground/statements/*/*/manifest.json` по ВСЕМ namespace (full/fix). Если в репозитории
   две фичи В РАБОТЕ, гейты более свежей применяются к работе по другой. Корректный выбор
   требует явного маркера активного прогона — отдельная работа, в `tasks/012` не входит.
   Завершённые прогоны из выборки убраны архивацией (BR-17) — риск сузился с «все прогоны,
@@ -503,13 +561,43 @@ git-история и связанные `tasks/`.
 резолвера корня), **013** (отказ гейта закрытия выглядел крахом; escape-hatch и `--skill`
 вели в чужой namespace; preflight не видел, что рантайм читает ДРУГОЙ каталог настроек — всё найдено e2e-прогоном на qwen CLI), **014** (инвертированная полярность RED-судьи, слепые причины отказа чекеров, однострочный детектор Given-When-Then — найдено первым прогоном full-ветки против настоящей сборки Gradle+JaCoCo, а также гейт покрытия, молча проходивший на любом одномодульном проекте).
 
-### Незакрытые зоны аудита (субагенты упали на session-limit)
+### Аудит харнеса 2026-09-28 — что подтвердилось и что осталось
 
-- Ядро пайплайн-скриптов: обходы `record_gate`/`run_judge`-floor, деривация
-  `criticality`→`risk`.
-- Деплой/гигиена git: утечки логов прогонов, дубли реестров.
+Два внешних отчёта. Первый (`FORGE_WRAPPERS_AUDIT_2026-09-25`) **признан негодным**: он
+сравнивал `forge/skills/` с плоским legacy-каталогом оператора `.gigacode/` рядом с репо и
+на этом основании объявил «22 пропущенных компонента» и «пайплайн не стартует». Это не цель
+деплоя — `deploy.sh` требует явный `<target>` и разворачивает `<target>/.gigacode/`,
+деплой в себя запрещён. Половина его находок вообще про скиллы, которых в forge нет
+(`pdf`, `pptx`, `plantuml-to-png`, `java-uml-spec`, …). Не опираться на него.
 
-Допройти отдельным заходом.
+Второй (`HARNESS_AUDIT_2026-09-28`) в основном валиден: 23 утверждения подтверждены
+прогонами, 9 опровергнуты. Закрытое — [Thrust-10] выше. Поправки к отчёту: базовая линия
+зелёная под системным 3.9 (их красный тест — артефакт homebrew-3.12); `rm -rf /etc/passwd`
+блокировался и ДО правок (мёртвая регулярка, которую они цитируют, живёт в
+`forgeExtArchive/`); матчеры уже были на канон-именах (BLOCKER-0 закрыт раньше).
+
+**Подтверждено, но НЕ закрыто** — брать в следующий заход:
+
+- **Гонка писателей манифеста.** `update.py` делает read-modify-write без лока, общий
+  `manifest.json.tmp`, без `fsync`: при параллельных `04-test-T1/T2` (норма для пайплайна)
+  выживает одна запись из пяти, и каждый вызов печатает `{"status":"updated"}`.
+  `events.jsonl` под `flock` (`_project.append_locked`) не теряет ни строки — дефект ровно
+  в плоскости манифеста. Лечится тем же локом + `mkstemp` + `fsync`.
+- **`grounding-evidence` слушает только Claude-алиасы** (`{Read, ReadFile}`): канон-имени
+  `read_file` в наборе нет, поэтому штатное чтение grounding-excerpt не пишет evidence.
+  Матчеры цепочки при этом правильные — расходится внутренний набор хука.
+- **`in_progress` не проставляет никто автоматически** (`pipeline_phases.py:282` это прямо
+  признаёт). CLI-путь есть (`update.py --status in_progress`), но раз его никто не зовёт,
+  интерлок отката `rollback.py:421` («откат только между шагами») мёртв.
+- **`minor-defect-fix` дублирует триггеры `forgefix`** при противоположном контракте:
+  обещает коммиты/push/PR/отчёт в Jira, которых пайплайн не делает. Выбор скилла
+  недетерминирован.
+- **PII в git.** `.gigacode/` рядом с репо (пути машины в `minor-defect-fix/config.json`,
+  прод-спека `java-uml-spec/test/storage-spec.md` + 9 SVG) **уже в истории** — 165 файлов
+  отслеживаются, `.gitignore` каталог не покрывает. Это не будущий риск, а свершившийся.
+- Мелочь: `evidence_ok` ищет нерекурсивно; `agent_caps` перематчивают (`(?i)…|dev|…`);
+  инертные секции `policy.json` (`security.*`, `risk.deny_first`, `evidence.threshold`) —
+  либо начать читать, либо перестать писать (см. `hooks/DEPLOY.md`).
 
 ## Что НЕ входит в скоуп этого документа
 

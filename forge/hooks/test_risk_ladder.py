@@ -233,7 +233,7 @@ class TestReadOnlyCommand(unittest.TestCase):
 class TestStepRequirementPhaseAliases(unittest.TestCase):
     """Задача 009: `level_requirements.steps` ссылается на full-имя фазы (`02-design`).
 
-    В fix/lite-манифестах его нет НИКОГДА (там `fix-diag`/`lite-design`), поэтому требование
+    В fix-манифестах его нет НИКОГДА (там `fix-diag`), поэтому требование
     R2 — а это `src/main/**.java`, весь прод-код — было невыполнимо в принципе."""
 
     REQ = {"mode": "require", "steps": ["02-design"]}
@@ -251,10 +251,6 @@ class TestStepRequirementPhaseAliases(unittest.TestCase):
         ok, why = self._check({"fix-intake": "completed", "fix-diag": "pending"})
         self.assertFalse(ok)
         self.assertIn("fix-diag", why)
-
-    def test_lite_branch_alias(self):
-        self.assertTrue(self._check({"lite-design": "completed"})[0])
-        self.assertFalse(self._check({"lite-design": "pending"})[0])
 
     def test_full_branch_unchanged(self):
         self.assertTrue(self._check({"02-design": "completed"})[0])

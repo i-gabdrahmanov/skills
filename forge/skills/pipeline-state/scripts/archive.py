@@ -74,7 +74,7 @@ def _ensure_path(p: Path) -> None:
 
 # Фолбэк финального шага плоских веток, если реестр шагов не прочитался. Живой источник —
 # skills/<skill>/references/manifest-steps.json (последний элемент).
-_FLAT_FINAL_FALLBACK = {"forgefix": "fix-spec", "forgelite": "lite-verify"}
+_FLAT_FINAL_FALLBACK = {"forgefix": "fix-spec"}
 
 
 class Fail(RuntimeError):
@@ -160,7 +160,7 @@ def _flat_final_step(skill: str) -> str:
 def final_step_ids(skill: str, manifest: dict) -> list:
     """Шаги, закрытие которых означает «стройка готова».
 
-    Плоские ветки (forgefix/forgelite) — последний шаг их реестра. feature-pipeline — шаги
+    Плоская ветка (forgefix) — последний шаг её реестра. feature-pipeline — шаги
     ПОСЛЕДНЕЙ ФАЗЫ в каноническом порядке (container-шаг фазы не считается: его статус не
     отражает завершённость динамических шагов). Брать «последний шаг манифеста» нельзя:
     add_steps.py дописывает per-task 04-* в конец, уже ПОСЛЕ 06-spec.

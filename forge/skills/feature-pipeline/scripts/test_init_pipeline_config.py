@@ -663,14 +663,14 @@ class TestMigrationV1ToV2(unittest.TestCase):
         """Несколько фич в v1 → все мигрированы в bare-пути, не теряется ни одна."""
         self._seed_v1({
             "forgefix/fix-y":          {"skill": "forgefix",        "steps": [{"id": "a"}]},
-            "forgelite/lite-x":        {"skill": "forgelite",       "steps": [{"id": "b"}]},
+            "forgefix/fix-w":          {"skill": "forgefix",        "steps": [{"id": "b"}]},
             "feature-pipeline/fp-z":   {"skill": "feature-pipeline",
                                         "steps": [{"id": "c"}]},
         })
         rc = self._run("--migrate")
         self.assertEqual(rc, 0)
         for skill, feature in [("forgefix", "fix-y"),
-                               ("forgelite", "lite-x"),
+                               ("forgefix", "fix-w"),
                                ("feature-pipeline", "fp-z")]:
             mp = self.root / "ground" / "statements" / skill / feature / "manifest.json"
             self.assertTrue(mp.exists(), f"missing {mp}")

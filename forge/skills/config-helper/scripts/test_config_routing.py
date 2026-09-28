@@ -35,6 +35,25 @@ def _run(project: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+# quality.coverage_threshold — переключатель enforcement, его правка с недавних пор R4
+# (approval с цитатой пользователя; см. risk-policy.json:quality_downgrade и
+# gate-guard.check_quality_downgrade). Тесты НИЖЕ проверяют РОУТИНГ (policy.json ↔ manifest,
+# маскирование снимком), а не класс согласия, поэтому маркер выдаётся фикстурой — иначе они
+# мерили бы новый гейт вместо роутинга. Сам гейт пинится отдельно: test_config.py:
+# TestEnforcementSwitchesAreR4 и hooks/test_gate-guard.py: TQualityDowngradeIsR4.
+_RECORD_APPROVAL = (Path(__file__).resolve().parents[1].parent
+                    / "pipeline-state" / "scripts" / "record_approval.py")
+
+
+def _approve_param(project: Path, param_id: str) -> None:
+    subprocess.run(
+        [sys.executable, str(_RECORD_APPROVAL), "--project", str(project),
+         "--key", f"policy-downgrade-{param_id}", "--approved-by", "user",
+         "--reason", "фикстура теста роутинга",
+         "--evidence", "да, меняй порог для этого теста"],
+        capture_output=True, text=True, check=False)
+
+
 def _seed_policy(project: Path, body: dict | None = None) -> Path:
     """Создать ground/policy.json с заданным (или пустым quality) телом."""
     p = project / "ground" / "policy.json"
@@ -129,6 +148,7 @@ class TestConfigRouting(unittest.TestCase):
     def test_set_quality_writes_to_policy(self) -> None:
         _seed_policy(self.tmpdir, body={"quality": {}})
 
+        _approve_param(self.tmpdir, "quality.coverage_threshold")
         r = _run(self.tmpdir, "set", "quality.coverage_threshold", "0.85")
 
         self.assertEqual(r.returncode, 0,
@@ -152,17 +172,19 @@ class TestConfigRouting(unittest.TestCase):
 
         pipeline.mode НЕ существует как id (DEPRECATED alias от inputs.mode) —
         для проверки resolve_file("pipeline") → policy.json берём валидный id
-        с file="pipeline" (quality.max_step_reopens)."""
+        с file="pipeline". Берём ФАКТ о проекте (quality.build_command), а не переключатель
+        enforcement (max_step_reopens/tdd/...): последние теперь R4 и потребовали бы approval,
+        что к роутингу отношения не имеет."""
         _seed_policy(self.tmpdir, body={"quality": {}})
 
-        r = _run(self.tmpdir, "set", "quality.max_step_reopens", "5")
+        r = _run(self.tmpdir, "set", "quality.build_command", "./gradlew build")
 
         self.assertEqual(r.returncode, 0,
                          f"set failed: rc={r.returncode} stdout={r.stdout!r} stderr={r.stderr!r}")
         policy = self.tmpdir / "ground" / "policy.json"
         data = json.loads(policy.read_text(encoding="utf-8"))
-        self.assertEqual(data.get("quality", {}).get("max_step_reopens"), 5,
-                         f"quality.max_step_reopens != 5: {data}")
+        self.assertEqual(data.get("quality", {}).get("build_command"), "./gradlew build",
+                         f"quality.build_command не записан: {data}")
         # Явная проверка resolve_file-семантики: в JSON-ответе set указан
         # именно policy.json (НЕ legacy pipeline.json).
         applied = json.loads(r.stdout)
@@ -185,6 +207,7 @@ class TestConfigRouting(unittest.TestCase):
                              "steps": [{"id": "fix-diag", "status": "pending"}],
                              "policy_snapshot": {"quality": {"coverage_threshold": 0.8}}})
 
+        _approve_param(self.tmpdir, "quality.coverage_threshold")
         r = _run(self.tmpdir, "set", "quality.coverage_threshold", "0.5")
 
         self.assertEqual(r.returncode, 0,
@@ -202,6 +225,7 @@ class TestConfigRouting(unittest.TestCase):
                        body={"feature": "fix-x", "skill": "forgefix",
                              "steps": [{"id": "fix-diag", "status": "pending"}],
                              "policy_snapshot": {"quality": {"coverage_threshold": 0.8}}})
+        _approve_param(self.tmpdir, "quality.coverage_threshold")
         _run(self.tmpdir, "set", "quality.coverage_threshold", "0.5")
 
         sys.path.insert(0, str(HOOKS_DIR))
@@ -222,6 +246,7 @@ class TestConfigRouting(unittest.TestCase):
                              "steps": [{"id": "fix-diag", "status": "completed"}],
                              "policy_snapshot": {"quality": {"coverage_threshold": 0.8}}})
 
+        _approve_param(self.tmpdir, "quality.coverage_threshold")
         r = _run(self.tmpdir, "set", "quality.coverage_threshold", "0.5")
         self.assertEqual(r.returncode, 0,
                          f"завершённый прогон блокирует конфиг: stdout={r.stdout!r}")
@@ -238,6 +263,7 @@ class TestConfigRouting(unittest.TestCase):
     def test_policy_writable_when_no_active_feature(self) -> None:
         _seed_policy(self.tmpdir, body={"quality": {}})
 
+        _approve_param(self.tmpdir, "quality.coverage_threshold")
         r = _run(self.tmpdir, "set", "quality.coverage_threshold", "0.5")
 
         self.assertEqual(r.returncode, 0,

@@ -342,7 +342,7 @@ def load_pipeline_config(root: Optional[Path] = None) -> dict:
 #                  quality-пороги, gates, risk-policy). IMMUTABLE на прогоне: пока есть
 #                  активный манифест, config.py валит set policy.* (R3-класс, deny-first).
 #   manifest.json — per-feature входы (inputs.*) и решения (decisions.*) — мутабельны
-#                  в процессе прогона, конкурируют по скиллам (forgefix vs forgelite vs
+#                  в процессе прогона, конкурируют по скиллам (forgefix vs
 #                  feature-pipeline), но НЕ друг с другом (отдельный файл на фичу).
 #
 # Запись в policy.json — через config.py с file-key "policy" (config-helper роутит
@@ -409,7 +409,7 @@ def manifest_for(root: Path, skill: str, feature: str) -> dict:
 def load_active_manifest(root: Optional[Path] = None, skill: Optional[str] = None) -> tuple[Path | None, dict]:
     """Возвращает (manifest_path, manifest_dict) самой свежей фичи активного namespace.
 
-    skill=None → ищет по всем namespace (feature-pipeline, forgelite, forgefix,
+    skill=None → ищет по всем namespace (feature-pipeline, forgefix,
     system-analyst, minor-defect-fix) — аналог risk_ladder.active_manifest.
 
     НЕ выполняет миграцию (для этого см. init.py — migrate_manifest_if_needed). Если

@@ -124,7 +124,7 @@ def _status_from(obj: dict) -> str:
 
 def _resolve_active(root: Path) -> tuple[str, str]:
     """(skill, feature) активной фичи = самый свежий manifest.json в ground/statements/*/*/
-    ПО ВСЕМ skill-namespace (feature-pipeline, forgelite, forgefix) — один control-plane на все ветки.
+    ПО ВСЕМ skill-namespace (feature-pipeline, forgefix) — один control-plane на все ветки.
     Fallback (SKILL, 'pipeline')."""
     base = root / "ground" / "statements"
     best, bm = None, -1.0
@@ -220,7 +220,7 @@ def _direct_update(root: Path, skill: str, feature: str, step_id: str, status: s
     """Прямая запись в pipeline-state (fallback, когда FlushGate неактивен).
 
     Пишет в namespace активной фичи (--skill/--feature) — резолвится по свежести манифеста,
-    чтобы обслуживать и feature-pipeline, и forgelite. Ошибки не глушим: при ненулевом коде
+    чтобы обслуживать и feature-pipeline, и forgefix. Ошибки не глушим: при ненулевом коде
     логируем stderr update.py (иначе судейная блокировка остаётся незаметной).
     """
     if UPDATE.exists():

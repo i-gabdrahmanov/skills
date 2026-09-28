@@ -50,7 +50,7 @@ def _record_grounding_read(data: dict, root: str) -> None:
 
     # Пишем в журнал прогона активной фичи. Раньше — в ground/phases/<feature>/
     # agent-evidence.jsonl, рядом с производным кэшем фазовой машины; кэш снят.
-    # Фичу резолвим по самому свежему манифесту ПО ВСЕМ веткам (fix/lite/full), как
+    # Фичу резолвим по самому свежему манифесту ПО ВСЕМ веткам (fix/full), как
     # это делает file-journal: гейт 01-grounding есть и у них.
     mp = R.active_manifest(Path(root)) if R is not None else None
     if mp is None:

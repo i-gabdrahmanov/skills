@@ -53,9 +53,9 @@ class ExtractFinalJson(unittest.TestCase):
     def test_contract_wins_over_longer_gate_output(self):
         gate = ('{"status":"ok","passed":true,"cmd":"./gradlew build",'
                 '"modules":["a","b"],"duration_ms":123456,"note":"' + "x" * 200 + '"}')
-        final = '{"step_id":"lite-green","status":"completed","build_ok":true}'
+        final = '{"step_id":"fix-green","status":"completed","build_ok":true}'
         got = self.m._extract_json(f"Гейт:\n```json\n{gate}\n```\nИтог:\n```json\n{final}\n```")
-        self.assertEqual(got.get("step_id"), "lite-green", got)
+        self.assertEqual(got.get("step_id"), "fix-green", got)
         self.assertEqual(got.get("status"), "completed", got)
 
     def test_last_contract_json_wins_on_repeat(self):
@@ -66,10 +66,10 @@ class ExtractFinalJson(unittest.TestCase):
 
     def test_nested_object_does_not_shadow_outer(self):
         # вложенный объект НЕ должен побеждать: иначе теряются step_id и status
-        final = ('{"step_id":"lite-verify","status":"completed",'
+        final = ('{"step_id":"fix-verify","status":"completed",'
                  '"coverage_gate":{"status":"ok","percent":0.91,"files":["A.java","B.java"]}}')
         got = self.m._extract_json(f"Итог:\n{final}")
-        self.assertEqual(got.get("step_id"), "lite-verify", got)
+        self.assertEqual(got.get("step_id"), "fix-verify", got)
         self.assertEqual(self.m._status_from(got), "completed", got)
 
     def test_no_contract_json_returns_last_object(self):

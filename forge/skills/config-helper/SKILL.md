@@ -116,12 +116,34 @@ python3 .../config.py validate --strict   # preflight: варнинги = оши
   следующего прогона; применить к текущему — `repin`.
 - `risk-policy.json` нет → не создаётся автоматически (exit 3).
 
+> ## 🔒 Переключатели enforcement — R4
+>
+> `config.py set` по параметрам из `risk-policy.json:quality_downgrade.params` требует
+> approval-маркера `policy-downgrade-<параметр>` с **цитатой пользователя**
+> (`record_approval.py … --evidence "<его дословная фраза>"`, сверяется с транскриптом).
+> Это пороги, которыми харнес меряет собственную работу: `quality.tdd`,
+> `quality.eval_enabled`, `coverage_threshold`, `eval_threshold`, `max_judge_iterations`,
+> `max_step_reopens`, `*_check`, `module_dep_policy`, `coverage_exclude_globs`,
+> `no_test_layers`, `sdd.security_gate`, `autonomy.mode` и весь `security.*`.
+>
+> Почему так. Прямая запись в `ground/policy.json` и раньше резалась `state-write-guard`,
+> а этот скрипт не гейтился ничем — enforcement снимался штатной командой, причём НА ВЕСЬ
+> ПРОЕКТ: `policy.json` переживает прогон и действует на соседние. Снимок политики не
+> спасал — он фиксируется на `init.py`, а окно ДО него было открыто.
+>
+> **ФАКТЫ о проекте в том же namespace гейт НЕ трогает** — `build_command`, `test_command`,
+> `coverage_report`, `jacoco_configured`, `test_layer`, `compile_test_command`. Их
+> настройка это и есть работа config-helper, спрашивать на них разрешение незачем.
+>
+> Чтение (`get`, `list`, `validate`) и `--dry-run` не гейтятся никогда.
+
 ## Примеры маппинга запроса → команды
 
 | Пользователь сказал | Команда |
 |---|---|
-| «подними покрытие до 90%» | `set quality.coverage_threshold 0.9` |
-| «выключи TDD» | `set quality.tdd false` (убирает RED-шаги `04-test-*` и блок tdd-guard; фазу Build НЕ гасит — код пишется всё равно; `tdd_enforced` — мёртвый gates-флаг, ничем не читается) |
+| «подними покрытие до 90%» 🔒 | `set quality.coverage_threshold 0.9` — **R4** (переключатель enforcement, см. рамку ниже) |
+| «выключи TDD» 🔒 | `set quality.tdd false` — **R4**. Убирает RED-шаги `04-test-*` и блок tdd-guard; фазу Build НЕ гасит — код пишется всё равно; `tdd_enforced` — мёртвый gates-флаг, ничем не читается |
+| «какая у нас команда сборки» | `set quality.build_command './gradlew build'` — это ФАКТ о проекте, не гейт: свободно |
 | «применить настройку к идущему прогону» 🔒 | `repin --skill <S> --feature <F>` — **R4**: сначала `repin --dry-run` (покажи пользователю расхождение), затем после явного «да» `record_approval.py --key policy-repin-<feature> --approved-by user --reason "<почему>"`, и только потом `repin`. Маркер одноразовый |
 | «включи security review» | `set security_review true` |
 | «разреши авто-аппрув до R2» 🔒 | `python3 skills/feature-pipeline/scripts/set_criticality.py --criticality low --skill <skill> --feature <feature>` (фича-уровень; порог R2) — для project-wide уровня: `set risk.autonomy_auto_max R2 --confirm` |

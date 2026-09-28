@@ -17,7 +17,7 @@ config-helper — безопасная настройка параметров f
 Все подкоманды принимают --project (дефолт: git toplevel / cwd).
 
 Роутинг записи (v2):
-  - quality.* / conventions.* / docs.* / jira.* / autonomy.level / gates.* / project.*
+  - quality.* / conventions.* / docs.* / jira.* / autonomy.mode / gates.* / project.*
     → ground/policy.json (общая конфигурация проекта; immutable на прогоне активной фичи);
   - inputs.* / decisions.*
     → ground/statements/<skill>/<feature>/manifest.json (per-feature входы/решения).
@@ -59,10 +59,41 @@ _HOOKS = str(_hooks_dir())
 if _HOOKS not in sys.path:
     sys.path.append(_HOOKS)
 
-from _project import load_active_manifest  # noqa: E402  (после sys.path.append)
+from _project import load_active_manifest, safe_component  # noqa: E402  (после sys.path.append)
 
 
 REGISTRY = Path(__file__).resolve().parent.parent / "references" / "params-registry.json"
+
+
+# ── Переключатели enforcement: правка = R4 (approval) ─────────────────────────
+# Единый список с hooks/risk-policy.json:quality_downgrade — его же читает первый слой
+# (gate-guard.check_quality_downgrade). Здесь второй слой: гейт держится и при запуске мимо
+# харнеса, как у repin. Список ЯВНЫЙ, не по префиксу quality.*: в том же namespace живут
+# факты о проекте (build_command, test_command, jacoco_configured, test_layer) — их настройка
+# это штатная работа config-helper. Дефолты продублированы в коде: пропавшая секция политики
+# не должна молча открывать обход.
+_FALLBACK_GATED = frozenset((
+    "quality.tdd", "quality.eval_enabled", "quality.coverage_threshold",
+    "quality.eval_threshold", "quality.max_judge_iterations", "quality.max_step_reopens",
+    "quality.architecture_check", "quality.tautology_check", "quality.traceability_check",
+    "quality.module_dep_policy", "quality.coverage_exclude_globs", "quality.no_test_layers",
+    "sdd.security_gate", "autonomy.mode",
+    "risk.autonomy_auto_max", "risk.default_level", "security_review",
+))
+
+
+def _is_enforcement_switch(param_id: str) -> bool:
+    gated, prefixes = set(_FALLBACK_GATED), ("security.",)
+    try:
+        import risk_ladder as _R
+        block = _R.load_policy().get("quality_downgrade") or {}
+        if block.get("params"):
+            gated = set(block["params"])
+        if block.get("param_prefixes"):
+            prefixes = tuple(block["param_prefixes"])
+    except Exception:  # noqa: BLE001 — политика недоступна: остаёмся на коде (fail-closed)
+        pass
+    return param_id in gated or param_id.startswith(prefixes)
 
 
 # ── Реестр ────────────────────────────────────────────────────────────────────
@@ -335,6 +366,38 @@ def cmd_set(project: Path, params: list, args) -> int:
                           "enum": e.get("enum"), "range": [e.get("min"), e.get("max")]},
                          ensure_ascii=False))
         return 1
+
+    # ── R4: quality.*/security.* — approval обязателен (ВТОРОЙ слой; первый —
+    #    gate-guard.check_quality_downgrade). Это пороги, которыми харнес меряет СОБСТВЕННУЮ
+    #    работу (tdd, eval_enabled, coverage_threshold, max_judge_iterations). Прямая запись в
+    #    policy.json режется state-write-guard, а этот скрипт не гейтился ничем — и enforcement
+    #    снимался штатной командой, причём на ВЕСЬ проект: policy.json переживает прогон и
+    #    действует на соседние. Снимок политики не защита: окно ДО init.py открыто.
+    #    Слой держится и при запуске мимо харнеса — как у repin.
+    if _is_enforcement_switch(str(e["id"])):
+        # Санитайзер ОБЩИЙ с gate-guard и record_approval — иначе слои искали бы маркер
+        # под разными именами и гейт держался бы только в одном из них.
+        approval_key = safe_component(f"policy-downgrade-{e['id']}")
+        try:
+            import forge_events as FE
+        except Exception as ex:  # noqa: BLE001 — без журнала approval не проверить
+            print(json.dumps({"error": f"forge_events недоступен, approval не проверить: {ex}"},
+                             ensure_ascii=False))
+            return 4
+        rec = FE.approval(project, approval_key)
+        if not (isinstance(rec, dict) and rec.get("produced_by") == "record_approval"):
+            print(json.dumps({
+                "error": f"{e['id']} — R4-класс: нужен approval-маркер с провенансом record_approval",
+                "approval_key": approval_key,
+                "hint": (f"quality.*/security.* — пороги, которыми харнес меряет сам себя, и "
+                         f"policy.json действует на весь проект, а не на один прогон. "
+                         f"(1) прогони гейт, а не снимай его; (2) если он объективно "
+                         f"неприменим — покажи пользователю, ЧТО меняется, и спроси; "
+                         f"(3) после явного «да»: pipeline-state/scripts/record_approval.py "
+                         f"--key {approval_key} --approved-by user --reason \"<почему>\" "
+                         f"--evidence \"<дословная цитата пользователя>\"; (4) повтори команду."),
+            }, ensure_ascii=False))
+            return 2
 
     # v2: определяем целевой файл по file-key и роутингу пути.
     file_key = e["file"]
@@ -845,7 +908,7 @@ def main() -> int:
     ps.add_argument("--dry-run", action="store_true")
     ps.add_argument("--confirm", action="store_true", help="Подтверждение для sensitive-параметров")
     ps.add_argument("--skill", default=None,
-                    help="Для inputs.*/decisions.*: namespace скилла (forgefix/forgelite/feature-pipeline). "
+                    help="Для inputs.*/decisions.*: namespace скилла (forgefix/feature-pipeline). "
                          "По умолчанию — самая свежая фича по mtime.")
     ps.add_argument("--feature", default=None,
                     help="Для inputs.*/decisions.*: слаг фичи. По умолчанию — самая свежая фича по mtime.")

@@ -19,7 +19,7 @@ Usage:
 
 Exit: 0 — минорный дефект, fix-путь подходит;
       3 — ESCALATE: скоуп не для fix (это фича / крупная задача / нет описания) —
-          СТОП, спроси пользователя: «взять fix, lite или full?»;
+          СТОП, спроси пользователя: «взять fix или full?»;
       2 — ошибка входа (нечитаемый JSON/файл).
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ import json
 import re
 import sys
 
-# Типы задач, которые fix не берёт (это не дефект, а работа full/lite-пути)
+# Типы задач, которые fix не берёт (это не дефект, а работа full-пути)
 _NOT_BUG_ISSUETYPES = {"epic", "story", "new feature", "эпик", "история", "improvement",
                        "улучшение", "task", "задача"}
 # Типы, однозначно говорящие «дефект»
@@ -88,7 +88,7 @@ def check_scope(issue: dict) -> list[str]:
     if not is_bug_type:
         if itype in _NOT_BUG_ISSUETYPES:
             reasons.append(f"issuetype '{issuetype}' — это не дефект "
-                           f"(fix-путь только для багов; фичу веди через full/lite)")
+                           f"(fix-путь только для багов; фичу веди через full)")
         elif not _BUG_MARKERS.search(text):
             reasons.append("в задаче не распознан дефект: нет типа Bug и нет признаков поломки "
                            "(«не работает», «ошибка», «падает», exception, регресс)")
@@ -142,7 +142,7 @@ def main() -> int:
     print("⛔ ESCALATE: задача не похожа на минорный дефект:", file=sys.stderr)
     for r in reasons:
         print(f"   - {r}", file=sys.stderr)
-    print("   СТОП: спроси пользователя — «это фикс (forgefix), готовая подзадача (forgelite) "
+    print("   СТОП: спроси пользователя — «это фикс (forgefix) "
           "или фича с нуля (feature-pipeline)?». Не решай молча.", file=sys.stderr)
     return 3
 

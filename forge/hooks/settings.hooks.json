@@ -11,7 +11,7 @@
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/inline-phase-guard.py", "name": "inline-phase-guard"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/gate-guard.py", "name": "gate-guard"}
       ]},
-      {"matcher": "^(write_file|edit|notebook_edit|Write|Edit|WriteFile|NotebookEdit)$", "sequential": true, "hooks": [
+      {"matcher": "^(write_file|edit|notebook_edit|Write|Edit|WriteFile|NotebookEdit|mcp__.*)$", "sequential": true, "hooks": [
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/pii-boundary.py", "name": "pii-boundary"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/state-write-guard.py", "name": "state-write-guard"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/tdd-guard.py", "name": "tdd-guard"},
@@ -39,12 +39,12 @@
       ]}
     ],
     "SubagentStart": [
-      {"matcher": "*", "hooks": [
+      {"hooks": [
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/context-injector.py", "name": "context-injector"}
       ]}
     ],
     "SubagentStop": [
-      {"matcher": "*", "hooks": [
+      {"hooks": [
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/state-recorder.py", "name": "state-recorder"}
       ]}
     ],
