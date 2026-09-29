@@ -402,6 +402,52 @@ def main() -> int:
         check("fix-red skipped без task-plan → стоп (fail-closed)",
               r.returncode == 3, f"rc={r.returncode} {r.stdout}{r.stderr}")
 
+    # ── Повторное закрытие: шаг, уже стоящий в completed ──────────────────────
+    # Гейты висели на `prev_status != "completed"`, поэтому второй вызов с тем же
+    # статусом проходил мимо ВСЕХ семи проверок и дальше безусловно переписывал
+    # closed_by/artifacts/output-файл. Легитимно закрытый шаг становился каналом
+    # подмены собственного результата.
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td)
+        d = _statedir(p)
+        _write_manifest(p, [{"id": "00-brd", "status": "pending",
+                             "required_judges": ["brd-judge"]}])
+        _verdict(d, "brd-judge", True)
+        _origin(d, "00-brd")
+        _gate(p, "00-brd")
+        _approval(p, "brd-approved-demo")
+        rc, out = run(p, "00-brd", "--closed-by", "subagent")
+        check("первое закрытие с валидным вердиктом → ok", rc == 0, f"rc={rc} {out}")
+
+        # вердикт судьи испорчен (FAIL) — повторное закрытие обязано упереться в гейт
+        _verdict(d, "brd-judge", False)
+        rc, out = run(p, "00-brd", "--closed-by", "inline")
+        check("completed→completed с FAIL-вердиктом → блок", rc != 0, f"rc={rc} {out}")
+        step = json.loads((d / "manifest.json").read_text(encoding="utf-8"))["steps"][0]
+        check("closed_by не перезаписан обходом", step.get("closed_by") == "subagent",
+              f"closed_by={step.get('closed_by')}")
+
+    # ── Счётчик переоткрытий не обходится петлёй через skipped ────────────────
+    # _check_reopen_limit вызывался только при prev ∈ {completed, failed}, поэтому
+    # completed→skipped→pending возвращал шаг в работу, не тронув step["reopens"],
+    # и лимит quality.max_step_reopens обходился бесконечно.
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td)
+        d = _statedir(p)
+        _write_manifest(p, [{"id": "03-build", "status": "completed"}])
+
+        def _set(status, *extra):
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "--project", str(p), "--skill",
+                 "feature-pipeline", "--feature", "demo", "--step-id", "03-build",
+                 "--status", status, *extra], capture_output=True, text=True)
+
+        _set("skipped")
+        _set("pending")
+        step = json.loads((d / "manifest.json").read_text(encoding="utf-8"))["steps"][0]
+        check("петля completed→skipped→pending считается переоткрытием",
+              step.get("reopens", 0) >= 1, f"reopens={step.get('reopens')}")
+
     print(f"\n{PASSED} passed, {FAILED} failed")
     return 1 if FAILED else 0
 

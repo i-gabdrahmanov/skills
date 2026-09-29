@@ -171,5 +171,39 @@ class TestSkillsRegistryConsistency(unittest.TestCase):
                          f"хуки подключены, но не описаны в реестре: {missing}")
 
 
+class TestQualityKeysAreRegistered(unittest.TestCase):
+    """Каждый ключ quality.*, который ЧИТАЕТ хук, обязан быть в params-registry.
+
+    Иначе получается тупик: хук читает ключ и в DENY-баннере советует
+    `config.py set quality.<key> …`, а cmd_set не находит его в реестре и отдаёт exit 3.
+    Прямая правка policy.json при этом заблокирована state-write-guard — то есть
+    санкционированного пути разблокировки не существует вовсе. Так жили
+    quality.block_jpa_test и quality.tdd_integration_skip.
+    """
+
+    REGISTRY = REPO / "skills/config-helper/references/params-registry.json"
+    # quality_cfg.get("key") / cfg.get("quality", {}).get("key")
+    _KEY_RE = re.compile(r"""quality_cfg\.get\(\s*["'](\w+)["']""")
+
+    def test_hook_quality_keys_present_in_registry(self):
+        registered = {
+            e["id"].split(".", 1)[1]
+            for e in json.loads(self.REGISTRY.read_text(encoding="utf-8"))["params"]
+            if e["id"].startswith("quality.")
+        }
+        missing = {}
+        for hook in sorted(HOOKS.glob("*.py")):
+            if hook.name.startswith("test_"):
+                continue
+            for key in self._KEY_RE.findall(hook.read_text(encoding="utf-8")):
+                if key not in registered:
+                    missing.setdefault(key, []).append(hook.name)
+        self.assertEqual(
+            missing, {},
+            f"ключи quality.* читаются хуками, но отсутствуют в params-registry: {missing}. "
+            f"`config.py set` вернёт на них exit 3, а прямая правка policy.json "
+            f"заблокирована state-write-guard → ручка недостижима")
+
+
 if __name__ == "__main__":
     unittest.main()

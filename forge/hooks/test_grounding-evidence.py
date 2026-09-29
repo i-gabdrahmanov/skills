@@ -56,6 +56,27 @@ class TestGroundingEvidence(unittest.TestCase):
             self.assertEqual(list(root.glob("ground/phases/**/*.jsonl")), [],
                              "кэш-каталог фазовой машины вернулся")
 
+    def test_canonical_tool_name_records_evidence(self):
+        """Канон-имя рантайма — `read_file`, а не Claude-алиас `Read`.
+
+        Хук принимал только {Read, ReadFile}, поэтому на боевом рантайме (где матчер
+        read-группы в settings.hooks.json и gate-guard._READ_TOOLS начинаются именно с
+        `read_file`) он не писал НИЧЕГО. Гейт 01-grounding при этом ждёт evidence — то
+        есть снять его чтением grounding-excerpt было нельзя в принципе, а тест пинил
+        ровно тот алиас, на котором хук случайно работал.
+        """
+        for tool in ("read_file", "Read", "ReadFile"):
+            with self.subTest(tool=tool), tempfile.TemporaryDirectory() as td:
+                root = _mk_project(Path(td))
+                rc = _run({"cwd": str(root), "tool_name": tool,
+                           "tool_input": {
+                               "file_path": "ground/inventory/grounding-excerpt.json"}}, root)
+                self.assertEqual(rc, 0)
+                self.assertTrue(
+                    FE.grounding_read(root, "feature-pipeline", "pipeline"),
+                    f"evidence не записано для канон-имени '{tool}' → гейт 01-grounding "
+                    f"не снимется никогда")
+
     def test_non_grounding_read_writes_nothing(self):
         with tempfile.TemporaryDirectory() as td:
             root = _mk_project(Path(td))

@@ -121,6 +121,41 @@
       ]
     },
     {
+      "id": "quality.block_jpa_test",
+      "file": "pipeline",
+      "path": "quality.block_jpa_test",
+      "type": "bool",
+      "default": true,
+      "category": "quality",
+      "sensitive": false,
+      "title": "Запрет @DataJpaTest/@SpringBootTest при test_layer=service-unit",
+      "description": "ЖИВАЯ ручка tdd-guard: при test_layer=service-unit запись теста с @DataJpaTest/@SpringBootTest блокируется (они падают initializationError). false разрешает их точечно, не трогая test_layer. Ключ читает hooks/tdd-guard.py и на него же указывает его DENY-баннер — без записи в реестре `config.py set` возвращал exit 3, и санкционированного пути разблокировки не существовало",
+      "aliases": [
+        "block_jpa_test",
+        "jpa тесты",
+        "DataJpaTest",
+        "разреши jpa-тесты",
+        "SpringBootTest"
+      ]
+    },
+    {
+      "id": "quality.tdd_integration_skip",
+      "file": "pipeline",
+      "path": "quality.tdd_integration_skip",
+      "type": "bool",
+      "default": true,
+      "category": "quality",
+      "sensitive": false,
+      "title": "Пропуск TDD-цикла для интеграционных тестов",
+      "description": "ЖИВАЯ ручка tdd-guard: интеграционный тест (@SpringBootTest/@Testcontainers/@EmbeddedKafka/@DataJpaTest/@DataMongoTest/@JdbcTest) не обязан идти через RED. false требует RED и от них. Читается hooks/tdd-guard.py",
+      "aliases": [
+        "tdd_integration_skip",
+        "интеграционные тесты tdd",
+        "Testcontainers",
+        "пропусти tdd для интеграционных"
+      ]
+    },
+    {
       "id": "quality.test_layer",
       "file": "pipeline",
       "path": "quality.test_layer",

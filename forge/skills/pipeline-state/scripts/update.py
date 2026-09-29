@@ -803,13 +803,24 @@ def main():
     if args.skip_judges:
         _check_skip_judges(project, args.feature)
 
-    # Брейк ре-итераций: переоткрытие закрытого шага лимитируется quality.max_step_reopens
+    # Брейк ре-итераций: переоткрытие закрытого шага лимитируется quality.max_step_reopens.
+    # `skipped` входит в список закрытых наравне с completed/failed: без него петля
+    # completed→skipped→pending возвращала шаг в работу, НЕ трогая step["reopens"], и лимит
+    # обходился бесконечным числом итераций (ни один транзишен петли не подпадал под условие:
+    # у completed→skipped целевой статус не pending/in_progress, а у skipped→pending
+    # предыдущий не был closed-статусом).
     if (not args.skip_judges and args.status in ("pending", "in_progress")
-            and prev_status in ("completed", "failed")):
+            and prev_status in ("completed", "failed", "skipped")):
         _check_reopen_limit(step, project, args.skill, args.feature)
 
-    # Детерминированная блокировка: не даём закрыть шаг без судей и без субагентного происхождения
-    if not args.skip_judges and args.status == "completed" and prev_status != "completed":
+    # Детерминированная блокировка: не даём закрыть шаг без судей и без субагентного
+    # происхождения. Условия `prev_status != "completed"` здесь БЫТЬ НЕ ДОЛЖНО: с ним повторный
+    # вызов на уже закрытом шаге проходил мимо всех семи проверок и дальше безусловно
+    # переписывал closed_by, artifacts и output-файл. То есть легитимно закрытый шаг сам
+    # становился каналом подмены своего результата: один честный прогон — и дальше любой
+    # вердикт, любые артефакты. Повторное закрытие обязано заново предъявить те же гейты;
+    # если вердикты на месте, оно и пройдёт заново.
+    if not args.skip_judges and args.status == "completed":
         _check_subagent_origin(step, args.closed_by, project, args.skill, args.feature)
         _check_gate_result(step, project, args.skill, args.feature)
         _check_judges(step, project, args.skill, args.feature)

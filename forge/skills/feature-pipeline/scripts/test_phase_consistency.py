@@ -63,6 +63,36 @@ class CanonicalSource(unittest.TestCase):
                       "init.py должен читать маску из judges_registry (единый источник)")
 
 
+class TestJudgeLayers(unittest.TestCase):
+    """Пары «список против списка» вокруг run_judge: любая недостача = дыра в гейте.
+
+    Предыстория: INGEST_FLOOR_PHASES покрывал 5 фаз из 10, а `--from-output` принимал любую
+    из PHASE_MAP. Для sdd/design/spec/coverage/regression сохранялся сырой вердикт субагента,
+    FE.judge(layer=None) отдавал его как последний, и update.py закрывал шаг, ни разу не
+    запустив детерминированную проверку. Симметрично `--recheck` не пересчитывал design/sdd
+    и возвращал тот же ингестнутый вердикт. Здесь это держит тест, а не внимательность.
+    """
+
+    def test_ingest_floor_covers_every_phase(self):
+        missing = set(RJ.PHASE_MAP) - set(RJ.INGEST_FLOOR_PHASES)
+        self.assertEqual(
+            missing, set(),
+            f"фазы {sorted(missing)} принимаются в `run_judge --from-output`, но пол на "
+            f"ингесте для них не пересчитывается → вердикт субагента закроет шаг сам")
+
+    def test_recheck_recomputes_every_phase(self):
+        missing = set(RJ.PHASE_MAP) - set(RJ.RECHECK_RECOMPUTE_PHASES)
+        self.assertEqual(
+            missing, set(),
+            f"для фаз {sorted(missing)} `--recheck` перечитывает сохранённый вердикт "
+            f"вместо пересчёта детерминированного слоя")
+
+    def test_floor_modes_are_known(self):
+        for phase, mode in RJ.INGEST_FLOOR_PHASES.items():
+            self.assertIn(mode, ("merges_saved", "deterministic"),
+                          f"неизвестный режим пола '{mode}' у фазы '{phase}'")
+
+
 class TestJudgeNames(unittest.TestCase):
     def test_mask_names_are_produced_by_run_judge(self):
         """Каждое имя судьи из маски = <phase>-judge для существующей фазы run_judge."""

@@ -420,5 +420,47 @@ class TestMain(unittest.TestCase):
         self.assertIn(rc, (0, 2))
 
 
+class TestTestFilterEscaping(unittest.TestCase):
+    """--test-filter приходит из брифа/оркестратора и попадает в строку, которую
+    _run исполняет с shell=True. Интерполяция без экранирования делала из него
+    инъекцию: `*"; touch /tmp/PWNED; echo "` давал
+    `./gradlew test --tests "**"; touch /tmp/PWNED; echo "*"` — вторая команда
+    выполнялась, а третья маскировала хвост.
+    """
+
+    EVIL = '*"; touch /tmp/forge-pwned-probe; echo "'
+
+    def test_filter_cannot_break_out_of_quoting(self):
+        """Инвариант: чем бы ни был фильтр, он остаётся ОДНИМ аргументом.
+
+        Проверяем разбором той же грамматикой, которой команду разберёт шелл: весь
+        payload обязан лежать в единственном токене. Если он расщепился на несколько —
+        значит кавычки порваны и `touch …` станет отдельной командой.
+        """
+        import shlex
+        payload = f"*{self.EVIL}*"
+        for bs, flag in (("gradle", "--tests"), ("maven", "-Dtest=")):
+            with self.subTest(build_system=bs):
+                cmd = ctr._apply_test_filter("./gradlew test", bs, self.EVIL)
+                toks = shlex.split(cmd)
+                whole = [t for t in toks if payload in t or t == payload]
+                self.assertTrue(
+                    whole,
+                    f"payload расщеплён на несколько токенов — кавычки порваны.\n"
+                    f"  команда: {cmd}\n  токены: {toks}")
+
+    def test_plain_filter_still_works(self):
+        import shlex
+        gradle = ctr._apply_test_filter("./gradlew test", "gradle", "T1")
+        self.assertEqual(shlex.split(gradle)[-2:], ["--tests", "*T1*"])
+        maven = ctr._apply_test_filter("mvn test", "maven", "T1")
+        self.assertIn("-Dtest=*T1*", shlex.split(maven))
+
+    def test_wildcard_filters_are_noop(self):
+        for f in ("*", "*Test.java", "", None):
+            self.assertEqual(ctr._apply_test_filter("./gradlew test", "gradle", f),
+                             "./gradlew test")
+
+
 if __name__ == "__main__":
     unittest.main()

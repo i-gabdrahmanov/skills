@@ -39,9 +39,17 @@ def _agent_label(data: dict) -> str:
     return "main"
 
 
+# Инструменты ЧТЕНИЯ ФАЙЛА — те, у кого в tool_input есть file_path. Канон рантайма —
+# `read_file`; Read/ReadFile — Claude-алиасы. Без канон-имени хук молчал на боевом рантайме
+# (матчер read-группы в settings.hooks.json и gate-guard._READ_TOOLS перечисляют его первым),
+# а гейт 01-grounding ждёт от него evidence — то есть снять гейт чтением grounding-excerpt
+# было нельзя в принципе. Поиск (grep/glob) сюда НЕ входит: у него нет file_path.
+_READ_FILE_TOOLS = frozenset({"read_file", "Read", "ReadFile"})
+
+
 def _record_grounding_read(data: dict, root: str) -> None:
     """Пишет evidence, только если агент читает grounding-excerpt."""
-    if data.get("tool_name", "") not in {"Read", "ReadFile"}:
+    if data.get("tool_name", "") not in _READ_FILE_TOOLS:
         return
     tool_input = data.get("tool_input") or {}
     file_path = str(tool_input.get("file_path") or tool_input.get("path") or "")

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 import sys
 import time
@@ -134,13 +135,21 @@ def _resolve_test_cmd(cfg: dict, override: str | None) -> str:
 
 
 def _apply_test_filter(test_cmd: str, build_system: str, test_filter: str | None) -> str:
-    """Добавляет фильтр тест-класса в синтаксисе build-системы (Gradle --tests / Maven -Dtest)."""
+    """Добавляет фильтр тест-класса в синтаксисе build-системы (Gradle --tests / Maven -Dtest).
+
+    Фильтр ОБЯЗАН уходить одним аргументом через shlex.quote: собранная строка исполняется
+    с shell=True (см. _run), а значение приходит снаружи — из брифа и из --test-filter. При
+    интерполяции в `"*{filter}*"` фильтр `*"; touch /tmp/x; echo "` закрывал кавычку и давал
+    `--tests "**"; touch /tmp/x; echo "*"`: вторая команда выполнялась, третья маскировала
+    хвост. Кавычки shlex.quote ставит сам, поэтому своих здесь быть не должно.
+    """
     if not test_filter or test_filter in ("*", "*Test.java"):
         return test_cmd
+    pattern = shlex.quote(f"*{test_filter}*")
     if build_system == "maven":
         # surefire: не падать в модулях без совпадений
-        return f'{test_cmd} -Dtest="*{test_filter}*" -Dsurefire.failIfNoSpecifiedTests=false'
-    return f'{test_cmd} --tests "*{test_filter}*"'
+        return f"{test_cmd} -Dtest={pattern} -Dsurefire.failIfNoSpecifiedTests=false"
+    return f"{test_cmd} --tests {pattern}"
 
 
 def _module_to_path(module: str) -> str:
