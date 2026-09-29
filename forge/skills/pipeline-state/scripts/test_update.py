@@ -296,26 +296,27 @@ def main() -> int:
             rc, out = run(p, "fix-intake", skill="forgefix", feature="BUG-512")
             check(f"fix-intake с inputs.story={value} → exit 0", rc == 0, f"rc={rc} {out}")
 
-    # 21. lite-design с документом под именем слага задачи → блок (имя = контракт).
-    #     Так дельта/дизайн выпадали из /forge-spec и из следующих фаз.
+    # 21. fix-diag с документом под именем слага задачи → блок (имя = контракт).
+    #     Так план/дизайн выпадали из /forge-spec и из следующих фаз.
     with tempfile.TemporaryDirectory() as td:
         p = Path(td)
-        d = _write_manifest(p, [{"id": "lite-design", "status": "pending"}],
-                            skill="forgelite", feature="KID-1234")
-        _gate(p, "lite-design", skill="forgelite", feature="KID-1234")
-        _origin(d, "lite-design")
-        docs = p / "docs" / "feature-pipeline" / "KID-1234"
+        d = _write_manifest(p, [{"id": "fix-diag", "status": "pending"}],
+                            skill="forgefix", feature="BUG-1234")
+        _gate(p, "fix-diag", skill="forgefix", feature="BUG-1234")
+        _origin(d, "fix-diag")
+        _pipeline_cfg(p, {"sources": {"story": "STOR-100"}})
+        docs = p / "docs" / "feature-pipeline" / "STOR-100" / "fixes" / "BUG-1234"
         docs.mkdir(parents=True)
-        (docs / "KID-1234.md").write_text("# design", encoding="utf-8")
+        (docs / "BUG-1234.md").write_text("# fix plan", encoding="utf-8")
         (docs / "task-plan.json").write_text("{}", encoding="utf-8")
-        rc, out = run(p, "lite-design", "--closed-by", "subagent",
-                      skill="forgelite", feature="KID-1234")
-        check("lite-design: документ по слагу вместо tech-design.md → блок",
-              rc != 0 and "tech-design.md" in out, f"rc={rc} {out}")
-        (docs / "KID-1234.md").rename(docs / "tech-design.md")
-        rc, out = run(p, "lite-design", "--closed-by", "subagent",
-                      skill="forgelite", feature="KID-1234")
-        check("lite-design с каноническими именами → exit 0", rc == 0, f"rc={rc} {out}")
+        rc, out = run(p, "fix-diag", "--closed-by", "subagent",
+                      skill="forgefix", feature="BUG-1234")
+        check("fix-diag: документ по слагу вместо fix-plan.md → блок",
+              rc != 0 and "fix-plan.md" in out, f"rc={rc} {out}")
+        (docs / "BUG-1234.md").rename(docs / "fix-plan.md")
+        rc, out = run(p, "fix-diag", "--closed-by", "subagent",
+                      skill="forgefix", feature="BUG-1234")
+        check("fix-diag с каноническими именами → exit 0", rc == 0, f"rc={rc} {out}")
 
     # 21b. дельта фикса ищется /forge-spec строго как sdd.md — и лежит внутри папки стори
     with tempfile.TemporaryDirectory() as td:
@@ -358,7 +359,7 @@ def main() -> int:
         check("--skip-judges с маркером БЕЗ провенанса → стоп", rc == 3, f"rc={rc} {out}")
 
     # 23. RED-шаг задачи без тестируемого кода пропускается ЛЕГАЛЬНО (брифы обещали
-    #     «не заводи шаг», но манифест lite/fix статический — шаг всегда есть).
+    #     «не заводи шаг», но манифест fix статический — шаг всегда есть).
     def _taskplan(project: Path, layers: list, feature="demo"):
         d = project / "docs" / "feature-pipeline" / feature
         d.mkdir(parents=True, exist_ok=True)
@@ -368,26 +369,26 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as td:
         p = Path(td)
-        _write_manifest(p, [{"id": "lite-red", "status": "pending"}],
-                        skill="forgelite", feature="demo")
+        _write_manifest(p, [{"id": "fix-red", "status": "pending"}],
+                        skill="forgefix", feature="demo")
         _taskplan(p, ["migration"])
         r = subprocess.run(
-            [sys.executable, str(SCRIPT), "--project", str(p), "--skill", "forgelite",
-             "--feature", "demo", "--step-id", "lite-red", "--status", "skipped"],
+            [sys.executable, str(SCRIPT), "--project", str(p), "--skill", "forgefix",
+             "--feature", "demo", "--step-id", "fix-red", "--status", "skipped"],
             capture_output=True, text=True)
-        check("lite-red skipped при task-plan=migration → exit 0",
+        check("fix-red skipped при task-plan=migration → exit 0",
               r.returncode == 0, f"rc={r.returncode} {r.stdout}{r.stderr}")
 
     with tempfile.TemporaryDirectory() as td:
         p = Path(td)
-        _write_manifest(p, [{"id": "lite-red", "status": "pending"}],
-                        skill="forgelite", feature="demo")
+        _write_manifest(p, [{"id": "fix-red", "status": "pending"}],
+                        skill="forgefix", feature="demo")
         _taskplan(p, ["service"])
         r = subprocess.run(
-            [sys.executable, str(SCRIPT), "--project", str(p), "--skill", "forgelite",
-             "--feature", "demo", "--step-id", "lite-red", "--status", "skipped"],
+            [sys.executable, str(SCRIPT), "--project", str(p), "--skill", "forgefix",
+             "--feature", "demo", "--step-id", "fix-red", "--status", "skipped"],
             capture_output=True, text=True)
-        check("lite-red skipped при задаче с кодом → стоп (exit 3)",
+        check("fix-red skipped при задаче с кодом → стоп (exit 3)",
               r.returncode == 3, f"rc={r.returncode} {r.stdout}{r.stderr}")
 
     with tempfile.TemporaryDirectory() as td:
@@ -400,6 +401,52 @@ def main() -> int:
             capture_output=True, text=True)
         check("fix-red skipped без task-plan → стоп (fail-closed)",
               r.returncode == 3, f"rc={r.returncode} {r.stdout}{r.stderr}")
+
+    # ── Повторное закрытие: шаг, уже стоящий в completed ──────────────────────
+    # Гейты висели на `prev_status != "completed"`, поэтому второй вызов с тем же
+    # статусом проходил мимо ВСЕХ семи проверок и дальше безусловно переписывал
+    # closed_by/artifacts/output-файл. Легитимно закрытый шаг становился каналом
+    # подмены собственного результата.
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td)
+        d = _statedir(p)
+        _write_manifest(p, [{"id": "00-brd", "status": "pending",
+                             "required_judges": ["brd-judge"]}])
+        _verdict(d, "brd-judge", True)
+        _origin(d, "00-brd")
+        _gate(p, "00-brd")
+        _approval(p, "brd-approved-demo")
+        rc, out = run(p, "00-brd", "--closed-by", "subagent")
+        check("первое закрытие с валидным вердиктом → ok", rc == 0, f"rc={rc} {out}")
+
+        # вердикт судьи испорчен (FAIL) — повторное закрытие обязано упереться в гейт
+        _verdict(d, "brd-judge", False)
+        rc, out = run(p, "00-brd", "--closed-by", "inline")
+        check("completed→completed с FAIL-вердиктом → блок", rc != 0, f"rc={rc} {out}")
+        step = json.loads((d / "manifest.json").read_text(encoding="utf-8"))["steps"][0]
+        check("closed_by не перезаписан обходом", step.get("closed_by") == "subagent",
+              f"closed_by={step.get('closed_by')}")
+
+    # ── Счётчик переоткрытий не обходится петлёй через skipped ────────────────
+    # _check_reopen_limit вызывался только при prev ∈ {completed, failed}, поэтому
+    # completed→skipped→pending возвращал шаг в работу, не тронув step["reopens"],
+    # и лимит quality.max_step_reopens обходился бесконечно.
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td)
+        d = _statedir(p)
+        _write_manifest(p, [{"id": "03-build", "status": "completed"}])
+
+        def _set(status, *extra):
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "--project", str(p), "--skill",
+                 "feature-pipeline", "--feature", "demo", "--step-id", "03-build",
+                 "--status", status, *extra], capture_output=True, text=True)
+
+        _set("skipped")
+        _set("pending")
+        step = json.loads((d / "manifest.json").read_text(encoding="utf-8"))["steps"][0]
+        check("петля completed→skipped→pending считается переоткрытием",
+              step.get("reopens", 0) >= 1, f"reopens={step.get('reopens')}")
 
     print(f"\n{PASSED} passed, {FAILED} failed")
     return 1 if FAILED else 0

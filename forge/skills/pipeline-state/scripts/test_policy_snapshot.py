@@ -123,8 +123,11 @@ class PolicySnapshot(unittest.TestCase):
 
     # ── repin ─────────────────────────────────────────────────────────────────
     def _approve_repin(self, feature="BUG-1"):
+        # policy-repin-* снимает enforcement → цитата пользователя обязательна
+        # (record_approval._check_evidence + gate-guard.check_record_approval).
         r = _run(RECORD_APPROVAL, "--project", self.proj, "--key", f"policy-repin-{feature}",
-                 "--approved-by", "user", "--reason", "тест")
+                 "--approved-by", "user", "--reason", "тест",
+                 "--evidence", "да, переснимай политику прогона")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_repin_without_approval_is_blocked(self):

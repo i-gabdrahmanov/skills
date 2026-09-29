@@ -2124,7 +2124,26 @@ INGEST_FLOOR_PHASES = {
     # при этом объявлял red-judge как pass-through. Теперь ингест обязателен, как у
     # остальных гибридов: прогон тестов — решающий пол, вердикт субагента — второй слой.
     "red": "merges_saved",
+    # Чисто детерминированные судьи. Раньше их тут не было, и это открывало ингест как
+    # обход: `--from-output` принимает ЛЮБУЮ фазу из PHASE_MAP, но пол пересчитывался
+    # только для гибридов выше. Для sdd/design/spec/coverage/regression сохранялся сырой
+    # вердикт субагента, FE.judge(layer=None) отдавал его как последнюю запись, и update.py
+    # закрывал шаг, ни разу не запустив check_sdd_doc / check_taskplan / check_coverage.
+    # У этих фаз своего LLM-слоя нет — их check_* ничего не мержит, поэтому решает он один
+    # ("deterministic"): вердикт субагента остаётся в журнале слоем "llm", но шаг закрывает
+    # только детерминированная проверка.
+    "sdd": "deterministic",
+    "design": "deterministic",
+    "spec": "deterministic",
+    "coverage": "deterministic",
+    "regression": "deterministic",
 }
+
+# Фазы, которые `--recheck` пересчитывает заново, а не перечитывает сохранённый вердикт.
+# Вынесено в константу (а не инлайн-кортеж в main), чтобы согласованность с PHASE_MAP
+# держал тест, а не внимательность: пара «список против списка» — ровно тот класс, которым
+# разъезжались INGEST_FLOOR_PHASES/PHASE_MAP и judges-registry/PHASE_MAP.
+RECHECK_RECOMPUTE_PHASES = frozenset(PHASE_MAP)
 
 
 
@@ -2270,8 +2289,10 @@ def main():
                 print(f"ERROR: детерминированный слой {args.phase} упал при ингесте: {e}",
                       file=sys.stderr)
                 sys.exit(2)
-            # Все гибриды — "merges_saved": check_* сам прочитал сохранённый LLM-вердикт
-            # и применил к нему пол, поэтому его результат уже финальный.
+            # "merges_saved" — гибрид: check_* сам прочитал сохранённый LLM-вердикт и
+            # применил к нему пол, его результат уже финальный.
+            # "deterministic" — своего LLM-слоя у судьи нет, check_* про вердикт субагента
+            # не знает; решает он один. В обоих случаях финалом становится det.
             verdict = det
             out_path = _save_verdict(args.slug, judge_name, verdict)
         if verdict["passed"]:
@@ -2294,7 +2315,11 @@ def main():
         # Для детерминированных и гибридных фаз — полная проверка заново (не кэш).
         # build — гибрид: check_build загружает сохранённый LLM-вердикт и применяет
         # детерминированный пол (stubs), поэтому recheck обязан его пересчитывать.
-        if args.phase in ("brd", "reuse", "eval", "spec", "red", "coverage", "regression", "build"):
+        # design и sdd раньше сюда не попадали и уходили в ветку «просто перечитать
+        # сохранённый вердикт» — то есть `--recheck` после ингеста возвращал тот же самый
+        # вердикт субагента, не запуская check_design/check_sdd_doc. Детерминированный слой
+        # у них есть, значит recheck обязан его пересчитывать, как у всех остальных.
+        if args.phase in RECHECK_RECOMPUTE_PHASES:
             try:
                 verdict = PHASE_MAP[args.phase](args.slug, feature_dir)
             except Exception as e:
@@ -2408,7 +2433,7 @@ def main():
 
 def _resolve_skill_ns(project, explicit):
     """Namespace ground/statements/<skill>/ активного прогона (см. pipeline-state/_util).
-    Хардкод "feature-pipeline" уводил forgefix/forgelite в чужой каталог — молча."""
+    Хардкод "feature-pipeline" уводил forgefix в чужой каталог — молча."""
     if explicit:
         return str(explicit)
     try:

@@ -222,7 +222,7 @@ class TestSnapshotCompare(unittest.TestCase):
 
 
 class TestGuard(unittest.TestCase):
-    """guard — self-contained регресс через git stash (lite/minor). git и прогон замоканы."""
+    """guard — self-contained регресс через git stash (fix/minor). git и прогон замоканы."""
 
     def setUp(self):
         self._saved = {k: getattr(mt, k) for k in

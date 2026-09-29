@@ -442,7 +442,7 @@ def main() -> int:
     ap.add_argument("--skill", default=None,
                     help="Namespace ground/statements/<skill>/. По умолчанию — namespace "
                          "активного прогона (_util.resolve_skill): прежний хардкод "
-                         "feature-pipeline уводил override forgefix/forgelite в чужой каталог, "
+                         "feature-pipeline уводил override forgefix в чужой каталог, "
                          "и снятый гейт продолжал блокировать.")
     ap.add_argument("--list", action="store_true", help="Показать существующие overrides")
     ap.add_argument("--remove", action="store_true", help="Удалить override")
@@ -453,7 +453,7 @@ def main() -> int:
 
     project = Path(args.project or repo_root()).resolve()
     # Namespace прогона: без резолва хардкод feature-pipeline уводил override в чужой
-    # каталог на forgefix/forgelite — снятый гейт продолжал блокировать (см. _util).
+    # каталог на forgefix — снятый гейт продолжал блокировать (см. _util).
     args.skill = resolve_skill(project, args.skill)
 
     # Batch имеет приоритет над одиночными командами: --batch + --reason взаимоисключающи

@@ -177,7 +177,7 @@ def _task_exempt(plan, task_id: str, cfg: dict) -> bool:
 
 
 def _all_tasks_exempt(plan, cfg: dict) -> bool:
-    """Нет ни одной задачи, пишущей код и не освобождённой (для плоских lite/fix-ветвей).
+    """Нет ни одной задачи, пишущей код и не освобождённой (для плоской fix-ветки).
     ЕДИНЫЙ предикат — pipeline_phases.all_tasks_test_exempt (его же зовёт update.py, разрешая
     легальный `skipped` для RED-шага); inline-фолбэк — для повреждённого бандла."""
     if not plan or _pp is None:
@@ -295,10 +295,10 @@ def main() -> int:
     # ── Проверка RED-теста в manifest ──
     steps = R.manifest_status(root)
 
-    # Плоские ветки forge: lite (forgelite) и fix (forgefix) — один RED-шаг на прогон.
+    # Плоская ветка forge: fix (forgefix) — один RED-шаг на прогон.
     # Есть в манифесте → это её прогон; блок src/main, пока RED-шаг не completed.
-    # (Full-манифест их не содержит → пропуск ниже, к per-task логике 04-build-<id>.)
-    for flat_red in ("lite-red", "fix-red"):
+    # (Full-манифест его не содержит → пропуск ниже, к per-task логике 04-build-<id>.)
+    for flat_red in ("fix-red",):
         status = steps.get(flat_red)
         if status is None:
             continue

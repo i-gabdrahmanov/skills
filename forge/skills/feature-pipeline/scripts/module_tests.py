@@ -19,14 +19,14 @@ src-пути) для compare. Тесты гоняются полным сьют�
 проигнорированы». Если падение pre-existing — включи модуль в baseline (`--modules`), тогда оно
 корректно классифицируется как pre-existing и блокировать не будет.
 
-Для lite/minor (нет фазы baseline) есть режим `guard`: он сам снимает эталон через git stash
+Для fix/minor (нет фазы baseline) есть режим `guard`: он сам снимает эталон через git stash
 (прячет правки → тесты затронутых модулей → возвращает правки → тесты снова → сверка).
 
 Usage:
     module_tests.py snapshot --root . --from-taskplan <task-plan.json> --out <baseline.json> [--json]
     module_tests.py compare  --root . --baseline <baseline.json> [--from-diff <base>] [--json]
     module_tests.py snapshot --root . --modules service-taskservice,utils-web --out <baseline.json>
-    module_tests.py guard    --root . --base HEAD [--json]      # self-contained, для lite/minor
+    module_tests.py guard    --root . --base HEAD [--json]      # self-contained, для fix/minor
 
 Exit:
     0 — OK (snapshot записан / при compare|guard регрессий нет)
@@ -272,7 +272,7 @@ def _resolve_modules(root: Path, args) -> list[str]:
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 def cmd_guard(args) -> int:
-    """Самодостаточный регресс-гейт затронутых модулей БЕЗ заранее снятого baseline (lite/minor).
+    """Самодостаточный регресс-гейт затронутых модулей БЕЗ заранее снятого baseline (fix/minor).
 
     «Зелёное ДО» берём через git stash: прячем правки → гоняем тесты затронутых диффом модулей
     (эталон пред-change) → возвращаем правки → гоняем снова → сверяем. Fail-closed:
@@ -470,7 +470,7 @@ def main() -> int:
     cp.add_argument("--from-diff", default=None, help="git base — расширить scope изменёнными модулями")
 
     gp = sub.add_parser("guard", parents=[common],
-                        help="самодостаточный регресс-гейт через git stash (lite/minor, без baseline)")
+                        help="самодостаточный регресс-гейт через git stash (fix/minor, без baseline)")
     gp.add_argument("--base", default="HEAD", help="git ref для diff затронутых модулей (дефолт HEAD)")
 
     args = ap.parse_args()

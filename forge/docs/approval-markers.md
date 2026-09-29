@@ -26,19 +26,48 @@ Approval-маркер — это «человек сказал да» на ри�
 
 * `phase_approvals` — обязательное согласие перед фазой:
   * `fix-red` / `fix-green` → маркер `fix-plan-{feature}` (утверждение плана фикса)
-  * В ветке `forgefix` без маркера фаза блокируется `gate-guard._phase_approval_missing`.
+  * `03-jira` → маркер `jira-plan-{feature}` (утверждение состава задач ДО их создания:
+    задачи в трекере необратимы, из пайплайна их не удалить)
+  * Без маркера фаза блокируется `gate-guard._phase_approval_missing`.
 * `level_requirements` — обязательное согласие по уровню риска:
   * `R3` (security-sensitive пути) → `security-review`
-  * `R4` (PR-мерджи, доставка, override гейтов, `skip-judges`) → `human-approval`
-  * `R5` (force-push, деструктив) → `change-advisory`
+  * `R4` (override гейтов, `skip-judges`, откат, репин политики) → `human-approval`
+  * `R5` (деструктив) → `change-advisory`
 * Override гейта судьи (R4-класс) → маркер `gate-override-<judge>` (ставится через
   `record_approval.py` ДО создания override'а; иначе `update._check_gate_override_approval`
   блокирует `override_judge.py --judge <name>`).
-* Закрытие документа фазы (`00-brd` / `02-sdd`) → `<doc>-approved-<feature>`
-  (ставится через `record_approval.py` ДО doc-review-push).
+* Понижение порогов харнеса (R4-класс) → `policy-downgrade-<параметр>`. Список
+  параметров — `risk-policy.json:quality_downgrade.params` (`quality.tdd`,
+  `quality.eval_enabled`, `coverage_threshold`, `max_judge_iterations`,
+  `coverage_exclude_globs`, `security.*` и т.д.). ФАКТЫ о проекте в том же namespace
+  (`build_command`, `test_command`, `jacoco_configured`) под гейт НЕ попадают.
+* Закрытие документа фазы (`00-brd` / `02-sdd`) → `<doc>-approved-<feature>`.
 
-Полный список ключей — в `risk-policy.json` (`phase_approvals`, `level_requirements`)
-и в `_DOC_APPROVAL_STEPS` скрипта `update.py`.
+Полный список ключей — в `risk-policy.json` (`phase_approvals`, `level_requirements`,
+`quality_downgrade`) и в `_DOC_APPROVAL_STEPS` скрипта `update.py`.
+
+## `--evidence` обязателен для ключей, снимающих enforcement
+
+Сам `record_approval.py` долго не гейтился ничем. DENY-баннер соседнего R4-гейта печатал
+готовую к вставке команду — и модель её выполняла, никого не спросив: цепочка «баннер →
+маркер → гейт снят» целиком помещалась внутри модели. Скрипт централизует согласие, но
+сам по себе его не доказывает.
+
+Поэтому для ключей **`gate-override-*`, `rollback-*`, `skip-judges-*`, `policy-downgrade-*`**
+обязателен `--evidence "<дословная фраза пользователя>"`:
+
+* `gate-guard.check_record_approval` сверяет цитату с транскриптом сессии. Транскрипт
+  модель не пишет — это единственный канал, куда она не может дописать строку. Цитаты нет
+  в транскрипте → deny.
+* Транскрипт недоступен → предупреждение и пропуск: `--evidence` всё равно обязателен и
+  уходит в журнал под аудит. Запирать единственный аварийный выход наглухо нельзя.
+* Второй слой — сам `record_approval.py` (`_check_evidence`), включая `--batch`: гейт
+  держится и при запуске мимо харнеса. Валидация батча атомарна — одна запись без цитаты
+  отменяет весь батч.
+* Цитата короче 12 символов не принимается: «да»/«ок»/«+» цитатой не являются.
+
+Approval'ы **плана** (`fix-plan-*`, `jira-plan-*`, `<doc>-approved-*`) цитаты не требуют:
+они двигают прогон вперёд, а не убирают защиту.
 
 ## Легитимные способы создания
 
@@ -54,7 +83,7 @@ python3 <harness>/skills/pipeline-state/scripts/record_approval.py \
     [--kind approval|gate-override-<judge>|human-approval|doc-approved|...] \
     --approver <name> \
     --reason "<объяснение для аудита>" \
-    [--evidence "<sha256 | ticket | url>"]
+    [--evidence "<дословная цитата пользователя | sha256 | ticket | url>"]
 ```
 
 Примеры:

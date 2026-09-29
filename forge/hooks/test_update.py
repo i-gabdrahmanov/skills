@@ -56,7 +56,7 @@ class UpdateRoundTrip(unittest.TestCase):
     def _assert_forge_armed_and_operator_intact(self):
         self.assertIn("gate-guard", self._hook_names(), "после update харнес обязан быть вооружён")
         self.assertTrue((self.gig / "skills" / "feature-pipeline").is_dir(), "форж-скилл должен стоять")
-        self.assertTrue((self.gig / "commands" / "forge-lite.md").exists(), "команда /forge-lite должна стоять")
+        self.assertTrue((self.gig / "commands" / "forge-fix.md").exists(), "команда /forge-fix должна стоять")
         self.assertTrue((self.my_skill / "SKILL.md").exists(), "самописный скилл оператора снесён — недопустимо")
         self.assertTrue((self.state / "manifest.json").exists(), "ground/ трогать нельзя")
         s = json.loads(self.settings.read_text(encoding="utf-8"))

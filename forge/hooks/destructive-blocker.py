@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -53,7 +54,6 @@ _RM_ABS_PATTERN = (r"\brm\b(?=.*" + _RM_RECURSIVE + r")(?=.*" + _RM_FORCE + r").
                    + _DANGEROUS_TARGET)
 
 _CORE_BLACKLIST = [
-    r"\brm\b(?:\s+(?:-\S+|--\w[\w-]*))*\s+(?:(?:/|~|\$HOME|\*)(?:\s|/|\*|$)|\.(?:\s|$))",  # rm <любые флаги> опасная цель (/, /*, ~, $HOME, *, бар. .) — но НЕ ./subdir
     _RM_ABS_PATTERN,
     r"\bfind\s+(?:/|~|\$HOME)\S*\s.*-(?:delete|exec\s+rm)\b",  # find в опасном корне + удаление
     # force-push и в короткой форме `-f` (кластер флагов), кроме --force-with-lease
@@ -72,6 +72,40 @@ _CORE_BLACKLIST = [
 ]
 
 # ── Контекстные проверки (одним regex не выражаются) ─────────────────────────────────
+# `rm <любые флаги> <опасная цель>` — разбором argv, не регуляркой. Прежний паттерн
+#   \brm\b(?:\s+(?:-\S+|--\w[\w-]*))*\s+(?:(?:/|~|\$HOME|\*)…)
+# имел двусмысленную альтернативу под `*`: `--recursive` подходит ОБЕИМ ветвям, и на не
+# подошедшем хвосте движок перебирал разбиения экспоненциально. Замер на этом дереве:
+# `rm --recursive`×28 → 131.8 с при таймауте хука 40 с. Таймаут рантайм читает как
+# «возражений нет», то есть одна длинная строка флагов ГАСИЛА блокировщик целиком —
+# ReDoS здесь не про «медленно», а про снятие enforcement. Токенизация линейна и точнее:
+# `rm -rf ./build` (относительная цель) под запрет не подпадает и раньше.
+_CMD_SEP_RE = re.compile(r"\|\||&&|[;|&\n]")
+_BARE_DANGEROUS = frozenset((
+    "/", "/*", "~", "~/*", "*", ".", "$HOME", "$HOME/*", "${HOME}", "${HOME}/*",
+))
+
+
+def _rm_bare_dangerous_target(cmd: str) -> bool:
+    """`rm` с ГОЛОЙ опасной целью: корень, дом, звезда, текущий каталог.
+
+    Абсолютные пути вида `/etc/passwd` ловит _RM_ABS_PATTERN (у него есть законное
+    исключение «внутри своего проекта»), здесь — только цели без содержательного пути."""
+    for seg in _CMD_SEP_RE.split(cmd):
+        try:
+            toks = shlex.split(seg, posix=True)
+        except ValueError:                 # незакрытая кавычка — грубая токенизация
+            toks = re.findall(r"[^\s'\"]+", seg)
+        if not toks or os.path.basename(toks[0]) != "rm":
+            continue
+        for a in toks[1:]:
+            if a.startswith("-"):
+                continue                   # флаг в любой форме (-rf, --recursive, --)
+            if a.rstrip("/") in _BARE_DANGEROUS or a in _BARE_DANGEROUS:
+                return True
+    return False
+
+
 # `xargs rm` цель получает из stdin, поэтому опасность определяет ПРОИЗВОДИТЕЛЬ списка.
 # Прежний безусловный блок резал штатную уборку (`find . -name '*.tmp' | xargs rm`).
 _XARGS_RM_RE = re.compile(r"\bxargs\b(?:\s+-\S+)*\s+rm\b")
@@ -138,6 +172,11 @@ def main() -> int:
             policy = R.load_policy().get("destructive_blacklist", []) or []
         except Exception:
             policy = []
+        if _rm_bare_dangerous_target(cmd):
+            print("[destructive-blocker] DENY: `rm` с целью «корень/дом/звезда/текущий "
+                  "каталог». Уборку делай по конкретному относительному пути "
+                  "(`rm -rf build/`), а не по `/`, `~`, `*` или `.`.", file=sys.stderr)
+            return 2
         if _xargs_rm_from_dangerous_root(cmd):
             print("[destructive-blocker] DENY: `xargs rm` со списком из опасного корня "
                   "(/, ~, $HOME). Уборку делай в пределах рабочего каталога.", file=sys.stderr)

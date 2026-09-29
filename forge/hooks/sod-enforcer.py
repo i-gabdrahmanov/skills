@@ -113,11 +113,6 @@ STEP_ROLE = {
     "05-": "test",
     "06-spec": "spec",
     "06-": "spec",
-    # Lite-ветка (forgelite): плоские шаги lite-*.
-    "lite-design": "design",
-    "lite-red": "test",
-    "lite-green": "dev",
-    "lite-verify": "test",
     # Fix-ветка (forgefix): плоские шаги fix-*. fix-diag играет роль дизайна (мини-план),
     # fix-spec — роль спецадаптера (правит только дельту спеки, не код).
     "fix-diag": "design",
@@ -189,8 +184,7 @@ def _block(reason: str) -> int:
 # Фазы прогона тестов: правка src/main здесь — это «подгонка кода под зелёное» в обход
 # счётчика ре-итераций. Легальный путь — ПЕРЕОТКРЫТЬ шаг реализации (его считает
 # quality.max_step_reopens и на исчерпании даёт exit 3 «стоп-и-спроси»).
-_VERIFY_TO_IMPL = {"05-tests": "04-build-<taskId>", "lite-verify": "lite-green",
-                   "fix-verify": "fix-green"}
+_VERIFY_TO_IMPL = {"05-tests": "04-build-<taskId>", "fix-verify": "fix-green"}
 
 
 def _how_to_proceed(step_id: str, role: str) -> str:

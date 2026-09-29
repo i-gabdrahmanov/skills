@@ -254,28 +254,28 @@ class TRequiredDecisions(unittest.TestCase):
     """Thrust 1 fail-closed: продуктивная запись фазы блокируется без записанного решения."""
 
     @staticmethod
-    def _mk(td: str, spec: str | None = None):
-        d = Path(td) / "ground" / "statements" / "forgelite" / "f1"
+    def _mk(td: str, story: str | None = None):
+        d = Path(td) / "ground" / "statements" / "forgefix" / "f1"
         d.mkdir(parents=True)
         (d / "manifest.json").write_text(
-            json.dumps({"steps": [{"id": "lite-design", "status": "in_progress"}]}),
+            json.dumps({"steps": [{"id": "fix-diag", "status": "in_progress"}]}),
             encoding="utf-8")
         cfg = {"autonomy": {"criticality": "medium", "auto_max_risk": "R2"}}
-        if spec:
-            cfg["sources"] = {"spec": spec}
+        if story:
+            cfg["sources"] = {"story": story}
         (Path(td) / "ground" / "pipeline.json").write_text(json.dumps(cfg), encoding="utf-8")
 
     def test_write_blocked_without_required_decision(self):
         with tempfile.TemporaryDirectory() as td:
             self._mk(td)
-            r = _write_run("docs/feature-pipeline/f1/tech-design.md", td)
+            r = _write_run("docs/feature-pipeline/f1/fix-plan.md", td)
             self.assertEqual(r.returncode, 2, r.stderr)
-            self.assertIn("inputs.spec", r.stderr)
+            self.assertIn("inputs.story", r.stderr)
 
     def test_write_passes_when_decision_recorded(self):
         with tempfile.TemporaryDirectory() as td:
-            self._mk(td, spec="docs/feature-pipeline/f1/existing-spec.md")
-            r = _write_run("docs/feature-pipeline/f1/tech-design.md", td)
+            self._mk(td, story="STOR-100")
+            r = _write_run("docs/feature-pipeline/f1/fix-plan.md", td)
             self.assertEqual(r.returncode, 0, r.stderr)
 
 
@@ -339,16 +339,16 @@ class TCurrentStepResolver(unittest.TestCase):
     def test_parallel_phases_stay_fail_open(self):
         """Готовы к работе шаги РАЗНЫХ фаз (параллельные задачи full-пути) — фазу не угадываем."""
         with tempfile.TemporaryDirectory() as td:
-            d = Path(td) / "ground" / "statements" / "forgelite" / "f1"
+            d = Path(td) / "ground" / "statements" / "forgefix" / "f1"
             d.mkdir(parents=True)
             (d / "manifest.json").write_text(json.dumps({"steps": [
-                {"id": "lite-design", "status": "pending"},
-                {"id": "lite-red", "status": "pending"},
+                {"id": "fix-diag", "status": "pending"},
+                {"id": "fix-red", "status": "pending"},
             ]}), encoding="utf-8")
             (Path(td) / "ground" / "pipeline.json").write_text(
                 json.dumps({"autonomy": {"criticality": "medium", "auto_max_risk": "R2"}}),
                 encoding="utf-8")
-            r = _write_run("docs/feature-pipeline/f1/tech-design.md", td)
+            r = _write_run("docs/feature-pipeline/f1/fix-plan.md", td)
             self.assertEqual(r.returncode, 0, r.stderr)
 
 
@@ -731,6 +731,158 @@ class TJiraApprovalKey(unittest.TestCase):
             self._state(td)
             _approval(td, "jira-create")
             self.assertEqual(_run(self.CMD, td).returncode, 0)
+
+
+class TSegmentedArgv(unittest.TestCase):
+    """Readonly-флаг читается из argv ГЕЙТЯЩЕГОСЯ сегмента, а не из всей строки.
+
+    Регрессия: `shlex.split` по всей команде не срезал комментарии и не разделял операторы
+    оболочки, поэтому дописанный где угодно `--list`/`--dry-run` снимал R4-гейт, ничего не
+    запуская. Три из четырёх R4-проверок открывались одним трейлинг-комментарием."""
+
+    BYPASSES = [
+        "python3 override_judge.py --judge coverage-judge --reason x  # не использую --list",
+        "python3 override_judge.py --judge coverage-judge && echo done --remove",
+        "python3 config.py repin  # --dry-run",
+        "python3 rollback.py --to-step 02-sdd  # --dry-run",
+        "python3 rollback.py --to-step 02-sdd; echo --list",
+        "python3 update.py --skip-judges --status completed  # --dry-run --list",
+    ]
+
+    REAL_READONLY = [
+        "python3 override_judge.py --list",
+        "python3 override_judge.py --judge coverage-judge --remove",
+        "python3 config.py repin --dry-run",
+        "python3 rollback.py --to-step 02-sdd --dry-run",
+    ]
+
+    def test_bypasses_are_denied(self):
+        with tempfile.TemporaryDirectory() as d:
+            for cmd in self.BYPASSES:
+                r = _run(cmd, d)
+                self.assertEqual(r.returncode, 2,
+                                 f"обход readonly-флагом не закрыт: {cmd!r} → rc {r.returncode}")
+
+    def test_real_readonly_still_free(self):
+        with tempfile.TemporaryDirectory() as d:
+            for cmd in self.REAL_READONLY:
+                r = _run(cmd, d)
+                self.assertEqual(r.returncode, 0,
+                                 f"настоящий readonly заблокирован: {cmd!r} → {r.stderr}")
+
+    def test_quoted_flag_is_not_readonly(self):
+        """Флаг внутри строки-аргумента readonly не делает (shlex отдаёт его одним токеном)."""
+        with tempfile.TemporaryDirectory() as d:
+            r = _run('python3 rollback.py --to-step 02-sdd --reason "cleanup --dry-run"', d)
+            self.assertEqual(r.returncode, 2, r.stdout)
+
+
+class TConsentIsExternal(unittest.TestCase):
+    """`record_approval` для ключей, снимающих enforcement, требует цитату пользователя.
+
+    Самый опасный отказ харнеса: согласие было самомаркируемым. Скрипт не гейтился НИ ОДНИМ
+    хуком (gate-guard / state-write-guard / destructive-blocker / sod-enforcer — все exit 0),
+    а DENY-баннеры соседних R4-гейтов печатали готовую к вставке команду. Цепочка
+    «баннер → маркер → гейт снят» проходила целиком внутри модели."""
+
+    QUOTE = "снимай гейт покрытия, я подтверждаю"
+    RA = "python3 record_approval.py --key {key} --approved-by user --reason r"
+
+    def _run(self, cmd, transcript=None):
+        payload = {"hook_event_name": "PreToolUse", "cwd": "/tmp",
+                   "tool_name": "run_shell_command", "tool_input": {"command": cmd}}
+        if transcript:
+            payload["transcript_path"] = transcript
+        return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
+                              capture_output=True, text=True, timeout=30)
+
+    def _transcript(self, d):
+        p = Path(d) / "transcript.jsonl"
+        p.write_text('{"role":"user","text":"ладно, %s"}\n' % self.QUOTE, encoding="utf-8")
+        return str(p)
+
+    def test_bypass_keys_need_evidence(self):
+        for key in ("gate-override-coverage-judge", "rollback-f1-02-sdd",
+                    "skip-judges-f1", "policy-repin-f1"):
+            with self.subTest(key=key):
+                r = self._run(self.RA.format(key=key))
+                self.assertEqual(r.returncode, 2, f"{key} прошёл без цитаты")
+
+    def test_short_evidence_rejected(self):
+        cmd = self.RA.format(key="gate-override-x") + ' --evidence "да"'
+        self.assertEqual(self._run(cmd).returncode, 2)
+
+    def test_quote_must_be_in_transcript(self):
+        with tempfile.TemporaryDirectory() as d:
+            tr = self._transcript(d)
+            real = self.RA.format(key="gate-override-x") + f' --evidence "{self.QUOTE}"'
+            self.assertEqual(self._run(real, tr).returncode, 0, "настоящая цитата отбита")
+            fake = self.RA.format(key="gate-override-x") + ' --evidence "пользователь разрешил всё"'
+            self.assertEqual(self._run(fake, tr).returncode, 2, "выдуманная цитата прошла")
+
+    def test_no_transcript_degrades_to_warning(self):
+        """Транскрипт недоступен — сверить нельзя, но --evidence уже обязателен и журналится.
+        Запирать единственный аварийный выход наглухо нельзя."""
+        cmd = self.RA.format(key="gate-override-x") + f' --evidence "{self.QUOTE}"'
+        r = self._run(cmd)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("WARN", r.stderr)
+
+    def test_plan_approvals_not_gated(self):
+        for key in ("fix-plan-STOR-1", "jira-plan-f1", "sdd-approved-f1", "human-approval"):
+            with self.subTest(key=key):
+                self.assertEqual(self._run(self.RA.format(key=key)).returncode, 0)
+
+    def test_banners_do_not_ship_a_ready_bypass(self):
+        """Баннер R4-гейта не должен быть копипастом: без --evidence команда всё равно не поедет."""
+        with tempfile.TemporaryDirectory() as d:
+            r = self._run("python3 override_judge.py --judge coverage-judge --reason x", d)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("record_approval.py", r.stderr)
+            self.assertIn("--evidence", r.stderr)
+
+
+class TQualityDowngradeIsR4(unittest.TestCase):
+    """`config.py set quality.*|security.*` — R4-класс (approval).
+
+    Регрессия: прямая запись в ground/policy.json резалась state-write-guard, а санкционный
+    скрипт не гейтился ничем — `set quality.tdd false` / `set quality.eval_enabled false`
+    проходили ВСЕ хуки с exit 0. Снимок политики тут не защита: он фиксируется на init.py,
+    окно ДО него открыто, а policy.json переживает прогон и действует на соседние."""
+
+    def _run(self, cmd):
+        payload = json.dumps({"hook_event_name": "PreToolUse", "cwd": "/tmp",
+                              "tool_name": "run_shell_command", "tool_input": {"command": cmd}})
+        return subprocess.run([sys.executable, str(HOOK)], input=payload,
+                              capture_output=True, text=True, timeout=30)
+
+    def test_downgrades_are_denied(self):
+        for cmd in ("python3 config.py set quality.eval_enabled false",
+                    "python3 config.py set quality.tdd false",
+                    "python3 config.py set quality.coverage_threshold 0.5",
+                    "python3 config.py set quality.max_judge_iterations 20",
+                    "python3 config.py set security.pii_boundary false"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 2, f"прошло без approval: {cmd}")
+
+    def test_reads_and_dry_run_are_free(self):
+        for cmd in ("python3 config.py get quality.tdd",
+                    "python3 config.py list",
+                    "python3 config.py set quality.tdd false --dry-run"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 0, f"ложный блок: {cmd}")
+
+    def test_other_namespaces_not_gated(self):
+        for cmd in ("python3 config.py set jira.enabled false",
+                    "python3 config.py set inputs.mode fix",
+                    "python3 config.py set docs.feature_docs_dir docs"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 0, f"ложный блок: {cmd}")
+
+    def test_trailing_comment_does_not_bypass(self):
+        """Тот же разбор argv, что у остальных R4-гейтов (TSegmentedArgv)."""
+        r = self._run("python3 config.py set quality.tdd false # --dry-run")
+        self.assertEqual(r.returncode, 2, r.stdout)
 
 
 if __name__ == "__main__":

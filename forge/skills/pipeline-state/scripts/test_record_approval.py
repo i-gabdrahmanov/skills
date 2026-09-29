@@ -57,7 +57,10 @@ class TestRecordApprovalSingle(unittest.TestCase):
             "approver": None,
             "reason": "test reason",
             "kind": None,
-            "evidence": None,
+            # gate-override-* снимает enforcement → цитата пользователя обязательна
+            # (TestConsentEvidenceRequired). Здесь она часть фикстуры: эти тесты про
+            # механику записи, а не про класс согласия.
+            "evidence": "подтверждаю, снимаем гейт для теста",
             "feature_ctx": None,
             "batch": None,
             "json": False,
@@ -611,6 +614,90 @@ approvals:
         if log.exists():
             self.assertEqual(log.read_text(encoding="utf-8").strip(), "",
                              "атомарность нарушена — в журнале есть записи после ошибки валидации")
+
+
+class TestConsentEvidenceRequired(unittest.TestCase):
+    """Ключи, снимающие enforcement, требуют дословной цитаты пользователя.
+
+    Регрессия «согласие самомаркируемое»: record_approval не гейтился ни одним хуком, а
+    DENY-баннеры соседних R4-гейтов печатали готовую команду. Цепочка «баннер → маркер →
+    гейт снят» проходила целиком внутри модели. Это второй слой (первый —
+    gate-guard.check_record_approval, он ещё и сверяет цитату с транскриптом сессии)."""
+
+    QUOTE = "снимай гейт покрытия, я подтверждаю"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.project = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _run(self, *extra):
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "record_approval.py"),
+             "--project", str(self.project), "--approved-by", "user",
+             "--reason", "проба", *extra],
+            capture_output=True, text=True, cwd=str(SCRIPTS))
+
+    def test_bypass_keys_require_evidence(self):
+        for key in ("gate-override-coverage-judge", "rollback-f1-02-sdd",
+                    "skip-judges-f1", "policy-repin-f1"):
+            with self.subTest(key=key):
+                r = self._run("--key", key)
+                self.assertEqual(r.returncode, 2, f"{key} записался без цитаты: {r.stdout}")
+                self.assertIn("--evidence", r.stderr)
+
+    def test_short_evidence_rejected(self):
+        r = self._run("--key", "gate-override-x", "--evidence", "да")
+        self.assertEqual(r.returncode, 2, r.stdout)
+
+    def test_quote_accepted_and_journaled(self):
+        r = self._run("--key", "gate-override-coverage-judge", "--evidence", self.QUOTE)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rec = FE.approval(self.project, "gate-override-coverage-judge")
+        self.assertEqual(rec.get("produced_by"), "record_approval")
+        self.assertEqual(rec.get("evidence"), self.QUOTE)
+
+    def test_batch_is_not_a_backdoor(self):
+        """Тот же инвариант в batch: хук ключей внутри YAML не видит, слой здесь единственный."""
+        import json as _json
+        bad = self.project / "bad.json"
+        bad.write_text(_json.dumps([
+            {"key": "fix-plan-ok", "reason": "план", "approver": "user"},
+            {"key": "gate-override-coverage-judge", "reason": "обход", "approver": "user"},
+        ]), encoding="utf-8")
+        r = subprocess.run(
+            [sys.executable, str(SCRIPTS / "record_approval.py"),
+             "--project", str(self.project), "--batch", str(bad)],
+            capture_output=True, text=True, cwd=str(SCRIPTS))
+        # rc 1 — контракт ошибок валидации батча (как у прочих невалидных записей)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("--evidence", r.stderr)
+        # атомарность: не записалась ни одна строка, включая валидную первую
+        self.assertIsNone(FE.approval(self.project, "fix-plan-ok"))
+
+    def test_batch_with_evidence_passes(self):
+        import json as _json
+        good = self.project / "good.json"
+        good.write_text(_json.dumps([
+            {"key": "gate-override-coverage-judge", "reason": "обход",
+             "approver": "user", "evidence": self.QUOTE},
+        ]), encoding="utf-8")
+        r = subprocess.run(
+            [sys.executable, str(SCRIPTS / "record_approval.py"),
+             "--project", str(self.project), "--batch", str(good)],
+            capture_output=True, text=True, cwd=str(SCRIPTS))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(FE.approval(self.project, "gate-override-coverage-judge")["evidence"],
+                         self.QUOTE)
+
+
+    def test_plan_approvals_unaffected(self):
+        """Approval плана/документа двигает прогон вперёд, а не снимает защиту — цитата не нужна."""
+        for key in ("fix-plan-STOR-1", "jira-plan-f1", "sdd-approved-f1", "human-approval"):
+            with self.subTest(key=key):
+                self.assertEqual(self._run("--key", key).returncode, 0)
 
 
 if __name__ == "__main__":

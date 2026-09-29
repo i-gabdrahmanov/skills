@@ -5,7 +5,15 @@
 > SKILL.md §0.6, override — SKILL.md §0.6.1. Нумерация секций ниже — историческая (§ из
 > монолитного SKILL.md), внутри брифа она самодостаточна.
 >
-> **Гейт закрытия фазы:** Гейт 3 (пользователь подтвердил создание) + check_jira; закрой шаг 03-jira
+> **Гейт закрытия фазы:** approval-маркер `jira-plan-<slug>` (пользователь подтвердил СОСТАВ задач)
+> + evidence `record_gate` по `check_jira.py`; только после этого `update.py --status completed`.
+>
+> **Почему строже остальных.** Это единственная фаза с необратимым внешним эффектом: задачи
+> в трекере создаются насовсем, пайплайн их не удалит. До 2026-09-28 она не гейтилась НИЧЕМ —
+> ни судьями, ни gate-result, ни approval, — а `state-recorder` на `SubagentStop` закрывает
+> шаг как `completed` по умолчанию (статус `failed` он выводит только из полей
+> `status`/`result`/`ok`/`passed`, произвольное «error» в тексте не читает). MCP-инструменты
+> при этом не видел ни один хук; теперь write-цепочка матчит и `mcp__.*`.
 
 ## 6. Фаза 2.5 — Jira → Гейт 3
 
@@ -59,13 +67,26 @@ agent(subagent_type="general-purpose",
    > Осознанное расхождение (Jira укрупнённо, task-plan детально) приведёт к FAIL `check_jira`
    > — тогда закрывай шаг только через ручной override (§0.6.1) с обоснованием.
 
-4. **На «Да»** — создай Story и Sub-task **строго по последнему подтверждённому черновику**
+4. **На «Да» — СНАЧАЛА зафиксируй согласие, потом создавай.** Без маркера
+   `jira-plan-<slug>` `gate-guard` не пропустит продуктивную запись фазы (`phase_approvals`),
+   и это намеренно: задачи в трекере необратимы, поэтому «да» пользователя должно остаться
+   в журнале, а не только в диалоге.
+   ```bash
+   python3 <project>/.gigacode/skills/pipeline-state/scripts/record_approval.py \
+       --project <toplevel> --key jira-plan-<slug> --approved-by user \
+       --reason "подтверждён черновик: Story + <N> подзадач"
+   ```
+   > Цитата (`--evidence`) здесь НЕ обязательна: это approval ПЛАНА, он двигает прогон
+   > вперёд, а не снимает защиту. Цитату требуют только ключи класса
+   > `gate-override-*`/`rollback-*`/`skip-judges-*`/`policy-downgrade-*`.
+
+   Затем создай Story и Sub-task **строго по последнему подтверждённому черновику**
    (не по сырому task-plan) через Jira MCP, следуя `references/jira-create-workflow.md`.
    Сохрани результат:
    ```bash
    python3 <project>/.gigacode/skills/jira-task-writer/scripts/check_jira.py \
        "<папка фичи>/task-plan.json" --result "<папка фичи>/jira-tasks-result.json" \
-       --pipeline-config "<project>/ground/pipeline.json"
+       --pipeline-config "<project>/ground/policy.json"
    ```
 
 5. **На пустой ответ** (не отобразился вопрос) — не паникуй:
@@ -75,6 +96,14 @@ agent(subagent_type="general-purpose",
    - Иди дальше в режиме «без Jira»
 
 Результат — `jira-tasks-result.json` (`{story, tasks:{task_id→key}, skipped}`).
+
+**Зафиксируй гейт** (без evidence `update.py` шаг не закроет):
+```bash
+python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py \
+    --project <toplevel> --skill feature-pipeline --feature <slug> \
+    --step-id 03-jira --cmd "python3 <project>/.gigacode/skills/jira-task-writer/scripts/check_jira.py ..."
+```
+
 Обнови `03-jira` с артефактами:
 
 ```bash

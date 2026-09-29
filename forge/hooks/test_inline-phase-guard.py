@@ -174,17 +174,17 @@ class TestInlinePhaseGuard(unittest.TestCase):
             self.assertEqual(_run(tmp, {"tool_name": "Write",
                 "tool_input": {"file_path": str(tmp / "docs/feature-pipeline/feat/tech-design.md")}}), 0)
 
-    # ── Thrust 2: lite-design — субагентная фаза (главный агент не пишет tech-design inline) ──
-    def test_main_agent_blocked_lite_design_write(self):
+    # ── Thrust 2: fix-diag — субагентная фаза (главный агент не пишет fix-plan inline) ──
+    def test_main_agent_blocked_fix_diag_write(self):
         with tempfile.TemporaryDirectory() as d:
-            tmp = Path(d); _make(tmp, "lite-design", slug="f1")
+            tmp = Path(d); _make(tmp, "fix-diag", slug="f1")
             self.assertEqual(_run(tmp, {"tool_name": "write_file",
-                "tool_input": {"file_path": str(tmp / "docs/feature-pipeline/f1/tech-design.md")}}), 2)
+                "tool_input": {"file_path": str(tmp / "docs/feature-pipeline/f1/fix-plan.md")}}), 2)
 
     # ── Thrust 4: checkstyle/lint inline главным агентом в build/test-фазе → блок ──
     def test_main_agent_blocked_gradle_checkstyle_inline(self):
         with tempfile.TemporaryDirectory() as d:
-            tmp = Path(d); _make(tmp, "lite-green")
+            tmp = Path(d); _make(tmp, "fix-green")
             self.assertEqual(_run(tmp, {"tool_name": "run_shell_command",
                 "tool_input": {"command": "./gradlew checkstyleMain"}}), 2)
 

@@ -30,14 +30,13 @@ forge/
 │   ├── resolve_hook_paths.py # подстановка ${PYTHON}/${PROJECT_ROOT} в settings.hooks.json
 │   └── run-hook-tests.sh     # юнит-тесты хуков + evals одной командой
 ├── commands/
-│   ├── forge.md            # /forge       → router (классификация fix | lite | full)
+│   ├── forge.md            # /forge       → router (классификация fix | full)
 │   ├── forge-fix.md        # /forge-fix   → forgefix (минорный дефект, спека правится точечно)
-│   ├── forge-lite.md       # /forge-lite  → forgelite (исполнение готовой задачи)
 │   ├── forge-spec.md       # /forge-spec  → требования-мастер: status/diff/merge/remove/check/research
 │   ├── forge-merge.md      # /forge-merge → свести дельту с мастером и убрать доки в архив
 │   └── forge-archive.md    # /forge-archive → архив доков готовых строек: status/put/list/restore
 ├── skills/
-│   ├── 20 скиллов/SKILL.md        # router, feature-pipeline, forgelite, forgefix, sdd, tech-design, …
+│   ├── 19 скиллов/SKILL.md        # router, feature-pipeline, forgefix, sdd, tech-design, …
 │   ├── SKILLS-REGISTRY.md         # реестр с owner/validity/evals
 │   └── run_all_tests.py           # единый CI-вход: скиллы + хуки + корень
 ├── docs/                   # user-guide, troubleshooting, pipeline-*, v2/ (исторический анализ)
@@ -56,22 +55,44 @@ forge/
 
 ## Состав
 
-- **Скиллы:** 20 (`router`, `feature-pipeline`, `forgelite`, `forgefix`, `sdd`, `tech-design`,
+- **Скиллы:** 19 (`router`, `feature-pipeline`, `forgefix`, `sdd`, `tech-design`,
   `jira-task-writer`, `java-spring-dev`, `test-writer`, `system-analyst`, `project-grounder`,
   `pipeline-state`, `brd-grounder`, `brd-interview`, `business-requirements`, `defect-analyzer`,
   `bugfix-developer`, `minor-defect-fix`, `config-helper`, `harness-verifier`).
   Полный реестр с owner/validity/evals — [`SKILLS-REGISTRY.md`](SKILLS-REGISTRY.md).
-- **Команды:** 6 (`/forge`, `/forge-fix`, `/forge-lite`, `/forge-spec`, `/forge-merge`,
-  `/forge-archive`).
+- **Команды:** 5 (`/forge`, `/forge-fix`, `/forge-spec`, `/forge-merge`, `/forge-archive`).
 - **Хуки:** 15 (`gate-guard`, `tdd-guard`, `eval-guard`, `sod-enforcer`, `inline-phase-guard`,
   `state-write-guard`, `pii-boundary`, `destructive-blocker`, `fork-syntax-guard`,
   `grounding-evidence`, `prompt-guard`, `file-journal`, `state-recorder`, `context-injector`,
   `phase-gate`) + `preflight.py` для самопроверки.
 
+## Что именно форсится (R4-классы)
+
+Обычная работа идёт авто. Отдельно стоят действия, которые **снимают enforcement с самого
+харнеса** — их нельзя сделать молча, нужен approval-маркер с провенансом `record_approval`:
+
+| Действие | Ключ маркера |
+|---|---|
+| `override_judge.py` — снять вердикт судьи | `gate-override-<judge>` |
+| `rollback.py` — откатить прогон к шагу | `rollback-<feature>-<step>` |
+| `update.py --skip-judges` — обойти все гейты закрытия | `skip-judges-<feature>` |
+| `config.py repin` — переснять политику идущего прогона | `policy-repin-<feature>` |
+| `config.py set` по переключателю enforcement (`quality.tdd`, `coverage_threshold`, `security.*`, …) | `policy-downgrade-<параметр>` |
+
+Для этих пяти классов `record_approval.py` требует **`--evidence "<дословная фраза
+пользователя>"`**, и цитата сверяется с транскриптом сессии: согласие обязано прийти извне
+модели, а не из её же вывода. Approval'ы ПЛАНА (`fix-plan-*`, `jira-plan-*`,
+`<doc>-approved-*`) цитаты не требуют — они двигают прогон вперёд, а не убирают защиту.
+
+ФАКТЫ о проекте под гейт не попадают: `quality.build_command`, `test_command`,
+`jacoco_configured`, `test_layer` настраиваются свободно — это работа `config-helper`.
+
+Подробно: [`FORGE.md`](FORGE.md) §Approval markers, [`docs/approval-markers.md`](docs/approval-markers.md).
+
 ## Тесты
 
 ```bash
-python3 skills/run_all_tests.py          # весь набор: скиллы + хуки + корень (108 файлов тестов)
+python3 skills/run_all_tests.py          # весь набор: скиллы + хуки + корень (113 файлов тестов)
 python3 skills/run_all_tests.py --skill hooks   # только control-plane (30)
 bash hooks/run-hook-tests.sh             # юнит-тесты хуков + eval-набор
 ```
@@ -101,7 +122,7 @@ gigacode --experimental-hooks
 ```
 
 Дальше в сессии — команда `/forge <ключ Jira или описание>`: `router` классифицирует задачу и
-уводит в fix / lite / full. **Headless (`-p`) для пайплайна не годится** без `-y`/YOLO и
+уводит в fix / full. **Headless (`-p`) для пайплайна не годится** без `-y`/YOLO и
 предзаписи решений: рантайм не даёт выполнить `agent`, фаза уходит inline и упирается в
 `inline-phase-guard` (см. INSTALL.md §4).
 
@@ -128,7 +149,7 @@ hooks из `settings.json`; `--purge-state` дополнительно снос�
 
 ## Проверено
 
-- `python3 skills/run_all_tests.py` — 108/108 (control-plane + skills + корень).
+- `python3 skills/run_all_tests.py` — 113/113 (control-plane + skills + корень).
 - `bash cleanup-legacy.sh --apply` на user-уровне с extension-остатками — успех,
   операторские скиллы (pptx/pdf/skill-creator) не тронуты.
 - `destructive-blocker` блокирует на точном payload qwen (`git push -f origin main` →
@@ -136,6 +157,13 @@ hooks из `settings.json`; `--purge-state` дополнительно снос�
 - Сессионные хуки (`prompt-guard`, `phase-gate`, `gate-guard`, `state-recorder`,
   `context-injector`) корректно **ноопают** (exit 0) вне forge-пайплайна →
   глобальный деплой не мешает обычным сессиям.
+- **Аудит харнеса 2026-09-28** (внешний, два независимых отчёта). Подтверждённые обходы
+  закрыты и запинены — подробности в `FORGE.md` §Thrust-10: трейлинг-комментарий снимал
+  три R4-гейта из четырёх; `record_approval` не гейтился ничем; `rm`/`touch` манифеста
+  выключали все хуки разом; ReDoS в `destructive-blocker` (131.8 с при таймауте хука 40 с)
+  гасил блокировщик; `config.py set quality.tdd false` снимал TDD с exit 0; фаза `03-jira`
+  не гейтилась вообще. Опровергнуто: `rm -rf /etc/passwd` блокировался и до аудита,
+  матчеры уже были на канон-именах.
 
 ## Открытые задачи
 
@@ -147,6 +175,15 @@ hooks из `settings.json`; `--purge-state` дополнительно снос�
   git-корень внешний, `forge/` — подкаталог).
 - **005** — накладные расходы `grounding-evidence` на каждый `read_file` (наблюдение,
   пренебрежимо на малых проектах).
+- **Из аудита 2026-09-28, НЕ закрыто** (подтверждено, но вне объёма правок):
+  гонка писателей `manifest.json` (read-modify-write без лока, общий `.json.tmp`, без
+  `fsync` — при параллельных `update.py` выживает одна запись из пяти; `events.jsonl`
+  под `flock` не теряет ничего); `grounding-evidence` слушает только Claude-алиасы
+  (`Read`/`ReadFile`), канон-имени `read_file` в наборе нет; `in_progress` не проставляет
+  никто автоматически, из-за чего мёртв интерлок отката (`rollback.py:421`);
+  `minor-defect-fix` дублирует триггеры `forgefix` при противоположном контракте доставки;
+  `.gigacode/` рядом с репо содержит PII (пути машины, прод-спека) и **уже в git-истории**,
+  `.gitignore` его не покрывает.
 
 `FORGE.md` как контекст **не инжектится** (`contextFileName` не задан) — 84 KB в каждую
 сессию не нужны. Если потребуется авто-контекст — сделать отдельный компактный `QWEN.md`.

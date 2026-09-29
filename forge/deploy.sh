@@ -118,7 +118,7 @@ for d in FORGE.md SKILLS-REGISTRY.md; do
 done
 echo "  ✓ deploy-local.sh и доки на месте"
 
-# 3b. слэш-команды forge (/forge, /forge-lite, …) — короткие точки входа в пайплайн.
+# 3b. слэш-команды forge (/forge, /forge-fix, …) — короткие точки входа в пайплайн.
 # Кладём в .gigacode/commands/ — рядом с hooks/ и skills/, откуда GigaCode-рантайм
 # (перелицованный Qwen с базовым каталогом .gigacode) читает свой конфиг: settings.json,
 # skills/, commands/. Единый .gigacode-корень, как и остальной задеплоенный харнес.

@@ -96,12 +96,22 @@ def _with_run_snapshot(root, cfg):
 
 # ── Маппинг mode → допустимые skill (для manifest.inputs.mode ↔ manifest.skill) ─────
 # Фича кладётся в ground/statements/<SKILL>/<slug>/; её manifest.inputs.mode должен
-# согласовываться с manifest.skill (защита от «запустили forgefix-фичу с mode=forgelite» —
-# разные ветки пайплайна, разные гейты/судьи, смешивать нельзя). mode отсутствует/None —
-# пропуск (default mode, обратная совместимость со старыми манифестами без inputs).
+# согласовываться с manifest.skill (защита от «запустили forgefix-фичу с
+# mode=feature-pipeline» — разные ветки пайплайна, разные гейты/судьи, смешивать нельзя).
+# mode отсутствует/None — пропуск (default mode, обратная совместимость со старыми
+# манифестами без inputs).
+#
+# Ключи — ПОЛЬЗОВАТЕЛЬСКИЙ словарь (`fix`/`full`), тот же, что в params-registry (enum
+# inputs.mode) и во всех брифах: `config.py set inputs.mode fix|full`. Раньше карта была
+# ключена именами скиллов (`forgefix`/`feature-pipeline`), которых не пишет НИ ОДИН бриф,
+# и предписанное значение отбивалось как unknown mode → rc 3 на резолве КАЖДОЙ фазы.
+# Имена скиллов оставлены синонимами: манифесты, заведённые до унификации, не должны
+# внезапно падать. Согласованность карты с реестром пинит test_mode_vocab_matches_registry.
 _MODE_TO_SKILLS = {
-    "forgefix":        {"forgefix"},
-    "forgelite":       {"forgelite"},
+    "fix":              {"forgefix"},
+    "full":             {"feature-pipeline"},
+    # legacy-синонимы (манифесты старых прогонов)
+    "forgefix":         {"forgefix"},
     "feature-pipeline": {"feature-pipeline"},
 }
 
@@ -223,7 +233,7 @@ def resolve_phases(project_root, feature_slug=None, gates_path=None):
         _path_skill, manifest = _find_manifest(project_root, feature_slug)
         if manifest:
             # manifest.inputs.mode ↔ manifest.skill: ловим «запустили forgefix-фичу с
-            # mode=forgelite» и подобные mismatch'и — разные ветки пайплайна, смешивать нельзя.
+            # mode=feature-pipeline» и подобные mismatch'и — разные ветки, смешивать нельзя.
             err = _validate_mode_skill(manifest)
             if err:
                 print(f"mode/skill mismatch для фичи '{feature_slug}': {err}",

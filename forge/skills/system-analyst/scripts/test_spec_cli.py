@@ -156,7 +156,8 @@ class SpecCliTest(unittest.TestCase):
                                       encoding="utf-8")
         rc, out = self._r("merge", "--all", "-y")
         self.assertEqual(rc, 3)                       # нужно решение пользователя
-        self.assertIn("пропущено: report-export", out)
+        self.assertIn("нужно решение — blocked-modify", out)
+        self.assertIn("--allow-modify", out)
         reqs = engine.parse_master(self.spec.read_text(encoding="utf-8"))
         self.assertIn("Журнал действий оператора", [r["title"] for r in reqs])  # вторая прошла
         self.assertIn("отчёт сформирован", self.spec.read_text(encoding="utf-8"))  # первая цела
@@ -245,6 +246,24 @@ class SpecCliTest(unittest.TestCase):
         self.assertNotIn("### REQ-", text)
         self.assertIn("#### Scenario: ", text)
         self.assertEqual(text.count("## Requirement: Журнал действий оператора"), 1)
+
+    def test_presence_is_undecidable_without_provenance(self):
+        """У мастера без провенанса присутствие НЕ определяется — и это не повод отказывать.
+
+        Гейт архивации стоит на состоянии дельты; блокируй мы по провенансу, такой проект
+        не смог бы заархивировать ничего и никогда."""
+        self.spec.parent.mkdir(parents=True)
+        self.spec.write_text("# Claims\n\n## Requirements\n\n## Changelog\n- 2026-01-01\n",
+                             encoding="utf-8")
+        self._set_grammar(requirement_kind="title-only", requirement_level=2,
+                          requirement_lead="Requirement", scenario_style="gwt-block",
+                          requirements_section="requirements", audit_section="changelog",
+                          provenance="none")
+        rc, out = self._r("merge", "report-export", "-y", "--no-archive")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("не определяется", out)
+        self.assertIn("new → merged", out)
+        self.assertEqual(spec_cli.delta_state(self.root, "report-export"), "merged")
 
     def test_project_grammar_merge_is_idempotent(self):
         self.test_project_grammar_merges_in_project_shape()
@@ -338,7 +357,7 @@ class FixDeltaInsideStoryTest(unittest.TestCase):
         self.assertEqual(rc, 2)
 
 
-# ── режим мастера + архивация доков на merge ───────────────────────────────
+# ── режим (--master-first) + отчёт + архивация доков на merge ──────────────
 
 FULL_STEPS = ["02-sdd", "02-design", "05-tests", "06-spec"]
 
@@ -353,16 +372,12 @@ def _manifest(skill: str, ids, **status):
 class MergeArchiveBase(unittest.TestCase):
     """Проект с ЗАВЕРШЁННЫМ прогоном: только у такого merge вправе убрать доки."""
 
-    MASTER_SOURCE = "delta-first"
-
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
-        cfg = json.loads(json.dumps(PIPELINE))
-        cfg["spec"]["master_source"] = self.MASTER_SOURCE
         (self.root / "ground").mkdir()
         (self.root / "ground" / "pipeline.json").write_text(
-            json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+            json.dumps(PIPELINE, ensure_ascii=False), encoding="utf-8")
         d = self.root / "docs" / "feature-pipeline" / "report-export"
         d.mkdir(parents=True)
         (d / "sdd.md").write_text(SDD_A, encoding="utf-8")
@@ -382,9 +397,21 @@ class MergeArchiveBase(unittest.TestCase):
         spec_cli._GRAMMAR_CACHE.pop(str(self.root), None)
         return run("--project-root", str(self.root), *argv)
 
+    def _second_delta(self, slug="audit-log", body=SDD_B):
+        """Вторая дельта с собственным завершённым прогоном — для --all."""
+        d = self.root / "docs" / "feature-pipeline" / slug
+        d.mkdir(parents=True)
+        (d / "sdd.md").write_text(body, encoding="utf-8")
+        st = self.root / "ground" / "statements" / "feature-pipeline" / slug
+        st.mkdir(parents=True)
+        (st / "manifest.json").write_text(
+            json.dumps(_manifest("feature-pipeline", FULL_STEPS), ensure_ascii=False),
+            encoding="utf-8")
+        return d
+
 
 class ArchiveOnMergeTest(MergeArchiveBase):
-    """delta-first: слили — и доки уехали с рабочего стола."""
+    """Дефолт (без флага): слили — и доки уехали с рабочего стола."""
 
     def test_merge_archives_docs(self):
         rc, out = self._r("merge", "report-export", "-y")
@@ -392,13 +419,14 @@ class ArchiveOnMergeTest(MergeArchiveBase):
         self.assertTrue(self.spec.exists())
         self.assertFalse(self.docs.exists())
         self.assertTrue((self.archived / "sdd.md").is_file())
-        self.assertIn("доки report-export", out)
+        self.assertIn("docs/archive/report-export", out.replace("\\", "/"))
 
     def test_no_archive_keeps_docs(self):
-        rc, _ = self._r("merge", "report-export", "-y", "--no-archive")
+        rc, out = self._r("merge", "report-export", "-y", "--no-archive")
         self.assertEqual(rc, 0)
         self.assertTrue((self.docs / "sdd.md").is_file())
         self.assertFalse(self.archived.exists())
+        self.assertIn("--no-archive", out)
 
     def test_dry_run_touches_nothing(self):
         rc, out = self._r("merge", "report-export", "-y", "--dry-run")
@@ -417,54 +445,120 @@ class ArchiveOnMergeTest(MergeArchiveBase):
         self.assertEqual(rc, 0)
         self.assertTrue(self.spec.exists())
         self.assertTrue((self.docs / "sdd.md").is_file())
-        self.assertIn("не заархивированы", out)
+        self.assertIn("остались на месте", out)
         self.assertIn("/forge-archive put report-export", out)
 
 
-class MasterFirstTest(MergeArchiveBase):
-    """master-first: sdd выделяется ИЗ мастера, поэтому merge сверяет и в мастер не пишет."""
+class MergeReportTest(MergeArchiveBase):
+    """Отчёт печатается ВСЕГДА и в обоих режимах — это и есть ответ «доехало ли до мастера»."""
 
-    MASTER_SOURCE = "master-first"
+    def test_report_shows_presence_before_and_after(self):
+        rc, out = self._r("merge", "report-export", "-y", "--no-archive")
+        self.assertEqual(rc, 0)
+        self.assertIn("Отчёт /forge-merge — слияние", out)
+        self.assertIn("в мастере:   нет → да", out)
+        self.assertIn("new → merged", out)
+        self.assertIn("Итог:", out)
 
-    def test_master_source_is_read_from_config(self):
-        self.assertEqual(spec_cli.master_source(self.root), "master-first")
+    def test_report_is_printed_in_verify_mode_too(self):
+        self._r("merge", "report-export", "-y", "--no-archive")
+        rc, out = self._r("merge", "report-export", "--master-first", "--no-archive")
+        self.assertEqual(rc, 0)
+        self.assertIn("Отчёт /forge-merge — сверка (--master-first)", out)
+        self.assertIn("в мастере:   да", out)
+        self.assertIn("сверено 1", out)
+
+    def test_json_carries_report_and_choices(self):
+        rc, out = self._r("merge", "report-export", "--master-first", "--json")
+        self.assertEqual(rc, 3)
+        data = json.loads(out)
+        self.assertEqual(data["mode"], "master-first")
+        self.assertEqual(data["exit"], 3)
+        f = data["features"][0]
+        self.assertEqual(f["slug"], "report-export")
+        self.assertIs(f["in_master_before"], False)
+        self.assertEqual(f["problem"], "divergence")
+        self.assertFalse(f["master_written"])
+        self.assertEqual([c["id"] for c in data["choices"]],
+                         ["align-delta", "merge-anyway", "archive-force"])
+
+    def test_all_reports_every_slug_on_mixed_outcome(self):
+        """Одна дельта сверена, другая разошлась: цикл не прерывается, в отчёте обе."""
+        self._second_delta()
+        self._r("merge", "report-export", "-y", "--no-archive")
+        rc, out = self._r("merge", "--all", "--master-first", "--no-archive")
+        self.assertEqual(rc, 3)
+        self.assertIn("report-export", out)
+        self.assertIn("audit-log", out)
+        self.assertIn("сверено 1", out)
+        self.assertIn("требует решения 1", out)
+
+
+class MasterFirstFlagTest(MergeArchiveBase):
+    """Режим задаёт ФЛАГ КОМАНДЫ, а не ключ конфига: сверка и архивация, без записи в мастер."""
 
     def test_divergence_exits_3_and_leaves_master_untouched(self):
-        rc, out = self._r("merge", "report-export", "-y")
+        rc, out = self._r("merge", "report-export", "--master-first")
         self.assertEqual(rc, 3)
-        self.assertFalse(self.spec.exists(), "master-first не имеет права писать мастер")
+        self.assertFalse(self.spec.exists(), "--master-first не имеет права писать мастер")
         self.assertTrue((self.docs / "sdd.md").is_file())
-        self.assertIn("расходится с мастером", out)
-        self.assertIn("--allow-merge", out)
+        self.assertIn("нужно решение — divergence", out)
+        self.assertIn("/forge-merge report-export", out)   # вариант «всё-таки слить»
 
-    def test_allow_merge_is_the_explicit_escape(self):
-        rc, _ = self._r("merge", "report-export", "-y", "--allow-merge", "--no-archive")
+    def test_without_flag_the_same_delta_is_merged(self):
+        """Эскейпа не нужно: запуск без флага И ЕСТЬ разрешение слить."""
+        rc, _ = self._r("merge", "report-export", "-y", "--no-archive")
         self.assertEqual(rc, 0)
         self.assertTrue(self.spec.exists())
 
     def test_matching_delta_is_verified_and_archived(self):
-        self._r("merge", "report-export", "-y", "--allow-merge", "--no-archive")
-        rc, out = self._r("merge", "report-export", "-y")
+        self._r("merge", "report-export", "-y", "--no-archive")
+        rc, out = self._r("merge", "report-export", "--master-first")
         self.assertEqual(rc, 0)
         self.assertIn("сверка прошла", out)
         self.assertFalse(self.docs.exists())
         self.assertTrue((self.archived / "sdd.md").is_file())
 
-    def test_status_calls_it_a_divergence(self):
-        rc, out = self._r("status")
-        self.assertEqual(rc, 0)
-        self.assertIn("мастер первичен", out)
-        self.assertIn("РАСХОЖДЕНИЕ", out)
-
-    def test_status_json_carries_mode(self):
-        rc, out = self._r("status", "--json")
-        self.assertEqual(json.loads(out)["master_source"], "master-first")
-
-    def test_unknown_value_falls_back_to_default(self):
+    def test_config_key_no_longer_switches_the_mode(self):
+        """Осевший в policy.json spec.master_source ничего не решает — режим только флагом."""
         cfg = json.loads((self.root / "ground" / "pipeline.json").read_text(encoding="utf-8"))
-        cfg["spec"]["master_source"] = "whatever"
+        cfg["spec"]["master_source"] = "master-first"
         (self.root / "ground" / "pipeline.json").write_text(json.dumps(cfg), encoding="utf-8")
-        self.assertEqual(spec_cli.master_source(self.root), "delta-first")
+        rc, _ = self._r("merge", "report-export", "-y", "--no-archive")
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.spec.exists(), "ключ конфига больше не переключает режим")
+
+    def test_diff_flags_divergence_too(self):
+        rc, out = self._r("diff", "report-export", "--master-first")
+        self.assertEqual(rc, 3)
+        self.assertIn("расхождение с мастером", out)
+
+
+class PostCheckGateTest(MergeArchiveBase):
+    """Доки уезжают только на ПОДТВЕРЖДЁННОМ merged — слову вызывающего архивация не верит."""
+
+    def test_unconfirmed_master_holds_the_docs(self):
+        real = spec_cli._state_of
+        spec_cli._state_of = lambda *a, **kw: "drifted"     # пост-проверка не подтвердила
+        try:
+            rc, out = self._r("merge", "report-export", "-y")
+        finally:
+            spec_cli._state_of = real
+        self.assertEqual(rc, 3)
+        self.assertTrue(self.spec.exists(), "мастер записан")
+        self.assertTrue((self.docs / "sdd.md").is_file(), "а доки обязаны остаться на месте")
+        self.assertFalse(self.archived.exists())
+        self.assertIn("нужно решение — not-confirmed", out)
+
+    def test_blocked_modify_holds_the_docs(self):
+        self._r("merge", "report-export", "-y", "--no-archive")
+        (self.docs / "sdd.md").write_text(SDD_A.replace("отчёт сформирован", "отчёт подписан"),
+                                          encoding="utf-8")
+        rc, out = self._r("merge", "report-export", "-y")
+        self.assertEqual(rc, 3)
+        self.assertIn("нужно решение — blocked-modify", out)
+        self.assertTrue((self.docs / "sdd.md").is_file())
+        self.assertFalse(self.archived.exists())
 
 
 class DeltaStateTest(MergeArchiveBase):

@@ -213,7 +213,7 @@ def main() -> int:
 
 def _resolve_skill_ns(project, explicit):
     """Namespace ground/statements/<skill>/ активного прогона (см. pipeline-state/_util).
-    Хардкод "feature-pipeline" уводил forgefix/forgelite в чужой каталог — молча."""
+    Хардкод "feature-pipeline" уводил forgefix в чужой каталог — молча."""
     if explicit:
         return str(explicit)
     try:

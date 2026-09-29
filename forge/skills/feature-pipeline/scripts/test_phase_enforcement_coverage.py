@@ -43,11 +43,6 @@ REPRESENTATIVE = {
     "04-build": ("04-build-T1", "Write", {"file_path": "src/main/java/X.java"}),
     "05-tests": ("05-tests",    "Bash",  {"command": "./gradlew test"}),
     "06-spec":  ("06-spec",     "Write", {"file_path": "docs/system-analysis/spec.md"}),
-    # Lite-ветка (forgelite): плоские subagent-фазы.
-    "lite-design": ("lite-design", "Write", {"file_path": "docs/feature-pipeline/f/tech-design.md"}),
-    "lite-red":    ("lite-red",    "Write", {"file_path": "src/test/java/XTest.java"}),
-    "lite-green":  ("lite-green",  "Write", {"file_path": "src/main/java/X.java"}),
-    "lite-verify": ("lite-verify", "Bash",  {"command": "./gradlew test"}),
     # Fix-ветка (forgefix): плоские subagent-фазы минорного дефекта.
     "fix-diag":    ("fix-diag",    "Write", {"file_path": "docs/feature-pipeline/f/task-plan.json"}),
     "fix-red":     ("fix-red",     "Write", {"file_path": "src/test/java/XTest.java"}),

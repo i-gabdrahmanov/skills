@@ -125,6 +125,16 @@ _CP_PATTERNS = [
     r"(?<![\w-])ground/approvals\.jsonl\b",
     r"(?<![\w-])ground/statements/[^/]+/[^/]+/manifest\.json\b",
     r"(?<![\w-])ground/statements/[^/]+/[^/]+/evals\.json\b",
+    # task-plan.json в statements/ — КАНОНИЧЕСКАЯ копия плана, по которой add_steps.py
+    # разворачивает шаги и tdd/eval-guard резолвят задачу по артефакту (_find_task_plan).
+    # Подделка плана = подделка состава шагов и привязки «файл → задача». Копия в docs/
+    # НЕ гейтится: это артефакт фазы дизайна, её пишет субагент тулом Write.
+    r"(?<![\w-])ground/statements/[^/]+/[^/]+/task-plan\.json\b",
+    # ground/inventory/** — инвентарь проекта (scan/*.json + grounding-excerpt.json):
+    # топливо детерминированных гейтов дизайна и источник, по которому check_taskplan
+    # сверяет reuses. Единственный легитимный писатель — system-analyst/ensure_inventory.py
+    # (Bash→python), тул Write тут не используется: прямая запись подделывает grounding.
+    r"(?<![\w-])ground/inventory(?:/|\b)",
     r"(?<![\w-])ground/statements/[^/]+/[^/]+/events\.jsonl\b",
     r"(?<![\w-])ground/statements/[^/]+/[^/]+/(?:_origins|gates|overrides|judges|journal|rollbacks)(?:/|\b)",
     r"(?<![\w-])ground/approvals(?:/|\b)",
@@ -139,7 +149,15 @@ _CP_PATTERNS = [
     # Легитимная запись — Edit в PR с явным обоснованием, не в проде.
     r"(?<![\w-])(?:hooks/|\.gigacode/hooks/)risk-policy\.json\b",
 ]
-_CP_RE = re.compile("|".join(_CP_PATTERNS))
+# IGNORECASE обязателен: ФС macOS/Windows регистронезависимы, а regex — нет. `write_file
+# GROUND/statements/<s>/<f>/manifest.json` попадал в ТОТ ЖЕ файл, но мимо гарда — это был
+# мастер-ключ к состоянию (без манифеста все хуки становятся noop).
+_CP_RE = re.compile("|".join(_CP_PATTERNS), re.IGNORECASE)
+# Живой control-plane: то, по чему хуки принимают решение ПРЯМО СЕЙЧАС. Удаление такой цели
+# гасит enforcement, поэтому rm/mv/touch по ней — deny. Архив завершённых прогонов сюда не
+# входит: его чистка — уборка, а не подделка (пин test_pass_archive_script_and_reads).
+_CP_LIVE_RE = re.compile(
+    "|".join(p for p in _CP_PATTERNS if "ground/archive" not in p), re.IGNORECASE)
 
 # ── Каталог САМОГО ХАРНЕСА (код форжа) — тоже control-plane ───────────────────────────
 # Артефакты фазы (sdd.md, task-plan.json, fix-plan.md) должны идти в docs-каталог ПРОЕКТА
@@ -185,6 +203,17 @@ def _pipeline_active(cwd: str) -> bool:
         return False
 
 
+def _unlink_hint(target: str) -> str:
+    return (
+        f"[state-write-guard] DENY: удаление/перенос control-plane-цели '{target}' запрещено.\n"
+        f"  Без manifest.json фазовая машина не резолвится и ВСЕ хуки становятся noop — снести "
+        f"состояние дешевле, чем его подделать, поэтому это тот же класс запрета, что и запись.\n"
+        f"  Нужно начать прогон заново — pipeline-state/scripts/init.py --force (архивирует "
+        f"текущий стейт, а не теряет его). Нужно откатить шаги — rollback.py (R4, по approval). "
+        f"Уборка завершённых прогонов — archive.py; ground/archive/ чистить можно."
+    )
+
+
 def _harness_hint(target: str) -> str:
     return (
         f"[state-write-guard] DENY: запись в каталог ХАРНЕСА '{target}' запрещена во время "
@@ -205,6 +234,12 @@ _CMD_SEP_RE = re.compile(r"\|\||&&|[;|&\n]")
 _REDIR_TOK_RE = re.compile(r"^[0-9]*&?(>>?|<>)(.*)$")
 _COPY_CMDS = ("cp", "mv", "install", "rsync")
 _MULTI_TARGET_CMDS = ("tee", "truncate")   # пишут во все свои файлы всегда
+# Удаление/обнуление/перенос/«подкрутка mtime» — отдельный класс целей, разбирается
+# _unlink_targets. Это самый дешёвый способ снять enforcement: без manifest.json фазовая
+# машина не резолвится и ВСЕ хуки становятся noop, а `touch` чужого манифеста перехватывает
+# «активную фичу» (её резолвят по самому свежему mtime). У `mv` сюда идёт ИСТОЧНИК —
+# назначение остаётся обычной записью через _COPY_CMDS.
+_UNLINK_CMDS = ("rm", "unlink", "shred", "touch", "mv")
 _INPLACE_CMDS = ("sed", "perl", "ruby")    # пишут в файл ТОЛЬКО с -i (иначе поток на stdout)
 # inline-python: пишущий вызов в тексте команды. Есть такой — целями считаем ВСЕ строковые
 # литералы команды (какой из них путь, из shell не разобрать; лучше перебдеть).
@@ -264,6 +299,27 @@ def _write_targets(cmd: str) -> list[str]:
             if a.startswith("of="):        # dd of=<file>
                 out.append(a[3:])
     return [t for t in out if t]
+
+def _unlink_targets(cmd: str) -> list[str]:
+    """Пути, которые команда УДАЛЯЕТ/обнуляет/уносит (rm, unlink, shred, touch, mv-источник).
+
+    Отдельно от _write_targets, потому что проверяются по более узкому множеству: живой
+    control-plane. Архив завершённых прогонов (ground/archive/) под это не попадает —
+    его уборка легитимна, гейты из него ничего не читают."""
+    out: list[str] = []
+    for seg in _CMD_SEP_RE.split(cmd.replace(">|", ">")):
+        toks = _tokens(seg)
+        if not toks:
+            continue
+        name = posixpath.basename(toks[0])
+        if name not in _UNLINK_CMDS:
+            continue
+        files = [a for a in toks[1:] if not a.startswith("-")]
+        if name == "mv":
+            files = files[:-1]             # последний операнд mv — назначение, не источник
+        out += files
+    return [t for t in out if t]
+
 
 # Чекпойнт-refs (refs/forge/*) — control-plane в git: точки восстановления rollback.py.
 # `git update-ref` на них — подделка чекпойнта (перенаправить откат на выгодный коммит),
@@ -334,6 +390,10 @@ def main() -> int:
                       "Ручная правка refs подделывает точку восстановления rollback.",
                       file=sys.stderr)
                 return 2
+            for t in (_collapse(x) for x in _unlink_targets(cmd)):
+                if _CP_LIVE_RE.search(t):
+                    print(_unlink_hint(t), file=sys.stderr)
+                    return 2
             targets = [_collapse(t) for t in _write_targets(cmd)]
             for t in targets:
                 if _CP_RE.search(t):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Тесты check_architecture.py — ArchUnit-lite гейт слоёв (P2-9)."""
+"""Тесты check_architecture.py — облегчённый ArchUnit-гейт слоёв (P2-9)."""
 from __future__ import annotations
 
 import sys

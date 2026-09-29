@@ -97,7 +97,7 @@ build-файлов) и проверяет их против **архитекту
 `check_architecture` читает его дефолтным путём через резолвер):
 ```bash
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.py \
-    --root "<project>" --pipeline-config "<project>/ground/pipeline.json"
+    --root "<project>" --pipeline-config "<project>/ground/policy.json"
 ```
 - **exit 0** — новых межмодульных зависимостей нет, либо связка уже принята в проекте (модули
   соединять МОЖНО — по правилам архитектуры), либо ребро в allow-list. Продолжай.
@@ -121,11 +121,11 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.p
 Гоняй ПОСЛЕ тестов, до закрытия `05-tests`. Оба по умолчанию `false`; включаются в `pipeline.json`.
 
 - **Архитектура — строгий режим** (`quality.architecture_check: true`) — добавляет `--strict`
-  к гейту §8.3c: ArchUnit-lite слои (package_root, чистота домена, запрет entity→service /
+  к гейту §8.3c: облегчённый ArchUnit — слои (package_root, чистота домена, запрет entity→service /
   controller→repository) валят и на warning-уровне:
   ```bash
   python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.py \
-      --root "<project>" --pipeline-config "<project>/ground/pipeline.json" --strict
+      --root "<project>" --pipeline-config "<project>/ground/policy.json" --strict
   ```
 - **Тавтологичные тесты** — статический детектор пустых/тавтологичных тестов
   (`assertTrue(true)`, пустое тело, нет ассертов/verify). ВШИТ floor'ом в coverage-judge

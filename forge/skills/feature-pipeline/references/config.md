@@ -1,24 +1,37 @@
-# Параметр-стор конвейера: `<project>/ground/pipeline.json`
+# Параметр-стор конвейера: `<project>/ground/policy.json`
 
 Единое место для всех параметров, от которых зависит конвейер в конкретном проекте.
 Делает конвейер **переносимым**: скиллы не хардкодят пути/пороги/конвенции, а читают их
 из файла, который лежит в самом проекте и версионируется вместе с кодом.
 
+> **v2.** Конфиг разделён на два слоя: project-wide — `<project>/ground/policy.json`
+> (`$schema: "feature-pipeline/config@2"`), per-feature решения прогона —
+> `inputs.*`/`decisions.*` в `manifest.json` активной фичи. Единый v1-файл
+> `ground/pipeline.json` снят: он ещё дочитывается dual-read шимом ради старых проектов,
+> но не создаётся и источником правды не является. Ниже `pipeline.json` встречается только
+> там, где речь о legacy.
+
 ## Где живёт и как разрешается
 
 | Слой | Путь | Роль |
 |---|---|---|
-| **Параметры проекта** | `<project>/ground/pipeline.json` | **источник правды** для всех скиллов |
+| **Параметры проекта** | `<project>/ground/policy.json` | **источник правды** для всех скиллов |
+| **Решения прогона** | `manifest.json` фичи (`inputs.*`, `decisions.*`) | что решили именно в этой задаче |
+| Legacy | `<project>/ground/pipeline.json` | только чтение, для проектов до миграции |
 | Рантайм-оверрайд | аргумент в диалоге | разовое переопределение на прогон |
 
 Идентичность проекта = текущая директория (или `git rev-parse --show-toplevel`). Реестра
 по абсолютным путям нет — поэтому ничего не ломается при переезде/переименовании проекта.
 
+**Прогон идёт по снимку.** `init.py` кладёт снимок политики в манифест, и читатели видят
+`policy_snapshot` поверх файла. Правка `policy.json` посреди прогона применится со
+СЛЕДУЮЩЕГО; применить к идущему — `config.py repin` (R4, approval).
+
 ## Как скиллы это потребляют
 
-Любой скилл читает `<project>/ground/pipeline.json` **напрямую** (обычный JSON, через
-Read). Скрипт не нужен для чтения. Если файла нет — скилл откатывается к прежнему
-поведению (спросить у пользователя). Что берёт каждый:
+Скиллы читают эффективный конфиг через `_config_loader.load_project_config` (он и делает
+оверлей снимка). Прямое чтение файла — только для справки. Если конфига нет — скилл
+откатывается к прежнему поведению (спросить у пользователя). Что берёт каждый:
 
 | Скилл | Поля |
 |---|---|
@@ -44,7 +57,7 @@ Read). Скрипт не нужен для чтения. Если файла н�
 Каждая фаза имеет:
 - `id` — стабильный идентификатор (используется в pipeline-state manifest)
 - `skill` — какой скилл отвечает за фазу (null если встроенная)
-- `enabled_by` — условие включения (путь к полю в pipeline.json или `gates.*`)
+- `enabled_by` — условие включения (путь к полю в `policy.json` или `gates.*`)
 - `skip_if` — условие пропуска (если уже выполнено, grounding.exists и т.п.)
 - `gates` — список гейтов, требующих подтверждения пользователя
 - `description` — человекочитаемое описание
@@ -142,7 +155,7 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
     "eval_enabled": true,            // Eval-Driven Development: eval-guard хук блокирует
                                       // запись в src/main/ пока eval'ы задачи не пройдены
     "eval_threshold": 0.95,          // Порог прохождения eval'ов по умолчанию
-    "architecture_check": false,     // вкл. ArchUnit-lite гейт слоёв в verify (check_architecture.py)
+    "architecture_check": false,     // вкл. облегчённый ArchUnit-гейт слоёв в verify (check_architecture.py)
     "tautology_check": false,        // вкл. детектор пустых/тавтологичных тестов (check_tautological_tests.py)
     "traceability_check": false      // вкл. сквозной judge трассируемости (check_traceability.py)
   },
@@ -177,7 +190,6 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
     "enforce_couplings": false       // новая межмодульная связка требует accepted ADR (05-verify)
   },
   "spec": {                          // ПОВЕДЕНИЕ требований-мастера (где он лежит — в docs.master)
-    "master_source": "delta-first",  // delta-first | master-first — кто первичен, дельта или мастер
     "id_prefix": "REQ",              // префикс стабильных ID требований (### REQ-0007: ...)
     "drift": "warn",                 // off | warn — реакция spec-judge на неслитую дельту
     "scenario_floor": true,          // каждое требование обязано иметь ≥1 Given-When-Then
@@ -205,7 +217,7 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
 }
 ```
 
-## Гейт архитектуры (ArchUnit-lite, `quality.architecture_check`)
+## Гейт архитектуры (облегчённый ArchUnit, `quality.architecture_check`)
 
 Детерминированная проверка слоёв БЕЗ запуска Java/ArchUnit — статический разбор изменённых
 `.java` (`check_architecture.py`). Ловит то, что покрытие и компиляция не видят:
@@ -223,7 +235,7 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
 ```bash
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.py \
     --root <project> --base <branch-base> \
-    --pipeline-config <project>/ground/pipeline.json [--strict] [--json]
+    --pipeline-config <project>/ground/policy.json [--strict] [--json]
 # exit 2 → есть нарушения слоёв (error); --strict делает warning тоже блокирующими.
 ```
 
@@ -273,7 +285,7 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_traceability.p
 явная пометка «не применимо: <причина>» — раздел закрывают осознанно, а не молча выпускают.
 Меняется через `config-helper` (`config.py set sdd.security_gate <hard|applicability|soft>`);
 `run_judge.py sdd` прокидывает путь конфига в гейт, автономный вызов гейта берёт политику из
-`<cwd>/ground/pipeline.json` или дефолт.
+`<cwd>/ground/policy.json` или дефолт.
 
 ## Гейт тавтологичных тестов (`quality.tautology_check`)
 
@@ -306,7 +318,7 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_tautological_t
   `feature-pipeline` / `system-analysis`).
 - В режиме `separate-repo` спецадаптер и system-analyst работают в `repo_path` через
   `git -C <repo_path>` (отдельная ветка/коммит спеки).
-- **Два способа настроить:** (1) прописать `docs` в `ground/pipeline.json`; (2) просто сказать
+- **Два способа настроить:** (1) прописать `docs` в `ground/policy.json`; (2) просто сказать
   агенту, куда класть артефакты — он впишет `docs` в нужном формате (init/обновление конфига),
   после чего весь пайплайн (скрипты, хуки, судьи) подхватит расположение из резолвера.
 - **Legacy:** старые ключи `docs.feature_docs_path` / `docs.system_analysis_path` (полные
@@ -363,7 +375,6 @@ Git-политика (forge-no-delivery): forge **пишет** обновлен�
 
 | Поле | Значение |
 |---|---|
-| `spec.master_source` | `delta-first` \| `master-first` — кто первичен (см. ниже). Дефолт `delta-first` |
 | `spec.id_prefix` | префикс стабильных ID требований мастера (`### REQ-0007: <название>`). Дефолт `REQ` |
 | `spec.drift` | `off` \| `warn` — что делает spec-judge, если дельта фичи не слита в мастер. Дефолт `warn` (сообщает, не блокирует фазу) |
 | `spec.scenario_floor` | каждое требование обязано нести ≥1 сценарий Given-When-Then (`check_master_spec`). Дефолт true |
@@ -406,34 +417,36 @@ Git-политика (forge-no-delivery): forge **пишет** обновлен�
 <slug>` (предпросмотр — `/forge-spec diff <slug>`, состояние — `/forge-spec status`). Запись идёт
 в рабочее дерево клона мастер-репо, коммит/push — на пользователе (forge-no-delivery).
 
-### Кто первичен: дельта или мастер (`spec.master_source`)
+### Режим `/forge-merge`: слияние или сверка (флаг, не конфиг)
 
 Форж по умолчанию собирает мастер ИЗ дельт: фича пишет `sdd.md`, `/forge-merge` дописывает её
-требования в `specs/<cap>/spec.md`. Это `delta-first`.
+требования в `specs/<cap>/spec.md`.
 
 Бывает наоборот: мастер-спеку ведёт аналитик, и `sdd.md` фичи ВЫДЕЛЯЕТСЯ из неё. Тогда дописывать
-мастер дельтой — значит писать в источник из его же производной. Режим `master-first` переключает
-`/forge-merge` со слияния на **сверку**: план слияния обязан быть пустым, а любая операция
+мастер дельтой — значит писать в источник из его же производной. Флаг `--master-first` переключает
+команду со слияния на **сверку**: план слияния обязан быть пустым, а любая операция
 (`+` — требования нет в мастере, `~` — содержимое разошлось) считается расхождением и даёт
-exit 3. Мастер при этом не трогается вообще; дельту приводят к мастеру, а не наоборот. Если
-требование действительно введено дельтой — явный `--allow-merge` на одну команду.
+exit 3. Мастер при этом не трогается вообще; дельту приводят к мастеру, а не наоборот.
 
 ```bash
-config.py --project <root> set spec.master_source master-first
+/forge-merge STOR-100 --master-first     # сверить и заархивировать, в мастер не писать
+/forge-merge STOR-100                    # слить дельту в мастер (дефолт)
 ```
 
-> `policy.json` пишется всегда, но ИДУЩИЙ прогон его правку не увидит: `init.py` кладёт снимок
-> политики в манифест, и прогон до конца идёт по нему (общее правило для ВСЕХ project-wide
-> ключей, не только этого). Так шаги одного прогона не могут закрыться под разными правилами.
-> `config.py set` в этом случае вернёт exit 0 и предупреждение; применить к идущему прогону —
-> `config.py repin --skill <S> --feature <F>`. Чище — ставить режим до старта фичи.
+Ключа конфига у режима нет и не должно быть: это выбор на одну операцию. Ручка в `policy.json`
+означала бы снимок политики в манифесте прогона и `config.py repin` ради смены режима, а
+отдельный эскейп (`--allow-merge`) — второй способ сказать ровно то, что уже говорит запуск
+без флага. Осевший в старом `policy.json` `spec.master_source` ничего не переключает.
 
-`/forge-spec status` в этом режиме так и пишет — «режим: мастер первичен», и называет несведённые
-дельты расхождениями, а не «не слито».
+**Проверка присутствия задачи в мастере идёт в любом режиме** — до операции и ещё раз после
+записи — и печатается отчётом (`в мастере: нет → да`, состояние дельты, что стало с мастером и
+с доками). Доки уезжают в архив только на пересчитанном `merged`: слову вызывающего архивация
+не верит. Всё, что не сошлось, — exit 3 с диагнозом и списком вариантов (в `--json` те же
+варианты лежат в `choices[]`), а выбирает пользователь.
 
 ### Архив завершённых фич (`docs.archive_subdir`)
 
-По успеху `/forge-merge` (слияния — или сверки в `master-first`) завершённая фича уезжает в
+По успеху `/forge-merge` (слияния — или сверки при `--master-first`) завершённая фича уезжает в
 архив ОБЕИМИ половинами:
 
 | Что | Откуда | Куда |
@@ -467,9 +480,9 @@ config.py --project <root> set spec.master_source master-first
 ## Обратная совместимость
 
 Старый `~/.gigacode/skills/minor-defect-fix/config.json` (path-keyed `docs_path`) остаётся
-рабочим. `feature-pipeline` при наличии `pipeline.json` берёт `docs.docs_path` из него;
+рабочим. `feature-pipeline` при наличии конфига берёт `docs.docs_path` из него;
 если старый конфиг содержит запись для проекта — импортирует её. Миграция остальных скиллов
-на `pipeline.json` — постепенная, ломать ничего не нужно.
+на `policy.json` — постепенная, ломать ничего не нужно.
 
 ## Переносимость скиллов (не параметр, а упаковка)
 
@@ -495,7 +508,7 @@ coverage воркфлоу). `deploy.sh` раскладывает ВСЕ скил
       "id": "compile-t1",             // уникальный ID eval'а
       "type": "compile",              // compile | coverage | test_pass
       "task_id": "T1",                // привязка к задаче из task-plan
-      "command": "./gradlew compileJava", // команда из pipeline.json (Maven: "mvn -q compile")
+      "command": "./gradlew compileJava", // команда из policy.json (Maven: "mvn -q compile")
       "threshold": 0,                 // для compile: 0 (просто exit code)
       "binary": true,
       "description": "Проект компилируется"
@@ -512,7 +525,7 @@ coverage воркфлоу). `deploy.sh` раскладывает ВСЕ скил
       "id": "test_pass-t1",
       "type": "test_pass",
       "task_id": "T1",
-      "command": "./gradlew test",        // команда из pipeline.json (Maven: "mvn -q test ...")
+      "command": "./gradlew test",        // команда из policy.json (Maven: "mvn -q test ...")
       "threshold": 0,                      // бинарный gate (exit-код), не ratio
       "binary": true,
       "description": "Вся тест-сюита зелёная после задачи T1 (регрессия)"

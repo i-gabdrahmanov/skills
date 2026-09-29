@@ -185,6 +185,20 @@ def main() -> int:
     if not mp or not mp.exists():
         return 0
 
+    # 3a. Ветка прогона. EDD существует ТОЛЬКО в full-ветке: фазу 02-eval-plan (а значит и
+    # eval-plan.json) заводит один feature-pipeline, у fix её нет по дизайну.
+    # Раньше это выражалось окольно — брифы ДО init.py писали project-wide
+    # `quality.eval_enabled=false`, только чтобы этот хук молчал. Плата несоразмерная: тот
+    # же флаг снимает EDD-гейт и в full-ветке, оставался доступен модели штатной командой,
+    # и выключался не на прогон, а на ВЕСЬ проект — включая соседние прогоны. Ветку хук
+    # определяет сам: namespace стейта (ground/statements/<skill>/<feature>/manifest.json)
+    # плюс префикс активного шага.
+    if mp.parent.parent.name not in ("", "feature-pipeline"):
+        return 0
+    active_step = R.current_step_id(root) if hasattr(R, "current_step_id") else None
+    if isinstance(active_step, str) and active_step.startswith("fix-"):
+        return 0
+
     manifest = json.loads(mp.read_text(encoding="utf-8"))
     # Слаг: top-level `feature` (его ВСЕГДА пишет init.py) → каталог стейта → context.feature.
     # Раньше читался только `context.feature`, а `--context` у init.py опционален (дефолт `{}`):
@@ -248,8 +262,9 @@ def main() -> int:
             f"Eval-Driven Development: для задачи {current_task_id} не пройдены (или не прогонялись) "
             f"eval'ы: {failed_evals}. Прогони execution-gate: "
             f"python3 {_runner_script()} "
-            f"--project . --feature {feature_slug} --task {current_task_id}  "
-            f"(или отключи quality.eval_enabled в pipeline.json)."
+            f"--project . --feature {feature_slug} --task {current_task_id}.\n"
+            f"  Прогони гейт, а не снимай его: `quality.eval_enabled` — R4-класс (нужен "
+            f"approval), и отключение действует на ВЕСЬ проект, включая соседние прогоны."
         )
 
     return 0

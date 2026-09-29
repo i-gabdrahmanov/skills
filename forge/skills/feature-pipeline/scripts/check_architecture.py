@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""check_architecture.py — детерминированный ArchUnit-lite гейт слоёв (P2-9).
+"""check_architecture.py — детерминированный облегчённый ArchUnit-гейт слоёв (P2-9).
 
 Покрытие и компиляция не видят архитектурных нарушений: сущность, лезущая в сервис; контроллер,
 дёргающий репозиторий напрямую; класс не в своём пакете; пакет не под `package_root`. Этот гейт
@@ -590,7 +590,7 @@ def check_module_deps(root: Path, base: str, mode: str, arch_ground: "dict | Non
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Deterministic ArchUnit-lite layering gate.")
+    ap = argparse.ArgumentParser(description="Deterministic lightweight ArchUnit layering gate.")
     ap.add_argument("--root", default=".")
     ap.add_argument("--base", default="HEAD")
     ap.add_argument("--changed", help="явный список .java (через ,/пробел) — минует git")

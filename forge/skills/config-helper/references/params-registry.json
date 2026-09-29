@@ -121,6 +121,41 @@
       ]
     },
     {
+      "id": "quality.block_jpa_test",
+      "file": "pipeline",
+      "path": "quality.block_jpa_test",
+      "type": "bool",
+      "default": true,
+      "category": "quality",
+      "sensitive": false,
+      "title": "Запрет @DataJpaTest/@SpringBootTest при test_layer=service-unit",
+      "description": "ЖИВАЯ ручка tdd-guard: при test_layer=service-unit запись теста с @DataJpaTest/@SpringBootTest блокируется (они падают initializationError). false разрешает их точечно, не трогая test_layer. Ключ читает hooks/tdd-guard.py и на него же указывает его DENY-баннер — без записи в реестре `config.py set` возвращал exit 3, и санкционированного пути разблокировки не существовало",
+      "aliases": [
+        "block_jpa_test",
+        "jpa тесты",
+        "DataJpaTest",
+        "разреши jpa-тесты",
+        "SpringBootTest"
+      ]
+    },
+    {
+      "id": "quality.tdd_integration_skip",
+      "file": "pipeline",
+      "path": "quality.tdd_integration_skip",
+      "type": "bool",
+      "default": true,
+      "category": "quality",
+      "sensitive": false,
+      "title": "Пропуск TDD-цикла для интеграционных тестов",
+      "description": "ЖИВАЯ ручка tdd-guard: интеграционный тест (@SpringBootTest/@Testcontainers/@EmbeddedKafka/@DataJpaTest/@DataMongoTest/@JdbcTest) не обязан идти через RED. false требует RED и от них. Читается hooks/tdd-guard.py",
+      "aliases": [
+        "tdd_integration_skip",
+        "интеграционные тесты tdd",
+        "Testcontainers",
+        "пропусти tdd для интеграционных"
+      ]
+    },
+    {
       "id": "quality.test_layer",
       "file": "pipeline",
       "path": "quality.test_layer",
@@ -277,7 +312,7 @@
       "default": false,
       "category": "quality",
       "sensitive": false,
-      "title": "Гейт архитектуры (ArchUnit-lite)",
+      "title": "Гейт архитектуры (облегчённый ArchUnit)",
       "description": "Включить детерминированный гейт слоёв check_architecture.py в фазе verify: package_root, размещение классов по слоям, запрет зависимостей (entity→service и т.п.). Без Java/ArchUnit",
       "aliases": [
         "архитектура",
@@ -446,20 +481,18 @@
       "type": "enum",
       "enum": [
         "fix",
-        "lite",
         "full"
       ],
       "default": "",
       "category": "pipeline",
       "sensitive": false,
       "title": "Режим пайплайна (выбранный путь)",
-      "description": "Выбранный путь: fix (минорный дефект, forgefix — спека правится точечно) | lite (готовая Jira-подзадача по существующей спеке, forgelite) | full (фича с нуля, feature-pipeline). v2: пишется в manifest.json активной фичи (inputs.mode). Записывает router — для аудита и headless-предзаписи выбора. ДЕЙСТВУЕТ В ПАРЕ С decisions.mode_task: manifest живёт одну фичу, и mode_task пин-щитит от «липкого режима» между прогонами одной и той же feature. legacy: читается через dual-read из pipeline.mode в pipeline.json",
+      "description": "Выбранный путь: fix (минорный дефект, forgefix — спека правится точечно) | full (фича с нуля, feature-pipeline). v2: пишется в manifest.json активной фичи (inputs.mode). Записывает router — для аудита и headless-предзаписи выбора. ДЕЙСТВУЕТ В ПАРЕ С decisions.mode_task: manifest живёт одну фичу, и mode_task пин-щитит от «липкого режима» между прогонами одной и той же feature. legacy: читается через dual-read из pipeline.mode в pipeline.json",
       "aliases": [
         "режим",
         "путь",
         "mode",
-        "fix/lite/full",
-        "lite/full"
+        "fix/full"
       ],
       "deprecated_aliases": [
         "pipeline.mode"
@@ -537,7 +570,7 @@
       "category": "pipeline",
       "sensitive": false,
       "title": "Путь к спецификации (source of truth)",
-      "description": "Путь к готовой спеке/SDD, по которой строится tech-design (lite+design). v2: пишется в manifest.json активной фичи (inputs.spec). Source of truth — required_decisions для фазы lite-design (gate-guard блокирует запись фазы без него). legacy: читается через dual-read из sources.spec в pipeline.json",
+      "description": "Путь к готовой спеке/SDD, по которой строится tech-design. v2: пишется в manifest.json активной фичи (inputs.spec). legacy: читается через dual-read из sources.spec в pipeline.json",
       "aliases": [
         "спека",
         "спецификация",
@@ -781,29 +814,6 @@
         "префикс требований",
         "id prefix",
         "req prefix"
-      ]
-    },
-    {
-      "id": "spec.master_source",
-      "file": "pipeline",
-      "path": "spec.master_source",
-      "type": "enum",
-      "enum": [
-        "delta-first",
-        "master-first"
-      ],
-      "default": "delta-first",
-      "category": "docs",
-      "sensitive": false,
-      "title": "Кто первичен — дельта или мастер",
-      "description": "delta-first (дефолт) — мастер собирается ИЗ дельт фич: /forge-merge дописывает в него требования. master-first — мастер пишет аналитик ДО sdd.md, и дельта выделяется из мастера; тогда /forge-merge в мастер не пишет, а СВЕРЯЕТ (план слияния обязан быть пустым, любое расхождение — exit 3). Дописать мастер в этом режиме можно только явным --allow-merge",
-      "aliases": [
-        "мастер первичен",
-        "сверка спеки",
-        "master first",
-        "master source",
-        "кто первичен",
-        "verify spec"
       ]
     },
     {

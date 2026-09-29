@@ -17,7 +17,7 @@
 ```bash
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/build_evals_from_design.py \
     "<папка фичи>/task-plan.json" \
-    --pipeline-config "<project>/ground/pipeline.json" \
+    --pipeline-config "<project>/ground/policy.json" \
     --coverage-script "<project>/.gigacode/skills/minor-defect-fix/scripts/check_coverage.py"
 ```
 
