@@ -319,7 +319,7 @@ python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <to
 (02-sdd, 02-design, 02-eval-plan, 03-jira), обязательно передавай `--artifacts '{"key":"path"}'`.
 Перед синтезаторами/дизайнером — выжимки через
 `--excerpt-of` (тоже с `--feature`). Не храни в state секреты и сами MD-файлы.
-Хуки (`gate-guard`/`phase-gate`) сами находят АКТИВНУЮ фичу как самый свежий манифест — отдельно
+Хуки (`gate-guard`/`phase-gate`) сами находят АКТИВНУЮ фичу как свежайший ЖИВОЙ манифест — отдельно
 передавать им ничего не нужно.
 
 ### 0.6 Правило ре-итерации (режим исправления после judge FAIL)

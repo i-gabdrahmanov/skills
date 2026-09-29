@@ -25,7 +25,7 @@ import warnings
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _project import skills_dir, resolve_skill_path, gigacode_home
+from _project import skills_dir, resolve_skill_path, gigacode_home, resolve_active_run
 
 _POLICY_PATH = gigacode_home() / "hooks" / "risk-policy.json"
 
@@ -255,7 +255,7 @@ def config_get(root: Path, dotpath: str,
 
 
 def active_step_id(root: Path) -> str | None:
-    """id активного (in_progress) шага самого свежего манифеста активной фичи.
+    """id активного (in_progress) шага манифеста активной фичи (resolve_active_run).
     Единый резолвер для хуков (был скопирован в sod-enforcer/inline-phase-guard)."""
     p = active_manifest(root)
     if not p:
@@ -512,31 +512,19 @@ def agent_cap(agent_type: str | None) -> str | None:
 
 # ── проверки выполнения требований уровня ─────────────────────────────────────────────
 def active_manifest(root: Path) -> Path | None:
-    """Активная фича = самый свежий manifest под statements/*/*/ ПО ВСЕМ skill-namespace
+    """Активная фича = свежайший ЖИВОЙ manifest под statements/*/*/ ПО ВСЕМ skill-namespace
     (feature-pipeline, forgefix), кроме archived. Резолв glob-овый, а не по списку
     имён, поэтому новая ветка forge подхватывается хуками без правки этого модуля. Так один
-    общий control-plane обслуживает full- и fix-ветку: активна та, чей manifest свежее."""
-    base = root / "ground" / "statements"
-    newest, mt = None, -1.0
+    общий control-plane обслуживает full- и fix-ветку.
+
+    Тело — в _project.resolve_active_run: предикат «кто активен» обязан быть ОДИН на хуки,
+    config.py и archive.py. Здесь была третья копия обхода, и она (как и две остальных)
+    брала просто свежайший mtime — брошенный прогон тем самым перехватывал все гейты на себя.
+    Фолбэк на None сохранён: без активной фичи хуки обязаны быть noop, а не падать."""
     try:
-        for skill_dir in base.iterdir():
-            if not skill_dir.is_dir():
-                continue
-            for d in skill_dir.iterdir():
-                if not d.is_dir() or d.name == "archived":
-                    continue
-                mp = d / "manifest.json"
-                if not mp.exists():
-                    continue
-                try:
-                    m = mp.stat().st_mtime
-                except OSError:
-                    continue
-                if m > mt:
-                    newest, mt = mp, m
+        return resolve_active_run(Path(root))["path"]
     except Exception:
         return None
-    return newest
 
 
 def manifest_status(root: Path) -> dict:
@@ -555,7 +543,7 @@ def manifest_exists(root: Path) -> bool:
 
 
 def active_feature_name(root: Path) -> str | None:
-    """Слаг активной фичи (каталог самого свежего манифеста ПО ВСЕМ namespace).
+    """Слаг активной фичи (каталог манифеста из resolve_active_run — ПО ВСЕМ namespace).
     В отличие от _project.active_feature смотрит все ветки (fix/full), а не только
     feature-pipeline — им пользуются гейты, привязывающие approval-маркер к фиче."""
     p = active_manifest(root)

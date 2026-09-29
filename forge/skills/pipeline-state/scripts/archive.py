@@ -9,15 +9,21 @@
 <docs_base>/feature-pipeline/ (spec_cli._features), и архив внутри этого каталога продолжал бы
 попадать в `/forge-spec status`: заархивированное требование предлагалось бы слить повторно.
 
+`put` уносит ОБЕ половины и требует каталог доков. Для прогона, умершего ДО первого артефакта,
+доков нет по определению — его убирает `abandon`: только стейт, туда же в ground/archive/, с
+обязательной причиной. Без него такой прогон был неубираем ничем (put отказывал на доках,
+status его не показывал, руками нельзя — state-write-guard) и продолжал числиться активным.
+
 Уносится ДВА каталога: доки (<docs_base>/feature-pipeline/<слаг>) и стейт прогона
 (ground/statements/<skill>/<feature>/ → ground/archive/<skill>/<feature>/). Второй — тоже
 control-plane, поэтому archive.py встаёт в один ряд с init.py/rollback.py как санкционированный
 писатель стейта (BLOCKER-1): произвольный `mv` по этим путям режет state-write-guard.
 
-Зачем уносить стейт. Активная фича резолвится ПО САМОМУ СВЕЖЕМУ манифесту в ground/statements/*/*/
-(risk_ladder.active_manifest) — завершённые прогоны остаются в этой выборке и тем повышают шанс,
-что гейты применятся по чужому стейту (принятый риск в FORGE.md). Из ground/archive/ прогон
-выпадает у всех резолверов сразу.
+Зачем уносить стейт. Активная фича резолвится обходом ground/statements/*/*/
+(_project.resolve_active_run): свежайший ЖИВОЙ манифест. Завершённый прогон из выборки живых
+выпадает сам, но БРОШЕННЫЙ — нет (шаги остались pending, по статусу он живой), и пока он лежит
+в statements/, гейты рискуют примениться по чужому стейту. Из ground/archive/ прогон выпадает
+у всех резолверов сразу — поэтому и `put`, и `abandon` переносят стейт, а не только доки.
 
 Git-чекпойнты фичи (refs/forge/checkpoints/<feature>/*) при архивации УДАЛЯЮТСЯ: это точки
 восстановления для rollback.py, а откатывать завершённое некуда. Их restore не вернёт — число
@@ -30,6 +36,8 @@ Usage:
     python3 archive.py [--project <root>] status [--json]
     python3 archive.py [--project <root>] put <slug> [--skill S] [--dry-run]
                                                      [--force --reason R] [--json]
+    python3 archive.py [--project <root>] abandon <feature> [--skill S] --reason R
+                                                            [--dry-run] [--json]
     python3 archive.py [--project <root>] list [--json]
     python3 archive.py [--project <root>] restore <slug> [--dry-run] [--json]
 
@@ -61,6 +69,9 @@ if _cached_util is not None and getattr(_cached_util, "__file__", None) and \
 from _util import (archive_docs_dir, feature_docs_dir, ground_dir, manifest_path,  # noqa: E402
                    repo_root, safe_load_json, state_archive_dir, state_dir, task_docs_dir)
 import read as _read  # summarize()  # noqa: E402
+# _util при импорте кладёт hooks/ в sys.path — оттуда берём ЕДИНЫЙ предикат живости прогона
+# (тот же, которым резолвят активную фичу хуки и config.py), а не вторую его копию здесь.
+import _config_loader as _CL  # noqa: E402
 
 META_NAME = "archive-meta.json"
 
@@ -386,6 +397,98 @@ def archive_feature(project, slug, skill=None, force: bool = False, reason=None,
     return plan
 
 
+def abandon_run(project, feature: str, skill=None, reason: str = "",
+                dry_run: bool = False) -> dict:
+    """Убрать БРОШЕННЫЙ прогон: стейт → ground/archive/<skill>/<feature>/, без доков.
+
+    Зачем отдельная команда. `put` уносит ДВЕ половины и требует каталог доков — проверка
+    стоит ДО --force и им не снимается. Прогон, умерший до первого артефакта (init.py прошёл,
+    фаза не дошла до записи), каталога доков не имеет по определению: для него `put` давал
+    DENY при любых флагах, `status` его не показывал вовсе (там `if not docs.is_dir():
+    continue`), а руками из ground/statements/ удалять нельзя — это control-plane,
+    state-write-guard режет unlink. Единственным выходом оставался `rm -rf` мимо харнеса,
+    и всё это время брошенный прогон перехватывал резолв активной фичи на себя.
+
+    Стейт НЕ теряется: он переезжает в тот же ground/archive/, что и у `put`, с
+    archive-meta.json рядом. Причина обязательна — это запись в control-plane, и «почему
+    прогон брошен» единственное, чего потом не восстановить.
+
+    Есть доки — отказ: значит, прогон не пустой, и уносить надо обе половины (`put --force`),
+    иначе доки остаются сиротой, а дельта — несведённой с мастером.
+    """
+    project = Path(project)
+    feature = norm_slug(feature)
+    if "/" in feature:
+        raise Fail(f"abandon принимает слаг ОДНОГО прогона, не '{feature}' "
+                   f"(каталог фикса внутри стори — это доки, ищи их через put)")
+    skill = _skill_for(project, feature, skill)
+
+    st_src = state_dir(project, skill, feature)
+    if not st_src.is_dir():
+        raise Fail(f"нет стейта прогона: {st_src}")
+
+    try:
+        docs = task_docs_dir(project, skill, feature)
+    except Exception:  # noqa: BLE001 — резолвер доков не поднялся: считаем, что доков нет
+        docs = None
+    if docs is not None and docs.is_dir():
+        raise Fail(f"у прогона '{skill}/{feature}' ЕСТЬ каталог доков ({docs}).\n"
+                   f"   abandon уносит только стейт и оставил бы их сиротой. Уносить обе "
+                   f"половины — put {feature} --force --reason '<почему>'.", code=3)
+
+    # Манифеста может не быть (стейт уже наполовину снесён руками) — тогда run_state ушёл бы
+    # в SystemExit(4) через safe_load_json, и брошенный каталог остался бы неубираемым ВООБЩЕ.
+    if manifest_path(project, skill, feature).exists():
+        st = run_state(project, skill, feature)
+    else:
+        st = {"manifest": {}, "summary": {}, "steps": {}, "open": []}
+    st_target = state_archive_dir(project, skill) / feature
+    if st_target.exists():
+        st_target = st_target.parent / f"{st_target.name}-{_ts()}"
+
+    plan = {"ok": True, "skill": skill, "feature": feature, "abandoned": True,
+            "state_source": _rel(st_src, ground_dir(project)),
+            "state_target": str(st_target), "dry_run": bool(dry_run),
+            "status": st["summary"].get("status"), "open": st["open"]}
+    if dry_run:
+        plan["moved"] = False
+        return plan
+
+    st_target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.move(str(st_src), str(st_target))
+    except OSError as e:
+        raise Fail(f"стейт прогона не переносится ({st_src} → {st_target}): {e}. "
+                   f"Ничего не изменилось.")
+
+    dropped = _drop_checkpoints(project, feature)
+
+    man = st["manifest"]
+    meta = {
+        "version": 1,
+        "slug": feature,
+        "skill": skill,
+        "feature": feature,
+        "pipeline_id": man.get("pipeline_id"),
+        "started_at": man.get("started_at"),
+        "last_update": man.get("last_update"),
+        "archived_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "abandoned": True,
+        "reason": reason or "(причина не указана)",
+        "state_source": _rel(st_src, ground_dir(project)),
+        "state_target": _rel(st_target, ground_dir(project)),
+        "checkpoints_deleted": dropped,
+        "steps": st["steps"],
+    }
+    # Мета едет В САМ перенесённый стейт: доков у брошенного прогона нет, а без неё
+    # заархивированный каталог не отличить от заготовки под новый прогон.
+    (st_target / META_NAME).write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
+                                       encoding="utf-8")
+    plan["moved"] = True
+    plan["checkpoints_deleted"] = dropped
+    return plan
+
+
 def restore_feature(project, slug, dry_run: bool = False) -> dict:
     """Вернуть заархивированные доки обратно в feature-pipeline/."""
     project = Path(project)
@@ -471,13 +574,25 @@ def status(project) -> dict:
     """Что готово к архивации, что держит отказ, что уже в архиве."""
     project = Path(project)
     base = feature_docs_dir(project)
-    rows = []
+    rows, stateless = [], []
     for skill, feature in find_runs(project):
         try:
             docs = task_docs_dir(project, skill, feature)
         except Exception:  # noqa: BLE001
             continue
         if not docs.is_dir():
+            # Стейт есть, доков нет — прогон, умерший до первого артефакта. Раньше такой
+            # просто выпадал из выдачи: `status` молчал, `put` отказывал на отсутствии доков,
+            # а резолв активной фичи всё это время считал его активным. Показываем отдельно
+            # и с выходом (abandon), иначе о нём узнают только по промаху гейта.
+            try:
+                live = bool(_CL.run_is_live(safe_load_json(
+                    manifest_path(project, skill, feature), what="manifest.json")))
+            except Exception:  # noqa: BLE001 — битый/пропавший манифест: считаем живым
+                live = True
+            stateless.append({"skill": skill, "feature": feature, "live": live,
+                              "state": _rel(state_dir(project, skill, feature),
+                                            ground_dir(project))})
             continue
         try:
             st = run_state(project, skill, feature)
@@ -500,7 +615,7 @@ def status(project) -> dict:
                      "status": st["summary"].get("status"), "delta_state": ds,
                      "archivable": not blockers, "blockers": blockers})
     return {"docs_base": str(base), "archive": str(archive_docs_dir(project)),
-            "candidates": rows, "archived": list_archived(project)}
+            "candidates": rows, "stateless": stateless, "archived": list_archived(project)}
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────────────
@@ -519,12 +634,23 @@ def _print_status(data: dict) -> None:
         print(f"\nПока не архивируется ({len(held)}):")
         for r in held:
             print(f"   · {r['slug']}  [{r['skill']}] — {'; '.join(r['blockers'])}")
+    orphans = data.get("stateless") or []
+    if orphans:
+        print(f"\nСтейт без доков ({len(orphans)}) — прогон ещё не дал артефактов "
+              f"либо брошен на старте:")
+        for r in orphans:
+            print(f"   {'⚠' if r['live'] else '·'} {r['skill']}/{r['feature']}  {r['state']}"
+                  f"{'  (числится живым — участвует в резолве активной фичи)' if r['live'] else ''}")
+        print("   Который из них идёт — знаешь ты; лишний не удаляй, а сними с активных.")
+        print("   Убрать штатно: /forge-archive abandon <feature> --skill <S> "
+              "--reason \"<почему>\"")
+        print("   (стейт переезжает в ground/archive/, руками из ground/statements/ — нельзя)")
     if data["archived"]:
         print(f"\nВ архиве ({len(data['archived'])}):")
         for a in data["archived"]:
             print(f"   {a.get('slug')}  ({a.get('archived_at', '?')})")
-    if not ready and not held and not data["archived"]:
-        print("\nНи одного прогона с доками не найдено.")
+    if not ready and not held and not orphans and not data["archived"]:
+        print("\nНи одного прогона не найдено.")
 
 
 def main(argv=None) -> int:
@@ -542,6 +668,13 @@ def main(argv=None) -> int:
     p.add_argument("--force", action="store_true", help="снять гейты готовности (нужен --reason)")
     p.add_argument("--reason", default=None)
     p.add_argument("--json", action="store_true")
+
+    ab = sub.add_parser("abandon", help="убрать стейт БРОШЕННОГО прогона (без доков)")
+    ab.add_argument("feature")
+    ab.add_argument("--skill", default=None, help="namespace прогона (если фича в нескольких)")
+    ab.add_argument("--reason", required=True, help="почему прогон брошен (обязательно)")
+    ab.add_argument("--dry-run", action="store_true")
+    ab.add_argument("--json", action="store_true")
 
     ls = sub.add_parser("list", help="что лежит в архиве")
     ls.add_argument("--json", action="store_true")
@@ -591,6 +724,26 @@ def main(argv=None) -> int:
                     print(f"   сняты git-чекпойнты фичи: {res['checkpoints_deleted']} шт. "
                           f"(restore их не вернёт)")
                 print("   Коммит архива — на тебе, forge не коммитит.")
+            return 0
+
+        if cmd == "abandon":
+            if not (args.reason or "").strip():
+                raise Fail("--reason пустой: причина, по которой прогон брошен, обязана "
+                           "быть записана — восстановить её потом нечем")
+            res = abandon_run(project, args.feature, skill=args.skill, reason=args.reason,
+                              dry_run=args.dry_run)
+            if as_json:
+                print(json.dumps(res, ensure_ascii=False, indent=2))
+            elif args.dry_run:
+                print(f"dry-run: стейт {res['state_source']} → {res['state_target']} "
+                      f"(ничего не записано)")
+            else:
+                print(f"✅ прогон {res['skill']}/{res['feature']} снят с активных")
+                print(f"   стейт → {res['state_target']}")
+                if res.get("checkpoints_deleted"):
+                    print(f"   сняты git-чекпойнты фичи: {res['checkpoints_deleted']} шт. "
+                          f"(restore их не вернёт)")
+                print("   Коммит — на тебе, forge не коммитит.")
             return 0
 
         if cmd == "restore":

@@ -390,5 +390,56 @@ class TestRuntimeSettingsDirs(unittest.TestCase):
             self.assertEqual(warnings, [], warnings)
 
 
+class TestAmbiguousActiveRun(unittest.TestCase):
+    """Брошенный прогон должен быть ВИДЕН на старте, а не по промаху гейта.
+
+    Инцидент: чужой брошенный прогон (пустой стаб, шаги pending) перехватывал резолв
+    активной фичи. Узнать о нём было нечем — `archive.py status` его не показывал, отказы
+    гейтов выглядели как поломка форжа, и пользователь снёс каталоги `rm -rf`."""
+
+    def _run(self, root: Path, skill: str, feature: str, status: str) -> None:
+        d = root / "ground" / "statements" / skill / feature
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "manifest.json").write_text(
+            json.dumps({"version": 2, "skill": skill, "feature": feature,
+                        "steps": [{"id": "01-grounding", "status": status}]}),
+            encoding="utf-8")
+
+    def test_warns_when_two_runs_are_live(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            self._run(tmp, "forgelite", "SQUATTER", "in_progress")
+            self._run(tmp, "feature-pipeline", "MINE", "pending")
+            warnings: list = []
+            preflight._check_ambiguous_active_run(tmp, warnings)
+            self.assertEqual(len(warnings), 1, warnings)
+            self.assertIn("SQUATTER", warnings[0])
+            self.assertIn("abandon", warnings[0], "предупреждение обязано назвать выход")
+
+    def test_silent_on_single_live_run(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            self._run(tmp, "feature-pipeline", "MINE", "pending")
+            warnings: list = []
+            preflight._check_ambiguous_active_run(tmp, warnings)
+            self.assertEqual(warnings, [], warnings)
+
+    def test_silent_when_extra_run_is_finished(self):
+        """Завершённый прогон неоднозначности не создаёт — его выбивает фильтр живости."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            self._run(tmp, "forgefix", "DONE", "completed")
+            self._run(tmp, "feature-pipeline", "MINE", "pending")
+            warnings: list = []
+            preflight._check_ambiguous_active_run(tmp, warnings)
+            self.assertEqual(warnings, [], warnings)
+
+    def test_silent_without_runs(self):
+        with tempfile.TemporaryDirectory() as td:
+            warnings: list = []
+            preflight._check_ambiguous_active_run(Path(td), warnings)
+            self.assertEqual(warnings, [], warnings)
+
+
 if __name__ == "__main__":
     unittest.main()

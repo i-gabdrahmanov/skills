@@ -83,10 +83,28 @@ flowchart TD
 State намеспейсится по фиче: `<project>/ground/statements/feature-pipeline/<feature>/`.
 Завершённый прогон оттуда уезжает в `<project>/ground/archive/<skill>/<feature>/` (`archive.py`,
 сам по успеху `/forge-merge` либо вручную `/forge-archive`) — сиблинг `statements/`, а не папка
-внутри неё: резолверы активной фичи (`risk_ladder.active_manifest`, `state-recorder`,
-`active_feature_with_skill`) обходят именно `ground/statements/*`, и из сиблинга заархивированный
-прогон выпадает у всех сразу. Не путать с `ground/statements/<skill>/archived/`: туда `init.py
---force` ВЫТЕСНЯЕТ прогон при переиспользовании слага, в любом статусе.
+внутри неё: резолверы активной фичи обходят именно `ground/statements/*`, и из сиблинга
+заархивированный прогон выпадает у всех сразу. Не путать с `ground/statements/<skill>/archived/`:
+туда `init.py --force` ВЫТЕСНЯЕТ прогон при переиспользовании слага, в любом статусе.
+
+**Какой прогон активен.** Предикат один на всех — `_project.resolve_active_run`: свежайший
+ЖИВОЙ манифест (живой = есть шаг в статусе `pending`/`in_progress`/`failed`), а если живых нет —
+свежайший вообще. `risk_ladder.active_manifest` и `active_feature_with_skill` — обёртки над ним;
+раньше это были три независимые копии обхода, и каждая брала просто свежайший по mtime.
+
+Фильтр живости выбивает ЗАВЕРШЁННЫЙ прогон, но не БРОШЕННЫЙ: у брошенного шаги остались
+`pending`, и по статусу он живой. Поэтому резолвер отдаёт ещё и `ambiguous` — признак того, что
+выбор сделан тай-брейком по mtime. Кто на него смотрит:
+
+| Читатель | Поведение при `ambiguous` |
+|---|---|
+| хуки (`gate-guard`, `tdd-guard`, `risk_ladder`, …) | берут выбор по mtime — ответить они обязаны, блокировать прогон из-за неубранного стейта нельзя |
+| `config.py set inputs.*/decisions.*`, `config.py repin` | **отказ, exit 3** с перечнем кандидатов: значение per-feature, и промах виден не сразу, а на гейте следующей фазы |
+| `config.py get` / `validate` | резолв мягкий: отказ читать сломал бы диагностику на пустом месте |
+
+Убрать лишний прогон: `archive.py abandon <feature> --skill <S> --reason '<почему>'` (стейт без
+доков) либо `put <slug> --force --reason` (стейт с доками). Руками из `ground/statements/` —
+нельзя, `state-write-guard` режет unlink.
 
 > **`ground/` — рантайм-каталог данных в ЦЕЛЕВОМ проекте, не в source-репо Forge.** Его создаёт
 > `init.py` (`mkdir(parents=True)`), а `init_pipeline_config.py` кладёт туда `pipeline.json`.

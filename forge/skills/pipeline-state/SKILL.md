@@ -270,9 +270,12 @@ python <project>/.gigacode/skills/pipeline-state/scripts/read.py \
   Параллельные запуски одного скилла на одном проекте не поддерживаются.
 - **Не чистит старые state'ы сам.** Стейт ЗАВЕРШЁННОЙ стройки уносит `scripts/archive.py`
   (`ground/statements/<skill>/<feature>/` → `ground/archive/<skill>/<feature>/`) — по успеху
-  `/forge-merge` или вручную через `/forge-archive`. А вот прогоны, ВЫТЕСНЕННЫЕ `init.py
-  --force` в `ground/statements/<skill>/archived/`, по-прежнему накапливаются: туда попадает
-  что угодно в любом статусе, и разбирает их пользователь руками.
+  `/forge-merge` или вручную через `/forge-archive`. Прогон, который БРОШЕН и доков не дал,
+  уносит `archive.py abandon <feature> --skill <S> --reason '<почему>'`: `put` на него не
+  работает (требует каталог доков), а пока он лежит в `statements/`, он числится живым и
+  участвует в резолве активной фичи. А вот прогоны, ВЫТЕСНЕННЫЕ `init.py --force` в
+  `ground/statements/<skill>/archived/`, по-прежнему накапливаются: туда попадает что угодно
+  в любом статусе, и разбирает их пользователь руками.
 
 ## Скрипты
 
@@ -284,7 +287,7 @@ python <project>/.gigacode/skills/pipeline-state/scripts/read.py \
 | `scripts/read.py` | Прочитать state, выдать summary или выжимку шага |
 | `scripts/override_judge.py` | Ручной пропуск гейта судьи (`--judge … --feature … --reason …`) — единственный путь закрыть шаг, заблокированный отсутствующим/проваленным вердиктом `required_judges`. **Создание override — R4**: `gate-guard` пропустит команду только при согласии под ключом `gate-override-<judge>` (`record_approval.py`), зафиксированном после ЯВНОГО «да» пользователя (молча — exit 2); `--list`/`--remove` свободны |
 | `scripts/checkpoint.py` | Git-чекпойнты worktree на границах шагов (`refs/forge/checkpoints/<feature>/<step-id>`; ветки/HEAD/индекс не трогаются). Пишутся автоматически: `update.py` на закрытии шага, `init.py` — baseline. Точки восстановления для `rollback.py` |
-| `scripts/archive.py` | Архив ЗАВЕРШЁННОЙ стройки — обе половины: доки `<docs_base>/feature-pipeline/<слаг>` → `<docs_base>/archive/<слаг>` (у фикса путь `<стори>/fixes/<баг>` сохраняется, рядом — `archive-meta.json`) и стейт `ground/statements/<skill>/<feature>/` → `ground/archive/<skill>/<feature>/`; git-чекпойнты фичи удаляются. Подкоманды `status`/`put`/`list`/`restore`. Обычно вызывается сам, по успеху `/forge-merge`; вручную — `/forge-archive`. Гейты: стройка завершена (все шаги терминальны И финальный шаг фазы закрыт `completed`), внутри каталога нет живых прогонов, дельта сведена с мастером. Снимаются только `--force --reason`. Частичный перенос невозможен: не поехала вторая половина — первая возвращается на место |
+| `scripts/archive.py` | Архив ЗАВЕРШЁННОЙ стройки — обе половины: доки `<docs_base>/feature-pipeline/<слаг>` → `<docs_base>/archive/<слаг>` (у фикса путь `<стори>/fixes/<баг>` сохраняется, рядом — `archive-meta.json`) и стейт `ground/statements/<skill>/<feature>/` → `ground/archive/<skill>/<feature>/`; git-чекпойнты фичи удаляются. Подкоманды `status`/`put`/`abandon`/`list`/`restore`; `abandon <feature> --skill <S> --reason R` уносит стейт БРОШЕННОГО прогона, у которого каталога доков нет вовсе (`put` на таком отказывает, и `--force` эту проверку не снимает) — иначе он остаётся в `statements/`, числится живым по статусу шагов и участвует в резолве активной фичи. Обычно вызывается сам, по успеху `/forge-merge`; вручную — `/forge-archive`. Гейты: стройка завершена (все шаги терминальны И финальный шаг фазы закрыт `completed`), внутри каталога нет живых прогонов, дельта сведена с мастером. Снимаются только `--force --reason`. Частичный перенос невозможен: не поехала вторая половина — первая возвращается на место |
 | `scripts/rollback.py` | Откат к шагу X («X переделывается»): X и всё после → `pending`, evidence — в архив `rollbacks/<ts>/` (повторное закрытие по старым доказательствам блокируется), код — точечный `git restore` на чекпойнт по скоупу журнала `file-journal`. **Запуск — R4**: approval-маркер `rollback-<feature>-<to-step>` (одноразовый, потребляется откатом); `--dry-run`/`--list` свободны. См. `feature-pipeline/references/rollback.md` |
 
 См. `scripts/<name>.py --help` для деталей.

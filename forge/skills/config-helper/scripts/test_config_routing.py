@@ -4,7 +4,7 @@
 Покрывает:
   - inputs.* / decisions.* → ground/statements/<skill>/<feature>/manifest.json
   - quality.* / conventions.* / docs.* / jira.* / project.* / autonomy.* →
-    ground/policy.json (immutable на прогоне активной фичи)
+    ground/policy.json (пишется и на прогоне; прогон едет по снимку политики)
   - dual-read fallback в risk_ladder.config_get (legacy pipeline.json →
     sources.story / autonomy.criticality и т.п.)
 
@@ -344,6 +344,117 @@ class TestConfigRouting(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0,
                             f"ожидался nonzero exit, получили {r.returncode}; "
                             f"stdout={r.stdout!r} stderr={r.stderr!r}")
+
+
+class TestActiveRunIsNotGuessed(unittest.TestCase):
+    """Запись per-feature значения не угадывает фичу по mtime.
+
+    Инцидент: брошенный прогон чужой ветки (пустой стаб, шаги pending) оказался свежее —
+    и `config.py set inputs.story <новая фича>` молча записал вход НОВОЙ фичи в ЕГО
+    манифест, rc=0, без единого предупреждения. Промах виден не сразу, а на гейте
+    следующей фазы, поэтому здесь fail-closed: exit 3 с перечнем кандидатов.
+    """
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmpdir, ignore_errors=True)
+        _seed_policy(self.tmpdir)
+
+    def _live(self, skill, feature):
+        return _seed_manifest(self.tmpdir, skill, feature,
+                              body={"version": 2, "skill": skill, "feature": feature,
+                                    "steps": [{"id": "01-grounding", "status": "pending"}]})
+
+    def test_implicit_write_refuses_when_two_runs_are_live(self):
+        self._live("forgelite", "SQUATTER")
+        mine = self._live("feature-pipeline", "MINE")
+        r = _run(self.tmpdir, "set", "inputs.story", "MINE")
+        self.assertEqual(r.returncode, 3,
+                         f"ожидался exit 3, rc={r.returncode} stdout={r.stdout!r}")
+        self.assertIn("SQUATTER", r.stdout)
+        self.assertIn("abandon", r.stdout, "отказ обязан назвать штатный выход")
+        # Ни один манифест не тронут.
+        for mp in (mine, self.tmpdir / "ground" / "statements" / "forgelite" / "SQUATTER"
+                   / "manifest.json"):
+            self.assertEqual(json.loads(mp.read_text(encoding="utf-8")).get("inputs"), None,
+                             f"на отказе манифест не должен меняться: {mp}")
+
+    def test_explicit_feature_writes_even_when_ambiguous(self):
+        """--skill/--feature снимают неоднозначность: координаты названы, угадывать нечего."""
+        self._live("forgelite", "SQUATTER")
+        self._live("feature-pipeline", "MINE")
+        r = _run(self.tmpdir, "set", "inputs.story", "MINE",
+                 "--skill", "feature-pipeline", "--feature", "MINE")
+        self.assertEqual(r.returncode, 0, f"rc={r.returncode} stdout={r.stdout!r}")
+        mp = self.tmpdir / "ground" / "statements" / "feature-pipeline" / "MINE" / "manifest.json"
+        self.assertEqual(json.loads(mp.read_text(encoding="utf-8"))["inputs"]["story"], "MINE")
+
+    def test_single_live_run_writes_and_names_the_target(self):
+        """Один прогон — пишем как раньше, но неявный резолв больше не молчит."""
+        self._live("feature-pipeline", "MINE")
+        r = _run(self.tmpdir, "set", "inputs.story", "MINE")
+        self.assertEqual(r.returncode, 0, f"rc={r.returncode} stdout={r.stdout!r}")
+        self.assertIn("NOTE:", r.stderr)
+        self.assertIn("MINE", r.stderr)
+
+    def test_dead_run_does_not_hijack_resolution(self):
+        """Завершённый прогон свежее живого — писать всё равно в живой."""
+        _seed_manifest(self.tmpdir, "forgefix", "DONE",
+                       body={"version": 2, "skill": "forgefix", "feature": "DONE",
+                             "steps": [{"id": "01-grounding", "status": "completed"}]})
+        self._live("feature-pipeline", "MINE")
+        r = _run(self.tmpdir, "set", "inputs.story", "MINE")
+        self.assertEqual(r.returncode, 0, f"rc={r.returncode} stdout={r.stdout!r}")
+        mine = self.tmpdir / "ground" / "statements" / "feature-pipeline" / "MINE" / "manifest.json"
+        self.assertEqual(json.loads(mine.read_text(encoding="utf-8"))["inputs"]["story"], "MINE")
+        done = self.tmpdir / "ground" / "statements" / "forgefix" / "DONE" / "manifest.json"
+        self.assertIsNone(json.loads(done.read_text(encoding="utf-8")).get("inputs"),
+                          "вход новой фичи уехал в завершённый прогон")
+
+
+class TestPolicyWriteIsNotBlockedOnLiveRun(unittest.TestCase):
+    """policy.json на идущем прогоне ПИШЕТСЯ (WARNING, rc=0), а не блокируется.
+
+    Пин на инцидент с доками: запрет сняли ещё в a3820bb, но докстринги config.py и
+    router/SKILL.md продолжали обещать «иммутабельна на прогоне — set вернёт exit 1».
+    Модель прочитала обещание и отказалась выполнять задачу, НЕ ЗАПУСТИВ команду; выходом
+    пользователю показалось удаление чужих прогонов руками. Тест держит контракт со стороны
+    поведения, чтобы текст доков было чем проверить.
+    """
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmpdir, ignore_errors=True)
+        _seed_policy(self.tmpdir, body={"jira": {"enabled": True}})
+        _seed_manifest(self.tmpdir, "forgelite", "ABANDONED",
+                       body={"version": 2, "skill": "forgelite", "feature": "ABANDONED",
+                             "inputs": {}, "decisions": {},
+                             "steps": [{"id": "01-grounding", "status": "in_progress"}]})
+
+    def test_project_wide_write_succeeds_with_warning(self):
+        r = _run(self.tmpdir, "set", "jira.enabled", "false")
+        self.assertEqual(r.returncode, 0,
+                         f"регресс: запись в policy.json заблокирована. "
+                         f"rc={r.returncode} stdout={r.stdout!r} stderr={r.stderr!r}")
+        self.assertIn("WARNING", r.stderr)
+        self.assertIn("repin", r.stderr, "WARNING обязан назвать способ применить сейчас")
+        policy = json.loads((self.tmpdir / "ground" / "policy.json").read_text(encoding="utf-8"))
+        self.assertIs(policy["jira"]["enabled"], False)
+
+    def test_no_exit_1_immutability_claim_survives_in_docs(self):
+        """Доки не должны снова обещать блок, которого нет: обещание останавливает модель
+        РАНЬШЕ запуска команды, и тестом такого не поймать — только текстом."""
+        forge = Path(__file__).resolve().parents[3]
+        stale = []
+        for rel in ("skills/router/SKILL.md", "skills/config-helper/SKILL.md",
+                    "skills/config-helper/scripts/config.py", "hooks/_project.py"):
+            text = (forge / rel).read_text(encoding="utf-8")
+            for i, line in enumerate(text.splitlines(), 1):
+                low = line.lower()
+                if ("immutable" in low or "иммутабел" in low) and "не иммутабел" not in low:
+                    stale.append(f"{rel}:{i}: {line.strip()}")
+        self.assertEqual(stale, [], "доки снова обещают иммутабельность policy.json:\n"
+                                    + "\n".join(stale))
 
 
 if __name__ == "__main__":
