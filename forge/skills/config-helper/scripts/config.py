@@ -18,7 +18,8 @@ config-helper — безопасная настройка параметров f
 
 Роутинг записи (v2):
   - quality.* / conventions.* / docs.* / jira.* / autonomy.mode / gates.* / project.*
-    → ground/policy.json (общая конфигурация проекта; immutable на прогоне активной фичи);
+    → ground/policy.json (общая конфигурация проекта; пишется и на прогоне — прогон едет
+      по снимку политики из своего манифеста, см. cmd_set и `repin`);
   - inputs.* / decisions.*
     → ground/statements/<skill>/<feature>/manifest.json (per-feature входы/решения).
 
@@ -29,8 +30,9 @@ config-helper — безопасная настройка параметров f
     в новые пути (manifest.inputs.* / manifest.decisions.*);
   - config.py validate помечает DEPRECATED поля в policy.json как WARNING.
 
-Exit-коды: 0 ок · 1 валидация/блок (sensitive без --confirm / immutable на прогоне) ·
-           2 ошибка аргументов · 3 файл/параметр не найден.
+Exit-коды: 0 ок · 1 валидация (sensitive без --confirm) · 2 ошибка аргументов / R4 без
+           approval · 3 файл/параметр не найден, активный прогон неоднозначен.
+           Записи в policy.json на идущем прогоне блока НЕТ (только WARNING) — см. cmd_set.
 """
 from __future__ import annotations
 
@@ -59,7 +61,9 @@ _HOOKS = str(_hooks_dir())
 if _HOOKS not in sys.path:
     sys.path.append(_HOOKS)
 
-from _project import load_active_manifest, safe_component  # noqa: E402  (после sys.path.append)
+from _project import (  # noqa: E402  (после sys.path.append)
+    load_active_manifest, resolve_active_run as load_active_run, safe_component,
+)
 
 
 REGISTRY = Path(__file__).resolve().parent.parent / "references" / "params-registry.json"
@@ -151,25 +155,43 @@ def resolve_file(project: Path, file_key: str) -> Path:
     raise ValueError(f"неизвестный file-key: {file_key}")
 
 
-def _resolve_manifest_path(project: Path, skill: str | None, feature: str | None) -> Path:
-    """Путь к manifest.json активной фичи (тонкая обёртка над hooks/_project.load_active_manifest).
+class AmbiguousRun(Exception):
+    """Активный прогон не определяется однозначно — писать per-feature значение некуда."""
+
+
+def _resolve_manifest_path(project: Path, skill: str | None, feature: str | None,
+                           *, strict: bool = False) -> Path:
+    """Путь к manifest.json активной фичи (обёртка над hooks/_project.resolve_active_run).
 
     Если --skill/--feature переданы — точно в эту фичу (прямой путь, без сканирования).
-    Если нет — берём САМУЮ СВЕЖУЮ фичу (mtime) среди всех namespace через ЕДИНЫЙ резолвер
-    hooks/_project.load_active_manifest (им же пользуются risk_ladder и gate-guard).
-    Совместимость по семантике: при отсутствии фичей — FileNotFoundError (как раньше)."""
+    Если нет — активный прогон резолвится ЕДИНЫМ резолвером (им же пользуются risk_ladder
+    и gate-guard). Совместимость по семантике: при отсутствии фичей — FileNotFoundError.
+
+    strict=True (ЗАПИСЬ inputs.*/decisions.*): при нескольких живых прогонах — AmbiguousRun
+    вместо выбора по mtime. `inputs.story` новой фичи молча уезжал в манифест брошенного
+    чужого прогона, если тот оказался свежее — exit 0, без единого предупреждения. Угадывать
+    тут нельзя: значение per-feature, и промах виден не сразу, а на гейте следующей фазы.
+    На ЧТЕНИИ (strict=False) резолв остаётся мягким: диагностике и validate неоднозначность
+    не мешает, а отказ читать сломал бы их на пустом месте."""
     if skill and feature:
         # Прямой путь без сканирования — пользователь явно указал обе координаты.
         return project / "ground" / "statements" / skill / feature / "manifest.json"
-    mp, _ = load_active_manifest(project, skill)
-    if mp is None:
+    run = load_active_run(project, skill)
+    if run["path"] is None:
         base = project / "ground" / "statements"
         hint = ("ground/statements/" if base.is_dir()
                 else f"нет ground/statements/ в {project}")
         raise FileNotFoundError(
             f"нет ни одного manifest.json в ground/statements/*/*/; сначала init.py ({hint})"
         )
-    return mp
+    if strict and run["ambiguous"]:
+        if run["live"]:
+            raise AmbiguousRun(
+                "живых прогонов несколько ({}) — в какой писать, неизвестно".format(
+                    ", ".join(f"{s}/{f}" for s, f in run["live"])))
+        raise AmbiguousRun(
+            "прогонов несколько, и ни один не числится живым — в какой писать, неизвестно")
+    return run["path"]
 
 
 def gates_skeleton(params: list) -> dict:
@@ -404,7 +426,7 @@ def cmd_set(project: Path, params: list, args) -> int:
     if file_key == "manifest":
         # inputs.* / decisions.* → manifest.json активной фичи
         try:
-            target = _resolve_manifest_path(project, args.skill, args.feature)
+            target = _resolve_manifest_path(project, args.skill, args.feature, strict=True)
         except FileNotFoundError as ex:
             print(json.dumps({"error": str(ex),
                               "hint": "сначала инициализируй manifest: "
@@ -412,6 +434,21 @@ def cmd_set(project: Path, params: list, args) -> int:
                                       "--skill <S> --feature <F> --steps '...'"},
                              ensure_ascii=False))
             return 3
+        except AmbiguousRun as ex:
+            print(json.dumps({
+                "error": f"{e['id']} — per-feature значение, а {ex}",
+                "hint": (f"(1) назови фичу явно: --skill <S> --feature <F>; (2) если лишний "
+                         f"прогон брошен — убери его штатно: pipeline-state/scripts/archive.py "
+                         f"abandon <feature> --skill <S> --reason \"<почему>\" (он переезжает в "
+                         f"ground/archive/, а не теряется). Руками из ground/statements/ ничего "
+                         f"не удаляй — это control-plane, его режет state-write-guard."),
+            }, ensure_ascii=False))
+            return 3
+        if not (args.skill and args.feature):
+            # Неявный резолв на ЗАПИСИ больше не молчит: цель попадает в stderr рядом с
+            # результатом, иначе промах по фиче замечается только на гейте следующей фазы.
+            print(f"NOTE: фича не названа (--skill/--feature) — пишу в активный прогон: "
+                  f"{target}", file=sys.stderr)
         # Путь ВНУТРИ манифеста: после route_path остаётся inputs.X или decisions.X.
         target_section, sub_path = route_path(e["path"])
         if target_section != "manifest":
@@ -803,9 +840,16 @@ def cmd_repin(project: Path, params: list, args) -> int:
         print(json.dumps({"error": f"_config_loader недоступен: {e}"}, ensure_ascii=False))
         return 2
     try:
-        mp = _resolve_manifest_path(project, args.skill, args.feature)
+        mp = _resolve_manifest_path(project, args.skill, args.feature, strict=True)
     except FileNotFoundError as ex:
         print(json.dumps({"error": str(ex)}, ensure_ascii=False))
+        return 3
+    except AmbiguousRun as ex:
+        # repin пишет снимок политики В МАНИФЕСТ — промах по фиче меняет правила чужому
+        # прогону, причём по approval, выданному для этого. Угадывать нельзя.
+        print(json.dumps({"error": f"repin: {ex}",
+                          "hint": "назови прогон явно: repin --skill <S> --feature <F>"},
+                         ensure_ascii=False))
         return 3
     man = load_json(mp)
     if not isinstance(man, dict):

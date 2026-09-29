@@ -285,9 +285,14 @@ def approval_path(root: Path, key: str) -> Path:
 
 
 def active_feature(root: Path, skill: str = "feature-pipeline") -> str:
-    """Активная фича = самый свежий manifest.json в ground/statements/<skill>/<feature>/.
-    'pipeline' (back-compat), если ни одного манифеста нет. Должна совпадать с
-    pipeline_phases.active_feature (проверяется тестом)."""
+    """Активная фича ОДНОГО namespace = самый свежий manifest.json в
+    ground/statements/<skill>/<feature>/. 'pipeline' (back-compat), если манифестов нет.
+    Должна совпадать с pipeline_phases.active_feature (проверяется тестом).
+
+    Внимание: здесь, в отличие от resolve_active_run, фильтра живости НЕТ — только mtime.
+    Функция скоупится одним skill и связана пином равенства с pipeline_phases.active_feature,
+    поэтому менять предикат надо в обеих или ни в одной. Кросс-namespace читателям (гейты,
+    config.py, risk_ladder) нужен resolve_active_run, а не она."""
     base = statements_dir(root, skill)
     if not base.is_dir():
         return "pipeline"
@@ -310,7 +315,8 @@ def active_feature(root: Path, skill: str = "feature-pipeline") -> str:
 def pipeline_config_path(root: Path) -> Path:
     """ground/pipeline.json — DEPRECATED legacy-файл (read-only fallback).
 
-    Целевая модель: общая конфигурация проекта → ground/policy.json (immutable на прогоне);
+    Целевая модель: общая конфигурация проекта → ground/policy.json (прогон едет по снимку
+    этого файла в своём манифесте, а не по запрету на запись);
     per-feature входы/решения → manifest.json активной фичи. Старый pipeline.json читается
     через dual-read fallback в risk_ladder.config_get, но НЕ пишется (config.py валит запись
     в этот файл, кроме как в резолв под file-key "pipeline" — см. config.py.resolve_file).
@@ -336,11 +342,18 @@ def load_pipeline_config(root: Optional[Path] = None) -> dict:
     return {}
 
 
-# ── policy.json — общая конфигурация проекта (immutable на прогоне) ───────────
+# ── policy.json — общая конфигурация проекта ──────────────────────────────────
 # Целевая модель: pipeline.json разделён на два файла с разной семантикой:
 #   policy.json — общая конфигурация проекта (build-система, conventions, docs, jira,
-#                  quality-пороги, gates, risk-policy). IMMUTABLE на прогоне: пока есть
-#                  активный манифест, config.py валит set policy.* (R3-класс, deny-first).
+#                  quality-пороги, gates, risk-policy). ПИШЕТСЯ и во время прогона: сам
+#                  прогон едет по СНИМКУ этого файла (policy_snapshot в манифесте, кладёт
+#                  init.py), поэтому правка долетает до следующего прогона, а к текущему
+#                  применяется только явным `config.py repin` (R4, по approval).
+#                  Прежний запрет «есть манифест → set валится» снят (см. a3820bb): он
+#                  блокировал конфиг второго прогона в репозитории, а правку файла мимо
+#                  config.py — руками, редактором — не ловил вовсе. Пороги, которыми харнес
+#                  меряет СЕБЯ (quality.*/security.*), держит не иммутабельность, а R4:
+#                  approval-маркер с провенансом record_approval (config._is_enforcement_switch).
 #   manifest.json — per-feature входы (inputs.*) и решения (decisions.*) — мутабельны
 #                  в процессе прогона, конкурируют по скиллам (forgefix vs
 #                  feature-pipeline), но НЕ друг с другом (отдельный файл на фичу).
@@ -354,7 +367,7 @@ POLICY_FILENAME = "policy.json"
 
 
 def policy_path(root: Path) -> Path:
-    """ground/policy.json — общая конфигурация проекта (immutable на прогоне)."""
+    """ground/policy.json — общая конфигурация проекта (прогон читает её через снимок)."""
     return ground_dir(root) / POLICY_FILENAME
 
 
@@ -406,8 +419,98 @@ def manifest_for(root: Path, skill: str, feature: str) -> dict:
         return {}
 
 
+def iter_runs(root: Path, skill: Optional[str] = None) -> list:
+    """[(mtime, skill, feature, manifest_path)] прогонов ground/statements/<skill>/<feature>/,
+    новые первыми. `archived/` пропускается: туда init.py --force ВЫТЕСНЯЕТ прогон при
+    переиспользовании слага, активным он уже не считается.
+
+    Единственный обход дерева прогонов для всех кросс-namespace резолверов ниже. До этого
+    обход был скопирован в load_active_manifest, active_feature_with_skill и
+    risk_ladder.active_manifest — три копии одного предиката «кто активен», которые могли
+    разойтись молча."""
+    root = Path(root)
+    base = statements_dir(root, skill) if skill else ground_dir(root) / "statements"
+    if not base.is_dir():
+        return []
+    out = []
+    try:
+        skill_dirs = [base] if skill else [d for d in base.iterdir() if d.is_dir()]
+        for sd in skill_dirs:
+            if not sd.is_dir():
+                continue
+            sname = skill if skill else sd.name
+            for d in sd.iterdir():
+                if not d.is_dir() or d.name == "archived":
+                    continue
+                mp = d / "manifest.json"
+                try:
+                    mt = mp.stat().st_mtime      # нет файла → OSError → прогоном не считается
+                except OSError:
+                    continue
+                out.append((mt, sname, d.name, mp))
+    except OSError:
+        return out
+    out.sort(key=lambda r: (-r[0], r[1], r[2]))
+    return out
+
+
+def resolve_active_run(root, skill: Optional[str] = None) -> dict:
+    """Активный прогон: свежайший ЖИВОЙ, а если живых нет — свежайший вообще.
+
+    {"path", "skill", "feature", "live": [(skill, feature), …], "ambiguous": bool}
+
+    `live` — прогоны, живые ПО СТАТУСУ шагов (может быть пусто). `ambiguous` — что выбор
+    между кандидатами сделан тай-брейком, а не однозначно: кандидаты это живые, если они
+    есть, иначе все найденные прогоны. Writer per-feature значений смотрит на `ambiguous`,
+    хуки — только на `path`.
+
+    Раньше каждый резолвер брал просто свежайший манифест по mtime. Брошенный прогон —
+    чужой, подтянутый git'ом, или свой, умерший на первом шаге — становился так «активной
+    фичей» для config.py, gate-guard и risk_ladder, и per-feature вход НОВОЙ фичи молча
+    уезжал в ЕГО манифест. mtime к тому же не факт, а догадка: checkout, rebase и `cp -a`
+    переставляют его как угодно.
+
+    Фильтр живости выбивает завершённые прогоны, но НЕ брошенные: у брошенного шаги остались
+    `pending`, и по статусу он живой. Поэтому вторая половина защиты — `live`/`ambiguous`:
+    писатель per-feature значений (config.py set inputs.*/decisions.*) на неоднозначности
+    ОТКАЗЫВАЕТ вместо угадывания, а убрать лишний прогон есть чем — archive.py abandon.
+    Хуки на неоднозначности не блокируют: им нужно ответить хоть что-то, и тай-брейком
+    остаётся mtime — уборка стейта не должна валить прогон.
+
+    Ровно один прогон — манифест не парсится вообще: цена резолва остаётся такой же, как
+    была (один stat на каталог), а решать там нечего.
+    """
+    runs = iter_runs(root, skill)
+    if not runs:
+        return {"path": None, "skill": None, "feature": None, "live": [], "ambiguous": False}
+    if len(runs) == 1:
+        live = runs          # прогон один — решать нечего, манифест не читаем
+    else:
+        try:
+            from _config_loader import run_is_live
+        except Exception:  # noqa: BLE001 — предиката нет: считаем кандидатами всех, как было
+            run_is_live = None
+        live = []
+        if run_is_live is None:
+            live = list(runs)
+        else:
+            for rec in runs:
+                try:
+                    man = json.loads(rec[3].read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue    # битый манифест активным прогоном не делает
+                if run_is_live(man):
+                    live.append(rec)
+    # Кандидаты — живые, если такие есть; иначе все найденные (хуки обязаны ответить).
+    candidates = live or runs
+    mt, sk, ft, mp = candidates[0]
+    return {"path": mp, "skill": sk, "feature": ft,
+            "live": [(s, f) for _, s, f, _ in live],
+            "ambiguous": len(candidates) > 1}
+
+
 def load_active_manifest(root: Optional[Path] = None, skill: Optional[str] = None) -> tuple[Path | None, dict]:
-    """Возвращает (manifest_path, manifest_dict) самой свежей фичи активного namespace.
+    """Возвращает (manifest_path, manifest_dict) активного прогона (см. resolve_active_run).
 
     skill=None → ищет по всем namespace (feature-pipeline, forgefix,
     system-analyst, minor-defect-fix) — аналог risk_ladder.active_manifest.
@@ -415,25 +518,7 @@ def load_active_manifest(root: Optional[Path] = None, skill: Optional[str] = Non
     НЕ выполняет миграцию (для этого см. init.py — migrate_manifest_if_needed). Если
     манифест v1 — возвращает как есть, callers решают, мигрировать ли."""
     root = Path(root) if root else find_project_root()
-    base = statements_dir(root, skill) if skill else root / "ground" / "statements"
-    if not base.is_dir():
-        return None, {}
-    newest, mt = None, -1.0
-    for skill_dir in ([base] if skill else base.iterdir()):
-        if not skill_dir.is_dir():
-            continue
-        for d in skill_dir.iterdir():
-            if not d.is_dir() or d.name == "archived":
-                continue
-            mp = d / "manifest.json"
-            if not mp.exists():
-                continue
-            try:
-                m = mp.stat().st_mtime
-            except OSError:
-                continue
-            if m > mt:
-                newest, mt = mp, m
+    newest = resolve_active_run(root, skill)["path"]
     if newest is None:
         return None, {}
     try:
@@ -443,34 +528,18 @@ def load_active_manifest(root: Optional[Path] = None, skill: Optional[str] = Non
 
 
 def active_feature_with_skill(root: Path) -> tuple[str, str] | None:
-    """(skill, feature) самой свежей фичи среди всех namespace. None если манифестов нет.
+    """(skill, feature) активного прогона среди всех namespace (см. resolve_active_run).
+    None если манифестов нет.
 
     Используется gate-guard и risk_ladder для чтения inputs.*/decisions.* с правильным
     feature/skill в config_get."""
-    root = Path(root)
-    base = root / "ground" / "statements"
-    if not base.is_dir():
-        return None
-    newest, mt = None, -1.0
     try:
-        for skill_dir in base.iterdir():
-            if not skill_dir.is_dir():
-                continue
-            for d in skill_dir.iterdir():
-                if not d.is_dir() or d.name == "archived":
-                    continue
-                mp = d / "manifest.json"
-                if not mp.exists():
-                    continue
-                try:
-                    m = mp.stat().st_mtime
-                except OSError:
-                    continue
-                if m > mt:
-                    newest, mt = (skill_dir.name, d.name), m
-    except Exception:
+        run = resolve_active_run(Path(root))
+    except Exception:  # noqa: BLE001 — резолвер не поднялся: как раньше, отвечаем None
         return None
-    return newest
+    if run["path"] is None:
+        return None
+    return run["skill"], run["feature"]
 
 
 # ── Резолв базы ДОКУМЕНТНЫХ артефактов (docs) ─────────────────────────

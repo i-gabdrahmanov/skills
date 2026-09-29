@@ -303,9 +303,11 @@ class TestDeltaGate(Base):
 class TestArchivedRunIsInvisible(Base):
     """Смысл переноса стейта: завершённый прогон перестаёт считаться активным.
 
-    Активная фича резолвится по самому свежему манифесту в ground/statements/*/*/ — пока
-    завершённые прогоны лежат там, гейты могут примениться по чужому стейту (принятый риск
-    в FORGE.md). Каждый резолвер проверяем отдельно: они написаны независимо."""
+    Активная фича резолвится обходом ground/statements/*/*/ (_project.resolve_active_run):
+    свежайший ЖИВОЙ манифест. Завершённый прогон выпадает уже из фильтра живости, но пока он
+    лежит в statements/, он остаётся кандидатом при отсутствии живых — перенос убирает его у
+    всех резолверов сразу. Каждый проверяем отдельно: раньше обход был скопирован в три
+    места, и разойтись они могли молча."""
 
     def setUp(self):
         super().setUp()
@@ -577,6 +579,111 @@ class TestStatusAndCli(Base):
 
     def test_cli_default_subcommand_is_status(self):
         self.assertEqual(archive.main(["--project", str(self.root)]), 0)
+
+
+class TestAbandonRun(Base):
+    """`abandon` — штатный выход для прогона, умершего ДО первого артефакта.
+
+    Инцидент: такой прогон (init.py прошёл, фаза до записи доков не дошла) был неубираем
+    ничем. `put` отказывал на отсутствии каталога доков — проверка стоит ДО --force и им не
+    снимается; `status` его не показывал вовсе; руками из ground/statements/ нельзя —
+    state-write-guard режет unlink. Всё это время он числился живым по статусу шагов и
+    перехватывал резолв активной фичи. Выходом оставался только `rm -rf` мимо харнеса.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.state = self._run("forgelite", "KEY-10398",
+                               _steps(["01-grounding"], status="in_progress"))
+
+    def test_put_cannot_help_without_docs_even_with_force(self):
+        """Пин на причину появления abandon: --force тут не работает и работать не должен."""
+        with self.assertRaises(archive.Fail) as cm:
+            archive.archive_feature(self.root, "KEY-10398", skill="forgelite",
+                                    force=True, reason="брошен")
+        self.assertIn("нет каталога доков", str(cm.exception))
+
+    def test_abandon_moves_state_to_archive(self):
+        res = archive.abandon_run(self.root, "KEY-10398", skill="forgelite", reason="брошен")
+        self.assertTrue(res["moved"])
+        self.assertFalse(self.state.exists(), "стейт остался в statements/")
+        moved = self.root / "ground" / "archive" / "forgelite" / "KEY-10398"
+        self.assertTrue((moved / "manifest.json").is_file(), "стейт потерян, а не перенесён")
+
+    def test_abandon_records_reason_in_meta(self):
+        """Причина — единственное, чего потом не восстановить, поэтому она едет в мету."""
+        archive.abandon_run(self.root, "KEY-10398", skill="forgelite",
+                            reason="чужой брошенный стаб")
+        meta = json.loads((self.root / "ground" / "archive" / "forgelite" / "KEY-10398"
+                           / "archive-meta.json").read_text(encoding="utf-8"))
+        self.assertTrue(meta["abandoned"])
+        self.assertEqual(meta["reason"], "чужой брошенный стаб")
+        self.assertEqual(meta["steps"], {"01-grounding": "in_progress"})
+
+    def test_abandon_frees_the_active_run_resolution(self):
+        """Смысл команды: после неё активной фичей становится ТА, что идёт."""
+        mine = self._run("feature-pipeline", "KEY-10413",
+                         _steps(["01-grounding"], status="pending"))
+        sys.path.insert(0, str(SCRIPTS.parents[2] / "hooks"))
+        import _project
+        self.assertTrue(_project.resolve_active_run(self.root)["ambiguous"],
+                        "брошенный прогон обязан быть виден как неоднозначность")
+        archive.abandon_run(self.root, "KEY-10398", skill="forgelite", reason="брошен")
+        run = _project.resolve_active_run(self.root)
+        self.assertFalse(run["ambiguous"])
+        self.assertEqual(run["path"], mine / "manifest.json")
+
+    def test_abandon_refuses_when_docs_exist(self):
+        """Есть доки — прогон не пустой: уносить надо обе половины, иначе доки сиротеют."""
+        self._docs("KEY-10398")
+        with self.assertRaises(archive.Fail) as cm:
+            archive.abandon_run(self.root, "KEY-10398", skill="forgelite", reason="брошен")
+        self.assertIn("put", str(cm.exception))
+        self.assertTrue(self.state.exists(), "на отказе стейт не должен двигаться")
+
+    def test_abandon_refuses_unknown_run(self):
+        with self.assertRaises(archive.Fail):
+            archive.abandon_run(self.root, "KEY-NOPE", skill="forgelite", reason="брошен")
+
+    def test_abandon_works_without_manifest(self):
+        """Стейт наполовину снесён руками: run_state ушёл бы в SystemExit(4) через
+        safe_load_json, и каталог остался бы неубираемым вообще."""
+        (self.state / "manifest.json").unlink()
+        res = archive.abandon_run(self.root, "KEY-10398", skill="forgelite", reason="битый")
+        self.assertTrue(res["moved"])
+        self.assertFalse(self.state.exists())
+
+    def test_dry_run_writes_nothing(self):
+        res = archive.abandon_run(self.root, "KEY-10398", skill="forgelite",
+                                  reason="брошен", dry_run=True)
+        self.assertFalse(res["moved"])
+        self.assertTrue(self.state.exists())
+        self.assertFalse((self.root / "ground" / "archive").exists())
+
+    def test_cli_requires_reason(self):
+        with self.assertRaises(SystemExit):
+            archive.main(["--project", str(self.root), "abandon", "KEY-10398",
+                          "--skill", "forgelite"])
+        self.assertTrue(self.state.exists())
+
+    def test_cli_rejects_blank_reason(self):
+        rc = archive.main(["--project", str(self.root), "abandon", "KEY-10398",
+                           "--skill", "forgelite", "--reason", "   "])
+        self.assertEqual(rc, 2)
+        self.assertTrue(self.state.exists())
+
+    def test_status_lists_run_without_docs(self):
+        """Раньше `status` пропускал такой прогон (`if not docs.is_dir(): continue`) — о нём
+        нельзя было узнать штатно вообще."""
+        data = archive.status(self.root)
+        rows = data["stateless"]
+        self.assertEqual([(r["skill"], r["feature"]) for r in rows],
+                         [("forgelite", "KEY-10398")])
+        self.assertTrue(rows[0]["live"])
+
+    def test_status_stops_listing_it_after_abandon(self):
+        archive.abandon_run(self.root, "KEY-10398", skill="forgelite", reason="брошен")
+        self.assertEqual(archive.status(self.root)["stateless"], [])
 
 
 if __name__ == "__main__":

@@ -283,6 +283,36 @@ def _check_policy_drift(project_root, raw_cfg: dict, warnings: list) -> None:
     )
 
 
+def _check_ambiguous_active_run(project_root, warnings: list) -> None:
+    """Живых прогонов больше одного — активный выбирается тай-брейком по mtime.
+
+    Так выглядит брошенный прогон: чужой, приехавший с `git pull`, или свой, умерший на
+    первом шаге. Сам он не рассосётся (шаги остались pending — по статусу он живой), а
+    последствия тихие: гейты фазы применяются по чужому стейту, а `config.py set inputs.*`
+    без --skill/--feature отказывает и выглядит как поломка форжа. Инцидент, из-за которого
+    проверка появилась: пользователь снёс чужие прогоны `rm -rf` — единственным, что
+    сработало, — потому что узнать о них было нечем.
+
+    Только WARNING: два живых прогона законны (фикс внутри стори), и решать, какой лишний,
+    может только пользователь.
+    """
+    try:
+        from _project import resolve_active_run
+        run = resolve_active_run(Path(project_root))
+    except Exception:  # noqa: BLE001 — диагностика не должна ронять preflight
+        return
+    if not run["ambiguous"]:
+        return
+    names = ", ".join(f"{s}/{f}" for s, f in run["live"]) or "(живых нет)"
+    warnings.append(
+        f"активный прогон неоднозначен — кандидаты: {names}. Активным считается "
+        f"{run['skill']}/{run['feature']} (свежайший по mtime), и гейты поедут по нему. "
+        f"Если лишний прогон брошен — сними его с активных: pipeline-state/scripts/"
+        f"archive.py abandon <feature> --skill <S> --reason \"<почему>\" "
+        f"(список: archive.py status). Руками из ground/statements/ не удаляй."
+    )
+
+
 def _check_runtime_settings_dirs(project_root, base, warnings: list) -> None:
     """Рантайм читает settings.json ИЗ СВОЕГО базового каталога — и он может быть не тем,
     куда мы задеплоились.
@@ -581,6 +611,7 @@ def preflight(project_root: str, self_base=None) -> dict:
         if cfg.get("_incomplete"):
             init_needed.append(f"policy.json incomplete: {cfg['_incomplete']}")
         _check_policy_drift(project_root, cfg, warnings)
+        _check_ambiguous_active_run(project_root, warnings)
 
     # 2. Проверяем ТУ раскладку кода, которую реально грузит рантайм.
     layout = resolve_layout(project_root, self_base)

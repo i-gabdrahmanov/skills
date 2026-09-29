@@ -119,7 +119,8 @@ def resolve_skill(project, explicit=None) -> str:
     Escape-hatch, который печатает КАЖДЫЙ баннер гейта, оказывался тупиком, и модель уходила
     в цикл «снял override → всё ещё блок».
 
-    Дефолт теперь — namespace самого свежего манифеста (тот же резолвер, что у хуков), с
+    Дефолт теперь — namespace активного прогона (тот же резолвер, что у хуков: свежайший
+    ЖИВОЙ манифест, см. _project.resolve_active_run), с
     откатом на "feature-pipeline", если манифестов нет вовсе."""
     if explicit:
         return str(explicit)

@@ -134,7 +134,12 @@ description: >
 
 - **Project-wide (`ground/policy.json`)** — общая конфигурация проекта: `quality.*`,
   `conventions.*`, `docs.*`, `sdd.*`, `adr.*`, `spec.*`, `jira.*`, `project.*`.
-  Иммутабельна на прогоне активной фичи (манифест существует) — `set` вернёт exit 1.
+  Пишется ВСЕГДА, в том числе на идущем прогоне: прогон защищён не запретом на запись, а
+  снимком политики (`policy_snapshot` в своём манифесте, делается на `init.py`). Поэтому
+  `set` вернёт exit 0 + WARNING «правка применится со следующего прогона»; применить её к
+  ТЕКУЩЕМУ — `config.py repin --skill <S> --feature <F>` (R4, по approval).
+  Прежний запрет («манифест существует → exit 1») снят: он блокировал конфиг ВТОРОГО
+  прогона в репозитории, а правку файла мимо `config.py` не ловил вовсе.
 - **Per-feature (`ground/statements/<skill>/<feature>/manifest.json`)** — входы и решения
   текущей фичи: `inputs.mode`/`inputs.story`/`inputs.spec`/`inputs.spec_anchor` и
   `decisions.mode_task`/`decisions.criticality`/`decisions.auto_max_risk`.
