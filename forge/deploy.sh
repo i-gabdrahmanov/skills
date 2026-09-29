@@ -30,6 +30,11 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # корень репо Fo
 . "$SRC/hooks/_pick_python.sh"
 forge_pick_python || true
 
+# Реестр положенного + надгробия (что форж удалил из репо). Общая библиотека с uninstall.sh —
+# два нескоординированных списка «что наше» уже приводили к сиротам, держим один источник.
+# shellcheck source=_deployed_manifest.sh
+. "$SRC/_deployed_manifest.sh"
+
 # --- целевая папка обязательна ---
 TARGET="${1:-}"
 if [ -z "$TARGET" ]; then
@@ -54,6 +59,23 @@ fi
 GIG="$TARGET/.gigacode"
 echo "== deploy Forge → $GIG =="
 mkdir -p "$GIG/hooks" "$GIG/skills"
+
+# 0. надгробия ПЕРЕД копированием: снять то, что прошлый деплой сюда клал, а текущий исходник
+# больше не содержит (реестр .forge-deployed ∪ tombstones.txt, минус живое в $SRC). До копии —
+# чтобы в выводе сначала шло «убрали снятое», потом «положили актуальное».
+# Почему не хватало прежнего предиката владения — см. шапку _deployed_manifest.sh.
+tombstoned=0
+while IFS= read -r _e; do
+  [ -n "$_e" ] || continue
+  rm -rf "$GIG/$_e"
+  echo "  ✗ снято из прошлой установки (удалено из репо): $_e"
+  tombstoned=$((tombstoned + 1))
+done <<EOF
+$(forge_tombstones "$SRC" "$GIG")
+EOF
+if [ "$tombstoned" -gt 0 ]; then
+  echo "  ✓ снято надгробий: $tombstoned"
+fi
 
 # 1. co-location: hooks И skills в один .gigacode (overwrite — source-managed).
 # cp -a вместо tar-конвейера — возврат к до-регрессионной команде. `tar -cf - .` тащит
@@ -134,8 +156,16 @@ if [ -d "$SRC/commands" ]; then
     cp "$c" "$GIG/commands/$base"
     echo "  ✓ слэш-команда /${base%.md} → $GIG/commands/$base"
   done
-  rm -f "$GIG/commands/forge.toml"     # устаревший TOML-вариант → окно миграции qwen-code
+  # устаревший commands/forge.toml (окно миграции qwen-code на каждом старте) снимается
+  # общим механизмом надгробий — запись в tombstones.txt, хардкод здесь больше не нужен.
 fi
+
+# 3d. реестр установки: перечень того, что этот деплой положил (top-level skills/hooks/commands).
+# По нему СЛЕДУЮЩИЙ апгрейд отличит «форж это удалил» от «оператор это добавил» — без реестра
+# оба выглядят одинаково (записи нет в исходнике), и снятая ветка оставалась в таргете навсегда.
+FORGE_REV="$(git -C "$SRC" describe --tags --match 'forge/v*' --always --dirty 2>/dev/null || echo unknown)"
+forge_manifest_write "$GIG" "$SRC" "$FORGE_REV"
+echo "  ✓ реестр установки записан: .gigacode/$FORGE_MANIFEST_NAME (rev: $FORGE_REV)"
 
 # 3c. .gitignore проекта: рабочие данные пайплайна и сам харнес в git не едут.
 # ground/ — это манифесты прогонов, вердикты судей, evidence, журналы файлов: производное от

@@ -9,8 +9,9 @@
 #   мягко (по умолчанию):   git pull  →  bash deploy.sh <target>
 #       overwrite source-managed файлов (hooks/skills/commands/доки), блок hooks в
 #       settings.json пере-резолвится. Данные оператора не трогаются: ground/, свои
-#       скиллы/хуки/команды, permissions/mcpServers, бэкапы. НО: скилл, УДАЛЁННЫЙ из
-#       репо, останется сиротой в таргете (deploy прунит только хуки, не скиллы).
+#       скиллы/хуки/команды, permissions/mcpServers, бэкапы. Скилл/команду, УДАЛЁННЫЕ из
+#       репо, deploy снимает сам — по реестру прошлой установки (.gigacode/.forge-deployed)
+#       и tombstones.txt; см. _deployed_manifest.sh.
 #
 #   жёстко (--force):       git pull  →  bash uninstall.sh <target>  →  bash deploy.sh <target>
 #       чистая переустановка форж-файлов: uninstall точечно снимает ВСЁ форж-своё (в т.ч.
