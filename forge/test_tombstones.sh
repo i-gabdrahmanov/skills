@@ -39,6 +39,7 @@ GIG="$TGT/.gigacode"
 mkdir -p "$SRC/skills/zzz-temp"
 echo "temp skill" > "$SRC/skills/zzz-temp/SKILL.md"
 echo "temp command" > "$SRC/commands/zzz-temp.md"
+echo "# temp hook" > "$SRC/hooks/zzz-temp-hook.py"
 
 run_deploy() { bash "$SRC/deploy.sh" "$TGT" >/dev/null 2>&1; }
 
@@ -47,6 +48,7 @@ run_deploy
 mkdir -p "$GIG/skills/my-own"                       # операторское — ПОСЛЕ деплоя
 echo "operator skill" > "$GIG/skills/my-own/SKILL.md"
 echo "operator command" > "$GIG/commands/my-own.md"
+echo "# operator hook" > "$GIG/hooks/my-hook.py"       # самописный хук рядом с форж-хуками
 
 if [ -d "$GIG/skills/zzz-temp" ] && [ -f "$GIG/commands/zzz-temp.md" ]; then
   ok "первый деплой поставил временный скилл и команду"
@@ -67,7 +69,7 @@ else
 fi
 
 # ── 2. удаляем из исходника → повторный деплой обязан снять сироту ────────────
-rm -rf "$SRC/skills/zzz-temp" "$SRC/commands/zzz-temp.md"
+rm -rf "$SRC/skills/zzz-temp" "$SRC/commands/zzz-temp.md" "$SRC/hooks/zzz-temp-hook.py"
 run_deploy
 
 if [ ! -e "$GIG/skills/zzz-temp" ]; then
@@ -86,6 +88,21 @@ if [ -f "$GIG/skills/my-own/SKILL.md" ] && [ -f "$GIG/commands/my-own.md" ]; the
   ok "операторское пережило апгрейд (снимаем своё, не всё лишнее)"
 else
   bad "операторское" "my-own снесён апгрейдом — регресс инцидента с rm -rf"
+fi
+
+# Хук оператора: прунинг hooks/ раньше сносил ЛЮБОЙ top-level *.py/*.sh, которого нет в
+# исходнике, — включая самописный. Та же ошибка, что со скиллами, только с обратным знаком.
+if [ -f "$GIG/hooks/my-hook.py" ]; then
+  ok "самописный хук оператора пережил апгрейд"
+else
+  bad "операторский хук" "hooks/my-hook.py снесён прунингом — потеря данных"
+fi
+
+# И при этом форж-свой хук, удалённый из исходника, всё-таки снимается.
+if [ ! -e "$GIG/hooks/zzz-temp-hook.py" ]; then
+  ok "хук, удалённый из репо, снят при апгрейде"
+else
+  bad "надгробие hooks/" "zzz-temp-hook.py пережил повторный деплой"
 fi
 
 if ! grep -Fxq "skills/zzz-temp" "$GIG/.forge-deployed"; then
