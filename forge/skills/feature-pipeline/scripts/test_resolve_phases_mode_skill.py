@@ -241,6 +241,7 @@ def main() -> int:
     test_unknown_mode_exits_3()
     test_mode_absent_skips_validation()
     test_current_phase_mismatch_exits_3()
+    test_mode_vocab_matches_registry()
     print(f"\n{PASSED} passed, {FAILED} failed")
     return 1 if FAILED else 0
 

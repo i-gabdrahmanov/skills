@@ -14,9 +14,10 @@
 # Что делает (порядок важен — см. ниже):
 #   1. Снимает блок hooks из <target>/.gigacode/settings.json (с бэкапом, как deploy-local.sh).
 #   2. Отставляет в сторону локальный конфиг оператора (minor-defect-fix/config.json).
-#   3. Удаляет ТОЧЕЧНО то, что положил deploy.sh (перечень из исходного репо), внутри
-#      co-located skills/ hooks/ commands/ + deploy-local.sh и доки. Самописные скиллы/хуки
-#      оператора рядом — НЕ трогает; опустевший каталог убирает только rmdir'ом.
+#   3. Удаляет ТОЧЕЧНО то, что положил deploy.sh (перечень: исходное репо + реестр прошлой
+#      установки .gigacode/.forge-deployed + tombstones.txt), внутри co-located skills/ hooks/
+#      commands/ + deploy-local.sh и доки. Самописные скиллы/хуки оператора рядом — НЕ трогает;
+#      опустевший каталог убирает только rmdir'ом.
 #   4. Снимает из <target>/.gitignore блок forge (ground/*, .gigacode/ — ровно между
 #      маркерами; строки оператора в этом файле остаются).
 #   5. --purge-state: дополнительно сносит рабочие данные (ground/ + git-refs чекпойнтов).
@@ -27,7 +28,7 @@
 #
 # Что НЕ трогает (по умолчанию):
 #   - самописные скиллы/хуки/команды оператора в .gigacode/{skills,hooks,commands}/ —
-#     всё, чего нет в исходном репо Forge, остаётся на месте.
+#     всё, чего нет ни в исходном репо Forge, ни в реестре прошлой установки, остаётся на месте.
 #   - ground/            — рабочие данные пайплайна (BRD/SDD/манифесты/логи). Только --purge-state.
 #   - .gitignore         — файл целиком; снимается ТОЛЬКО блок между маркерами forge.
 #   - settings.json      — остальные секции (permissions, mcpServers, $version) не наши.
@@ -42,6 +43,10 @@
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # корень репо Forge
+
+# Реестр установки + надгробия — общая библиотека с deploy.sh (один источник «что наше»).
+# shellcheck source=_deployed_manifest.sh
+. "$SRC/_deployed_manifest.sh"
 
 # --- поиск python-интерпретатора (Windows/git-bash часто без python3, только python/py) ---
 PY=()
@@ -182,11 +187,29 @@ remove_path() {  # $1=path  $2=человекочитаемое имя (один
   fi
 }
 
+# Реестр читаем ОДИН раз: remove_forge_owned зовётся на каждую запись трёх каталогов.
+MANIFEST_ENTRIES="$(forge_manifest_entries "$GIG")"
+_forge_in_manifest() {  # $1="<dir>/<name>"
+  [ -n "$MANIFEST_ENTRIES" ] || return 1
+  printf '%s\n' "$MANIFEST_ENTRIES" | grep -Fxq "$1"
+}
+
+# Надгробия: то, что форж клал раньше и удалил из репо. Снимаем и здесь, а не только в deploy —
+# uninstall обязан унести форж-своё целиком, включая снятые ветки (установки без реестра
+# закрывает tombstones.txt).
+while IFS= read -r _e; do
+  [ -n "$_e" ] || continue
+  remove_path "$GIG/$_e" "$_e (удалено из репо)"
+done <<EOF
+$(forge_tombstones "$SRC" "$GIG")
+EOF
+
 # skills/, hooks/, commands/ — co-located: рантайм читает из .gigacode/{skills,hooks,commands}
 # и туда же оператор кладёт СВОИ скиллы/хуки/команды. Снести каталог целиком (rm -rf) уносит
 # чужое — реальный инцидент: uninstall стёр все самописные скиллы оператора. Поэтому удаляем
-# ровно то, что клал deploy.sh: перечень берём из исходного репо ($SRC); всё, чего в $SRC нет,
-# — операторское, не трогаем (симметрично prune в deploy.sh). Родительский каталог убираем
+# ровно то, что клал deploy.sh: перечень — исходное репо ($SRC) ПЛЮС реестр прошлой установки
+# (.forge-deployed); всё, чего нет ни там, ни там, — операторское, не трогаем (симметрично
+# надгробиям в deploy.sh). Родительский каталог убираем
 # ТОЛЬКО через rmdir (не rm -rf): опустеет — уйдёт, останется чужое (в т.ч. скрытое) — выживет.
 remove_forge_owned() {  # $1=src-эталон  $2=dst-в-проекте  $3=label
   local src="$1" dst="$2" label="$3" entry base removed=0 kept=0
@@ -195,7 +218,11 @@ remove_forge_owned() {  # $1=src-эталон  $2=dst-в-проекте  $3=labe
   for entry in "$dst"/* "$dst"/.[!.]*; do
     [ -e "$entry" ] || continue
     base="$(basename "$entry")"
-    if [ -e "$src/$base" ]; then                    # forge-owned → снять
+    # Владение: запись есть в исходнике ИЛИ её клал прошлый деплой (реестр .forge-deployed).
+    # Одного «есть в $SRC» не хватало: скилл, УДАЛЁННЫЙ из репо, по нему проходил как
+    # операторский и переживал даже `update.sh --force` — ровно тот класс, ради которого
+    # --force и существует (шапка _deployed_manifest.sh).
+    if [ -e "$src/$base" ] || _forge_in_manifest "$label/$base"; then   # forge-owned → снять
       if [ "$DRY_RUN" -eq 1 ]; then
         echo "  [dry-run] удалить: $label/$base"
       else
@@ -220,10 +247,9 @@ remove_forge_owned() {  # $1=src-эталон  $2=dst-в-проекте  $3=labe
 
 remove_forge_owned "$SRC/skills"   "$GIG/skills"   "skills"
 remove_forge_owned "$SRC/hooks"    "$GIG/hooks"    "hooks"
-# legacy: прошлые деплои клали forge.toml (ныне forge.md). В $SRC его больше нет, поэтому
-# remove_forge_owned счёл бы его «операторским» и оставил, а qwen-code от TOML-команды
-# показывает окно миграции на каждом старте. Снимаем по имени ДО сметания commands/.
-remove_path "$GIG/commands/forge.toml" "commands/forge.toml (устаревший формат)"
+# legacy commands/forge.toml (qwen-code показывает окно миграции на каждом старте) снят выше
+# общим механизмом надгробий — точечный хардкод был первой заплаткой на дыру в предикате
+# владения, теперь запись живёт в tombstones.txt вместе с остальными снятыми.
 [ -d "$SRC/commands" ] && remove_forge_owned "$SRC/commands" "$GIG/commands" "commands"
 # .gitignore: снять РОВНО блок, который положил deploy.sh (между маркерами). Файл целиком не
 # трогаем — в нём строки оператора; опустевший после снятия блока файл тоже оставляем, его
@@ -244,6 +270,7 @@ if [ -f "$GI" ] && grep -qF "$GI_BEGIN" "$GI"; then
   fi
 fi
 
+remove_path "$(forge_manifest_file "$GIG")" "$FORGE_MANIFEST_NAME (реестр установки)"
 remove_path "$GIG/deploy-local.sh"  "deploy-local.sh"
 remove_path "$GIG/FORGE.md"         "FORGE.md"
 remove_path "$GIG/SKILLS-REGISTRY.md" "SKILLS-REGISTRY.md"
