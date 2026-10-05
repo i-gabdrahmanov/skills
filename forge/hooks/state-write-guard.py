@@ -321,6 +321,36 @@ def _unlink_targets(cmd: str) -> list[str]:
     return [t for t in out if t]
 
 
+# Доки фич и их архив — история стройки: BRD, sdd, tech-design, task-plan. Не control-plane
+# (фазы пишут туда тулом Write, а forgefix штатно переносит свои доки `mv`), но УДАЛЯТЬ их
+# моделью нельзя: на отказе архивации доки остаются на месте, и «прибраться руками» значило
+# потерять историю фичи безвозвратно — архив её больше не увидит, restore вернуть нечего.
+# Уборка — только /forge-archive put (переносит доки вместе со стейтом прогона).
+_DOCS_RE = re.compile(r"(?<![\w-])feature-pipeline(?:/|$)|(?<![\w-])docs/archive(?:/|$)",
+                      re.IGNORECASE)
+_RM_CMDS = ("rm", "unlink", "shred")
+
+
+def _rm_targets(cmd: str) -> list[str]:
+    """Пути, которые команда именно УДАЛЯЕТ (rm/unlink/shred) — без mv и touch."""
+    out: list[str] = []
+    for seg in _CMD_SEP_RE.split(cmd.replace(">|", ">")):
+        toks = _tokens(seg)
+        if toks and posixpath.basename(toks[0]) in _RM_CMDS:
+            out += [a for a in toks[1:] if a and not a.startswith("-")]
+    return out
+
+
+def _docs_hint(target: str) -> str:
+    return (
+        f"[state-write-guard] DENY: удаление доков фичи '{target}' запрещено — это история "
+        f"стройки (BRD, sdd, tech-design, task-plan), и после удаления её не вернёт ничто.\n"
+        f"  Убрать доки завершённой фичи с рабочего стола — /forge-archive put <слаг> (доки "
+        f"переезжают в <docs>/archive/ вместе со стейтом прогона, restore возвращает обратно).\n"
+        f"  Архивация отказала — покажи пользователю её причину как есть и не обходи её руками."
+    )
+
+
 # Чекпойнт-refs (refs/forge/*) — control-plane в git: точки восстановления rollback.py.
 # `git update-ref` на них — подделка чекпойнта (перенаправить откат на выгодный коммит),
 # deny безусловно (update-ref сам и есть запись, write-токен не нужен). Легитимный писатель —
@@ -393,6 +423,10 @@ def main() -> int:
             for t in (_collapse(x) for x in _unlink_targets(cmd)):
                 if _CP_LIVE_RE.search(t):
                     print(_unlink_hint(t), file=sys.stderr)
+                    return 2
+            for t in (_collapse(x) for x in _rm_targets(cmd)):
+                if _DOCS_RE.search(t):
+                    print(_docs_hint(t), file=sys.stderr)
                     return 2
             targets = [_collapse(t) for t in _write_targets(cmd)]
             for t in targets:

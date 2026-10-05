@@ -393,7 +393,9 @@ def check_gate_override(command: str, root: Path) -> str | None:
 # Гейт стоит на классах, которые СНИМАЮТ enforcement. Approval'ы плана (fix-plan-*,
 # jira-plan-*, <doc>-approved-*) не гейтятся: они двигают прогон вперёд, а не убирают защиту,
 # и их брифы и так проводят через явный вопрос.
-_CONSENT_BYPASS_RE = re.compile(r"^(?:gate-override|rollback|skip-judges|policy-repin)\b")
+# acceptance-<ID> — ручное подтверждение критерия приёмки (verify:"manual" в task-plan):
+# заменяет тест критерия, поэтому того же класса, что и override гейта.
+_CONSENT_BYPASS_RE = re.compile(r"^(?:gate-override|rollback|skip-judges|policy-repin|acceptance)\b")
 _EVIDENCE_MIN_CHARS = 12          # «да», «ок», «+» цитатой пользователя не являются
 
 

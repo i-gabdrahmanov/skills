@@ -462,5 +462,46 @@ class TestTestFilterEscaping(unittest.TestCase):
                              "./gradlew test")
 
 
+
+class TestRedAcceptance(unittest.TestCase):
+    """«Все новые тесты красные» не значит «каждый критерий приёмки покрыт»: RED-гейт требует
+    маркированный тест на КАЖДЫЙ критерий задачи, и тот обязан упасть в этом прогоне."""
+
+    _runner = TestPerTestRed._runner
+    _main = TestPerTestRed._main
+    tearDown = TestPerTestRed.tearDown
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        feat = self.root / "STOR-1"
+        feat.mkdir()
+        plan = {"tasks": [{"id": "T1", "layers": ["main"],
+                           "artifacts": ["src/main/java/Foo.java"],
+                           "acceptance": ["отчёт сформирован", "пустой период — 400"]}]}
+        self.plan_path = feat / "task-plan.json"
+        self.plan_path.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
+        self.test_file = self.root / "src" / "test" / "java" / "com" / "x" / "FooTest.java"
+        self.test_file.parent.mkdir(parents=True)
+
+    def _tests(self, *markers):
+        body = "package com.x;\nclass FooTest {\n"
+        for i, m in enumerate(markers, 1):
+            body += f"    // @acceptance {m}\n    @Test\n    void t{i}() {{}}\n"
+        self.test_file.write_text(body + "}\n", encoding="utf-8")
+
+    def test_every_criterion_red_passes(self):
+        self._tests("STOR-1:T1.1", "STOR-1:T1.2")
+        self.assertEqual(self._main(self._runner([("t1", "red"), ("t2", "red")])), 0)
+
+    def test_criterion_without_test_fails(self):
+        self._tests("STOR-1:T1.1")
+        rc = self._main(self._runner([("t1", "red"), ("t2", "red")]))
+        self.assertEqual(rc, 2, "второй критерий без теста — RED не пройден")
+
+    def test_criterion_test_outside_run_fails(self):
+        self._tests("STOR-1:T1.1", "STOR-1:T1.2")
+        rc = self._main(self._runner([("t1", "red")]))
+        self.assertEqual(rc, 2, "тест критерия не выполнился в RED-прогоне")
+
 if __name__ == "__main__":
     unittest.main()

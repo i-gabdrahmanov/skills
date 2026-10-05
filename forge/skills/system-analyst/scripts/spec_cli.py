@@ -25,8 +25,13 @@
 ещё раз после записи. Доки уезжают в архив только на ПОДТВЕРЖДЁННОМ merged; всё, что не
 сошлось, — exit 3 с диагнозом и списком вариантов, выбирает пользователь.
 
+Дельта — намерение. Перед записью merge сверяет task-plan.json фичи с кодом (impl_check.py) и
+пишет итог в журнал мастера по задачам; часть плана в коде не найдена — exit 3 not-implemented
+(`--allow-unimplemented` сливает с отметкой, что не сделано).
+
 По успеху слияния/сверки доки фичи уезжают в <docs_base>/archive/ (archive.py; `--no-archive`
-отключает). Архивация — best-effort: её отказ не меняет код выхода самого слияния.
+отключает) — ПОСЛЕ всей пачки: стори уносит свои fixes/, и фикс обязан быть слит до того.
+Архивация — best-effort: её отказ не меняет код выхода самого слияния.
 
 Политика forge-no-delivery: пишем только в рабочее дерево клона мастер-репо; коммит/push —
 на пользователе.
@@ -47,6 +52,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(SCRIPT_DIR.parents[1] / "feature-pipeline" / "scripts"))
 
 import check_master_spec as gate          # noqa: E402
+import impl_check as IC                   # noqa: E402
 import merge_delta_to_master as engine    # noqa: E402
 import spec_grammar as SG                 # noqa: E402
 import spec_map as SM                     # noqa: E402
@@ -273,6 +279,25 @@ def _classify(kinds: list[str]) -> str:
     return "merged"
 
 
+def _superseded(slug: str, sdd: Path, spec_path: Path, capability: str, prefix: str,
+                g: "SG.Grammar | None") -> "set[str]":
+    """Названия требований стори, переписанные её СЛИТЫМИ фиксами (fixes/*/sdd.md).
+
+    Фикс точечно правит требование стори, и после его слияния дельта стори с мастером
+    расходится законно: считать её «drifted» значит навсегда запереть стори вне архива, а
+    сливать её «~» — откатить правку фикса старым намерением."""
+    if "/fixes/" in slug:
+        return set()
+    out: "set[str]" = set()
+    for fix in sorted(sdd.parent.glob("fixes/*/sdd.md")):
+        fslug = f"{slug}/fixes/{fix.parent.name}"
+        if _state_of(fslug, fix, spec_path, capability, prefix, g) != "merged":
+            continue
+        text = fix.read_text(encoding="utf-8", errors="replace")
+        out |= {engine._norm(c["title"]) for c in engine.parse_delta(text)}
+    return out
+
+
 def _state_of(slug: str, sdd: Path, spec_path: Path, capability: str, prefix: str,
               g: "SG.Grammar | None" = None) -> str:
     """Состояние дельты по плану слияния (dry-run): new | drifted | merged | unknown-format.
@@ -280,7 +305,8 @@ def _state_of(slug: str, sdd: Path, spec_path: Path, capability: str, prefix: st
     `status == "error"` (в дельте нет требований) считаем «делать нечего» — так эта ветка
     вела себя с самого начала, и на ней же стоит гейт архивации."""
     plan = engine.merge(sdd, spec_path, engine.default_template(), slug, capability,
-                        prefix=prefix, dry_run=True, grammar=g)
+                        prefix=prefix, dry_run=True, grammar=g,
+                        superseded=_superseded(slug, sdd, spec_path, capability, prefix, g))
     if plan["status"] == "unsupported":
         # Форму мастера не разобрали — «слито» это или нет, неизвестно. Врать «merged»
         # нельзя: на этом состоянии стоит гейт архивации, и требование уехало бы мимо мастера.
@@ -489,11 +515,13 @@ def _status_single(args) -> int:
 
 def _run_merge(args, slug: str, sdd: Path, spec_path: Path, capability: str,
                prefix: str, dry: bool, g: "SG.Grammar | None" = None,
-               headings: "tuple" = (None, None)) -> dict:
+               headings: "tuple" = (None, None), impl: "dict | None" = None) -> dict:
     return engine.merge(sdd, spec_path, engine.default_template(), _provenance(slug), capability,
                         prefix=prefix, dry_run=dry, allow_modify=args.allow_modify,
                         modify_ids=set(args.modify or []), grammar=g,
-                        ensure=bool(getattr(args, "ensure_sections", False)), headings=headings)
+                        ensure=bool(getattr(args, "ensure_sections", False)), headings=headings,
+                        impl=impl,
+                        superseded=_superseded(slug, sdd, spec_path, capability, prefix, g))
 
 
 def cmd_diff(args) -> int:
@@ -541,6 +569,10 @@ def cmd_diff(args) -> int:
                   f"  (или --modify {res['blocked'][0]})")
             rc = rc or 3
     return rc
+
+
+def _story_of(slug: str) -> "str | None":
+    return slug.split("/fixes/", 1)[0] if "/fixes/" in slug else None
 
 
 def _targets(root: Path, args) -> "list[tuple[str, Path]] | None":
@@ -614,6 +646,22 @@ def _choices(row: dict) -> list:
             {"id": "archive-force", "slug": slug, "title": "Убрать доки мимо мастера",
              "detail": "требования останутся только в дельте — осознанный шаг",
              "command": f"/forge-archive put {short} --force --reason '<почему>'"},
+        ]
+    if p == "not-implemented":
+        impl = row.get("impl") or {}
+        return [
+            {"id": "finish", "slug": slug, "title": "Доделать реализацию и слить потом",
+             "detail": "в коде нет части плана задач: "
+                       + "; ".join(r["id"] for r in impl.get("tasks", [])
+                                   if r["status"] != "done"),
+             "command": None},
+            {"id": "merge-partial", "slug": slug,
+             "title": "Слить с отметкой «реализовано частично»",
+             "detail": "в журнал мастера уйдёт по строке на задачу: что есть в коде, чего нет",
+             "command": f"/forge-merge {short} --allow-unimplemented"},
+            {"id": "align-delta", "slug": slug, "title": "Сузить дельту до сделанного",
+             "detail": "убрать из sdd.md требования, которых нет в коде, и слить остаток",
+             "command": None},
         ]
     if p == "blocked-modify":
         blocked = row.get("blocked") or []
@@ -730,6 +778,11 @@ def _print_report(rows: list, verify: bool, dry: bool) -> None:
         # противоречие («new → merged — требований дельты в мастере нет»).
         final = after or st
         print(f"     дельта:      {st}{arrow} — {_STATE_WHY.get(final, final)}")
+        impl = r.get("impl")
+        if impl:
+            print(f"     код:         {IC.summary(impl)}")
+            for t in impl.get("tasks") or []:
+                print(f"        {'✓' if t['status'] == 'done' else '✗'} {IC.task_line(t)}")
         print(f"     мастер:      {r['master_note']}")
         print(f"     доки:        {r['docs_note']}")
         if r["ops"] and (r["problem"] or r["master_written"] or dry):
@@ -754,7 +807,7 @@ def _row(slug: str, short: str) -> dict:
             "master_written": False, "archived": False, "archive_target": None,
             "archive_error": None, "problem": None, "error": None, "did": None,
             "master_note": "не тронут", "docs_note": "остались на месте",
-            "spec": None, "capability": None, "candidates": []}
+            "spec": None, "capability": None, "candidates": [], "impl": None}
 
 
 def cmd_merge(args) -> int:
@@ -770,6 +823,7 @@ def cmd_merge(args) -> int:
     prompt = sys.stderr if args.json else sys.stdout   # --json: stdout остаётся машиночитаемым
     feats = _features(root)
     rows: list = []
+    to_archive: list = []
     rc = 0
     for slug, sdd in targets:
         row = _row(slug, _short(slug, feats))
@@ -815,6 +869,16 @@ def cmd_merge(args) -> int:
         state = _classify(plan["kinds"])
         row["delta_state_before"] = state
         sections = plan.get("sections_added") or []
+        # Дельта — намерение. Что из плана задач реально есть в коде — сверяем ДО записи:
+        # слить в мастер несделанное значит записать обещание как факт.
+        impl = row["impl"] = IC.check(root, sdd.parent, slug.split("/")[-1])
+        if state != "merged" and not verify and impl["status"] in ("partial", "not-implemented") \
+                and not args.allow_unimplemented:
+            row["problem"] = "not-implemented"
+            row["error"] = (f"{IC.summary(impl)} — несделанное в мастер как факт не пишем")
+            row["master_note"] = "не тронут (реализация не подтверждена кодом)"
+            rc = rc or 3
+            continue
 
         if state == "merged":
             row["did"] = "verified" if verify else "actual"
@@ -842,7 +906,7 @@ def cmd_merge(args) -> int:
                     row["master_note"] = "не тронут (отменено пользователем)"
                     continue
             res = _run_merge(args, slug, sdd, spec_path, capability, prefix, dry=False, g=g,
-                             headings=w["headings"])
+                             headings=w["headings"], impl=impl)
             if res["status"] in ("error", "no-section"):
                 row.update(problem="error", error=res["error"])
                 rc = 2
@@ -876,7 +940,21 @@ def cmd_merge(args) -> int:
         if args.no_archive:
             row["docs_note"] = "остались на месте (--no-archive)"
             continue
-        a = _archive_one(root, slug, dry_run=args.dry_run)
+        to_archive.append(row)
+
+    # Архивация — ПОСЛЕ всей пачки. Доки фикса лежат внутри папки стори, и её перенос уносит
+    # их с собой: архивируя стори сразу после её слияния, следующую в пачке дельту фикса
+    # увозили в архив неслитой (её merge падал на «нет дельты»), а стейт фикса оставался в
+    # ground/statements/ сиротой. Сливать при этом надо в хронологии (стори, потом её фиксы):
+    # обратный порядок перетёр бы правку фикса старой дельтой стори.
+    batch = {r["slug"] for r in to_archive}
+    for row in to_archive:
+        story = _story_of(row["slug"])
+        if story in batch:
+            # Стори уезжает в этой же пачке и унесёт фикс целиком — доки вместе со стейтом.
+            row["docs_note"] = f"уедут в архив вместе со стори {story}"
+            continue
+        a = _archive_one(root, row["slug"], dry_run=args.dry_run)
         row.update(archived=a["ok"], archive_target=a["target"], archive_error=a["error"])
         if a["ok"]:
             row["docs_note"] = (f"{'dry-run: ' if args.dry_run else ''}"
@@ -884,6 +962,17 @@ def cmd_merge(args) -> int:
         else:
             row["docs_note"] = (f"остались на месте: {a['error']}"
                                 f"  (когда будет готово: /forge-archive put {row['short']})")
+    for row in to_archive:
+        story = _story_of(row["slug"])
+        if story in batch:
+            host = next(r for r in to_archive if r["slug"] == story)
+            row["archived"] = host["archived"]
+            if host["archived"]:
+                row["docs_note"] = (f"{'dry-run: ' if args.dry_run else ''}уехали вместе со "
+                                    f"стори {story} → {host['archive_target']}")
+            else:
+                row["docs_note"] = (f"остались на месте вместе со стори {story}: "
+                                    f"{host['archive_error']}")
 
     first = next((r for r in rows if r.get("spec")), None)
     if args.json:
@@ -1187,6 +1276,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="показать план слияния и предстоящий перенос доков, ничего не записать")
     m.add_argument("--no-archive", action="store_true",
                    help="не убирать доки сведённой фичи в <docs_base>/archive/")
+    m.add_argument("--allow-unimplemented", action="store_true",
+                   help="слить, хотя часть плана задач в коде не найдена (отметка в журнале)")
     _merge_flags(m)
     m.set_defaults(func=cmd_merge)
 

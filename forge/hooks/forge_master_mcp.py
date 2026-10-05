@@ -180,7 +180,8 @@ def t_merge(root: Path, a: dict) -> dict:
     else:
         argv.append("-y")      # подтверждение — у пользователя, ДО вызова (см. бриф команды)
     for key, flag in (("ensure_sections", "--ensure-sections"), ("master_first", "--master-first"),
-                      ("allow_modify", "--allow-modify"), ("no_archive", "--no-archive")):
+                      ("allow_modify", "--allow-modify"), ("no_archive", "--no-archive"),
+                      ("allow_unimplemented", "--allow-unimplemented")):
         if _flag(a, key):
             argv.append(flag)
     for rid in a.get("modify") or []:
@@ -276,7 +277,10 @@ TOOLS: Dict[str, dict] = {
             "dry_run": {**_B, "default": True},
             "ensure_sections": {**_B, "description": "дописать раздел требований в конец мастера"},
             "master_first": _B, "allow_modify": _B,
-            "modify": {"type": "array", "items": _S}, "no_archive": _B},
+            "modify": {"type": "array", "items": _S}, "no_archive": _B,
+            "allow_unimplemented": {**_B, "description": (
+                "слить, хотя часть task-plan в коде не найдена — только по выбору пользователя "
+                "после отчёта not-implemented; что не сделано, уйдёт в журнал мастера")}},
             "additionalProperties": False},
     },
     "master_read": {

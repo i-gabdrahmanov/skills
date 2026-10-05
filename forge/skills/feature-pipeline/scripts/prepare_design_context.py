@@ -135,6 +135,8 @@ def extract_modules_from_task_plan(task_plan_path: str) -> tuple[list[str], set[
                 keywords.add(word)
 
         for acc in task.get("acceptance", []):
+            if isinstance(acc, dict):            # {text, verify: manual, reason}
+                acc = str(acc.get("text") or "")
             if isinstance(acc, str):
                 for word in re.findall(r"[A-Za-zА-Яа-я][A-Za-zА-Яа-я_]{2,}", acc):
                     keywords.add(word)

@@ -5,7 +5,23 @@
 > SKILL.md §0.6, override — SKILL.md §0.6.1. Нумерация секций ниже — историческая (§ из
 > монолитного SKILL.md), внутри брифа она самодостаточна.
 >
-> **Гейт закрытия фазы:** per-task: red-judge PASS → record_gate(check_tests_red) → закрой 04-test-<id>; build+reuse-judge PASS → record_gate(check_build) → закрой 04-build-<id>
+> **Гейт закрытия фазы:** per-task: red-judge PASS → record_gate(check_tests_red) → закрой 04-test-<id>; build+reuse-judge PASS → record_gate(check_acceptance --expect green) → закрой 04-build-<id>
+>
+> **Критерии приёмки ↔ тесты.** Каждый критерий `acceptance[]` задачи получает ID
+> `<фича>:<задача>.<n>` (печатает `check_acceptance.py <task-plan> --list`), и над тест-методом,
+> который его проверяет, стоит маркер `// @acceptance <ID>`. RED-гейт требует тест на каждый
+> критерий и чтобы он упал; GREEN-гейт — чтобы каждый такой тест прошёл. Это и есть проверка
+> «реализация совпадает с приёмкой»: без неё задача закрывалась зелёной сьютой, не проверив
+> ни одного критерия.
+>
+> **Не всё проверяется тестом.** Критерий `{"verify": "manual", "reason": …}` в task-plan
+> тест не требует — его подтверждает человек. Перед GREEN-гейтом задачи с такими критериями
+> покажи пользователю каждый (текст + reason + что именно посмотреть, по коду/стенду) и спроси,
+> проверено ли и как. На его ответ — `record_approval.py --key acceptance-<ID с ':' → '-'>
+> --kind acceptance --approver user --evidence "<дословная фраза пользователя>"` (точную команду
+> печатает сам гейт). Ручное подтверждение заменяет тест, поэтому оно того же класса, что
+> override гейта: цитата сверяется с транскриптом (gate-guard), пересказ не пройдёт. «Нет» —
+> критерий не выполнен: верни задачу в GREEN.
 
 ## 7. Фаза 3 — Build (по задачам, **TDD: RED → GREEN**)
 
@@ -75,7 +91,7 @@ pre-existing и НЕ будет считаться твоей виной (но �
 agent(
   subagent_type="general-purpose",
   description="TDD red: tests for <taskId> in <slug>",
-  prompt="<вывод `get_prompt.py 4.1`; подставь: taskId, slug, acceptance, tech-design сигнатуры>"
+  prompt="<вывод `get_prompt.py 4.1`; подставь: taskId, slug, ID+тексты критериев из `check_acceptance.py --list --task <taskId>`, tech-design сигнатуры>"
 )
 ```
 
@@ -149,9 +165,10 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py build <
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py build <slug> --recheck
 ```
 
-И execution-gate:
+И execution-gate — критерии приёмки задачи прогоном её маркированных тестов (каждый обязан
+ПРОЙТИ) плюс артефакты задачи на диске:
 ```bash
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_build.py "<папка>/task-plan.json" --task <taskId>
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_acceptance.py "<папка>/task-plan.json" --root <project> --task <taskId> --expect green
 ```
 
 ### 7.5 Judge-gate GREEN: reuse-judge (после build-judge, ДО закрытия шага)
@@ -179,11 +196,12 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py reuse <
 только когда **оба** судьи (build-judge И reuse-judge) PASS (`required_judges` шага — оба).
 
 Закрой `04-build-<taskId>` явной командой, только когда **оба** судьи PASS. Перед закрытием
-зафиксируй build-гейт через раннер (без evidence от `record_gate` update.py шаг не закроет):
+зафиксируй build-гейт через раннер (без evidence от `record_gate` update.py шаг не закроет;
+команда — только `check_acceptance.py --expect green`, record_gate другую для 04-build не примет):
 ```bash
 python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py \
     --project <project> --skill feature-pipeline --feature <slug> --step-id 04-build-<taskId> \
-    --cmd "python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_build.py <папка>/task-plan.json --root <project> --task <taskId>"
+    --cmd "python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_acceptance.py <папка>/task-plan.json --root <project> --task <taskId> --expect green"
 python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py \
     --skill feature-pipeline --feature <slug> --step-id 04-build-<taskId> --status completed
 ```

@@ -136,7 +136,10 @@ def _load_batch_file(path: Path) -> list[dict]:
 # цепочка «баннер подсказал команду → модель её выполнила → гейт снят» проходила без
 # человека. Дословная фраза пользователя — единственное, что модель не может сочинить
 # незаметно: она сверяется с транскриптом и остаётся в журнале под аудит.
-_CONSENT_BYPASS_PREFIXES = ("gate-override", "rollback", "skip-judges", "policy-repin")
+# acceptance-<ID> — ручное подтверждение критерия приёмки (verify:"manual"): оно заменяет
+# собой тест, то есть снимает проверку критерия ровно как override гейта.
+_CONSENT_BYPASS_PREFIXES = ("gate-override", "rollback", "skip-judges", "policy-repin",
+                            "acceptance")
 _EVIDENCE_MIN_CHARS = 12          # «да», «ок», «+» цитатой пользователя не являются
 
 

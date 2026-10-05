@@ -803,7 +803,9 @@ class TConsentIsExternal(unittest.TestCase):
 
     def test_bypass_keys_need_evidence(self):
         for key in ("gate-override-coverage-judge", "rollback-f1-02-sdd",
-                    "skip-judges-f1", "policy-repin-f1"):
+                    "skip-judges-f1", "policy-repin-f1",
+                    # ручная проверка критерия приёмки заменяет тест — тот же класс
+                    "acceptance-STOR-1-T1.3"):
             with self.subTest(key=key):
                 r = self._run(self.RA.format(key=key))
                 self.assertEqual(r.returncode, 2, f"{key} прошёл без цитаты")
