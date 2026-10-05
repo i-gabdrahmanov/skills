@@ -132,6 +132,7 @@ class TestReadyRun(Base):
 
     def test_collision_gets_timestamp_suffix(self):
         self._arc("STOR-100").mkdir(parents=True)
+        (self._arc("STOR-100") / archive.META_NAME).write_text("{}", encoding="utf-8")
         res = archive.archive_feature(self.root, "STOR-100")
         self.assertNotEqual(Path(res["target"]).name, "STOR-100")
         self.assertTrue(Path(res["target"]).name.startswith("STOR-100-"))
@@ -252,6 +253,64 @@ class TestFixLayout(Base):
             archive.archive_feature(self.root, "STOR-100")
         self.assertIn("BUG-777", str(cm.exception))
         self.assertTrue((self.root / "docs/feature-pipeline/STOR-100").is_dir())
+
+
+class TestStoryCarriesItsFixes(Base):
+    """Архивация стори уносит fixes/ целиком. Раньше уезжали только доки фикса: его стейт
+    оставался в ground/statements/ сиротой, а НЕслитая дельта фикса пропадала из обхода
+    /forge-merge — требования фикса в мастер не попадали никогда."""
+
+    def setUp(self):
+        super().setUp()
+        self._run("feature-pipeline", "STOR-100", _steps(FULL_STEPS))
+        self._docs("STOR-100", sdd=True)
+        self._run("forgefix", "BUG-512", _steps(["fix-intake", "fix-green", "fix-spec"]),
+                  inputs={"story": "STOR-100"})
+        self.fix = self._docs("STOR-100/fixes/BUG-512", sdd=True)
+
+    def _states(self, *states):
+        real = archive.delta_state
+        it = dict(states)
+        archive.delta_state = lambda project, slug: it.get(slug, "merged")
+        self.addCleanup(lambda: setattr(archive, "delta_state", real))
+
+    def test_fix_state_travels_with_story(self):
+        self._states()
+        archive.archive_feature(self.root, "STOR-100")
+        self.assertTrue((self._arc("STOR-100/fixes/BUG-512") / "sdd.md").is_file())
+        self.assertTrue((self.root / "ground/archive/forgefix/BUG-512/manifest.json").is_file())
+        self.assertFalse((self.root / "ground/statements/forgefix/BUG-512").exists())
+        meta = json.loads((self._arc("STOR-100") / archive.META_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(meta["nested_states"],
+                         [{"state_source": "statements/forgefix/BUG-512",
+                           "state_target": "archive/forgefix/BUG-512"}])
+
+    def test_unmerged_fix_delta_blocks_story(self):
+        self._states(("STOR-100/fixes/BUG-512", "new"))
+        with self.assertRaises(archive.Fail) as cm:
+            archive.archive_feature(self.root, "STOR-100")
+        self.assertIn("STOR-100/fixes/BUG-512 (new)", str(cm.exception))
+        self.assertTrue((self.fix / "sdd.md").is_file())
+        self.assertTrue((self.root / "ground/statements/forgefix/BUG-512").is_dir())
+
+    def test_restore_brings_fix_state_back(self):
+        self._states()
+        archive.archive_feature(self.root, "STOR-100")
+        archive.restore_feature(self.root, "STOR-100")
+        self.assertTrue((self.fix / "sdd.md").is_file())
+        self.assertTrue((self.root / "ground/statements/forgefix/BUG-512/manifest.json").is_file())
+        self.assertTrue((self.root / "ground/statements/feature-pipeline/STOR-100").is_dir())
+
+    def test_story_joins_fix_archived_earlier(self):
+        """Фикс уехал отдельно раньше: стори вливается в тот же archive/STOR-100, а не в
+        STOR-100-<ts> — иначе архив стори разрезан надвое."""
+        self._states()
+        archive.archive_feature(self.root, "STOR-100/fixes/BUG-512")
+        res = archive.archive_feature(self.root, "STOR-100")
+        self.assertEqual(Path(res["target"]).name, "STOR-100")
+        self.assertTrue((self._arc("STOR-100") / "sdd.md").is_file())
+        self.assertTrue((self._arc("STOR-100/fixes/BUG-512") / archive.META_NAME).is_file())
+        self.assertFalse((self.root / "docs/feature-pipeline/STOR-100").exists())
 
 
 class TestDeltaGate(Base):
@@ -430,7 +489,7 @@ class TestPartialMoveRollback(Base):
         self._break_state_target()
         with self.assertRaises(archive.Fail) as cm:
             archive.archive_feature(self.root, "STOR-100")
-        self.assertIn("стейт прогона не переносится", str(cm.exception))
+        self.assertIn("ничего не изменилось", str(cm.exception))
         self.assertTrue((src / "tech-design.md").is_file(), "доки обязаны вернуться")
         self.assertFalse(self._arc("STOR-100").exists())
         self.assertTrue((self.root / "ground/statements/feature-pipeline/STOR-100"

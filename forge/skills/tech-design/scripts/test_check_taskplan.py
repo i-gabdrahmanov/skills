@@ -194,6 +194,21 @@ def main() -> int:
     check("no_test не-bool → warning, не fail",
           rc == 0 and any("no_test" in w for w in j.get("warnings", [])), raw)
 
+    # Ручная проверка критерия: можно, но с причиной, и не для всей задачи с поведением
+    man = {"text": "в аудит-логе оператор и период", "verify": "manual",
+           "reason": "формат лога проверяет сопровождение на стенде"}
+    rc, j, raw = run(_plan(tasks=[_task("T1", acceptance=["Given a When b Then c", man])]))
+    check("manual с reason + тестовый критерий → pass", rc == 0, raw)
+    rc, j, raw = run(_plan(tasks=[_task("T1", acceptance=["Given a When b Then c",
+                                                          {**man, "reason": ""}])]))
+    check("manual без reason → fail", rc == 2 and _has_err(j, "без reason"), raw)
+    rc, j, raw = run(_plan(tasks=[_task("T1", acceptance=[man])]))
+    check("service-задача целиком manual → fail", rc == 2 and _has_err(j, "без единого критерия под тестом"), raw)
+    rc, j, raw = run(_plan(tasks=[_task("T1", layers=["migration"], acceptance=[man])]))
+    check("migration целиком manual → pass", rc == 0, raw)
+    rc, j, raw = run(_plan(tasks=[_task("T1", acceptance=[{**man, "verify": "eyeball"}])]))
+    check("неизвестный verify → fail", rc == 2 and _has_err(j, "допустимо test|manual"), raw)
+
     print(f"\n{PASSED} passed, {FAILED} failed")
     return 1 if FAILED else 0
 

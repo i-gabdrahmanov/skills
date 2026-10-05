@@ -343,6 +343,9 @@ read_file("<fixdir>/task-plan.json")  (acceptance: Given <условие баг�
    его молча: верни status:"failed" и что не сходится (план утверждён человеком).
 1. Тест — в существующий тест-класс затронутого кода, если он есть (не плоди новый класс без нужды).
 2. Один регресс-тест на симптом + edge cases из fix-diag. Без @Disabled. Не трогай src/main/.
+   Над регресс-тестом — маркер критерия приёмки: `// @acceptance <KEY|slug>:<id задачи>.<n>`
+   (ID печатает `python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_acceptance.py <fixdir>/task-plan.json --list`).
+   Без маркера fix-green не закроется: он проверяет, что тест КАЖДОГО критерия прошёл.
 3. Не ослабляй и не переписывай соседние тесты, чтобы «стало зелено».
 4. ПОСЛЕДНИМ действием прогони RED-гейт ЧЕРЕЗ РАННЕР (он пишет evidence — без него шаг не закроется).
    Гейт ПО-ТЕСТОВЫЙ: должны выполниться ТОЛЬКО твои новые тесты и ВСЕ упасть.
@@ -381,9 +384,10 @@ read_file("<fixdir>/task-plan.json")  (layers/artifacts — границы пр�
 2. Правь только src/main/. Тесты уже есть — не ослабляй их и не подгоняй под зелёное.
 3. Публичные сигнатуры и контракты API не меняй; понадобилось — это не минорный фикс,
    верни status:"failed" с причиной.
-4. ПОСЛЕДНИМ действием прогони BUILD-гейт ЧЕРЕЗ РАННЕР (без него шаг не закроется):
-   Gradle: python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgefix --feature <KEY|slug> --step-id fix-green --cmd "./gradlew build"
-   Maven:  тот же вызов с --cmd "mvn -q verify"
+4. ПОСЛЕДНИМ действием прогони BUILD-гейт ЧЕРЕЗ РАННЕР (без него шаг не закроется) — сборка
+   и критерии приёмки фикса (маркированные регресс-тесты обязаны пройти):
+   Gradle: python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgefix --feature <KEY|slug> --step-id fix-green --cmd "./gradlew build && python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_acceptance.py <fixdir>/task-plan.json --root <toplevel> --expect green"
+   Maven:  тот же вызов с --cmd "mvn -q verify && python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_acceptance.py <fixdir>/task-plan.json --root <toplevel> --expect green"
 Верни JSON: {"step_id":"fix-green","status":"completed|failed","files_changed":["..."],"build_ok":true}
 status:"completed" ТОЛЬКО если build_ok=true.
 ```

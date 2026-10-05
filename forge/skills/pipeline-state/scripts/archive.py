@@ -250,6 +250,61 @@ def live_runs_inside(project: Path, target: Path, exclude) -> list:
     return out
 
 
+def nested_runs(project: Path, target: Path, exclude) -> list:
+    """ЗАВЕРШЁННЫЕ прогоны, чьи доки лежат внутри архивируемого каталога: [(skill, feature, docs)].
+
+    Их доки уезжают вместе с папкой стори — значит, и стейт обязан уехать с ними. Иначе
+    история фикса оставалась в ground/statements/ сиротой (доков на месте нет, прогон в
+    выборках есть), а restore стори возвращал доки без стейта."""
+    out = []
+    for skill, feature in find_runs(Path(project)):
+        if (skill, feature) == exclude:
+            continue
+        try:
+            d = task_docs_dir(project, skill, feature)
+        except Exception:  # noqa: BLE001
+            continue
+        if d != target and target in d.parents:
+            out.append((skill, feature, d))
+    return out
+
+
+def unmerged_nested(project: Path, src: Path, base: Path) -> list:
+    """Дельты фиксов внутри папки стори, не сведённые с мастером: ['<слаг> (<состояние>)'].
+
+    Архивация стори уносит fixes/ целиком, а дельты ищутся обходом рабочего каталога — неслитый
+    фикс выпал бы из /forge-merge молча, и его требования не попали бы в мастер никогда."""
+    out = []
+    for sdd in sorted(src.glob("fixes/*/sdd.md")):
+        slug = _rel(sdd.parent, base)
+        ds = delta_state(project, slug)
+        if ds in ("new", "drifted", "unknown-format"):
+            out.append(f"{slug} ({ds})")
+    return out
+
+
+def _move_into(src: Path, target: Path) -> bool:
+    """Влить src в уже существующий target БЕЗ archive-meta (каталог, куда раньше отдельно
+    уехали фиксы этой стори). Пересечения имён — False, ничего не тронуто."""
+    if (target / META_NAME).exists() or not target.is_dir():
+        return False
+    names = [c.name for c in src.iterdir()]
+    if any((target / n).exists() and not (n == "fixes" and (target / n).is_dir()) for n in names):
+        return False
+    if (src / "fixes").is_dir() and (target / "fixes").is_dir():
+        if any((target / "fixes" / c.name).exists() for c in (src / "fixes").iterdir()):
+            return False
+    for c in sorted(src.iterdir()):
+        if c.name == "fixes" and (target / "fixes").is_dir():
+            for f in sorted(c.iterdir()):
+                shutil.move(str(f), str(target / "fixes" / f.name))
+            c.rmdir()
+        else:
+            shutil.move(str(c), str(target / c.name))
+    src.rmdir()
+    return True
+
+
 def delta_state(project: Path, slug: str):
     """Состояние дельты относительно мастера: merged|new|drifted|unknown-format|no-master."""
     try:
@@ -316,6 +371,13 @@ def archive_feature(project, slug, skill=None, force: bool = False, reason=None,
             raise Fail("внутри '{}' идут незавершённые прогоны: {}.\n"
                        "   Архивация утащила бы их доки вместе с папкой."
                        .format(slug, "; ".join(live)))
+        pending = unmerged_nested(project, src, base)
+        if pending:
+            raise Fail("внутри '{}' лежат дельты фиксов, не сведённые с мастером: {}.\n"
+                       "   Архивация унесла бы их мимо мастера. Сначала /forge-merge по каждой "
+                       "(или /forge-merge --all — фиксы сливаются раньше стори)."
+                       .format(slug, "; ".join(pending)))
+    nested = nested_runs(project, src, exclude=(skill, feature))
 
     ds = "assumed-merged" if (assume_merged and dry_run) else delta_state(project, slug)
     if ds in ("new", "drifted") and not force:
@@ -331,7 +393,8 @@ def archive_feature(project, slug, skill=None, force: bool = False, reason=None,
 
     dest_base = archive_docs_dir(project)
     target = dest_base / slug
-    if target.exists():
+    merge_into = target.exists() and not (target / META_NAME).exists() and target.is_dir()
+    if target.exists() and not merge_into:
         target = target.parent / f"{target.name}-{_ts()}"
 
     plan = {
@@ -339,6 +402,7 @@ def archive_feature(project, slug, skill=None, force: bool = False, reason=None,
         "source": _rel(src, base), "target": str(target), "dry_run": bool(dry_run),
         "state_target": str(state_archive_dir(project, skill) / feature),
         "delta_state": ds, "forced": bool(force),
+        "nested": [f"{s}/{f}" for s, f, _ in nested],
     }
     if dry_run:
         plan["moved"] = False
@@ -349,18 +413,34 @@ def archive_feature(project, slug, skill=None, force: bool = False, reason=None,
     if st_target.exists():
         st_target = st_target.parent / f"{st_target.name}-{_ts()}"
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(src), str(target))
+    # Порядок: сначала ВСЕ стейты (свой + вложенных фиксов стори), доки — последними. Откат
+    # стейта — один rename каталога; откат доков, влитых в существующий архив стори (_move_into),
+    # был бы поштучным. Падение на доках — откатываем стейты, и ничего не изменилось.
+    moves = [(st_src, st_target)]
+    for n_skill, n_feature, _ in nested:
+        n_dst = state_archive_dir(project, n_skill) / n_feature
+        if n_dst.exists():
+            n_dst = n_dst.parent / f"{n_dst.name}-{_ts()}"
+        moves.append((state_dir(project, n_skill, n_feature), n_dst))
+    moved_states = []      # [(откуда, куда)] — и для отката, и в мету
     try:
-        st_target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(st_src), str(st_target))
+        for a, b in moves:
+            b.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(a), str(b))
+            moved_states.append((a, b))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not (merge_into and _move_into(src, target)):
+            if merge_into:
+                target = target.parent / f"{target.name}-{_ts()}"
+            shutil.move(str(src), str(target))
     except OSError as e:
-        # Частичный перенос хуже отказа: доки уехали, стейт остался — прогон выглядит живым,
-        # а его артефактов на месте нет. Возвращаем доки и отказываем целиком.
-        src.parent.mkdir(parents=True, exist_ok=True)   # явно, а не через фолбэк shutil
-        shutil.move(str(target), str(src))
-        raise Fail(f"стейт прогона не переносится ({st_src} → {st_target}): {e}. "
-                   f"Доки возвращены на место, ничего не изменилось.")
+        # Частичный перенос хуже отказа: доки на месте, а стейт уехал — прогон выпал из
+        # выборок с живыми артефактами. Возвращаем стейты и отказываем целиком.
+        for a, b in reversed(moved_states):
+            shutil.move(str(b), str(a))
+        raise Fail(f"архив не переносится ({src} → {target}): {e}. "
+                   f"Стейт возвращён на место, ничего не изменилось.")
+    moved_states = moved_states[1:]
     # Husk-каталоги ('<стори>/fixes/') подчищаем ТОЛЬКО когда уехали обе половины. Прибрать
     # раньше не смертельно (shutil.move на откате пересоздаёт путь copytree-фолбэком), но тогда
     # откат — полное копирование дерева доков вместо rename. Порядок «сначала оба переноса,
@@ -386,6 +466,10 @@ def archive_feature(project, slug, skill=None, force: bool = False, reason=None,
         "steps": st["steps"],
         "delta_state": ds,
     }
+    if moved_states:
+        meta["nested_states"] = [{"state_source": _rel(a, ground_dir(project)),
+                                  "state_target": _rel(b, ground_dir(project))}
+                                 for a, b in moved_states]
     if force:
         meta["forced"] = True
         meta["reason"] = reason or "(причина не указана)"
@@ -526,7 +610,18 @@ def restore_feature(project, slug, dry_run: bool = False) -> dict:
         elif st_target.exists():
             raise Fail(f"место стейта занято: {st_target} — уберите каталог или переименуйте")
 
+    # Стейты фиксов, уехавших вместе со стори, возвращаются вместе с ней.
+    nested = []
+    g = ground_dir(project)
+    for n in meta.get("nested_states") or []:
+        a, b = g / n.get("state_target", ""), g / n.get("state_source", "")
+        if n.get("state_target") and n.get("state_source") and a.is_dir():
+            if b.exists():
+                raise Fail(f"место стейта фикса занято: {b} — уберите каталог или переименуйте")
+            nested.append((a, b))
+
     plan = {"ok": True, "slug": rel, "source": str(src), "target": str(target),
+            "nested_states": [str(b) for _, b in nested],
             "state_source": str(st_src) if st_src else None,
             "state_target": str(st_target) if st_target else None,
             "dry_run": bool(dry_run)}
@@ -545,6 +640,10 @@ def restore_feature(project, slug, dry_run: bool = False) -> dict:
             shutil.move(str(target), str(src))
             raise Fail(f"стейт не возвращается ({st_src} → {st_target}): {e}. "
                        f"Доки оставлены в архиве, ничего не изменилось.")
+    for a, b in nested:
+        b.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(a), str(b))
+        _prune_empty(a.parent, state_archive_dir(project))
     try:
         (target / META_NAME).unlink()
     except OSError:

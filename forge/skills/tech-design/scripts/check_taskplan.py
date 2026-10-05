@@ -19,6 +19,40 @@ import sys
 from pathlib import Path
 
 LAYERS = {"migration", "entity", "repository", "dto", "mapper", "service", "controller", "scheduler"}
+# Слои с поведением: RED для них обязателен всегда (04-tdd §7.0.1) — значит, хотя бы один
+# критерий такой задачи обязан проверяться тестом.
+BEHAVIOR_LAYERS = {"service", "controller", "scheduler"}
+
+
+def _check_acceptance_items(t: dict, loc: str, errors: list) -> None:
+    """Критерий — строка (проверяется тестом) либо объект {text, verify, reason}.
+
+    verify:"manual" — критерий подтверждает человек (вид UI, формат лога, нагрузка, внешняя
+    система). Это решение дизайна, и у него обязана быть причина: иначе «manual» становится
+    способом не писать тест. И задача с поведением не может уйти целиком в ручную проверку."""
+    tested = 0
+    raw = t.get("acceptance") or []
+    for n, a in enumerate([raw] if isinstance(raw, (str, dict)) else raw, 1):
+        if isinstance(a, dict):
+            if not str(a.get("text") or "").strip():
+                errors.append(f"task {loc}: критерий #{n} без text")
+                continue
+            verify = str(a.get("verify") or "test").strip().lower()
+            if verify not in ("test", "manual"):
+                errors.append(f"task {loc}: критерий #{n}: verify '{verify}' — допустимо test|manual")
+            elif verify == "manual":
+                if not str(a.get("reason") or "").strip():
+                    errors.append(f"task {loc}: критерий #{n} verify:manual без reason — "
+                                  f"почему его нельзя проверить тестом?")
+                continue
+            tested += 1
+        elif str(a).strip():
+            tested += 1
+    if not tested and t.get("no_test") is not True \
+            and BEHAVIOR_LAYERS & set(t.get("layers") or []):
+        errors.append(f"task {loc}: задача с поведением ({', '.join(sorted(BEHAVIOR_LAYERS & set(t.get('layers'))))}) "
+                      f"без единого критерия под тестом — все verify:manual. Хотя бы один "
+                      f"критерий должен проверяться тестом")
 REQUIRED_TOP = ["feature_slug", "title", "tasks"]
 
 
@@ -196,6 +230,8 @@ def validate(plan: dict, known_modules: set[str] | None, scan_given: bool,
             ids.add(tid)
         if not t.get("acceptance"):
             errors.append(f"task {loc}: пустой acceptance (нечем проверить задачу)")
+        else:
+            _check_acceptance_items(t, loc, errors)
         if not t.get("artifacts"):
             errors.append(f"task {loc}: пустой artifacts")
         layers = t.get("layers", [])

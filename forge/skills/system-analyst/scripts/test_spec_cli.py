@@ -579,5 +579,196 @@ class DeltaStateTest(MergeArchiveBase):
         self.assertEqual(spec_cli.delta_state(self.root, "report-export"), "no-master")
 
 
+
+PLAN = {"feature_slug": "report-export", "tasks": [
+    {"id": "T1", "title": "Сервис отчёта", "layers": ["service"],
+     "artifacts": ["service/ReportService.java"], "acceptance": ["отчёт сформирован"],
+     "sdd_ref": "sdd.md#x", "reuses": [], "depends_on": []},
+    {"id": "T2", "title": "REST-эндпойнт отчёта", "layers": ["controller"],
+     "artifacts": ["controller/ReportController.java"], "acceptance": ["200"],
+     "sdd_ref": "sdd.md#y", "reuses": [], "depends_on": ["T1"]}]}
+
+
+class ImplCheckOnMergeTest(MergeArchiveBase):
+    """Дельта — намерение. Merge сверяет task-plan с кодом — файлы задач, тест на каждый
+    критерий приёмки и прошедший гейт приёмки в журнале прогона — и пишет итог в журнал
+    мастера; несделанное как факт в мастер молча не уходит."""
+
+    TEST = """package com.x;
+
+class ReportTest {
+    // @acceptance report-export:T1.1
+    @Test
+    void shouldBuildReport() {}
+
+    // @acceptance report-export:T2.1
+    @Test
+    void shouldReturn200() {}
+}
+"""
+
+    def setUp(self):
+        super().setUp()
+        (self.docs / "task-plan.json").write_text(json.dumps(PLAN, ensure_ascii=False),
+                                                  encoding="utf-8")
+        self.code = self.root / "app" / "src" / "main" / "java" / "com" / "x"
+
+    def _write(self, rel):
+        f = self.code / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("class X {}\n", encoding="utf-8")
+
+    def _all_code(self):
+        self._write("service/ReportService.java")
+        self._write("controller/ReportController.java")
+
+    def _tests(self):
+        t = self.root / "app" / "src" / "test" / "java" / "com" / "x" / "ReportTest.java"
+        t.parent.mkdir(parents=True, exist_ok=True)
+        t.write_text(self.TEST, encoding="utf-8")
+
+    def _gate(self, step, passed=True, cmd="python3 check_acceptance.py p --expect green"):
+        sys.path.insert(0, str(SCRIPT_DIR.parents[2] / "hooks"))
+        import forge_events as FE
+        FE.append_event(self.root, "feature-pipeline", "report-export", "gate",
+                        step_id=step, passed=passed, cmd=cmd, expect="success")
+
+    def test_implemented_plan_is_recorded_in_journal(self):
+        self._all_code()
+        self._tests()
+        self._gate("04-build-T1")
+        self._gate("04-build-T2")
+        rc, out = self._r("merge", "report-export", "-y")
+        self.assertEqual(rc, 0, out)
+        text = self.spec.read_text(encoding="utf-8")
+        self.assertIn("код сверен с task-plan: реализовано 2/2 задач", text)
+        self.assertIn("  - T2 «REST-эндпойнт отчёта» — реализована; критерии приёмки 1/1 "
+                      "подтверждены тестами (гейт 04-build-T2", text)
+        self.assertIn("    - report-export:T1.1 «отчёт сформирован» — "
+                      "com.x.ReportTest.shouldBuildReport ✓", text)
+        self.assertTrue((self.archived / "task-plan.json").is_file())
+
+    def test_missing_code_blocks_merge(self):
+        self._write("service/ReportService.java")
+        self._tests()
+        rc, out = self._r("merge", "report-export", "-y")
+        self.assertEqual(rc, 3)
+        self.assertFalse(self.spec.exists(), "мастер не тронут")
+        self.assertTrue((self.docs / "sdd.md").is_file(), "доки на месте")
+        self.assertIn("not-implemented", out)
+        self.assertIn("✗ T2 «REST-эндпойнт отчёта» — НЕ реализована: нет в коде "
+                      "controller/ReportController.java", out)
+        self.assertIn("--allow-unimplemented", out)
+
+    def test_criterion_without_test_blocks_merge(self):
+        self._all_code()
+        rc, out = self._r("merge", "report-export", "-y", "--dry-run")
+        self.assertEqual(rc, 3)
+        self.assertIn("у 1 из 1 критериев приёмки нет теста", out)
+
+    def test_tests_without_passed_gate_are_unverified(self):
+        """Маркер в коде — ещё не доказательство: нужен прошедший гейт приёмки в журнале."""
+        self._all_code()
+        self._tests()
+        self._gate("04-build-T1")
+        self._gate("04-build-T2", cmd="python3 check_build.py p --task T2")
+        rc, out = self._r("merge", "report-export", "-y", "--dry-run")
+        self.assertEqual(rc, 3)
+        self.assertIn("T2 «REST-эндпойнт отчёта» — НЕ подтверждена: тесты критериев есть, "
+                      "но гейт приёмки", out)
+
+    def test_allow_unimplemented_records_what_is_missing(self):
+        self._write("service/ReportService.java")
+        rc, out = self._r("merge", "report-export", "-y", "--allow-unimplemented")
+        self.assertEqual(rc, 0, out)
+        text = self.spec.read_text(encoding="utf-8")
+        self.assertIn("реализовано 0/2 задач", text)
+        self.assertIn("T2 «REST-эндпойнт отчёта» — НЕ реализована: нет в коде "
+                      "controller/ReportController.java", text)
+        self.assertIn("    - report-export:T1.1 «отчёт сформирован» — НЕТ теста", text)
+
+    def test_open_build_step_is_not_done(self):
+        self._all_code()
+        st = self.root / "ground/statements/feature-pipeline/report-export/manifest.json"
+        st.write_text(json.dumps(_manifest("feature-pipeline", FULL_STEPS + ["04-build-T2"],
+                                           **{"04-build-T2": "pending"})), encoding="utf-8")
+        rc, out = self._r("merge", "report-export", "-y", "--dry-run")
+        self.assertEqual(rc, 3)
+        self.assertIn("шаг 04-build-T2 не закрыт (pending)", out)
+
+    def test_manual_criterion_needs_human_and_lands_in_master(self):
+        plan = json.loads(json.dumps(PLAN))
+        plan["tasks"][1]["acceptance"].append(
+            {"text": "ответ виден в UI оператора", "verify": "manual",
+             "reason": "UI e2e нет, проверяет аналитик на стенде"})
+        (self.docs / "task-plan.json").write_text(json.dumps(plan, ensure_ascii=False),
+                                                  encoding="utf-8")
+        self._all_code()
+        self._tests()
+        self._gate("04-build-T1")
+        self._gate("04-build-T2")
+        rc, out = self._r("merge", "report-export", "-y", "--dry-run")
+        self.assertEqual(rc, 3)
+        self.assertIn("ручной проверки человек не подтвердил", out)
+        import subprocess
+        rp = SCRIPT_DIR.parents[1] / "pipeline-state" / "scripts" / "record_approval.py"
+        subprocess.run([sys.executable, str(rp), "--project", str(self.root), "--key",
+                        "acceptance-report-export-T2.2", "--kind", "acceptance",
+                        "--approver", "analyst", "--evidence", "стенд, скрин в задаче",
+                        "--reason", "виден"], check=True, capture_output=True)
+        rc, out = self._r("merge", "report-export", "-y")
+        self.assertEqual(rc, 0, out)
+        text = self.spec.read_text(encoding="utf-8")
+        self.assertIn("    - report-export:T2.2 «ответ виден в UI оператора» — проверено "
+                      "вручную: analyst, стенд, скрин в задаче", text)
+
+    def test_no_plan_merges_with_note(self):
+        (self.docs / "task-plan.json").unlink()
+        rc, out = self._r("merge", "report-export", "-y")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("с кодом не сверено", self.spec.read_text(encoding="utf-8"))
+
+
+class StoryWithFixMergeTest(MergeArchiveBase):
+    """`merge --all` стори с фиксом внутри. Раньше стори архивировалась сразу после своего
+    слияния и уносила fixes/ неслитыми: merge фикса падал на «нет дельты», стейт фикса
+    оставался в ground/statements/ сиротой."""
+
+    def setUp(self):
+        super().setUp()
+        fx = self.docs / "fixes" / "BUG-512"
+        fx.mkdir(parents=True)
+        (fx / "sdd.md").write_text(FIX_DELTA, encoding="utf-8")
+        st = self.root / "ground" / "statements" / "forgefix" / "BUG-512"
+        st.mkdir(parents=True)
+        man = _manifest("forgefix", ["fix-intake", "fix-green", "fix-spec"])
+        man["inputs"] = {"story": "report-export"}
+        (st / "manifest.json").write_text(json.dumps(man), encoding="utf-8")
+
+    def test_all_merges_fix_and_archives_both(self):
+        rc, out = self._r("merge", "--all", "-y", "--allow-modify")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("отчёт пуст, ошибки нет", self.spec.read_text(encoding="utf-8"))
+        self.assertTrue((self.archived / "fixes" / "BUG-512" / "sdd.md").is_file())
+        self.assertTrue((self.root / "ground/archive/forgefix/BUG-512/manifest.json").is_file())
+        self.assertFalse((self.root / "ground/statements/forgefix/BUG-512").exists())
+        self.assertIn("уехали вместе со стори report-export", out)
+
+    def test_story_alone_waits_for_its_fix(self):
+        rc, out = self._r("merge", "report-export", "-y")
+        self.assertEqual(rc, 0, out)
+        self.assertTrue((self.docs / "fixes" / "BUG-512" / "sdd.md").is_file(),
+                        "неслитый фикс не уезжает вместе со стори")
+        self.assertIn("не сведённые с мастером", out)
+
+    def test_story_counts_as_merged_after_its_fix(self):
+        """Фикс переписал требование стори — стори не «drifted», и её «~» не откатывает фикс."""
+        self._r("merge", "report-export", "-y", "--no-archive")
+        self._r("merge", "BUG-512", "-y", "--allow-modify", "--no-archive")
+        self.assertEqual(spec_cli.delta_state(self.root, "report-export"), "merged")
+        rc, out = self._r("merge", "report-export", "-y", "--allow-modify", "--no-archive")
+        self.assertEqual(rc, 0)
+        self.assertIn("отчёт пуст, ошибки нет", self.spec.read_text(encoding="utf-8"))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

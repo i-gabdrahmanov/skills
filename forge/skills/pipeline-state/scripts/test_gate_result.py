@@ -152,11 +152,30 @@ def _mk_test_runner(tmp: Path, cases: list[tuple[str, str]], exit_code: int = 1)
     return "./gradlew test"
 
 
+def _green(tmp: Path, exit_code: int = 0) -> str:
+    """Команда GREEN-гейта: сборка + гейт приёмки (check_acceptance --expect green).
+
+    Для fix-green/04-build policy принимает ТОЛЬКО check_acceptance.py: голая сборка закрывала
+    шаг, не проверив ни одного критерия приёмки. Шим отдаёт заданный исход."""
+    _gradlew(tmp, 0)
+    shim = tmp / "check_acceptance.py"
+    shim.write_text(f"#!/bin/sh\nexit {exit_code}\n", encoding="utf-8")
+    shim.chmod(0o755)
+    return "./gradlew build && ./check_acceptance.py plan --expect green"
+
+
 class TestRecordGate(unittest.TestCase):
-    def test_success_gate_passed(self):
+    def test_green_without_acceptance_gate_refused(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             r = _record(tmp, "fix-green", "--cmd", _gradlew(tmp, 0))
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("check_acceptance.py", r.stderr)
+
+    def test_success_gate_passed(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            r = _record(tmp, "fix-green", "--cmd", _green(tmp, 0))
             self.assertEqual(r.returncode, 0, r.stderr)
             rec = _gate_rec(tmp, "fix-green")
             self.assertTrue(rec["passed"])
@@ -165,7 +184,7 @@ class TestRecordGate(unittest.TestCase):
     def test_success_gate_failed(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            r = _record(tmp, "fix-green", "--cmd", _gradlew(tmp, 1))
+            r = _record(tmp, "fix-green", "--cmd", _green(tmp, 1))
             self.assertEqual(r.returncode, 1)
             self.assertFalse(_gate_rec(tmp, "fix-green")["passed"])
 
@@ -382,14 +401,14 @@ class TestGateResultCheck(unittest.TestCase):
     def test_close_with_passed_artifact_ok(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d); _make_manifest(tmp); _write_origin(tmp, "fix-green")
-            self.assertEqual(_record(tmp, "fix-green", "--cmd", _gradlew(tmp, 0)).returncode, 0)
+            self.assertEqual(_record(tmp, "fix-green", "--cmd", _green(tmp, 0)).returncode, 0)
             r = _close(tmp, "fix-green")
             self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_close_with_failed_artifact_blocked(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d); _make_manifest(tmp); _write_origin(tmp, "fix-green")
-            _record(tmp, "fix-green", "--cmd", _gradlew(tmp, 1))
+            _record(tmp, "fix-green", "--cmd", _green(tmp, 1))
             self.assertNotEqual(_close(tmp, "fix-green").returncode, 0)
 
     def test_handwritten_legacy_artifact_blocked(self):

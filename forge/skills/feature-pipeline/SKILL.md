@@ -485,7 +485,8 @@ X и всё после → pending, evidence в архив, код — на git-
 (Python), который проверяет, что фаза реально отработала, ДО закрытия её шага в
 pipeline-state: sdd→`check_sdd_doc.py`, design→`check_taskplan.py`+`check_sdd.py`, eval-plan→`build_evals_from_design.py`
 (сама генерация, без gate — ошибка только если скрипт упал),
-jira→`check_jira.py`, build→`check_build.py` (с дополнительным
+jira→`check_jira.py`, build→`check_acceptance.py --expect green` (каждый критерий приёмки
+задачи — свой прошедший тест; плюс артефакты задачи на диске; с дополнительным
 **хуком `eval-guard`**, который проверяет прохождение eval'ов в рантайме),
 tests→`check_coverage.py`, grounding→`ensure_inventory.py`. Шаг не
 закрывается, пока execution-gate не вернул `pass` (exit 0) — это ловит молчаливый

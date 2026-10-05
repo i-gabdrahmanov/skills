@@ -276,6 +276,26 @@ class TBashVector(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertEqual(_bash(cmd).returncode, 0)
 
+    def test_block_rm_of_feature_docs(self):
+        """Доки фичи — история стройки. На отказе архивации модель «прибиралась» сама и
+        удаляла их: восстановить потом было нечем. Уборка — только /forge-archive put."""
+        for cmd in ("rm -rf docs/feature-pipeline/STOR-100",
+                    "rm docs/feature-pipeline/STOR-100/task-plan.json",
+                    "cd x && rm -r ../docs/feature-pipeline/STOR-100/fixes/BUG-1",
+                    "rm -rf docs/archive/STOR-100"):
+            with self.subTest(cmd=cmd):
+                r = _bash(cmd)
+                self.assertEqual(r.returncode, 2, r.stderr)
+                self.assertIn("/forge-archive put", r.stderr)
+
+    def test_pass_mv_and_write_of_feature_docs(self):
+        """Фазы пишут доки тулом Write, forgefix штатно переносит свои доки `mv` — не трогаем."""
+        for cmd in ("mv docs/feature-pipeline/BUG-1 docs/feature-pipeline/STOR-100/fixes/BUG-1",
+                    "cat docs/feature-pipeline/STOR-100/sdd.md"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_bash(cmd).returncode, 0)
+        self.assertEqual(_write("docs/feature-pipeline/STOR-100/sdd.md").returncode, 0)
+
     def test_block_copy_with_trailing_redirect(self):
         """Регресс: `> /dev/null` попадал в argv, и последним аргументом `cp` оказывался он —
         настоящее назначение копии (control-plane) не проверялось вовсе."""

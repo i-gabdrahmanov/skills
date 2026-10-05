@@ -26,18 +26,25 @@ if str(_HOOKS_DIR) not in sys.path and _HOOKS_DIR.is_dir():
 _SKIP = {"build", "out", "target", ".gradle", ".idea", "node_modules", ".git"}
 
 
-def _exists(root: Path, artifact: str) -> bool:
+def find_artifact(root: Path, artifact: str) -> "Path | None":
+    """Файл артефакта на диске (точный путь от корня либо суффиксный матч) или None.
+
+    Публичный: им же сверяет реализацию с планом /forge-merge (impl_check.py)."""
     art = artifact.strip().replace("\\", "/").lstrip("/")
     if (root / art).exists():
-        return True
+        return root / art
     suffix = "/" + art
     name = Path(art).name
     for p in root.rglob(name):
         if any(s in p.parts for s in _SKIP):
             continue
         if str(p).replace("\\", "/").endswith(suffix):
-            return True
-    return False
+            return p
+    return None
+
+
+def _exists(root: Path, artifact: str) -> bool:
+    return find_artifact(root, artifact) is not None
 
 
 def main() -> int:

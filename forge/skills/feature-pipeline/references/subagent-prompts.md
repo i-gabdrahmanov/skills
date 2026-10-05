@@ -225,7 +225,9 @@ TDD, фаза RED. Реализации ещё НЕТ — твоя задача 
 
 Корень проекта: <git toplevel>
 Задача: <id, title>
-Критерии приёмки (основа тестов, Given-When-Then): <acceptance[]>
+Критерии приёмки с ID (основа тестов, Given-When-Then) — вывод
+`python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_acceptance.py <папка>/task-plan.json --list --task <id>`:
+<ID<TAB>текст критерия, по строке>
 Контракт из tech-design (сигнатуры/слои, которые появятся): <из tech-design.md §3 для задачи>
 Целевой слой/класс: <напр. OverdueTaskServiceImpl.closeEmptyRegularTasks()>
 
@@ -242,6 +244,12 @@ TDD, фаза RED. Реализации ещё НЕТ — твоя задача 
    `service-unit` (редкий осознанный случай); по умолчанию `test_layer == service-unit`.
 2. По каждому acceptance — отдельный тест (happy + ошибочные ветки: null, пусто, нет прав, 404, конфликт).
    given/when/then, имена `should...When...`.
+   **Над тест-методом, проверяющим критерий, — маркер с его ID** (строкой комментария прямо
+   перед аннотациями метода): `// @acceptance STOR-100:T1.2`. Тест на несколько критериев —
+   через запятую. ID бери ровно из списка выше, не сочиняй. Критерий без маркированного теста
+   валит RED-гейт, а на GREEN каждый маркированный тест обязан пройти — так проверяется, что
+   код делает именно то, что обещано в приёмке. Критерии с пометкой «ручная проверка» в
+   списке тест не требуют — их подтверждает человек; тест на них писать можно, но не обязан.
 3. **Валидные, реалистичные данные:** стройте сущности билдерами/конструкторами с корректными типами и
    связями (как в домене), а не заглушками-нулями. Тест должен быть осмысленным, не «assertTrue(true)».
 4. Тесты ССЫЛАЮТСЯ на ещё не существующие методы/классы из контракта tech-design — это норма для RED
@@ -251,7 +259,7 @@ TDD, фаза RED. Реализации ещё НЕТ — твоя задача 
 
 Верни JSON:
 { "step_id": "04-test-<id>", "test_files": ["src/test/java/.../FooServiceTest.java"],
-  "cases": [{"name":"...","acceptance":"Given..When..Then.."}], "layer": "service-unit",
+  "cases": [{"name":"...","acceptance":"<ID критерия>"}], "layer": "service-unit",
   "notes": "что НЕ покрыть без инфраструктуры" }
 ```
 
@@ -344,9 +352,9 @@ prompt:
 Если eval-guard блокирует запись — выполни:
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_pending_evals.py --project . --feature <slug> --task <taskId>
 
-Gate перед завершением:
-1. ./gradlew test (задачи <taskId>)
-2. python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_build.py "<папка>/task-plan.json" --task <taskId>
+Gate перед завершением — каждый критерий приёмки задачи: его маркированные тесты проходят
+(тесты не ослабляй и маркеры не переноси на другие тесты — это подделка приёмки):
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_acceptance.py "<папка>/task-plan.json" --root <project> --task <taskId> --expect green
 
 Выходной JSON:
   {"step_id": "04-build-<taskId>", "status": "completed", "tests_green": true}

@@ -203,7 +203,10 @@ def format_ops(ops: list[dict]) -> list[str]:
 
 # ── применение ─────────────────────────────────────────────────────────
 
-def _append_audit(lines: list[str], entry: str, grammar: "SG.Grammar | None" = None) -> bool:
+def _append_audit(lines: list[str], entry: str, grammar: "SG.Grammar | None" = None,
+                  details: "list[str] | None" = None) -> bool:
+    """Запись журнала + подпункты (`details`, напр. сверка с кодом по задачам). Дедуп — по
+    главной строке: повторный merge того же не дублирует запись вместе с подпунктами."""
     g = grammar_for(DEFAULT_ID_PREFIX, grammar)
     span = g.section_span(lines, "audit")
     if span is None:
@@ -214,7 +217,7 @@ def _append_audit(lines: list[str], entry: str, grammar: "SG.Grammar | None" = N
     k = end
     while k - 1 > i and not lines[k - 1].strip():
         k -= 1
-    lines[k:k] = [entry]
+    lines[k:k] = [entry] + list(details or [])
     return True
 
 
@@ -254,8 +257,11 @@ def _num_of(rid: "str | None", g: "SG.Grammar"):
 
 def apply_ops(text: str, ops: list[dict], *, prefix: str, feature: str, today: str,
               allow_modify: bool = False, modify_ids: "set[str] | None" = None,
-              grammar: "SG.Grammar | None" = None) -> dict:
-    """Применяет план к тексту мастера. Возвращает {text, added, modified, blocked, audit}."""
+              grammar: "SG.Grammar | None" = None, impl: "dict | None" = None) -> dict:
+    """Применяет план к тексту мастера. Возвращает {text, added, modified, blocked, audit}.
+
+    `impl` — итог сверки плана задач с кодом (impl_check.check): дельта — намерение, и журнал
+    мастера пишет рядом с «добавлено …», что из этого реально есть в коде."""
     g = grammar_for(prefix, grammar)
     modify_ids = modify_ids or set()
     lines = text.splitlines()
@@ -311,7 +317,12 @@ def apply_ops(text: str, ops: list[dict], *, prefix: str, feature: str, today: s
             parts.append(f"добавлено {', '.join(added)}")
         if modified:
             parts.append(f"изменено {', '.join(modified)}")
-        audit = _append_audit(lines, f"- {today} — {feature}: {'; '.join(parts)}", g)
+        details = None
+        if impl is not None:
+            import impl_check
+            parts.append(impl_check.summary(impl))
+            details = impl_check.journal_lines(impl)
+        audit = _append_audit(lines, f"- {today} — {feature}: {'; '.join(parts)}", g, details)
 
     return {"text": "\n".join(lines) + "\n", "added": added, "modified": modified,
             "blocked": blocked, "audit": audit}
@@ -403,7 +414,8 @@ def merge(sdd_path: Path, spec_path: Path, template_path: Path, feature: str, ca
           *, prefix: str = DEFAULT_ID_PREFIX, dry_run: bool = False,
           allow_modify: bool = False, modify_ids: "set[str] | None" = None,
           grammar: "SG.Grammar | None" = None, ensure: bool = False,
-          headings: "tuple[str | None, str | None]" = (None, None)) -> dict:
+          headings: "tuple[str | None, str | None]" = (None, None),
+          impl: "dict | None" = None, superseded: "set[str] | None" = None) -> dict:
     """`ensure` — дописать недостающий раздел требований/журнала в конец существующего мастера
     (по подтверждению человека). Без него отсутствие раздела — статус `no-section` ещё на
     плане, а не ошибка посреди записи."""
@@ -448,6 +460,11 @@ def merge(sdd_path: Path, spec_path: Path, template_path: Path, feature: str, ca
 
     candidates = parse_delta(delta)
     ops = plan_ops(parse_master(text, prefix, g), candidates, g)
+    # Требования стори, которые позже переписал её слитый фикс: расхождение с мастером тут
+    # ожидаемо, и «~» откатил бы правку фикса старой дельтой стори.
+    for o in ops:
+        if o["op"] == "modify" and _norm(o["cand"]["title"]) in (superseded or set()):
+            o["op"] = "same"
 
     sections_added: list[str] = []
     if any(o["op"] == "add" for o in ops) \
@@ -472,7 +489,7 @@ def merge(sdd_path: Path, spec_path: Path, template_path: Path, feature: str, ca
                 "candidates": len(candidates)}
 
     res = apply_ops(text, ops, prefix=prefix, feature=feature, today=today,
-                    allow_modify=allow_modify, modify_ids=modify_ids, grammar=g)
+                    allow_modify=allow_modify, modify_ids=modify_ids, grammar=g, impl=impl)
     if res.get("error"):
         return {"status": "error", "error": res["error"]}
     spec_path.write_text(res["text"], encoding="utf-8")

@@ -179,6 +179,40 @@ def _extract_tasks(plan: dict, task_filter: str | None = None, cfg: dict | None 
             and not pipeline_phases.task_is_test_exempt(t, cfg)]
 
 
+def _acceptance_red(root: Path, plan_path: Path, plan: dict, tasks: list, cfg: dict, t: dict,
+                    result: dict) -> "str | None":
+    """Каждый критерий приёмки задачи — со СВОИМ маркированным тестом, и тот упал в этом прогоне.
+
+    «Все новые тесты красные» не говорит, какие критерии ими покрыты: десять тестов на один
+    критерий и ноль на остальные проходили RED, а дальше задача закрывалась зелёной без
+    проверки половины приёмки. Маркеры `@acceptance <фича>:<задача>.<n>` — см.
+    check_acceptance.py."""
+    import check_acceptance as CA
+    feature = CA.feature_of(plan_path)
+    found = CA.scan(root, feature)
+    errors, rows = [], []
+    for task in tasks:
+        res = CA.analyze(plan, feature, found, cfg, str(task.get("id")))
+        errors += res["errors"]
+        rows += res["rows"]
+    red = t["red"]
+    for r in rows:
+        if r["status"] != "covered":
+            continue
+        hit = [x for x in r["tests"]
+               if any(n.rsplit(".", 1)[-1].split("(")[0] == x.rsplit(".", 1)[-1]
+                      and x.rsplit(".", 1)[0].rsplit(".", 1)[-1] in n for n in red)]
+        if not hit:
+            errors.append(f"{r['id']}: тесты критерия не упали в этом прогоне "
+                          f"({', '.join(r['tests'])}) — не попали в --test-filter?")
+    result["acceptance"] = rows
+    if not errors:
+        return None
+    return ("критерии приёмки не покрыты RED-тестами:\n    " + "\n    ".join(errors)
+            + f"\n  ID критериев: python3 {Path(__file__).with_name('check_acceptance.py')} "
+              f"{plan_path} --list; маркер над тест-методом: // @acceptance <ID>")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="TDD RED-test gate.")
     ap.add_argument("plan", help="task-plan.json")
@@ -319,6 +353,8 @@ def main() -> int:
                                            invariant_pattern=inv_pattern,
                                            tolerate_green=args.tolerate_green)
         if red_fail is None:
+            red_fail = _acceptance_red(root, Path(args.plan), plan, tasks, cfg, t, result)
+        if red_fail is None:
             result.update(
                 status="pass",
                 verdict="pass: RED (compile OK + тесты прогона падают)",
@@ -328,7 +364,8 @@ def main() -> int:
         else:
             result.update(
                 status="fail",
-                verdict=("fail: no tests executed" if executed == 0 and t["reports"]
+                verdict=("fail: acceptance not covered" if "acceptance" in result
+                         else "fail: no tests executed" if executed == 0 and t["reports"]
                          else "fail: GREEN only (нет красных)" if t["green"] and not t["red"]
                          else "fail: GREEN tests present" if t["green"]
                          else "fail: no junit reports"),
