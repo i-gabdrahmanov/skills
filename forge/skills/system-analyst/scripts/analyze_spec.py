@@ -305,6 +305,61 @@ def _marker(head: Optional[str]) -> Optional[str]:
 
 # ── детект целиком ─────────────────────────────────────────────────────
 
+def analyze_text(text: str, path: Path, hyps: Optional[List[dict]] = None) -> dict:
+    """Форма требований ОДНОГО файла: grammar/confidence/axes/warnings/exemplars.
+
+    Вынесено из analyze(): карта мастера (spec_map.py) снимает форму по каждому сервису
+    отдельно, а не только у победителя по всей базе."""
+    if hyps is None:
+        hyps = _hypotheses(text)
+    out: dict = {"matches_native": True, "confidence": 0.0, "axes": {}, "grammar": {},
+                 "exemplars": [], "warnings": []}
+    if not hyps or hyps[0]["score"] == 0:
+        out["warnings"].append("no_requirements_found")
+        out["matches_native"] = False
+        return out
+
+    win = hyps[0]
+    top_n = win["n"]
+    runner = hyps[1]["score"] if len(hyps) > 1 else 0
+    req = {"level": win["level"], "kind": win["kind"], "lead": win.get("lead", ""),
+           "id_prefix": win.get("id_prefix", SG.NATIVE["requirement"]["id_prefix"]),
+           "id_width": win.get("id_width", 4)}
+    req["scope"] = "section" if (win["kind"] == "title-only" and not win.get("lead")) else "document"
+    probe = SG.Grammar({"requirement": req, "requirements_section": [], "audit_section": [],
+                        "scenario": {"style": "gwt-inline"}, "provenance": "from-bracket"})
+    style, scen_level, coverage = _scenario_style(text, probe)
+    sec_req, sec_audit = _sections(text, probe)
+
+    grammar = {
+        "requirement": req,
+        "requirements_section": [sec_req] if sec_req else [],
+        "audit_section": [sec_audit] if sec_audit else [],
+        "scenario": {"style": style, "level": scen_level},
+        "provenance": "from-bracket" if _FROM_TAG.search(text) else "none",
+    }
+    g = SG.Grammar(grammar)
+    out["grammar"] = grammar
+    out["matches_native"] = g.is_native()
+    out["axes"] = {
+        "requirement": round(min(1.0, top_n / 2.0) * (1.0 if win["score"] > runner * 1.5 else 0.7), 2),
+        "scenario": coverage,
+        "sections": 1.0 if sec_req else 0.5,
+    }
+    # Главная ось — распознан ли блок требования; сценарии и якорь раздела лишь уточняют.
+    out["confidence"] = round(
+        0.6 * out["axes"]["requirement"] + 0.25 * min(1.0, coverage + 0.3)
+        + 0.15 * out["axes"]["sections"], 2)
+    out["exemplars"] = _exemplars(text, g, path)
+    if coverage == 0.0:
+        out["warnings"].append("no_scenarios_found")
+    if runner and win["score"] <= runner * 1.5:
+        out["warnings"].append("mixed_grammar")
+    if out["confidence"] < CONFIDENCE_FLOOR:
+        out["warnings"].append("low_confidence")
+    return out
+
+
 def analyze(root: Path) -> dict:
     root = Path(root).resolve()
     configured, base = _resolve_master(root)
@@ -342,52 +397,10 @@ def analyze(root: Path) -> dict:
     top_n, spec, text, hyps = scored[0]
     result["source"]["spec"] = str(spec)
 
-    if not hyps or top_n == 0:
-        result["warnings"].append("no_requirements_found")
-        result["matches_native"] = False
-        result["confidence"] = 0.0
+    result.update(analyze_text(text, spec, hyps))
+    if "no_requirements_found" in result["warnings"]:
         return result
-
-    win = hyps[0]
-    top_n = win["n"]
-    runner = hyps[1]["score"] if len(hyps) > 1 else 0
-    req = {"level": win["level"], "kind": win["kind"], "lead": win.get("lead", ""),
-           "id_prefix": win.get("id_prefix", SG.NATIVE["requirement"]["id_prefix"]),
-           "id_width": win.get("id_width", 4)}
-    req["scope"] = "section" if (win["kind"] == "title-only" and not win.get("lead")) else "document"
-    probe = SG.Grammar({"requirement": req, "requirements_section": [], "audit_section": [],
-                        "scenario": {"style": "gwt-inline"}, "provenance": "from-bracket"})
-    style, scen_level, coverage = _scenario_style(text, probe)
-    sec_req, sec_audit = _sections(text, probe)
-
-    grammar = {
-        "requirement": req,
-        "requirements_section": [sec_req] if sec_req else [],
-        "audit_section": [sec_audit] if sec_audit else [],
-        "scenario": {"style": style, "level": scen_level},
-        "provenance": "from-bracket" if _FROM_TAG.search(text) else "none",
-    }
-    g = SG.Grammar(grammar)
-    result["grammar"] = grammar
-    result["matches_native"] = g.is_native()
-    result["axes"] = {
-        "requirement": round(min(1.0, top_n / 2.0) * (1.0 if win["score"] > runner * 1.5 else 0.7), 2),
-        "scenario": coverage,
-        "sections": 1.0 if sec_req else 0.5,
-    }
-    # Главная ось — распознан ли блок требования; сценарии и якорь раздела лишь уточняют.
-    result["confidence"] = round(
-        0.6 * result["axes"]["requirement"] + 0.25 * min(1.0, coverage + 0.3)
-        + 0.15 * result["axes"]["sections"], 2)
-    result["exemplars"] = _exemplars(text, g, spec)
     result["spec_path"] = _spec_path_tpl(spec, base, root)
-
-    if coverage == 0.0:
-        result["warnings"].append("no_scenarios_found")
-    if runner and win["score"] <= runner * 1.5:
-        result["warnings"].append("mixed_grammar")
-    if result["confidence"] < CONFIDENCE_FLOOR:
-        result["warnings"].append("low_confidence")
     result["suggested_config"] = _suggested(result)
     return result
 
@@ -450,8 +463,9 @@ def _suggested(result: dict) -> List[str]:
         out.append(f"config.py set spec.grammar.audit_section '{aud[0] if aud else ''}'")
     if g.get("provenance") != nat["provenance"]:
         out.append(f"config.py set spec.grammar.provenance {g.get('provenance')}")
-    if result.get("spec_path") and result["spec_path"] != "specs/{capability}/spec.md":
-        out.append(f"config.py set docs.master.spec_path '{result['spec_path']}'")
+    # Путь мастера отсюда НЕ советуем: победитель скана по всей базе — это догадка (в репо
+    # сервисных спек им оказывался навигационный PROJECT_MAP.md). Где чей файл — решает карта
+    # мастера (/forge-spec research → ground/spec-map.json), которую подтверждает человек.
     # Состав разделов форже-шаблона на чужом мастере — гарантированный FAIL гейта за чужую
     # структуру: у проекта свои разделы, и требовать «Границы охвата» бессмысленно.
     out.append("config.py set spec.profile detected")

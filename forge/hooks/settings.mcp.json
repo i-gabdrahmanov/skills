@@ -1,0 +1,12 @@
+{
+  "_comment": "MCP-серверы forge. resolve_hook_paths.py вливает их в .gigacode/settings.json (mcpServers), подставляя ${PYTHON_EXE} и ${PROJECT_ROOT}; чужие mcpServers не трогает, --remove снимает только эти имена.",
+  "mcpServers": {
+    "forge-master": {
+      "command": "${PYTHON_EXE}",
+      "args": ["-X", "utf8", "${PROJECT_ROOT}/.gigacode/hooks/forge_master_mcp.py", "--project-root", "${PROJECT_ROOT}"],
+      "cwd": "${PROJECT_ROOT}",
+      "timeout": 600000,
+      "trust": false
+    }
+  }
+}

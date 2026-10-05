@@ -312,5 +312,67 @@ class TestResolveCli(unittest.TestCase):
             self.assertEqual(script, f"{root_fwd}/.gigacode/hooks/phase-gate.py")
 
 
+
+class TestMcpServers(unittest.TestCase):
+    """mcpServers.forge-master: ставится deploy'ем, снимается uninstall'ом, чужие MCP — на месте.
+
+    Канал к мастер-репо вне каталога проекта (рантайм не пускает туда Edit/shell). Свой ключ
+    резолвер ведёт так же, как блок hooks: перезаписывает своё, чужого не касается."""
+
+    def _project(self, td: str, settings: dict) -> Path:
+        proj = Path(td)
+        hooks = proj / ".gigacode" / "hooks"
+        hooks.mkdir(parents=True)
+        (hooks / "settings.hooks.json").write_text(json.dumps({"hooks": {}}), encoding="utf-8")
+        (hooks / "settings.mcp.json").write_text(
+            (HOOKS / "settings.mcp.json").read_text(encoding="utf-8"), encoding="utf-8")
+        (proj / ".gigacode" / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+        return proj
+
+    def _run(self, proj: Path, *extra):
+        return subprocess.run([sys.executable, str(HOOKS / "resolve_hook_paths.py"),
+                               "--project", str(proj), *extra],
+                              capture_output=True, text=True, timeout=30)
+
+    def test_deploy_adds_forge_master_keeps_foreign(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = self._project(td, {"mcpServers": {"jira": {"command": "jira-mcp"}}})
+            r = self._run(proj)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            s = json.loads((proj / ".gigacode" / "settings.json").read_text(encoding="utf-8"))
+            self.assertEqual(s["mcpServers"]["jira"], {"command": "jira-mcp"})
+            fm = s["mcpServers"]["forge-master"]
+            root = str(proj.resolve()).replace("\\", "/")
+            self.assertNotIn("${", json.dumps(fm))
+            self.assertEqual(fm["args"][2], f"{root}/.gigacode/hooks/forge_master_mcp.py")
+            self.assertEqual(fm["args"][-1], root)
+            self.assertFalse(fm.get("trust"), "запись в мастер подтверждает пользователь")
+            self.assertNotIn('"', fm["command"], "command — голый путь, кавычки стали бы частью имени")
+
+    def test_redeploy_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = self._project(td, {})
+            self._run(proj)
+            first = (proj / ".gigacode" / "settings.json").read_text(encoding="utf-8")
+            self._run(proj)
+            self.assertEqual((proj / ".gigacode" / "settings.json").read_text(encoding="utf-8"),
+                             first)
+
+    def test_remove_strips_only_forge_master(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = self._project(td, {"mcpServers": {"jira": {"command": "jira-mcp"}}})
+            self._run(proj)
+            r = self._run(proj, "--remove")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(json.loads(r.stdout)["mcp_servers_removed"], ["forge-master"])
+            s = json.loads((proj / ".gigacode" / "settings.json").read_text(encoding="utf-8"))
+            self.assertEqual(s["mcpServers"], {"jira": {"command": "jira-mcp"}})
+
+    def test_remove_drops_empty_block(self):
+        updated, removed = rhp.strip_forge_mcp({"mcpServers": {"forge-master": {}}, "x": 1})
+        self.assertEqual(removed, ["forge-master"])
+        self.assertEqual(updated, {"x": 1})
+
+
 if __name__ == "__main__":
     unittest.main()

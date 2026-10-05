@@ -237,6 +237,7 @@ from _project import (  # noqa: E402
     system_analysis_dir,
     test_conventions_path,
     spec_conventions_path,
+    spec_map_path,
 )
 
 
@@ -267,6 +268,34 @@ def fix_delta_slug(bug: str, story=None) -> str:
     return f"{safe_slug(story.strip())}/fixes/{bug_slug}" if is_story_slug(story) else bug_slug
 
 
+def master_spec_for(project_root: Path, capability: Optional[str] = None,
+                    slug: Optional[str] = None) -> Path:
+    """Мастер-спека с учётом КАРТЫ мастера (ground/spec-map.json), если она подтверждена.
+
+    `master_spec_path` знает только шаблон docs.master.spec_path; у мастера «каталог = сервис»
+    с разными именами файлов путь держит карта. `slug` — дельта: её сервис берётся из привязки
+    в карте (merge её запоминает)."""
+    try:
+        _sa = str(Path(__file__).resolve().parents[2] / "system-analyst" / "scripts")
+        if _sa not in sys.path:
+            sys.path.insert(0, _sa)
+        import spec_map
+        m = spec_map.confirmed(Path(project_root))
+    except Exception:  # noqa: BLE001 — карты нет/движок недоступен: шаблон
+        m = None
+    if m:
+        caps = m.get("capabilities") or {}
+        cap = capability
+        if not cap and slug:
+            deltas = m.get("deltas") or {}
+            cap = deltas.get(slug) or deltas.get(slug.split("/fixes/", 1)[0])
+        if not cap and len(caps) == 1:
+            cap = next(iter(caps))
+        if cap in caps:
+            return spec_map.spec_path(Path(project_root), m, cap)
+    return master_spec_path(project_root, capability=capability)
+
+
 # ── CLI: печать резолвнутых путей ─────────────────────────────────────────────
 # Зачем: брифы скиллов раньше писали плейсхолдер `<docs>` и полагались на то, что модель
 # сама прочитает docs.* из pipeline.json и подставит. Нерезолвнутый плейсхолдер — прямая
@@ -292,6 +321,8 @@ def _cli() -> int:
     ap.add_argument("--feature", help="слаг/Jira-ключ: для feature-docs/fix-docs — подкаталог")
     ap.add_argument("--story", help="fix-docs: слаг стори, к которой относится баг "
                                     "('none' — стори неизвестна, папка будет плоской)")
+    ap.add_argument("--capability", help="master-spec: сервис (по карте мастера, если она "
+                                         "подтверждена; иначе по шаблону docs.master.spec_path)")
     ap.add_argument("--print-slug", action="store_true",
                     help="fix-docs: вместо пути напечатать слаг дельты для /forge-spec merge")
     args = ap.parse_args()
@@ -305,6 +336,9 @@ def _cli() -> int:
             print(fix_delta_slug(args.feature, args.story))
         else:
             print(fix_docs_dir(root, args.feature, args.story))
+        return 0
+    if args.target == "master-spec":
+        print(master_spec_for(root, args.capability))
         return 0
     path = _CLI_TARGETS[args.target](root)
     if args.feature and args.target == "feature-docs":

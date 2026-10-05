@@ -4,8 +4,9 @@ resolve_hook_paths.py — подстановка ${PROJECT_ROOT} в settings.hoo
 
 Читает .gigacode/hooks/settings.hooks.json (эталон с плейсхолдером),
 заменяет ${PROJECT_ROOT} на реальный путь к корню проекта,
-и обновляет ТОЛЬКО блок "hooks" в существующем .gigacode/settings.json.
-Все остальные секции (mcpServers, permissions, $version, ...) НЕ трогает.
+и обновляет в существующем .gigacode/settings.json блок "hooks" целиком плюс СВОИ имена в
+"mcpServers" (эталон hooks/settings.mcp.json — MCP-сервер forge-master для доступа к мастер-репо
+вне каталога проекта). Чужие MCP-серверы и прочие секции (permissions, $version, ...) НЕ трогает.
 
 ЕДИНЫЙ владелец блока hooks в settings.json: и постановка (--resolve, зовёт deploy-local.sh),
 и снятие (--remove, зовёт uninstall.sh). Два владельца одного контракта разъезжаются —
@@ -28,6 +29,10 @@ from pathlib import Path
 
 PLACEHOLDER = "${PROJECT_ROOT}"
 PYTHON_PLACEHOLDER = "${PYTHON}"
+PYTHON_EXE_PLACEHOLDER = "${PYTHON_EXE}"
+# Имена MCP-серверов, которыми владеет forge. Хардкод, а не чтение эталона: снимать их нужно и
+# тогда, когда .gigacode/hooks уже удалён (повторный/прерванный uninstall).
+FORGE_MCP_SERVERS = ("forge-master",)
 
 
 def to_command_path(path: str) -> str:
@@ -103,6 +108,57 @@ def resolve_hooks_block(hooks: dict, project_root: str, python_cmd: str) -> dict
         return node
 
     return _walk(hooks)
+
+
+def find_python_exe() -> str:
+    """Интерпретатор для MCP-сервера: голый путь без кавычек и флагов.
+
+    В отличие от command-строки хуков, mcpServers держит command и args РАЗДЕЛЬНО — рантайм не
+    режет их shlex'ом, поэтому кавычки тут были бы частью имени файла. Слэши прямые — тот же
+    путь читается и на Windows."""
+    return to_command_path(sys.executable) if sys.executable else "python3"
+
+
+def resolve_mcp_block(servers: dict, project_root: str) -> dict:
+    """${PROJECT_ROOT}/${PYTHON_EXE} во всех строках блока mcpServers эталона."""
+    exe = find_python_exe()
+
+    def _walk(node):
+        if isinstance(node, str):
+            return node.replace(PLACEHOLDER, project_root).replace(PYTHON_EXE_PLACEHOLDER, exe)
+        if isinstance(node, dict):
+            return {k: _walk(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [_walk(i) for i in node]
+        return node
+
+    return {name: _walk(cfg) for name, cfg in (servers or {}).items()}
+
+
+def merge_mcp_servers(settings: dict, resolved: dict) -> dict:
+    """Влить свои MCP-серверы: свои имена перезаписываются, чужие остаются как были."""
+    out = dict(settings)
+    cur = out.get("mcpServers")
+    cur = dict(cur) if isinstance(cur, dict) else {}
+    cur.update(resolved)
+    if cur:
+        out["mcpServers"] = cur
+    return out
+
+
+def strip_forge_mcp(settings: dict) -> "tuple[dict, list]":
+    """Снять MCP-серверы forge; чужие — на месте. Пустой mcpServers убирается целиком."""
+    out = dict(settings)
+    cur = out.get("mcpServers")
+    if not isinstance(cur, dict):
+        return out, []
+    removed = [n for n in FORGE_MCP_SERVERS if n in cur]
+    kept = {k: v for k, v in cur.items() if k not in FORGE_MCP_SERVERS}
+    if kept:
+        out["mcpServers"] = kept
+    else:
+        out.pop("mcpServers", None)
+    return out, removed
 
 
 def has_placeholder(value) -> bool:
@@ -265,6 +321,7 @@ def run_remove(target_settings_path: Path, project_root: str, dry_run: bool) -> 
         return 1
 
     updated, removed, removed_stale, kept_foreign = strip_forge_hooks(existing, project_root)
+    updated, removed_mcp = strip_forge_mcp(updated)
     summary = {
         "passed": True,
         "dry_run": dry_run,
@@ -275,6 +332,7 @@ def run_remove(target_settings_path: Path, project_root: str, dry_run: bool) -> 
         "removed_stale_paths": removed_stale,   # пути мимо project_root (проект переезжал)
         "foreign_hooks_kept": kept_foreign,
         "hooks_key_removed": "hooks" not in updated,
+        "mcp_servers_removed": removed_mcp,
         "other_sections_preserved": [k for k in updated if k != "hooks"],
     }
 
@@ -400,8 +458,19 @@ def main():
     else:
         existing = {}
 
-    # Обновляем ТОЛЬКО блок hooks
+    # Обновляем блок hooks целиком и СВОИ имена в mcpServers (чужие серверы оператора — нет)
     existing["hooks"] = resolved_hooks
+    mcp_template_path = project_gigacode / "hooks" / "settings.mcp.json"
+    mcp_resolved: dict = {}
+    if mcp_template_path.exists():
+        try:
+            mcp_tmpl = json.loads(mcp_template_path.read_text(encoding="utf-8"))
+            mcp_resolved = resolve_mcp_block(mcp_tmpl.get("mcpServers") or {}, project_root)
+        except (json.JSONDecodeError, OSError) as e:
+            print(json.dumps({"warning": f"эталон MCP не читается ({e}) — mcpServers не тронут"},
+                             ensure_ascii=False), file=sys.stderr)
+    if mcp_resolved:
+        existing = merge_mcp_servers(existing, mcp_resolved)
 
     # Гарантируем minimal обязательные поля
     existing.setdefault("disableAllHooks", False)
@@ -426,8 +495,9 @@ def main():
                 "source": str(hooks_template_path),
                 "target": str(target_settings_path),
                 "hooks_updated": True,
+                "mcp_servers": sorted(mcp_resolved),
                 "other_sections_preserved": [
-                    k for k in existing if k != "hooks"
+                    k for k in existing if k not in ("hooks", "mcpServers")
                 ],
                 "replacements_made": count,
             },
