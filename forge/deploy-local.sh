@@ -11,8 +11,9 @@
 #        - нет settings.json.bak       → settings.json.bak       (первозданный оригинал, вечный)
 #        - settings.json.bak уже есть  → settings.json.<TS>.bak   (текущая версия)
 #      Вечный .bak никогда не затирается, ничего не теряется.
-#   2. Делегирует merge в hooks/resolve_hook_paths.py — обновляется ТОЛЬКО блок hooks,
-#      permissions / mcpServers / $version и прочие секции сохраняются.
+#   2. Делегирует merge в hooks/resolve_hook_paths.py — обновляется блок hooks и свой
+#      MCP-сервер forge-master в mcpServers; чужие MCP-серверы, permissions / $version и
+#      прочие секции сохраняются.
 #
 # Usage (из корня проекта):
 #   bash .gigacode/deploy-local.sh                  # проект = родитель .gigacode/

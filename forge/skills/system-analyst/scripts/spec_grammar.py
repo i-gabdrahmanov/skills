@@ -52,6 +52,7 @@ _GWT = re.compile(r"(?i)given.*when.*then")
 _FROM_TAG = re.compile(r"\[from:[^\]]*\]")
 _SCEN_HEAD = re.compile(r"(?i)^\s{0,3}(#{2,6})\s+(?:scenario|сценарий)\s*:?\s*(.*)$")
 _DOTTED = re.compile(r"^\d+(?:\.\d+)*$")
+_SCEN_STEP = re.compile(r"(?i)^\s*[-*]|\b(?:given|when|then|and|but|дано|когда|тогда|и)\b")
 
 
 def _norm(s: str) -> str:
@@ -293,7 +294,12 @@ class Grammar:
             if not l.strip() or l.lstrip().startswith("#"):
                 continue
             n = _norm(l)
-            if not n or n in scen or any(n in s for s in scen):
+            if not n or n in scen:
+                continue
+            # Хвост многострочного сценария (подстрока своего GWT) — тоже сценарий. Но только
+            # если строка ПОХОЖА на шаг: короткое утверждение «Метрика» — подстрока сценария
+            # «…When метрика…», и раньше оно молча выпадало, а следующий план видел «~ modify».
+            if any(n in s for s in scen) and _SCEN_STEP.search(l):
                 continue
             keep.append(l.strip())
         return self.strip_provenance(" ".join(keep)).strip()

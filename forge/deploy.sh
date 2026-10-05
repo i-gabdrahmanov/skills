@@ -229,6 +229,16 @@ chmod +x "$GIG/hooks/"*.py "$GIG/hooks/"*.sh "$GIG/deploy-local.sh" 2>/dev/null 
 echo
 bash "$GIG/deploy-local.sh"
 
+# 4b. устаревшие per-feature поля policy.json (наследство старых версий): validate считает их
+# ошибкой, и без снятия КАЖДЫЙ `config.py validate` в обновлённом проекте валился по чужой
+# причине. Скрипт идемпотентен и бэкапит policy.json; его сбой деплой не валит.
+if [ "${#PY[@]}" -gt 0 ] && [ -f "$TARGET/ground/policy.json" ]; then
+  "${PY[@]}" -X utf8 "$GIG/skills/config-helper/scripts/config.py" --project "$TARGET" \
+    migrate-deprecated >/dev/null 2>&1 \
+    && echo "  ✓ policy.json: устаревшие per-feature поля сняты (если были)" \
+    || echo "  (migrate-deprecated не выполнился — проверь: config.py validate)"
+fi
+
 # 5. диагностика (advisory — не валим деплой)
 echo
 echo "== preflight =="

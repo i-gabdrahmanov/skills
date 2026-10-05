@@ -332,7 +332,10 @@ def _check_group(group, text_lower, sections, *, hard, allow_na, errors, warning
 
 def check(spec_path: Path, policy: str, *, id_prefix: str = _DEFAULT_ID_PREFIX,
           scenario_floor: bool = True, grammar: "SG.Grammar | None" = None,
-          profile: str = _DEFAULT_PROFILE) -> dict:
+          profile: str = _DEFAULT_PROFILE, foreign: bool = False) -> dict:
+    """`foreign` — мастер это чужой документ из карты (проза/API-дока сервиса): запрет листингов
+    действует только на раздел требований, который ведёт forge. SQL/код в собственном тексте
+    сервиса — не утечка реализации из дельты, а содержимое чужой спеки."""
     errors: list[str] = []
     warnings: list[str] = []
     g = _grammar(id_prefix, grammar)
@@ -378,12 +381,16 @@ def check(spec_path: Path, policy: str, *, id_prefix: str = _DEFAULT_ID_PREFIX,
 
     _check_requirements(raw, sections, text, id_prefix, scenario_floor, errors, warnings, g)
 
-    if _CODE_FENCE.search(raw):
+    leak_scope = raw
+    if foreign:
+        span = g.section_span(raw.splitlines(), "requirements")
+        leak_scope = "\n".join(raw.splitlines()[span[0]:span[1]]) if span else ""
+    if _CODE_FENCE.search(leak_scope):
         errors.append("в spec.md есть код-блок (```java/diff/sql/...) — мастер описывает "
                       "поведение словами, а не листингом (реализация — в коде/tech-design)")
-    if _CODE_SIGNS.search(raw):
+    if _CODE_SIGNS.search(leak_scope):
         errors.append("в spec.md есть сигнатуры кода (import/@RestController/public class) — убери")
-    if _LIQUIBASE.search(raw):
+    if _LIQUIBASE.search(leak_scope):
         warnings.append("в spec.md упомянут Liquibase changeset — детали миграций не уровень мастера")
 
     status = "pass" if not errors else "fail"
@@ -411,10 +418,23 @@ def main() -> int:
     policy = _load_policy(pcfg, args.policy, root)
     prefix, floor, profile = _load_spec_opts(pcfg, args.id_prefix, args.scenario_floor, root)
     grammar = SG.load_profile(root)
+    # Мастер из карты (сервис репо спек): форма — его, а состав разделов форже-шаблона чужой
+    # прозе не навязываем (иначе гейт валится за чужую структуру, как при spec.profile=forge).
+    foreign = False
+    try:
+        import spec_map
+        mapped = spec_map.profile_for(root, Path(args.spec))
+        if mapped is not None:
+            grammar = mapped
+            foreign = spec_map.is_foreign(root, Path(args.spec))
+            if foreign:
+                profile = "detected"
+    except Exception:  # noqa: BLE001 — карты нет/движок недоступен: проектный профиль
+        pass
     if args.id_prefix:
         grammar.id_prefix = args.id_prefix
     verdict = check(Path(args.spec), policy, id_prefix=prefix, scenario_floor=floor,
-                    grammar=grammar, profile=profile)
+                    grammar=grammar, profile=profile, foreign=foreign)
 
     if args.json:
         print(json.dumps(verdict, ensure_ascii=False, indent=2))

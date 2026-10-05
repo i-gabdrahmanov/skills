@@ -218,6 +218,30 @@ def _append_audit(lines: list[str], entry: str, grammar: "SG.Grammar | None" = N
     return True
 
 
+def ensure_sections(text: str, grammar: "SG.Grammar", req_heading: "str | None" = None,
+                    audit_heading: "str | None" = None) -> "tuple[str, list[str]]":
+    """Дописать в КОНЕЦ мастера недостающие разделы требований и журнала. (текст, добавленные).
+
+    Нужно мастеру-прозе (API-дока сервиса): требований своей формы в нём нет, и требования
+    фич живут в отдельном разделе. Прозу не трогаем — только хвост файла. Заголовок берём
+    из карты (как его назвал человек), иначе — из первого якоря грамматики."""
+    lines = text.splitlines()
+    added = []
+    for which, head in (("requirements", req_heading), ("audit", audit_heading)):
+        if grammar.section_span(lines, which) is not None:
+            continue
+        markers = grammar.requirements_section if which == "requirements" else grammar.audit_section
+        if not head:
+            if not markers:
+                continue
+            head = markers[0][:1].upper() + markers[0][1:]
+        while lines and not lines[-1].strip():
+            lines.pop()
+        lines += ["", f"## {head}", ""]
+        added.append(head)
+    return ("\n".join(lines) + "\n" if added else text), added
+
+
 def _num_of(rid: "str | None", g: "SG.Grammar"):
     """Номер из свежевыданного ID — чтобы следующая вставка в том же прогоне его учла."""
     if not rid:
@@ -340,6 +364,18 @@ def resolve_spec(project_root: Path, capability: "str | None" = None,
         if str(_p) not in sys.path:
             sys.path.insert(0, str(_p))
     import skill_paths
+    # Подтверждённая карта мастера — первоисточник пути: раскладка «каталог = сервис» с
+    # разными именами файлов шаблоном docs.master.spec_path не выражается.
+    try:
+        import spec_map
+        m = spec_map.confirmed(project_root)
+    except Exception:  # noqa: BLE001 — карты нет/битая: шаблон, как раньше
+        m = None
+    if m:
+        caps = m.get("capabilities") or {}
+        cap = capability or (next(iter(caps)) if len(caps) == 1 else None)
+        if cap in caps:
+            return spec_map.spec_path(project_root, m, cap), cap
     cap = capability or skill_paths.master_capability(project_root)
     return skill_paths.master_spec_path(project_root, capability=cap), cap
 
@@ -366,7 +402,11 @@ def spec_options(project_root: Path) -> dict:
 def merge(sdd_path: Path, spec_path: Path, template_path: Path, feature: str, capability: str,
           *, prefix: str = DEFAULT_ID_PREFIX, dry_run: bool = False,
           allow_modify: bool = False, modify_ids: "set[str] | None" = None,
-          grammar: "SG.Grammar | None" = None) -> dict:
+          grammar: "SG.Grammar | None" = None, ensure: bool = False,
+          headings: "tuple[str | None, str | None]" = (None, None)) -> dict:
+    """`ensure` — дописать недостающий раздел требований/журнала в конец существующего мастера
+    (по подтверждению человека). Без него отсутствие раздела — статус `no-section` ещё на
+    плане, а не ошибка посреди записи."""
     if not sdd_path.exists():
         return {"status": "error", "error": f"нет дельты (sdd.md): {sdd_path}"}
 
@@ -409,10 +449,23 @@ def merge(sdd_path: Path, spec_path: Path, template_path: Path, feature: str, ca
     candidates = parse_delta(delta)
     ops = plan_ops(parse_master(text, prefix, g), candidates, g)
 
+    sections_added: list[str] = []
+    if any(o["op"] == "add" for o in ops) \
+            and g.section_span(text.splitlines(), "requirements") is None:
+        if not ensure:
+            sec = headings[0] or (g.requirements_section[0] if g.requirements_section
+                                  else "требований")
+            return {"status": "no-section", "spec": str(spec_path), "section": sec,
+                    "ops": format_ops(ops), "kinds": [o["op"] for o in ops],
+                    "error": f"в мастере нет раздела «{sec}» — его можно дописать в конец "
+                             f"файла (--ensure-sections), прозу выше движок не трогает"}
+        text, sections_added = ensure_sections(text, g, *headings)
+
     if dry_run:
         blocked = [o for o in ops if o["op"] == "modify"
                    and not (allow_modify or o["id"] in (modify_ids or set()))]
         return {"status": "ok", "dry_run": True, "spec": str(spec_path), "created": created,
+                "sections_added": sections_added,
                 "feature": feature, "capability": capability, "ops": format_ops(ops),
                 "kinds": [o["op"] for o in ops],
                 "added": [], "modified": [], "blocked": [o["id"] for o in blocked],
@@ -426,6 +479,7 @@ def merge(sdd_path: Path, spec_path: Path, template_path: Path, feature: str, ca
 
     blocked = [o["id"] for o in res["blocked"]]
     return {"status": "blocked" if blocked else "ok", "spec": str(spec_path), "created": created,
+            "sections_added": sections_added,
             "feature": feature, "capability": capability, "ops": format_ops(ops),
             "kinds": [o["op"] for o in ops],
             "added": res["added"], "modified": res["modified"], "blocked": blocked,
@@ -444,6 +498,8 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="показать план операций, не писать")
     ap.add_argument("--allow-modify", action="store_true", help="применить все ~ (modify)")
     ap.add_argument("--modify", action="append", default=[], help="применить modify только для ID")
+    ap.add_argument("--ensure-sections", action="store_true",
+                    help="дописать недостающий раздел требований/журнала в конец мастера")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
@@ -463,7 +519,8 @@ def main() -> int:
 
     result = merge(Path(args.sdd), spec_path, template_path, args.feature, capability,
                    prefix=prefix, dry_run=args.dry_run, allow_modify=args.allow_modify,
-                   modify_ids=set(args.modify), grammar=grammar)
+                   modify_ids=set(args.modify), grammar=grammar,
+                   ensure=args.ensure_sections)
 
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -472,7 +529,7 @@ def main() -> int:
         print(result.get("profile", ""))
         print("   Уточни профиль: config.py set spec.grammar.<ручка> <значение> "
               "(разбор — /forge-spec research)")
-    elif result["status"] == "error":
+    elif result["status"] in ("error", "no-section"):
         print(f"✗ {result.get('error')}")
     else:
         head = "план" if result.get("dry_run") else "merge"
@@ -488,7 +545,7 @@ def main() -> int:
 
     if result["status"] == "error":
         return 2
-    if result["status"] == "unsupported":
+    if result["status"] in ("unsupported", "no-section"):
         return 3                             # нужно решение человека, а не «ошибка скрипта»
     return 3 if result["blocked"] else 0
 

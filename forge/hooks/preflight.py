@@ -575,6 +575,45 @@ def _run_doctor(base: Path, project_root, errors: list[str], warnings: list[str]
 MIN_PYTHON = (3, 9)
 
 
+def _check_master_mcp(base: Path, project_root, warnings: list) -> None:
+    """MCP forge-master зарегистрирован и отвечает на initialize.
+
+    Это единственный канал записи в мастер-репо ВНЕ каталога проекта (рантайм режет там и
+    Edit, и shell). Не enforcement — без него перестаёт работать только /forge-merge в
+    отдельный репо мастера, поэтому warning, а не error. Проверка — реальный запуск сервера:
+    запись в settings.json есть, а интерпретатор/путь битые — то же самое, что записи нет."""
+    server = Path(base) / "hooks" / "forge_master_mcp.py"
+    if not server.exists():
+        return                       # деплоя нет — про это скажет _check_project_layout
+    settings = Path(project_root) / ".gigacode" / "settings.json"
+    try:
+        cfg = (json.loads(settings.read_text(encoding="utf-8")).get("mcpServers") or {}) \
+            .get("forge-master")
+    except (OSError, json.JSONDecodeError, AttributeError):
+        cfg = None
+    if not isinstance(cfg, dict) or not cfg.get("command"):
+        warnings.append("MCP forge-master не зарегистрирован в .gigacode/settings.json — "
+                        "/forge-merge не сможет писать в мастер-репо вне проекта. "
+                        "Почини: bash .gigacode/deploy-local.sh")
+        return
+    import subprocess
+    req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                      "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                                 "clientInfo": {"name": "preflight", "version": "0"}}})
+    try:
+        r = subprocess.run([cfg["command"]] + list(cfg.get("args") or []), input=req + "\n",
+                           capture_output=True, text=True, timeout=15,
+                           cwd=cfg.get("cwd") or str(project_root), encoding="utf-8")
+        ok = '"serverInfo"' in (r.stdout or "")
+    except (OSError, subprocess.SubprocessError) as e:
+        warnings.append(f"MCP forge-master не стартует: {e}")
+        return
+    if not ok:
+        tail = ((r.stderr or r.stdout or "").strip().splitlines() or ["(пусто)"])[-1]
+        warnings.append(f"MCP forge-master не ответил на initialize: {tail[:200]} — "
+                        f"почини: bash .gigacode/deploy-local.sh")
+
+
 def preflight(project_root: str, self_base=None) -> dict:
     errors = []
     warnings = []
@@ -624,6 +663,9 @@ def preflight(project_root: str, self_base=None) -> dict:
 
     # 2b. Каталог настроек РАНТАЙМА vs каталог деплоя (см. _check_runtime_settings_dirs).
     _check_runtime_settings_dirs(project_root, base, warnings)
+
+    # 2c. MCP-канал к мастер-репо (warning: без него не работает только merge вне проекта)
+    _check_master_mcp(base, project_root, warnings)
 
     # 3. doctor.py — self-check целостности (база кода зависит от раскладки)
     _run_doctor(base, project_root, errors, warnings)

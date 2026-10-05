@@ -376,6 +376,21 @@ git-история и связанные `tasks/`.
   `spec.profile` (`forge` | `detected` | `minimal`), раскладка файла — `docs.master.spec_path`.
   Пины: `test_spec_grammar.py` (паритет NATIVE с прежними литералами), `test_analyze_spec.py`,
   `test_spec_cli.py`, `test_archive.py::test_unknown_master_format_blocks`.
+- [BR-20] Структура мастера — КАРТА, подтверждённая человеком, а не догадка merge. Дефолт
+  `specs/{capability}/spec.md` подходит для простых случаев. У опытного пользователя мастер — репо
+  из N сервисов, у каждого своя спека (`inbound-adapter/inbound-adapter.md`,
+  `db-service/dbservice.md`), плюс навигационный `PROJECT_MAP.md`. Старый ресерч ранжировал все
+  `*.md` базы и объявлял мастером индекс с нумерованными заголовками, а merge одной капабилити на
+  проект искал несуществующий `specs/npf/spec.md`. Теперь `/forge-spec research` пишет
+  `ground/spec-map.json` (сервисы, файл каждого, форма, модули кода, привязки дельт). Человек
+  подтверждает карту (`--confirm`), и merge/diff/status/`delta_state` резолвят мастер ДЕЛЬТЫ по
+  ней. Без карты по-старому работает только однозначный мастер (в базе ничего, кроме настроенного
+  пути), иначе exit 3 `no-map`. Проза без требований (`prose`) получает свой раздел в хвосте файла
+  (`--ensure-sections`), текст выше не трогается. Доступ к мастеру в отдельном репо идёт через
+  MCP-сервер `hooks/forge_master_mcp.py` (stdlib, 3.9): рантайм режет Edit и shell вне каталога
+  проекта. Deploy регистрирует его как `mcpServers.forge-master`, uninstall снимает, preflight
+  проверяет `initialize`. Пины: `test_spec_map.py`, `test_forge_master_mcp.py`,
+  `test_resolve_hook_paths.py`.
 - [BR-16] Режим `/forge-merge` — ФЛАГ КОМАНДЫ, а не ключ конфига. Был `spec.master_source`
   в `policy.json`, и это неверно трижды: выбор нужен на одну операцию, а жил в политике проекта
   (снимок в манифест прогона → идущий прогон правку не видит, нужен `config.py repin` под R4);

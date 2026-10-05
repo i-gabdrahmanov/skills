@@ -721,7 +721,8 @@ def _check_deprecated_in_policy(project: Path) -> list:
                     "severity": "error",
                     "error": (f"DEPRECATED: '{path}' больше не живёт в policy.json — это "
                               f"per-feature поле. Пиши в manifest.json активной фичи: "
-                              f"`config.py set {hint_path} <value> --skill <S> --feature <F>`."),
+                              f"`config.py set {hint_path} <value> --skill <S> --feature <F>`. "
+                              f"Снять разом все такие поля: `config.py migrate-deprecated`."),
                 })
     # 2. legacy pipeline.json — DEPRECATED поля = WARNING (совместимость).
     legacy = load_json(_legacy_pipeline_path(project))
@@ -823,6 +824,46 @@ def cmd_validate(project: Path, params: list, args) -> int:
                 print(f"  {flag} {i['id']} ({i['file']}:{i['path']}) = {i['value']!r}")
                 print(f"      {i['error']}")
     return 1 if failed else 0
+
+
+def cmd_migrate_deprecated(project: Path, params: list, args) -> int:
+    """Снять из policy.json per-feature поля, которые туда больше не пишутся.
+
+    validate считает их ОШИБКОЙ, поэтому проект, обновлённый со старой версии, валился на
+    КАЖДОМ validate по наследству, и любая цепочка `set … && validate` давала exit 1 по
+    чужой причине. Значения не переносятся: это решения конкретной фичи, а проектный
+    «дефолт» в policy.json давно не читается — переносить нечего и некуда. Legacy
+    pipeline.json не трогаем: его читает dual-read, и там поля — лишь предупреждение."""
+    path = _policy_path(project)
+    data = load_json(path)
+    if not isinstance(data, dict):
+        print(json.dumps({"ok": True, "removed": [], "note": f"policy.json нет: {path}"},
+                         ensure_ascii=False))
+        return 0
+    removed = []
+    for dotted in sorted(DEPRECATED_IN_POLICY_FROM_LEGACY):
+        found, val = dig(data, dotted)
+        if not found:
+            continue
+        parts = dotted.split(".")
+        node = data
+        for k in parts[:-1]:
+            node = node[k]
+        node.pop(parts[-1], None)
+        removed.append({"path": dotted, "value": val})
+        # Пустой родитель («sources»: {}) — тоже мусор от старой модели.
+        if not node and len(parts) > 1:
+            parent = data
+            for k in parts[:-2]:
+                parent = parent[k]
+            parent.pop(parts[-2], None)
+    bak = None
+    if removed and not args.dry_run:
+        bak = backup(path, project)
+        atomic_write(path, data)
+    print(json.dumps({"ok": True, "dry_run": bool(args.dry_run), "file": str(path),
+                      "removed": removed, "backup": bak}, ensure_ascii=False, indent=2))
+    return 0
 
 
 def cmd_repin(project: Path, params: list, args) -> int:
@@ -984,6 +1025,10 @@ def main() -> int:
                     help="Предупреждения тоже валят (exit 1) — для preflight-гейта")
     pv.add_argument("--json", action="store_true")
 
+    pmd = sub.add_parser("migrate-deprecated",
+                         help="Снять из policy.json устаревшие per-feature поля (с бэкапом)")
+    pmd.add_argument("--dry-run", action="store_true")
+
     args = p.parse_args()
     project = Path(args.project or repo_root()).resolve()
     params = load_registry()
@@ -1002,6 +1047,8 @@ def main() -> int:
         return cmd_repin(project, params, args)
     if args.cmd == "validate":
         return cmd_validate(project, params, args)
+    if args.cmd == "migrate-deprecated":
+        return cmd_migrate_deprecated(project, params, args)
     return 2
 
 

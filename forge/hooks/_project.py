@@ -733,6 +733,16 @@ def spec_conventions_path(root: Optional[Path] = None, cfg: Optional[dict] = Non
     return inventory_dir(root, cfg) / "spec-conventions.json"
 
 
+def spec_map_path(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
+    """ground/spec-map.json — КАРТА мастер-спеки: какие сервисы, где чей файл, какой формы.
+
+    В отличие от spec-conventions.json это не кэш, а подтверждённое человеком описание
+    структуры: merge по чужому мастеру идёт только по нему. Поэтому живёт в ground/ рядом с
+    policy.json и едет в git, а не в самоигнорирующемся inventory/.
+    """
+    return ground_dir(Path(root) if root else find_project_root()) / "spec-map.json"
+
+
 _DEFAULT_SPEC_TPL = "specs/{capability}/spec.md"
 
 

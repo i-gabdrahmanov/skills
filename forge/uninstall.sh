@@ -31,7 +31,8 @@
 #     всё, чего нет ни в исходном репо Forge, ни в реестре прошлой установки, остаётся на месте.
 #   - ground/            — рабочие данные пайплайна (BRD/SDD/манифесты/логи). Только --purge-state.
 #   - .gitignore         — файл целиком; снимается ТОЛЬКО блок между маркерами forge.
-#   - settings.json      — остальные секции (permissions, mcpServers, $version) не наши.
+#   - settings.json      — остальные секции (permissions, чужие mcpServers, $version) не наши;
+#                          снимаются только блок hooks и MCP-сервер forge-master.
 #   - *.bak              — бэкапы, в т.ч. первозданный settings.json.bak (до установки Forge).
 #   - refs/forge/*       — git-чекпойнты отката. Только --purge-state.
 #
@@ -124,8 +125,8 @@ else
 fi
 
 # ── 1. settings.json: снять блок hooks ПЕРВЫМ ────────────────────────────────
-# Снимает forge-хуки этого проекта; чужие записи и прочие секции (permissions/mcpServers)
-# резолвер сохраняет — он же их и ставил, контракт блока hooks у него один.
+# Снимает forge-хуки этого проекта и MCP-сервер forge-master; чужие записи и прочие секции
+# (permissions, чужие mcpServers) резолвер сохраняет — он же их и ставил, контракт у него один.
 RESOLVER="$SRC/hooks/resolve_hook_paths.py"
 if [ ! -f "$RESOLVER" ]; then
   echo "uninstall.sh: не найден $RESOLVER — репо Forge неполный." >&2
@@ -160,7 +161,7 @@ else
     echo "  [backup] вечный .bak сохранён; текущая версия → $SETTINGS.$TS.bak"
   fi
   "${PY[@]}" -X utf8 "$RESOLVER" --project "$TARGET" --remove
-  echo "  ✓ блок hooks снят из settings.json (permissions/mcpServers и чужие хуки сохранены)"
+  echo "  ✓ блок hooks и MCP forge-master сняты из settings.json (permissions, чужие MCP и хуки сохранены)"
 fi
 
 # ── 2. локальный конфиг оператора — отставить в сторону ──────────────────────

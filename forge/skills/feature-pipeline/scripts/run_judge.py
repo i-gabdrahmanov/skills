@@ -1255,14 +1255,15 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
     drift = ((pcfg.get("spec") or {}).get("drift") or "warn") if isinstance(pcfg, dict) else "warn"
     if master_cfg.get("enabled"):
         try:
-            master_spec = skill_paths.master_spec_path(PROJECT_ROOT)
+            # Мастер ЭТОЙ дельты: по подтверждённой карте у каждого сервиса своя спека.
+            master_spec = skill_paths.master_spec_for(PROJECT_ROOT, slug=slug)
         except Exception:  # noqa: BLE001
             master_spec = None
         if master_spec and master_spec.exists():
             mtext = master_spec.read_text(encoding="utf-8", errors="replace")
             # След дельты ищем формой из профиля: у мастера без провенанс-тега «from: <slug>»
             # не появится никогда, и судья вечно писал бы «не слито».
-            _mg = _spec_grammar(PROJECT_ROOT)
+            _mg = _spec_grammar(PROJECT_ROOT, master_spec)
             _supported = _mg.supported()[0] if _mg is not None else True
             _probe = _mg.provenance_query(slug) if _mg is not None else f"from: {slug}"
             if not _supported:
@@ -1312,7 +1313,7 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
     # Пол чистоты текста: китайские/CJK-символы в tech-design.md, task-plan.json и мастере (блок).
     _charset_files = [tech_path, task_plan_path]
     try:
-        _ms = skill_paths.master_spec_path(PROJECT_ROOT)
+        _ms = skill_paths.master_spec_for(PROJECT_ROOT, slug=slug)
         if _ms and _ms.exists():
             _charset_files.append(_ms)
     except Exception:  # noqa: BLE001
@@ -2147,13 +2148,23 @@ RECHECK_RECOMPUTE_PHASES = frozenset(PHASE_MAP)
 
 
 
-def _spec_grammar(root):
-    """Профиль формы мастера (spec_grammar). None — движок недоступен: ведём себя как раньше."""
+def _spec_grammar(root, master=None):
+    """Профиль формы мастера (spec_grammar). None — движок недоступен: ведём себя как раньше.
+
+    `master` — файл мастера дельты: по подтверждённой карте у каждого сервиса своя форма."""
     try:
         scripts = skill_paths.script(root, "system-analyst", "check_master_spec").parent
         if str(scripts) not in sys.path:
             sys.path.insert(0, str(scripts))
         import spec_grammar
+        if master is not None:
+            try:
+                import spec_map
+                mapped = spec_map.profile_for(root, master)
+                if mapped is not None:
+                    return mapped
+            except Exception:  # noqa: BLE001
+                pass
         return spec_grammar.load_profile(root)
     except Exception:  # noqa: BLE001
         return None
