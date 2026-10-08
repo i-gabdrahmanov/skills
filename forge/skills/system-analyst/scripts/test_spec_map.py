@@ -111,6 +111,27 @@ class SpecMapBase(unittest.TestCase):
         self.assertEqual(rc, 0, out)
 
 
+class MissingScanDirTest(unittest.TestCase):
+    """Боевой прогон v0.4.6 (SA-4): каталога из docs.master.spec_path нет — research падал
+    сырым FileNotFoundError, а status при этом показывал «НЕ слито»."""
+
+    def test_research_explains_missing_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "ground").mkdir()
+            (root / "ground" / "policy.json").write_text(json.dumps({
+                "project": {"name": "x"},
+                "docs": {"mode": "in-repo", "docs_path": "docs",
+                         "master": {"enabled": True, "spec_path": "specs/npf/spec.md"}}}),
+                encoding="utf-8")
+            (root / "docs").mkdir()
+            spec_cli._GRAMMAR_CACHE.clear()
+            rc, out = run("--project-root", str(root), "research")
+            self.assertEqual(rc, 2, out)
+            self.assertIn("каталога мастеров нет", out)
+            self.assertNotIn("FileNotFoundError", out)
+
+
 class BuildTest(SpecMapBase):
     def test_services_found_and_index_ignored(self):
         m = SM.build(self.root)

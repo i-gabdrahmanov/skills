@@ -747,7 +747,15 @@ def main():
     else:
         result = detected
 
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    ground = os.path.dirname(dest)
+    if os.path.exists(ground) and not os.path.isdir(ground):
+        # `ground` — ФАЙЛ: makedirs падал сырым FileExistsError, и первый запуск выглядел
+        # поломкой форжа (боевой прогон v0.4.6, CLI-8).
+        print(json.dumps({"status": "error", "path": ground,
+                          "error": f"{ground} — файл, а нужен каталог стейта forge: переименуй "
+                                   f"или убери его и повтори init"}, ensure_ascii=False))
+        sys.exit(2)
+    os.makedirs(ground, exist_ok=True)
     with open(dest, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
         f.write("\n")

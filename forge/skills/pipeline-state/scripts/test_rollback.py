@@ -351,5 +351,23 @@ class TCodeRestore(unittest.TestCase):
         self.assertEqual((self.tmp / "src" / "Main.java").read_text(encoding="utf-8"), "v2")
 
 
+class TJournalScopeNonUtf8(unittest.TestCase):
+    """Боевой прогон v0.4.6 (STATE-4): один не-UTF8 байт в journal/files.jsonl ронял откат
+    UnicodeDecodeError'ом — даже --dry-run. Битая строка — предупреждение, остальное читается."""
+
+    def test_bad_line_is_a_warning_not_a_crash(self):
+        import rollback
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td)
+            j = project / "ground" / "statements" / "feature-pipeline" / "f1" / "journal"
+            j.mkdir(parents=True)
+            (j / "files.jsonl").write_bytes(
+                json.dumps({"ts": "2026-10-08T10:00:00Z", "op": "write",
+                            "paths": ["src/A.java"]}).encode() + b"\n\xff\xfe broken\n")
+            paths, warnings = rollback._journal_scope(project, "feature-pipeline", "f1", None)
+            self.assertEqual(paths, {"src/A.java"})
+            self.assertTrue(any("не UTF-8" in w for w in warnings), warnings)
+
+
 if __name__ == "__main__":
     unittest.main()

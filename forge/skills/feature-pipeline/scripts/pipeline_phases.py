@@ -350,10 +350,12 @@ def match_required_judges(step_id: str) -> list:
 # Теперь имя настоящее: ground/inventory/grounding-excerpt.json.
 # Имена ЧИТАЮЩИХ инструментов: и Claude-нотация, и КАНОН рантайма. Список сравнивается с
 # tool_name из payload'а (`tool_name in blocked_tools`), а рантайм шлёт канон (read_file,
-# search_file_content, glob) — с одними Claude-именами блокировка чтения src/ до завершения
-# grounding'а не совпала бы никогда, даже будучи правильно проведённой (tasks/012).
+# grep_search, glob; search_file_content — имя grep в ранних версиях) — с одними Claude-именами
+# блокировка чтения src/ до завершения grounding'а не совпала бы никогда, даже будучи
+# правильно проведённой (tasks/012). grep_search в списке не было, и qwen-ный grep шёл мимо
+# гейта — его не видел и матчер settings (боевой прогон v0.4.6, B-F1).
 _READ_TOOL_NAMES = ["Read", "ReadFile", "read_file",
-                    "Grep", "GrepSearch", "grep", "search_file_content",
+                    "Grep", "GrepSearch", "grep", "grep_search", "search_file_content",
                     "Glob", "glob"]
 
 

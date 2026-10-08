@@ -108,10 +108,11 @@ class TestRecordApprovalSingle(unittest.TestCase):
         self.assertEqual(rec["kind"], "approval")
 
     def test_evidence_field(self):
-        """--evidence пишется в запись."""
-        rc = ra_mod.cmd_single(self._args(evidence="sha256:abc123"))
+        """--evidence пишется в запись. Ссылка-артефакт годится ключу плана; ключу согласия
+        (gate-override-* и др.) — только ответ пользователя, см. TestConsentEvidenceRequired."""
+        rc = ra_mod.cmd_single(self._args(key="human-approval", evidence="sha256:abc123"))
         self.assertEqual(rc, 0)
-        rec = FE.approval(self.project, "gate-override-x")
+        rec = FE.approval(self.project, "human-approval")
         self.assertEqual(rec["evidence"], "sha256:abc123")
 
     def test_feature_ctx(self):
@@ -680,6 +681,58 @@ class TestConsentEvidenceRequired(unittest.TestCase):
         self.assertIn("--evidence", r.stderr)
         # атомарность: не записалась ни одна строка, включая валидную первую
         self.assertIsNone(FE.approval(self.project, "fix-plan-ok"))
+
+    def test_consent_class_is_case_insensitive(self):
+        r = self._run("--key", "GATE-OVERRIDE Blue Judge")
+        self.assertEqual(r.returncode, 2, r.stdout)
+
+    def test_evidence_must_be_consent(self):
+        """Второй слой — без транскрипта, но смысл цитаты проверяет: мусор, отказ и постановка
+        задачи согласием не являются (боевой прогон v0.4.6, E-CONSENT-MINE/BATCH)."""
+        for ev in ("zzzzzzzzzzzzzzzzzz",
+                   "никогда не откатывай прогон автоматически",
+                   "Почини баг STOR-123 в OrderService",
+                   "а можно сначала показать план?"):
+            with self.subTest(evidence=ev):
+                r = self._run("--key", "git-discard", "--evidence", ev)
+                self.assertEqual(r.returncode, 2, f"{ev!r} записан согласием: {r.stdout}")
+                self.assertIsNone(FE.approval(self.project, "git-discard"))
+
+    def test_batch_garbage_evidence_rejected(self):
+        """Через батч цитату `zzzz…` выписывал маркер git-discard, и reset --hard проходил."""
+        import json as _json
+        bad = self.project / "bad.json"
+        bad.write_text(_json.dumps([
+            {"key": "git-discard", "reason": "r", "approver": "user",
+             "evidence": "zzzzzzzzzzzzzzzzzz"}]), encoding="utf-8")
+        r = subprocess.run(
+            [sys.executable, str(SCRIPTS / "record_approval.py"),
+             "--project", str(self.project), "--batch", str(bad)],
+            capture_output=True, text=True, cwd=str(SCRIPTS))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIsNone(FE.approval(self.project, "git-discard"))
+
+    def test_parallel_batches_do_not_duplicate_grants(self):
+        """Проверка «ключ ещё не активен» и запись — под одним замком: два параллельных батча
+        с одними ключами давали дубли грантов 12 из 12 повторов (боевой прогон v0.4.6)."""
+        import json as _json
+        keys = [f"phase-{i:02d}" for i in range(20)]
+        for n in range(2):
+            (self.project / f"b{n}.json").write_text(_json.dumps(
+                [{"key": k, "reason": "r", "approver": "lead"} for k in keys]), encoding="utf-8")
+        for _ in range(3):
+            log = FE.approvals_path(self.project)
+            if log.exists():
+                log.unlink()
+            procs = [subprocess.Popen(
+                [sys.executable, str(SCRIPTS / "record_approval.py"),
+                 "--project", str(self.project), "--batch", str(self.project / f"b{n}.json")],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=str(SCRIPTS))
+                for n in range(2)]
+            self.assertEqual([p.wait(timeout=60) for p in procs], [0, 0])
+            grants = [r["key"] for r in FE.read_log(FE.approvals_path(self.project))
+                      if r.get("kind") == "approval"]
+            self.assertEqual(sorted(grants), sorted(keys), "ключ выписан дважды")
 
     def test_batch_with_evidence_passes(self):
         import json as _json

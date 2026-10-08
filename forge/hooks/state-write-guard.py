@@ -86,7 +86,6 @@ import json
 import os
 import posixpath
 import re
-import shlex
 import sys
 from pathlib import Path
 
@@ -258,95 +257,122 @@ def _harness_hint(target: str) -> str:
 # ── Извлечение ЦЕЛЕЙ записи из shell-команды ──────────────────────────────────────────
 # Гард обязан отличать «файл, в который пишут» от «файл, который читают/исполняют». Иначе
 # `python3 <harness>/…/update.py … 2>&1` выглядит как запись в харнес (см. докстринг модуля).
-_CMD_SEP_RE = re.compile(r"\|\||&&|[;|&\n]")
-_REDIR_TOK_RE = re.compile(r"^[0-9]*&?(>>?|<>)(.*)$")
-_COPY_CMDS = ("cp", "mv", "install", "rsync")
-_MULTI_TARGET_CMDS = ("tee", "truncate")   # пишут во все свои файлы всегда
-# Удаление/обнуление/перенос/«подкрутка mtime» — отдельный класс целей, разбирается
-# _unlink_targets. Это самый дешёвый способ снять enforcement: без manifest.json фазовая
-# машина не резолвится и ВСЕ хуки становятся noop, а `touch` чужого манифеста перехватывает
-# «активную фичу» (её резолвят по самому свежему mtime). У `mv` сюда идёт ИСТОЧНИК —
-# назначение остаётся обычной записью через _COPY_CMDS.
-_UNLINK_CMDS = ("rm", "unlink", "shred", "touch", "mv")
-_INPLACE_CMDS = ("sed", "perl", "ruby")    # пишут в файл ТОЛЬКО с -i (иначе поток на stdout)
-# inline-python: пишущий вызов в тексте команды. Есть такой — целями считаем ВСЕ строковые
-# литералы команды (какой из них путь, из shell не разобрать; лучше перебдеть).
-_PY_WRITE_RE = re.compile(
-    r"open\s*\([^)]*['\"]\s*,\s*['\"][aw]|\.write(?:_text|_bytes)?\s*\(|\bshutil\.(copy|move)\b"
-)
-_STR_LIT_RE = re.compile(r"'([^']+)'|\"([^\"]+)\"")
-
-
-def _tokens(seg: str) -> list[str]:
+# Разбор целей записи/удаления — общий с tdd-guard/eval-guard/sod-enforcer. Модуль stdlib-only;
+# не грузится — бандл битый, и молчать нельзя: exit 1 рантайм читает как «возражений нет».
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _shell_targets as ST
+except Exception as _e:  # pragma: no cover — сломанный бандл
     try:
-        return shlex.split(seg, posix=True)
-    except ValueError:  # незакрытая кавычка — грубая токенизация
-        return re.findall(r"[^\s'\"]+", seg)
+        from _failclosed import bundle_denied
+    except Exception:
+        print(f"[state-write-guard] DENY: бандл forge не грузится ({_e}). Перезапусти: "
+              f"bash .gigacode/deploy-local.sh", file=sys.stderr)
+        sys.exit(2)
+    sys.exit(bundle_denied("state-write-guard", _e))
+
+_CMD_SEP_RE = ST._CMD_SEP_RE
+_SHELLS = ST._SHELLS
+_segments = ST._segments
+_write_targets = ST.write_targets
+_unlink_targets = ST.unlink_targets
+_rm_targets = ST.rm_targets
+
+# ── find, который УДАЛЯЕТ найденное ──────────────────────────────────────────────────
+# `find . -name manifest.json -delete` проходил все семь Bash-хуков: state-write-guard знал
+# только rm/unlink/shred/touch/mv, а ядро destructive-blocker ловит find лишь от `/`/`~`.
+# На жертвенном клоне манифест исчез, и запись в src/main, до того DENY, стала rc 0 (боевой
+# прогон v0.4.6, E-FIND-DELETE). Разбор: корни поиска + фильтры имён → задевает ли удаление
+# живой control-plane. Уборка своего (`find . -name '*.class' -delete`, `find build -delete`)
+# остаётся свободной.
+_FIND_DELETE_EXEC = ("rm", "unlink", "shred", "srm", "mv", "truncate")
+_FIND_NAME_OPTS = ("-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename",
+                   "-regex", "-iregex")
+# Что живёт внутри ground/ и hooks/: имена, по которым фильтр find задевает control-plane.
+_CP_SAMPLES = (
+    "ground/statements/s/f/manifest.json", "ground/statements/s/f/events.jsonl",
+    "ground/statements/s/f/evals.json", "ground/statements/s/f/task-plan.json",
+    "ground/policy.json", "ground/pipeline.json", "ground/feature-gates.json",
+    "ground/approvals.jsonl", "ground/inventory/grounding-excerpt.json",
+    ".gigacode/hooks/gate-guard.py", ".gigacode/hooks/risk-policy.json",
+)
 
 
-def _write_targets(cmd: str) -> list[str]:
-    """Пути, в которые команда ПИШЕТ (best-effort). Путь исполняемого скрипта, аргументы-входы
-    и `2>&1` целями не считаются."""
-    out: list[str] = []
-    if _PY_WRITE_RE.search(cmd):
-        out += [a or b for a, b in _STR_LIT_RE.findall(cmd)]
-    for seg in _CMD_SEP_RE.split(cmd.replace(">|", ">")):
-        if not seg.strip():
-            continue
-        toks = _tokens(seg)
-        if not toks:
-            continue
-        # редиректы: `> f`, `>>f`, `1> f`, `&> f` (но не `2>&1` и не fd-номер)
-        redirect_idx = set()
-        for i, t in enumerate(toks):
-            m = _REDIR_TOK_RE.match(t)
-            if not m:
-                continue
-            redirect_idx.add(i)
-            rest = m.group(2)
-            if not rest and i + 1 < len(toks):
-                rest = toks[i + 1]
-                # цель редиректа — НЕ аргумент команды: иначе у `cp src <cp-файл> > /dev/null`
-                # последним аргументом cp оказывался /dev/null, и настоящее назначение копии
-                # (control-plane) не проверялось вовсе — дыра в гарде.
-                redirect_idx.add(i + 1)
-            if rest and not rest.startswith("&") and not rest.isdigit():
-                out.append(rest)
-        argv = [t for i, t in enumerate(toks) if i not in redirect_idx]
-        if not argv:
-            continue
-        name = posixpath.basename(argv[0])
-        files = [a for a in argv[1:] if not a.startswith("-")]
-        if name in _COPY_CMDS and files:
-            out.append(files[-1])          # назначение copy/move — последний аргумент
-        elif name in _MULTI_TARGET_CMDS:
-            out += files
-        elif name in _INPLACE_CMDS and any(a.startswith("-i") for a in argv[1:]):
-            out += files
-        for a in argv:
-            if a.startswith("of="):        # dd of=<file>
-                out.append(a[3:])
-    return [t for t in out if t]
+def _find_is_deleting(argv: list[str], cmd: str) -> bool:
+    if "-delete" in argv:
+        return True
+    for i, a in enumerate(argv):
+        if a in ("-exec", "-execdir", "-ok", "-okdir") and i + 1 < len(argv):
+            target = posixpath.basename(argv[i + 1])
+            if target in _FIND_DELETE_EXEC:
+                return True
+            if target in _SHELLS and re.search(r"\b(?:rm|unlink|shred|mv|truncate)\b|>",
+                                               " ".join(argv[i + 2:])):
+                return True
+    return bool(re.search(r"\|\s*xargs\b[^;&|]*\b(?:rm|unlink|shred|srm|mv)\b", cmd))
 
-def _unlink_targets(cmd: str) -> list[str]:
-    """Пути, которые команда УДАЛЯЕТ/обнуляет/уносит (rm, unlink, shred, touch, mv-источник).
 
-    Отдельно от _write_targets, потому что проверяются по более узкому множеству: живой
-    control-plane. Архив завершённых прогонов (ground/archive/) под это не попадает —
-    его уборка легитимна, гейты из него ничего не читают."""
-    out: list[str] = []
-    for seg in _CMD_SEP_RE.split(cmd.replace(">|", ">")):
-        toks = _tokens(seg)
-        if not toks:
+def _find_roots_and_filters(argv: list[str]) -> "tuple[list[str], list[tuple[str, str]]]":
+    roots, i = [], 1
+    while i < len(argv) and argv[i] in ("-H", "-L", "-P", "-O0", "-O1", "-O2", "-O3"):
+        i += 1
+    while i < len(argv) and not argv[i].startswith(("-", "(", "!", "\\(")):
+        roots.append(argv[i])
+        i += 1
+    filters = [(argv[k], argv[k + 1]) for k in range(i, len(argv) - 1)
+               if argv[k] in _FIND_NAME_OPTS]
+    return roots or ["."], filters
+
+
+def _filter_hits_cp(opt: str, value: str) -> bool:
+    """Задевает ли фильтр find хоть один файл control-plane (по образцам _CP_SAMPLES)."""
+    import fnmatch
+    for sample in _CP_SAMPLES:
+        if opt in ("-name", "-iname"):
+            hit = fnmatch.fnmatch(posixpath.basename(sample).lower(), value.lower())
+        elif opt in ("-regex", "-iregex"):
+            try:
+                hit = re.search(value, "./" + sample, re.I) is not None
+            except re.error:
+                hit = True
+        else:
+            hit = fnmatch.fnmatch(("./" + sample).lower(), value.lower())
+        if hit:
+            return True
+    return False
+
+
+def _covers(root_dir: str, path: str) -> bool:
+    root_dir = root_dir.rstrip("/") or "/"
+    return path == root_dir or path.startswith(root_dir + "/") or root_dir == "/"
+
+
+def _find_delete_hit(cmd: str, cwd: str) -> str:
+    """Корень find, удаление под которым задевает живой control-plane; '' — не задевает."""
+    for argv in _segments(cmd):
+        if posixpath.basename(argv[0]) != "find" or not _find_is_deleting(argv, cmd):
             continue
-        name = posixpath.basename(toks[0])
-        if name not in _UNLINK_CMDS:
-            continue
-        files = [a for a in toks[1:] if not a.startswith("-")]
-        if name == "mv":
-            files = files[:-1]             # последний операнд mv — назначение, не источник
-        out += files
-    return [t for t in out if t]
+        roots, filters = _find_roots_and_filters(argv)
+        base = os.path.abspath(cwd or ".")
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import risk_ladder as _R
+            proj = str(_R.project_root(base))
+        except Exception:  # noqa: BLE001 — корень не резолвится: меряем от cwd
+            proj = base
+        cp_dirs = [posixpath.normpath(posixpath.join(proj, d).replace("\\", "/"))
+                   for d in ("ground", ".gigacode")]
+        for r in roots:
+            rr = _collapse(r)
+            if _CP_LIVE_RE.search(rr) or _CP_CONTAINER_RE.search(rr):
+                return r                    # корень поиска — сам control-plane
+            absr = posixpath.normpath(posixpath.join(base.replace("\\", "/"),
+                                                     os.path.expanduser(r).replace("\\", "/")))
+            if not any(_covers(absr, d) for d in cp_dirs):
+                continue                    # под этим корнем control-plane нет
+            if not filters or any(_filter_hits_cp(o, v) for o, v in filters):
+                return r
+    return ""
 
 
 # Доки фич и их архив — история стройки: BRD, sdd, tech-design, task-plan. Не control-plane
@@ -356,19 +382,6 @@ def _unlink_targets(cmd: str) -> list[str]:
 # Уборка — только /forge-archive put (переносит доки вместе со стейтом прогона).
 _DOCS_RE = re.compile(r"(?<![\w-])feature-pipeline(?:/|$)|(?<![\w-])docs/archive(?:/|$)",
                       re.IGNORECASE)
-_RM_CMDS = ("rm", "unlink", "shred")
-
-
-def _rm_targets(cmd: str) -> list[str]:
-    """Пути, которые команда именно УДАЛЯЕТ (rm/unlink/shred) — без mv и touch."""
-    out: list[str] = []
-    for seg in _CMD_SEP_RE.split(cmd.replace(">|", ">")):
-        toks = _tokens(seg)
-        if toks and posixpath.basename(toks[0]) in _RM_CMDS:
-            out += [a for a in toks[1:] if a and not a.startswith("-")]
-    return out
-
-
 def _docs_hint(target: str) -> str:
     return (
         f"[state-write-guard] DENY: удаление доков фичи '{target}' запрещено — это история "
@@ -377,6 +390,16 @@ def _docs_hint(target: str) -> str:
         f"переезжают в <docs>/archive/ вместе со стейтом прогона, restore возвращает обратно).\n"
         f"  Архивация отказала — покажи пользователю её причину как есть и не обходи её руками."
     )
+
+
+def _resolved(target: str, cwd: str) -> str:
+    """Цель через симлинки: `ln -s ground l; echo x > l/policy.json` писал в policy.json мимо
+    CP-паттерна — в строке цели нет `ground/` (track C F-3). Для харнеса realpath уже был."""
+    try:
+        p = target if os.path.isabs(target) else os.path.join(cwd or ".", target)
+        return os.path.realpath(p).replace("\\", "/")
+    except (OSError, ValueError):
+        return ""
 
 
 # Чекпойнт-refs (refs/forge/*) — control-plane в git: точки восстановления rollback.py.
@@ -448,20 +471,25 @@ def main() -> int:
                       "Ручная правка refs подделывает точку восстановления rollback.",
                       file=sys.stderr)
                 return 2
+            hit = _find_delete_hit(cmd, cwd)
+            if hit:
+                print(_unlink_hint(f"find {hit} … (удаление найденного)"), file=sys.stderr)
+                return 2
             for t in (_collapse(x) for x in _unlink_targets(cmd)):
-                if _CP_LIVE_RE.search(t):
-                    print(_unlink_hint(t), file=sys.stderr)
-                    return 2
-                if _CP_CONTAINER_RE.search(t):
-                    print(_container_hint(t), file=sys.stderr)
-                    return 2
+                for v in (t, _resolved(t, cwd)):
+                    if v and _CP_LIVE_RE.search(v):
+                        print(_unlink_hint(t), file=sys.stderr)
+                        return 2
+                    if v and _CP_CONTAINER_RE.search(v):
+                        print(_container_hint(t), file=sys.stderr)
+                        return 2
             for t in (_collapse(x) for x in _rm_targets(cmd)):
                 if _DOCS_RE.search(t):
                     print(_docs_hint(t), file=sys.stderr)
                     return 2
             targets = [_collapse(t) for t in _write_targets(cmd)]
             for t in targets:
-                if _CP_RE.search(t):
+                if _CP_RE.search(t) or _CP_RE.search(_resolved(t, cwd)):
                     print(_hint(t), file=sys.stderr)
                     return 2
             for t in targets:

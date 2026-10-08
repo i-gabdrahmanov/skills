@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations  # PEP604 (X | None) под Python 3.9
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -480,8 +481,12 @@ def main():
                 # теперь прямой — без нормализации свои же хуки ложно попали бы в foreign.
                 # Только пути .gigacode/hooks/ — свои хуки со старым путём проекта. Скрипты
                 # оператора в другом месте деплой сохраняет, и это не ошибка.
+                # realpath с обеих сторон: тот же каталог через симлинк-алиас (`/tmp` ↔
+                # `/private/tmp` на macOS) не «чужой путь» (боевой прогон v0.4.6, A-F2).
+                real_prefix = _norm(os.path.realpath(expected_prefix.rstrip("/"))) + "/"
                 foreign = [p for p in abs_paths if _GIGACODE_HOOK_RE.search(_norm(p))
-                           and not _norm(p).startswith(_norm(expected_prefix))]
+                           and not _norm(p).startswith(_norm(expected_prefix))
+                           and not _norm(os.path.realpath(p)).startswith(real_prefix)]
                 if foreign:
                     issues.append(
                         f"FOREIGN ABSOLUTE PATHS in settings.json hooks: {foreign}"

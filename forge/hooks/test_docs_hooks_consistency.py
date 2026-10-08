@@ -110,6 +110,25 @@ class TestDocsHooksConsistency(unittest.TestCase):
             self.assertEqual(ghosts, [],
                              f"{doc.name}: таблица хуков обещает непроведённые хуки: {ghosts}")
 
+    def test_no_doc_launches_with_removed_flags(self):
+        """В gigacode 26.9 флагов `--experimental-hooks` и `-y` нет — сессия с ними не стартует.
+
+        Фикс 016-C1 правил README/INSTALL/user-guide/troubleshooting/pipeline-technical/FORGE,
+        а DEPLOY.md и ДЕПЛОИМЫЕ SKILL.md роутера и forgefix продолжали велеть «запускай ВСЕГДА с
+        --experimental-hooks» (боевой прогон v0.4.6, H-F1/F2): модель в сессии советовала бы
+        команду, валящую сессию. Скан — по всем докам, которые читают человек и модель.
+        Упоминание флага как несуществующего разрешено; запрещена команда запуска с ним."""
+        launch = re.compile(r"gigacode\s+--experimental-hooks|gigacode\b[^`\n]*\s-y\b")
+        docs = [REPO / "README.md", REPO / "INSTALL.md", FORGE, HOOKS / "DEPLOY.md",
+                *sorted((REPO / "docs").glob("*.md")), *sorted((REPO / "skills").glob("*/SKILL.md")),
+                *sorted((REPO / "commands").glob("*.md"))]
+        bad = []
+        for doc in docs:
+            for i, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
+                if launch.search(line):
+                    bad.append(f"{doc.relative_to(REPO)}:{i}: {line.strip()[:100]}")
+        self.assertEqual(bad, [], "доки велят запуск с флагами, которых нет в 26.9")
+
     def test_every_wired_hook_in_forge_roster(self):
         """Каждый проведённый в settings хук обязан присутствовать в ростер-таблице FORGE.md.
 

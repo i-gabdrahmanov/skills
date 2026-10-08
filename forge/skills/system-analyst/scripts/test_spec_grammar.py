@@ -225,5 +225,26 @@ class LayersTest(unittest.TestCase):
         self.assertTrue(SG.load_profile(self.root, cfg={}).is_native())
 
 
+class ColdCliSeesPolicyTest(unittest.TestCase):
+    """Боевой прогон v0.4.6 (G-P2): CLI модуля, запущенный сам по себе, не находил
+    _config_loader (hooks/ не в sys.path), молча работал на NATIVE и отвечал «supported» —
+    ровно когда merge по той же policy отказывал."""
+
+    def test_policy_layer_visible_from_cold_cli(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "ground").mkdir()
+            (root / "ground" / "policy.json").write_text(json.dumps(
+                {"spec": {"grammar": {"requirement_kind": "numbered"}}}), encoding="utf-8")
+            (root / "pom.xml").write_text("<project/>", encoding="utf-8")
+            r = subprocess.run([sys.executable, str(SCRIPT_DIR / "spec_grammar.py"),
+                                "--project-root", str(root), "--json"],
+                               capture_output=True, text=True, cwd=d, timeout=60)
+            out = json.loads(r.stdout)
+            self.assertEqual(out["layers"].get("requirement"), "policy", r.stdout)
+            self.assertEqual(out["profile"]["requirement"]["kind"], "numbered")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

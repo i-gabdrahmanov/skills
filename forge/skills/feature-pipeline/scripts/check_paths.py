@@ -53,8 +53,11 @@ def check_paths(project_root: Path, config_path: Path) -> tuple[list[str], list[
     except FileNotFoundError:
         print(f"❌ Файл не найден: {config_path}", file=sys.stderr)
         sys.exit(2)
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
         print(f"❌ Ошибка парсинга JSON: {e}", file=sys.stderr)
+        sys.exit(2)
+    except OSError as e:          # каталог вместо файла, нет прав — rc 2, не трейсбек (CRASH-c)
+        print(f"❌ Конфиг не читается: {config_path}: {e}", file=sys.stderr)
         sys.exit(2)
 
     # Игнорируем _comment и ключи-исключения
@@ -71,9 +74,17 @@ def check_paths(project_root: Path, config_path: Path) -> tuple[list[str], list[
 
     valid = []
     invalid = []
+    root = project_root.resolve()
     for path in raw_paths:
         full_path = project_root / path
-        if full_path.exists():
+        try:
+            # Путь за пределами проекта (`../outside.md`) — не путь проекта, даже если такой
+            # файл где-то есть (боевой прогон v0.4.6, CK-3).
+            full_path.resolve().relative_to(root)
+            inside = True
+        except (ValueError, OSError):
+            inside = False
+        if inside and full_path.exists():
             valid.append(path)
         else:
             invalid.append(path)

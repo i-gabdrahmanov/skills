@@ -36,6 +36,7 @@ Append-only лог даёт то же свойство другим примит
 from __future__ import annotations
 
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -119,14 +120,23 @@ def append_approval(root: Path, key: str, /, **payload) -> dict:
 def read_log(path: Path) -> list[dict]:
     """Строки лога как список dict. Битая строка пропускается с предупреждением, а не
     роняет чтение: лог append-only, повреждение одной строки не должно ослеплять гейт
-    по остальным (полное отсутствие evidence и так означает блокировку)."""
+    по остальным (полное отсутствие evidence и так означает блокировку).
+
+    Декодирование — построчное. Файл целиком читался как UTF-8, и один не-UTF8 байт обнулял
+    ВЕСЬ журнал молча: origin/gate/judge прогона пропадали, а свежее согласие record_approval
+    писал «успешно» в журнал, которого гейт уже не видел (боевой прогон v0.4.6, STATE-1)."""
     try:
-        text = Path(path).read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+        raw = Path(path).read_bytes()
+    except OSError:
         return []
     out: list[dict] = []
-    for i, line in enumerate(text.splitlines(), 1):
-        line = line.strip()
+    for i, bline in enumerate(raw.splitlines(), 1):
+        try:
+            line = bline.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            print(f"[forge-events] {path}:{i}: строка не UTF-8 — пропущена (журнал повреждён)",
+                  file=sys.stderr)
+            continue
         if not line:
             continue
         try:
@@ -358,8 +368,68 @@ CONSENT_PREFIXES = ("gate-override", "rollback", "skip-judges", "policy-repin",
 
 
 def consent_required(key: str) -> bool:
-    """Нужна ли для ключа цитата пользователя (см. CONSENT_PREFIXES)."""
-    return any(key == p or key.startswith(p + "-") for p in CONSENT_PREFIXES)
+    """Нужна ли для ключа цитата пользователя (см. CONSENT_PREFIXES). Без учёта регистра:
+    `GATE-OVERRIDE-x` записывался без цитаты (гейты такой ключ не спрашивают, но журнал
+    согласий не должен содержать «согласие» без слов пользователя)."""
+    k = str(key).lower()
+    return any(k == p or k.startswith(p + "-") for p in CONSENT_PREFIXES)
+
+
+# ── Цитата обязана БЫТЬ согласием, а не просто словами пользователя ─────────────────
+# Сверка с транскриптом доказывала одно: фразу написал пользователь. Что это ОТВЕТ «да» на
+# вопрос о снятии защиты — не проверялось ничем, и согласие собиралось из любой реплики:
+# отказ «никогда не откатывай прогон автоматически» проходил как согласие на git-discard,
+# постановка задачи — как согласие на что угодно (боевой прогон v0.4.6, E-CONSENT-MINE).
+# Поэтому цитата сама обязана выражать согласие: слово согласия, без отрицания перед ним или
+# сразу за ним («да нет», «давай не будем»), не вопрос. Список — эвристика, и ошибается он в
+# безопасную сторону: на ответе без явного слова модель переспросит, а не выпишет маркер.
+CONSENT_WORDS = frozenset((
+    "да", "ага", "конечно", "разумеется", "согласен", "согласна", "согласны", "соглашаюсь",
+    "подтверждаю", "подтверждаем", "подтверждено", "разрешаю", "разрешаем", "разрешено",
+    "одобряю", "одобрено", "утверждаю", "утверждено", "ок", "окей", "ладно", "хорошо",
+    "давай", "давайте", "валяй", "действуй", "делай", "можно",
+    # acceptance-<ID>: человек подтверждает, что проверил критерий руками
+    "проверено", "проверил", "проверила", "проверили", "работает", "выполнено",
+    "принимаю", "принято",
+    "yes", "yeah", "yep", "yup", "ok", "okay", "sure", "agree", "agreed", "approve",
+    "approved", "confirm", "confirmed", "lgtm", "proceed", "verified", "accepted",
+))
+CONSENT_PHRASES = ("go ahead", "do it")
+NEGATION_WORDS = frozenset((
+    "не", "нет", "ни", "никогда", "нельзя", "запрещаю", "запрещено", "отказываюсь", "отказ",
+    "отмена", "отменяю", "стоп", "погоди", "подожди",
+    "no", "not", "don't", "dont", "never", "nope", "cancel", "stop", "wait",
+))
+_WORD_RE = re.compile(r"[\w']+")
+
+
+def consent_words(text: str) -> "list[str]":
+    """Слова фразы в нижнем регистре (кавычки-апострофы по краям сняты)."""
+    return [w for w in (t.strip("'") for t in _WORD_RE.findall(text.lower())) if w]
+
+
+def consent_quote_problem(quote: str) -> Optional[str]:
+    """Почему фраза не годится как согласие; None — годится.
+
+    Общая проверка обоих слоёв: gate-guard (вдобавок сверяет фразу с транскриптом) и
+    record_approval (держит её и мимо харнеса — в батче и когда транскрипта нет)."""
+    if "?" in quote:
+        return "цитата — вопрос, а не ответ"
+    words = consent_words(quote)
+    hits = [i for i, w in enumerate(words) if w in CONSENT_WORDS]
+    for phrase in CONSENT_PHRASES:
+        pw = phrase.split()
+        hits += [i for i in range(len(words) - len(pw) + 1) if words[i:i + len(pw)] == pw]
+    at = min(hits) if hits else None
+    if at is None:
+        return ("в цитате нет слова согласия («да», «согласен», «подтверждаю», «разрешаю», "
+                "«ок», «давай»…) — это не ответ «да», а просто слова пользователя")
+    neg = next((w for w in words[:at] if w in NEGATION_WORDS), None)
+    if neg is None and at + 1 < len(words) and words[at + 1] in NEGATION_WORDS:
+        neg = words[at + 1]
+    if neg is not None:
+        return f"в цитате отрицание («{neg}») — это отказ или оговорка, а не согласие"
+    return None
 
 
 def revoke_approval(root: Path, key: str, reason: str = "") -> dict:

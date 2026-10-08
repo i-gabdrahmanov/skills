@@ -146,18 +146,29 @@ def _evidence_required(key: str) -> bool:
 
 
 def _check_evidence(key: str, evidence: "str | None") -> "str | None":
-    """Причина отказа, если для ключа нужна цитата пользователя, а её нет; иначе None."""
+    """Причина отказа, если для ключа нужна цитата пользователя, а её нет либо она — не
+    согласие; иначе None.
+
+    Цитата обязана выражать согласие (FE.consent_quote_problem): длины не хватало — батч
+    проходил с `evidence: zzzzzzzzzzzzzzzzzz`, а отказ «никогда не откатывай …» годился
+    согласием на откат. Транскрипта скрипт не видит, поэтому проверка смысла здесь — тот же
+    словарь, что у gate-guard, без сверки с репликами."""
     if not _evidence_required(key):
         return None
     ev = (evidence or "").strip()
+    ask = (f"  Сначала покажи пользователю, ЧТО снимается, и спроси прямо; затем повтори "
+           f"команду с --evidence \"<его ответ дословно>\".\n"
+           f"  gate-guard сверяет цитату с ПОСЛЕДНЕЙ репликой пользователя — пересказ своими "
+           f"словами, постановка задачи и старые реплики не пройдут.")
     if len(ev) < _EVIDENCE_MIN_CHARS:
         return (f"--evidence обязателен для ключа '{key}': он снимает enforcement, поэтому "
                 f"согласие фиксируется ДОСЛОВНОЙ фразой пользователя (не короче "
-                f"{_EVIDENCE_MIN_CHARS} символов; «да»/«ок» цитатой не считаются).\n"
-                f"  Сначала покажи пользователю, ЧТО не сходится, и спроси прямо; затем "
-                f"повтори команду с --evidence \"<его фраза из этого диалога>\".\n"
-                f"  gate-guard сверяет цитату с транскриптом сессии — пересказ своими словами "
-                f"не пройдёт.")
+                f"{_EVIDENCE_MIN_CHARS} символов; «да»/«ок» цитатой не считаются).\n" + ask)
+    problem = FE.consent_quote_problem(ev)
+    if problem:
+        return (f"--evidence для ключа '{key}' — не согласие: {problem}.\n"
+                f"  Нужен ответ пользователя вида «да, …» / «согласен …» / «подтверждаю …».\n"
+                + ask)
     return None
 
 
@@ -248,6 +259,15 @@ def _atomic_batch_write(path: Path, records: list[dict]) -> None:
     append_locked(path, content)
 
 
+def _approvals_lock(project: Path):
+    """Замок на «проверил, что ключ не активен → дописал» (ground/approvals.lock).
+
+    append_locked держит замок только на саму запись строки; проверка идемпотентности стояла
+    снаружи, и два процесса успевали оба решить, что писать надо."""
+    from _project import exclusive_lock
+    return exclusive_lock(FE.approvals_path(project).with_suffix(".lock"))
+
+
 def _active_approval_keys(project: Path) -> set[str]:
     """Множество ключей, по которым УЖЕ есть активное согласие.
 
@@ -310,14 +330,14 @@ def cmd_single(args) -> int:
     # сознательно: batch-режим требует идемпотентности, а одиночный и batch должны
     # вести себя одинаково на одних и тех же данных. Если оператор хочет пересогласовать
     # ключ — сначала rollback/revoke, потом новый батч.
-    if key in _active_approval_keys(project):
-        out = FE.approvals_path(project)
-        print(f"[record_approval] approval '{key}' уже активен — пропущено (идемпотентность) → {out}")
-        print("[record_approval] ⚠️ это согласие должно было прозвучать от пользователя ЯВНО. "
-              "Если ты вызвал скрипт без реального «да» — останови работу и спроси.", file=sys.stderr)
-        return 0
-
-    FE.append_approval(project, key, **record)
+    with _approvals_lock(project):
+        if key in _active_approval_keys(project):
+            out = FE.approvals_path(project)
+            print(f"[record_approval] approval '{key}' уже активен — пропущено (идемпотентность) → {out}")
+            print("[record_approval] ⚠️ это согласие должно было прозвучать от пользователя ЯВНО. "
+                  "Если ты вызвал скрипт без реального «да» — останови работу и спроси.", file=sys.stderr)
+            return 0
+        FE.append_approval(project, key, **record)
     out = FE.approvals_path(project)
 
     print(f"[record_approval] approval '{key}' зафиксирован "
@@ -373,21 +393,24 @@ def cmd_batch(args) -> int:
             print(f"  • {e}", file=sys.stderr)
         return 1
 
-    # Идемпотентность: читаем активные ключи и фильтруем дубли ПОСЛЕ валидации, ДО записи.
-    active = _active_approval_keys(project)
-    final = [(k, p) for (k, p) in to_write if k not in active]
-    skipped.extend(k for (k, _) in to_write if k in active)
-
-    ts = _iso_now()
-    records = [_build_approval_record(k, p, ts) for (k, p) in final]
-
+    # Идемпотентность: читаем активные ключи и фильтруем дубли ПОСЛЕ валидации, ДО записи —
+    # под одним замком с записью, иначе два параллельных батча оба видели ключ неактивным и
+    # писали его дважды (боевой прогон v0.4.6: дубли грантов 12 из 12 повторов).
     log_path = FE.approvals_path(project)
-    if records:
-        try:
-            _atomic_batch_write(log_path, records)
-        except Exception as e:  # noqa: BLE001
-            print(f"ERROR: запись в {log_path} провалилась: {e}", file=sys.stderr)
-            return 1
+    with _approvals_lock(project):
+        active = _active_approval_keys(project)
+        final = [(k, p) for (k, p) in to_write if k not in active]
+        skipped.extend(k for (k, _) in to_write if k in active)
+
+        ts = _iso_now()
+        records = [_build_approval_record(k, p, ts) for (k, p) in final]
+
+        if records:
+            try:
+                _atomic_batch_write(log_path, records)
+            except Exception as e:  # noqa: BLE001
+                print(f"ERROR: запись в {log_path} провалилась: {e}", file=sys.stderr)
+                return 1
 
     # Отчёт
     if args.json:

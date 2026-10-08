@@ -24,8 +24,8 @@ FORGE.md ссылаются на него односторонне. Дрейф �
 | Скрипт | Событие | Назначение | Блок |
 |---|---|---|---|
 | `gate-guard.py` (+`risk_ladder.py`,`risk-policy.json`) | PreToolUse Bash/Write/Edit/Read | permission gateway, risk ladder R0–R5, **deny-first**; форсит выбор критичности, `required_decisions` (нет решения фазы → нет записи) и `phase_approvals` (нет approval-маркера плана → нет записи фазы) | exit 2 |
-| `tdd-guard.py` | PreToolUse Write/Edit | форсит TDD (блок `src/main` пока RED pending) + тест-стратегию (блок `@DataJpaTest`/`@SpringBootTest` при `test_layer=service-unit` — только для файлов в `src/test/`) | exit 2 |
-| `eval-guard.py` | PreToolUse Write/Edit | блок записи в `src/main`, пока pre-write eval задачи (`compile`) не пройден (Eval-Driven). `coverage`/`test_pass` выполнимы только ПОСЛЕ кода — их держат гейты закрытия шага | exit 2 |
+| `tdd-guard.py` | PreToolUse Write/Edit + Bash | форсит TDD (блок `src/main` пока RED pending) + тест-стратегию (блок `@DataJpaTest`/`@SpringBootTest` при `test_layer=service-unit` — только для файлов в `src/test/`) | exit 2 |
+| `eval-guard.py` | PreToolUse Write/Edit + Bash | блок записи в `src/main`, пока pre-write eval задачи (`compile`) не пройден (Eval-Driven). `coverage`/`test_pass` выполнимы только ПОСЛЕ кода — их держат гейты закрытия шага | exit 2 |
 | `destructive-blocker.py` | PreToolUse `run_shell_command` | чёрный список (`rm -rf /`, force-push `-f`/`--force`, DROP, base64→sh, xargs rm, rmtree корня) | exit 2 |
 | `fork-syntax-guard.py` | PreToolUse `run_shell_command` | инструктивный блок синтаксиса, который режет нативный сейфти форка (`$(...)`, backticks, `find -exec`, `ls -R`) — объясняет замену (Glob/Grep/Read) вместо молчаливого deny | exit 2 |
 | `pii-boundary.py` | PreToolUse Write/Edit/Bash | блок записи PII/секретов вне scope (вкл. inline-python `open()`/`write_text`) | exit 2 |
@@ -33,7 +33,7 @@ FORGE.md ссылаются на него односторонне. Дрейф �
 | `sod-enforcer.py` | PreToolUse Write/Edit/Bash | separation of duties: роль из активного шага (test не пишет src/main; design/spec/jira не билдят). git commit/push не гейтится — доставка на пользователе | exit 2 |
 | `inline-phase-guard.py` | PreToolUse Write/Edit/Bash | actor-guard: ГЛАВНЫЙ агент (пустой `agent_type`) не производит артефакты/код subagent-фазы inline | exit 2 |
 | `grounding-evidence.py` | PreToolUse Read | пишет запись `grounding` в журнал прогона при чтении grounding-excerpt — `gate-guard` снимает по нему блок фазы `01-grounding` | нет |
-| `prompt-guard.py` | UserPromptSubmit + PostToolUse(read/fetch) | детект prompt-injection → additionalContext | нет |
+| `prompt-guard.py` | UserPromptSubmit + PostToolUse(read/fetch/shell) | детект prompt-injection → additionalContext | нет |
 | `file-journal.py` | PostToolUse Write/Edit/Bash | безусловный журнал изменённых файлов активной фичи (`journal/files.jsonl`) — скоуп восстановления кода для `rollback.py` | нет |
 | `state-recorder.py` | SubagentStop | авто-запись шага в pipeline-state по `step_id` | нет |
 | `context-injector.py` | SubagentStart | инъекция grounding-excerpt/conventions | нет |
@@ -43,20 +43,24 @@ FORGE.md ссылаются на него односторонне. Дрейф �
 «0 hook entries»), `risk-policy.json` (policy-as-code, читает `risk_ladder.py`),
 `settings.hooks.json` (эталон блока hooks, плейсхолдеры `${PYTHON}` и `${PROJECT_ROOT}`
 подставляет `resolve_hook_paths.py`), `resolve_hook_paths.py` (in-project фиксер путей,
-его зовёт `deploy-local.sh`), `evals/run-evals.py` (eval-набор), `run-hook-tests.sh`
+его зовёт `deploy-local.sh`), `_shell_targets.py` (общий разбор целей записи/удаления в
+shell-команде для state-write-guard, tdd-guard, eval-guard и sod-enforcer; stdlib-only),
+`evals/run-evals.py` (eval-набор), `run-hook-tests.sh`
 (юнит-тесты хуков + evals одной командой). Статическая диагностика (`doctor.py`) и
 валидация скиллов живут в `skills/feature-pipeline/scripts/` — `preflight.py` зовёт их сам.
 
 ## Порядок и sequential
 
 PreToolUse `run_shell_command` идёт **sequential**: destructive-blocker → fork-syntax-guard →
-pii-boundary → state-write-guard → sod-enforcer → inline-phase-guard → gate-guard.
+pii-boundary → state-write-guard → tdd-guard → eval-guard → sod-enforcer → inline-phase-guard →
+gate-guard. tdd-guard/eval-guard/sod-enforcer судят в ней цели записи shell-команды (общий
+разбор `_shell_targets.py`) так же, как Write: `cat > src/main/... <<EOF` — та же запись.
 Write/Edit (`write_file|edit|notebook_edit`): pii-boundary → state-write-guard →
 tdd-guard → eval-guard → sod-enforcer → inline-phase-guard → gate-guard. Любой
 блокирующий может остановить (`exit 2`) до действия. Точный блок и порядок — в
 `settings.hooks.json`.
 
-PreToolUse на читающих инструментах (`read_file|search_file_content|glob`) — тоже sequential:
+PreToolUse на читающих инструментах (`read_file|grep_search|search_file_content|glob`) — тоже sequential:
 grounding-evidence → gate-guard. Там у gate-guard работает ровно одна проверка — фазовая
 (блок чтения `src/` до завершения `01-grounding`); ladder к чтению неприменим.
 
@@ -126,24 +130,24 @@ bash deploy.sh /path/to/target-project
 > `hooks` в `settings.json` остался → рантайм зовёт удалённые скрипты и падает на КАЖДОМ
 > вызове инструмента. Для снятия есть `cleanup-legacy.sh` — он чистит и конфиг.
 
-## ⚠️ ЗАПУСК: хуки за флагом `--experimental-hooks` (форк GigaCode)
-
-В форке GigaCode хуки — **экспериментальная опция**, гейтятся CLI-флагом. Без него рантайм
-стартует с `[HOOK_REGISTRY] 0 hook entries` — весь control-plane молчит (это и был провал
-pprb-kid). **Запускай ВСЕГДА с флагом:**
+## ⚠️ ЗАПУСК: gigacode без флагов, из корня проекта
 
 ```bash
-gigacode --experimental-hooks          # интерактивно — канон; дальше команда /forge <задача>
+gigacode                               # интерактивно — канон; дальше команда /forge <задача>
 ```
 
-Headless (`-p`) — отдельный режим: `agent` в нём требует `-y`/YOLO, иначе субагент не стартует и
-фаза упирается в `inline-phase-guard`; плюс `ask_user_question` не рендерится, поэтому все решения
-и approval-маркеры должны быть предзаписаны ДО прогона (INSTALL.md §4).
+В gigacode 26.9 флагов `--experimental-hooks` и `-y` нет: сессия с ними не стартует
+(`Unknown arguments`, exit 1). Ранние сборки форка держали хуки за `--experimental-hooks` —
+этот совет из прежних инструкций передавать нельзя. Хуки рантайм читает из
+`<project>/.gigacode/settings.json`, поэтому запуск — из корня проекта. Признак, что хуки не
+загрузились, — `[HOOK_REGISTRY] 0 hook entries` на старте: весь control-plane молчит (это и
+был провал pprb-kid), первым делом — preflight ниже.
 
-Флаг — это флаг **запуска бинаря**, его нельзя прописать в `settings.json`. Установка
-через `deploy.sh` его не ставит (не может — это аргумент процесса); `preflight.py` ловит
-отсутствие по firing-evidence. (В апстриме Qwen флага нет — хуки on по умолчанию; это
-особенность форка.)
+Headless (`gigacode "<задача>"`) — отдельный режим: инструменты с подтверждением (`agent`,
+`skill`, `run_shell_command`) разрешаются заранее списком `--allowed-tools` (YOLO в 26.9 нет),
+иначе субагент не стартует и фаза упирается в `inline-phase-guard`; `ask_user_question` не
+рендерится, поэтому все решения и approval-маркеры предзаписываются ДО прогона (INSTALL.md
+§«Headless»).
 
 ## Диагностика ПЕРЕД прогоном (обязательно)
 

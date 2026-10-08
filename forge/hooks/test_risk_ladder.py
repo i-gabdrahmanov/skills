@@ -296,5 +296,35 @@ class TTargetPathIsLinear(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertEqual(mod._target_path("run_shell_command", {"command": cmd}), want)
 
+class TPathRiskIsLinear(unittest.TestCase):
+    """path_risk-паттерны вида `(?i).*(risk[-_]?model|…).*` под re.search квадратичны: 32К
+    символов `a/a/…` в цели давали 52 с, таймаут хука — «возражений нет» (боевой прогон
+    v0.4.6, E-REPOS-GG). Цель Bash — склейка путей команды, heredoc с кодом даёт десятки КБ."""
+
+    def test_long_target_is_fast(self):
+        import time
+        for tool, ti in (("run_shell_command", {"command": "cat " + "a/" * 4096}),
+                         ("write_file", {"file_path": "a/" * 4096, "content": "x"})):
+            with self.subTest(tool=tool):
+                t0 = time.time()
+                mod.classify(tool, ti)
+                self.assertLess(time.time() - t0, 1.5, "классификация квадратична по длине цели")
+
+    def test_leading_dotstar_strip_keeps_answers(self):
+        for path, want in (("src/main/resources/application-prod.yml", "R4"),
+                           ("svc/src/main/java/a/Foo.java", "R2"),
+                           ("src/test/java/FooTest.java", "R1"),
+                           ("docs/notes.md", "R0"),
+                           ("db/migration/V2__x.sql", "R4"),
+                           ("src/main/java/auth/Login.java", "R3"),
+                           ("config/risk-model.json", "R5")):
+            with self.subTest(path=path):
+                self.assertEqual(mod.classify("write_file", {"file_path": path})["level"], want)
+
+    def test_lazy_dotstar_is_not_mangled(self):
+        """`.*?x` — не ведущий жадный `.*`: срезать нечего, паттерн обязан компилироваться."""
+        self.assertTrue(mod._path_re("(?i).*?prod").search("x/PROD/y"))
+
+
 if __name__ == "__main__":
     unittest.main()

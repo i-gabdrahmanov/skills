@@ -266,5 +266,18 @@ class TestPrewriteEvalsOnly(unittest.TestCase):
             self.assertEqual(self._write(tmp), 0)
 
 
+class TShellWriteIsAWrite(unittest.TestCase):
+    """Боевой прогон v0.4.6 (L-17b): EDD-гейт смотрел только на Write/Edit."""
+
+    def test_shell_write_to_src_main_blocked_without_compile_eval(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _make_project(tmp, build_status="in_progress", cache=None)
+            self.assertEqual(_run({"tool_name": "run_shell_command", "cwd": str(tmp),
+                                   "tool_input": {"command": "echo 'class X {}' > src/main/java/X.java"}}), 2)
+            self.assertEqual(_run({"tool_name": "run_shell_command", "cwd": str(tmp),
+                                   "tool_input": {"command": "echo x > build/out.txt"}}), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

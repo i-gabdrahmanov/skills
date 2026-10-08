@@ -194,6 +194,7 @@ def main() -> int:
         _write_manifest(p, [{"id": "02-sdd", "status": "pending",
                              "required_judges": ["sdd-judge"]}])
         _approval(p, "skip-judges-demo")
+        _approval(p, "sdd-approved-demo")
         rc, out = run(p, "02-sdd", "--skip-judges")
         check("--skip-judges (с approval) обходит гейты → exit 0", rc == 0, out)
 
@@ -348,8 +349,25 @@ def main() -> int:
         check("--skip-judges без approval → стоп (exit 3)",
               rc == 3 and "skip-judges-demo" in out, f"rc={rc} {out}")
         _approval(p, "skip-judges-demo")
+        _approval(p, "sdd-approved-demo")
         rc, out = run(p, "02-sdd", "--skip-judges")
         check("--skip-judges с approval-маркером → exit 0", rc == 0, f"rc={rc} {out}")
+        # Маркер одноразовый: одно согласие навсегда снимало гейты закрытия ВСЕХ шагов фичи
+        # (боевой прогон v0.4.6, F-4).
+        rc, out = run(p, "02-sdd", "--skip-judges")
+        check("--skip-judges: маркер потрачен первым закрытием → второе стоп (exit 3)",
+              rc == 3 and "skip-judges-demo" in out, f"rc={rc} {out}")
+
+    # 22b. Утверждение SDD человеком --skip-judges не снимает: флаг обещает обойти судей,
+    #      gate-result, origin, решения и артефакты, а 02-sdd закрывался без sdd-approved
+    #      (боевой прогон v0.4.6, F-3).
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td)
+        _write_manifest(p, [{"id": "02-sdd", "status": "pending"}])
+        _approval(p, "skip-judges-demo")
+        rc, out = run(p, "02-sdd", "--skip-judges")
+        check("--skip-judges без sdd-approved → 02-sdd не закрывается",
+              rc != 0 and "sdd-approved-demo" in out, f"rc={rc} {out}")
 
     with tempfile.TemporaryDirectory() as td:
         p = Path(td)

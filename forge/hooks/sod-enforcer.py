@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # громким отказом, а не тишиной. Инвариант «пол интерпретатора» держит test_python_floor.py.
 try:
     import risk_ladder as _R
+    import _shell_targets as ST
 except Exception as _e:  # pragma: no cover — сломанный бандл/интерпретатор
     # Форточка на команды ВОССТАНОВЛЕНИЯ: сплошной deny запирал и починку бандла
     # (баннер советовал `bash .gigacode/deploy-local.sh`, а матчер ^Bash$ её же и резал).
@@ -49,7 +50,10 @@ except Exception as _e:  # pragma: no cover — сломанный бандл/и
 # Команда сборки/тестов/линта — Gradle ИЛИ Maven ИЛИ standalone-линтер. Роль build/test закрыта
 # для spec/design/jira-фаз; раньше распознавался только `./gradlew` (на Maven `mvn` не срабатывал,
 # P1-16), + standalone checkstyle/ktlint/detekt/spotless (checkstyle inline в дизайн-фазе).
-BUILD_CMD_RE = r"(?:\./gradlew\s+|\bmvn\b|\b(?:checkstyle|ktlint|detekt|spotless)\b)"
+# Maven-wrapper `./mvnw` — штатный запуск в Spring-проектах — не совпадал с `\bmvn\b` (за «mvn»
+# идёт буква), и сборка шла мимо роли (боевой прогон v0.4.6, track C F-2). Копия константы
+# живёт в inline-phase-guard; совпадение пинит test_sod-enforcer.
+BUILD_CMD_RE = r"(?:\./gradlew\s+|\bmvnw?\b|\b(?:checkstyle|ktlint|detekt|spotless)\b)"
 
 # Роли и их разрешённые действия
 # role → { allowed_path_prefixes, blocked_commands, blocked_path_patterns }
@@ -239,7 +243,20 @@ def main() -> int:
                         f"роль '{role}' (фаза активного шага) не может выполнять '{detected_cmd}' "
                         f"(blocked_commands: {pattern})"
                     )
-        return 0  # для Bash больше проверок нет
+        # Shell-запись — та же запись: пути роли сверялись только у Write/Edit, и
+        # `echo … > src/main/Foo.java` на тестовой фазе проходил SoD (боевой прогон v0.4.6,
+        # L-17b). Цели записи — общим разбором с state-write-guard.
+        step_id = _active_step_id(root) or "<шаг>"
+        for t in ST.write_targets(str(cmd or "")):
+            norm = t.replace("\\", "/")
+            for blocked_pattern in policy.get("blocked_paths", []):
+                if blocked_pattern in norm:
+                    return _block(
+                        f"роль '{role}' (фаза '{step_id}') не может писать в '{t}' средствами "
+                        f"shell (blocked_paths: {blocked_pattern}).\n"
+                        f"  {_how_to_proceed(step_id, role)}"
+                    )
+        return 0
 
     # 3. Проверка по blocked_paths (для Write/Edit)
     if not target:
@@ -257,7 +274,8 @@ def main() -> int:
 
     # 4. Проверка blocked_content_patterns для content, который пишется
     if policy.get("blocked_content_patterns"):
-        content = tool_input.get("content", "")
+        # У Edit пишется new_string, не content: стаб правкой проходил мимо проверки (L-17a).
+        content = str(tool_input.get("content") or tool_input.get("new_string") or "")
         for pattern in policy["blocked_content_patterns"]:
             if re.search(pattern, content):
                 return _block(

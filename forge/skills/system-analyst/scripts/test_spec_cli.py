@@ -714,13 +714,13 @@ class ReportTest {
         rp = SCRIPT_DIR.parents[1] / "pipeline-state" / "scripts" / "record_approval.py"
         subprocess.run([sys.executable, str(rp), "--project", str(self.root), "--key",
                         "acceptance-report-export-T2.2", "--kind", "acceptance",
-                        "--approver", "analyst", "--evidence", "стенд, скрин в задаче",
+                        "--approver", "analyst", "--evidence", "проверено на стенде, скрин в задаче",
                         "--reason", "виден"], check=True, capture_output=True)
         rc, out = self._r("merge", "report-export", "-y")
         self.assertEqual(rc, 0, out)
         text = self.spec.read_text(encoding="utf-8")
         self.assertIn("    - report-export:T2.2 «ответ виден в UI оператора» — проверено "
-                      "вручную: analyst, стенд, скрин в задаче", text)
+                      "вручную: analyst, проверено на стенде, скрин в задаче", text)
 
     def test_no_plan_merges_with_note(self):
         (self.docs / "task-plan.json").unlink()

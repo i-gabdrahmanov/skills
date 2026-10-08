@@ -68,8 +68,9 @@ risk ladder, evidence bundle и security-гейты; доставка (commit/pu
 
 Политика-as-code в `hooks/risk-policy.json` (`risk_ladder.py` — потребитель). Deny-first:
 **R0** — чтение, навигация, ground. **R1** — авто-мутация state через санкц. скрипты
-(`update.py`, `record_gate.py`, `record_approval.py`). **R2** — запись артефактов, тесты,
-RED/GREEN. **R3** — создание задач во внешнем трекере (`command_risk.R3`: `jira … create`,
+(`update.py`, `record_gate.py`, `record_approval.py`) и запись тестов (`path_risk.R1`:
+`src/test/**`, `*Test.java`). **R2** — запись прод-кода (`src/main/**.java|kt`), RED/GREEN-
+закрытия. **R3** — создание задач во внешнем трекере (`command_risk.R3`: `jira … create`,
 `acli … create`, `rest/api/N/issue`) и security-sensitive пути (`path_risk.R3`).
 **R4** — действия, СНИМАЮЩИЕ enforcement: `override_judge`, `rollback`, `update --skip-judges`,
 `config.py repin`, `config.py set` по переключателю enforcement, `config.py risk
@@ -134,8 +135,8 @@ approval-маркером (см. §Approval markers). **R5** — деструк�
 | Скрипт | Событие | Роль |
 |---|---|---|
 | `gate-guard.py` | PreToolUse | permission gateway + risk ladder + deny-first |
-| `tdd-guard.py` | PreToolUse | блок `src/main` пока RED pending |
-| `eval-guard.py` | PreToolUse | блок `src/main` пока eval'ы задачи не passed |
+| `tdd-guard.py` | PreToolUse (Write/Edit + Bash) | блок `src/main` пока RED pending |
+| `eval-guard.py` | PreToolUse (Write/Edit + Bash) | блок `src/main` пока eval'ы задачи не passed |
 | `sod-enforcer.py` | PreToolUse | separation of duties по id активного шага |
 | `inline-phase-guard.py` | PreToolUse | actor-guard: ГЛАВНЫЙ не производит subagent-фазу inline |
 | `state-write-guard.py` | PreToolUse | deny прямой записи в control-plane + каталог харнеса |
@@ -154,9 +155,15 @@ approval-маркером (см. §Approval markers). **R5** — деструк�
 2. `fork-syntax-guard`
 3. `pii-boundary`
 4. `state-write-guard`
-5. `sod-enforcer`
-6. `inline-phase-guard`
-7. `gate-guard`
+5. `tdd-guard`
+6. `eval-guard`
+7. `sod-enforcer`
+8. `inline-phase-guard`
+9. `gate-guard`
+
+tdd-guard, eval-guard и sod-enforcer судят в Bash-цепочке ЦЕЛИ записи shell-команды
+(`hooks/_shell_targets.py`, общий разбор со state-write-guard) так же, как Write: иначе
+`cat > src/main/java/Foo.java <<EOF` на фазе RED проходил все хуки.
 
 **PreToolUse `(Write|Edit)` — sequential:**
 1. `pii-boundary`
@@ -196,14 +203,27 @@ R4-гейта, копировала оттуда готовую команду �
 рантайм отдаёт `transcript_path`). Именно с репликами, а не со всем файлом: qwen пишет запись
 модели с текущим `functionCall` и его аргументами ДО PreToolUse, и подстрока по всему
 транскрипту находила выдуманную цитату в самой команде (боевой прогон v0.4.5, tasks/016).
-Свои реплики модели и вывод её команд тоже не считаются. Не найдена цитата → deny.
+Свои реплики модели и вывод её команд тоже не считаются; ответ `ask_user_question` —
+считается (выбранный вариант/введённый текст, без заголовка вопроса). Транскрипт субагента —
+нет: его реплика `user` написана оркестратором. Не найдена цитата → deny.
 Транскрипт недоступен или реплик пользователя в нём не распознано → предупреждение и пропуск:
 `--evidence` всё равно обязателен и уходит в журнал под аудит, а запирать единственный
 аварийный выход наглухо нельзя.
 
+Найти цитату у пользователя мало — она обязана быть СОГЛАСИЕМ на это действие (боевой прогон
+v0.4.6: отказ «никогда не откатывай прогон автоматически» и постановка задачи выписывали
+`git-discard`, и `git reset --hard` проходил). Цитата берётся из ПОСЛЕДНЕЙ реплики
+пользователя; реплика, начатая отрицанием, согласием не бывает; в цитате — слово согласия без
+отрицания перед ним и сразу за ним, не вопрос (`forge_events.consent_quote_problem`, словарь
+общий на оба слоя). Ответ без явного «да» — повод переспросить, а не выписать маркер.
+
 Approval'ы ПЛАНА (`fix-plan-*`, `jira-plan-*`, `<doc>-approved-*`) цитаты не требуют: они
 двигают прогон вперёд, а не убирают защиту. Второй слой — сам `record_approval.py`
-(`_check_evidence`), в том числе в `--batch`: гейт держится и при запуске мимо харнеса.
+(`_check_evidence`), в том числе в `--batch`: та же проверка смысла цитаты, без транскрипта.
+Согласия этих классов батчем не пишутся — gate-guard читает batch-файл и отказывает: цитату в
+файле сверить не с чем (через батч `git-discard` выписывался с `zzzzzzzzzzzzzzzzzz`).
+`skip-judges-*` — одноразовый, как остальные: тратится на одно закрытие и не снимает
+утверждение BRD/SDD.
 
 Легитимные пути записи (полный список — `docs/approval-markers.md`):
 
@@ -254,7 +274,8 @@ ground/
 `init.py` кладёт в манифест `policy_snapshot` (копию `policy.json` на момент старта) и
 `policy_digest`. Читатели конфига получают ЭФФЕКТИВНЫЙ конфиг — снимок ЖИВОГО прогона поверх
 файла; оверлей один на всех, в `hooks/_config_loader.load_project_config` (`raw=True` отдаёт
-файл как есть — это нужно `preflight`, `init.py` и писателям `config.py`).
+файл как есть — это нужно `preflight`, `init.py`, писателям `config.py` и
+`init_pipeline_config.py`).
 
 Зачем: без фиксации правка `policy.json` посреди прогона разъезжается с уже закрытыми шагами
 («шаги 1-5 закрылись под coverage 80%, шаги 6-10 — под 50%»), и постфактум не восстановить, по

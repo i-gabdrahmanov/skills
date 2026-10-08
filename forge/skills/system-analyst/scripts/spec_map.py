@@ -289,6 +289,12 @@ def build(root: Path, prev: Optional[dict] = None, only: Optional[str] = None) -
     m["ignore"] = list(manual_ignore)
     modules = _code_modules(root)
 
+    if not scan.is_dir():
+        # Каталог из шаблона docs.master.spec_path (`specs/<cap>/`) не существует — это не
+        # «дельты не слиты», а неверный путь мастера; сырой FileNotFoundError уходил трейсбеком
+        # (боевой прогон v0.4.6, SA-4).
+        raise MapError(f"каталога мастеров нет: {scan} — проверь docs.master.spec_path "
+                       f"(config.py get docs.master.spec_path) или заведи каталог")
     dirs = [d for d in sorted(scan.iterdir())
             if d.is_dir() and not d.name.startswith(".") and d.name not in AS.SKIP_DIRS]
     caps: Dict[str, dict] = {}

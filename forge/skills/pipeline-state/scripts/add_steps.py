@@ -37,7 +37,7 @@ if _cached_util is not None and getattr(_cached_util, "__file__", None) and \
         Path(_cached_util.__file__).resolve().parent != _HERE:
     del sys.modules["_util"]
 
-from _util import repo_root  # noqa: E402
+from _util import repo_root, bad_step_id  # noqa: E402
 from _project import locked_json_update  # noqa: E402 — _util кладёт hooks/ в sys.path
 
 # Единый источник истины фаз/судей — pipeline_phases (из feature-pipeline/scripts).
@@ -111,6 +111,10 @@ def main():
     for s in steps_data:
         if "id" not in s:
             print(f"ERROR: step missing 'id': {s}", file=sys.stderr)
+            sys.exit(2)
+        _why = bad_step_id(s["id"])
+        if _why:
+            print(f"ERROR: {_why}", file=sys.stderr)
             sys.exit(2)
 
     added, skipped = [], []

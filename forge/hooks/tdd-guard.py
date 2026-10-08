@@ -29,6 +29,7 @@ from pathlib import Path
 # громким отказом, а не тишиной. Инвариант «пол интерпретатора» держит test_python_floor.py.
 try:
     import risk_ladder as R
+    import _shell_targets as ST
 except Exception as _e:  # pragma: no cover — сломанный бандл/интерпретатор
     # Форточка на команды ВОССТАНОВЛЕНИЯ: сплошной deny запирал и починку бандла
     # (баннер советовал `bash .gigacode/deploy-local.sh`, а матчер ^Bash$ её же и резал).
@@ -205,8 +206,19 @@ def main() -> int:
     root = Path(R.project_root(cwd))
     tool_name = data.get("tool_name", "")
     tool_input = data.get("tool_input") or {}
-    content = tool_input.get("content") or ""
-    target = R._target_path(tool_name, tool_input)
+
+    # Shell-запись в src/main — та же запись. Хук смотрел только на Write/Edit, и на фазе RED
+    # `cat > src/main/java/Foo.java <<EOF` проходил все хуки: отказ write_file модель обходила
+    # одной shell-командой (боевой прогон v0.4.6, L-17b). Каждую цель записи судим как Write;
+    # содержимого у неё нет — проверки по аннотациям к ней не применяются.
+    if tool_name in ("Bash", "run_shell_command"):
+        writes = [(t, "") for t in ST.write_targets(str(tool_input.get("command") or ""))
+                  if "src/" in t.replace("\\", "/")]
+        if not writes:
+            return 0
+    else:
+        writes = [(R._target_path(tool_name, tool_input),
+                   tool_input.get("content") or tool_input.get("new_string") or "")]
 
     # Загружаем конфиг качества.
     # B3 fix: используем канонический v2-reader с dual-read fallback (policy.json → pipeline.json).
@@ -218,6 +230,15 @@ def main() -> int:
     cfg = load_project_config(root)
     quality_cfg = cfg.get("quality") or {}
 
+    for target, content in writes:
+        rc = _check_write(root, cfg, quality_cfg, target, content)
+        if rc:
+            return rc
+    return 0
+
+
+def _check_write(root: Path, cfg: dict, quality_cfg: dict, target, content: str) -> int:
+    """Решение по одной цели записи: 0 — пропустить, 2 — блок (сообщение уже в stderr)."""
     target_str = str(target).replace("\\", "/")
 
     # ── Гейт @DataJpaTest/@SpringBootTest — ТОЛЬКО для тестовых исходников ──

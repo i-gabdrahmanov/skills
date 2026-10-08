@@ -175,5 +175,59 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(r["tags"], ["[from: report-export " + engine.date.today().isoformat() + "]"])
 
 
+class Battle046Test(unittest.TestCase):
+    """Боевой прогон v0.4.6: SA-1 (гонка без замка), SA-2 (пустая дельта), SA-3 (дубли)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.spec = self.tmp / "specs" / "claims" / "spec.md"
+        engine.merge(self._sdd("base", SDD_STRUCTURED), self.spec, TEMPLATE, "base", "claims")
+        self.base = self.spec.read_text(encoding="utf-8")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _sdd(self, name: str, text: str) -> Path:
+        p = self.tmp / f"{name}.md"
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def test_empty_delta_writes_nothing(self):
+        res = engine.merge(self._sdd("empty", ""), self.spec, TEMPLATE, "empty", "claims")
+        self.assertEqual((res["status"], res.get("kind")), ("error", "empty-delta"), res)
+        self.assertEqual(self.spec.read_text(encoding="utf-8"), self.base,
+                         "пустая дельта записала в мастер мусорный блок")
+
+    def test_duplicate_titles_refused_before_write(self):
+        dup = SDD_STRUCTURED.replace("### Снятие лимита", "### Установка лимита")
+        res = engine.merge(self._sdd("dup", dup), self.spec, TEMPLATE, "dup", "claims")
+        self.assertEqual((res["status"], res.get("kind")), ("error", "duplicate-titles"), res)
+        self.assertIn("Установка лимита", res["error"])
+        self.assertEqual(self.spec.read_text(encoding="utf-8"), self.base)
+
+    def test_parallel_merges_lose_nothing(self):
+        import subprocess
+        n = 60
+        for name in ("fa", "fb"):
+            body = "\n\n".join(f"### {name} требование {i}\nОписание {name} {i}.\n"
+                                 f"- **Given** a **When** b{i} **Then** c" for i in range(n))
+            self._sdd(name, f"# SDD: {name}\n\n## 1. Назначение и результат\nx\n\n"
+                             f"## 3. Функциональные требования (Given-When-Then)\n{body}\n")
+        procs = [subprocess.Popen(
+            [sys.executable, str(SCRIPT_DIR / "merge_delta_to_master.py"), "--sdd",
+             str(self.tmp / f"{name}.md"), "--feature", name, "--spec", str(self.spec),
+             "--capability", "claims", "--template", str(TEMPLATE)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for name in ("fa", "fb")]
+        self.assertEqual([p.wait(timeout=120) for p in procs], [0, 0])
+        text = self.spec.read_text(encoding="utf-8")
+        for name in ("fa", "fb"):
+            self.assertEqual(sum(f"{name} требование {i}" in text for i in range(n)), n,
+                             f"требования {name} потеряны параллельным merge")
+        import re as _re
+        ids = _re.findall(r"^### (REQ-\d+):", text, _re.M)
+        self.assertEqual(len(ids), len(set(ids)), "один ID у разных требований")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

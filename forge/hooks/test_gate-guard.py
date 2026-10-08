@@ -705,6 +705,49 @@ class TAgentTypeNotAPincer(unittest.TestCase):
             self.assertEqual(_run_payload(self._payload(td, "")).returncode, 0)
 
 
+class TGroundingReadGateSearchTools(unittest.TestCase):
+    """Боевой прогон v0.4.6 (B-F1): чтение src/ закрыто до grounding'а, но канонический поиск
+    шёл мимо. `glob {"pattern": "src/**/*.java"}` и grep без `path` давали пустую цель —
+    fail-open; `grep_search` (настоящее имя grep в qwen) не было ни в матчере, ни в списках."""
+
+    STEPS = [{"id": "01-grounding", "status": "in_progress", "depends_on": []},
+             {"id": "02-design", "status": "pending", "depends_on": ["01-grounding"]}]
+
+    def _rc(self, td, tool, ti):
+        return _run_payload({"hook_event_name": "PreToolUse", "cwd": td,
+                             "tool_name": tool, "tool_input": ti}).returncode
+
+    def test_search_without_path_is_blocked(self):
+        for tool, ti in (("glob", {"pattern": "src/**/*.java"}),
+                         ("glob", {"pattern": "./src/main/**"}),
+                         ("glob", {"pattern": "**/*.java"}),
+                         ("grep_search", {"pattern": "class"}),
+                         ("grep_search", {"pattern": "class", "path": "src/main/java"}),
+                         ("Grep", {"pattern": "class"}),
+                         ("GrepSearch", {"pattern": "class", "path": ""}),
+                         ("search_file_content", {"pattern": "class"})):
+            with self.subTest(tool=tool, ti=ti), tempfile.TemporaryDirectory() as td:
+                _mk_full_state(td, self.STEPS)
+                self.assertEqual(self._rc(td, tool, ti), 2, f"{tool} {ti} прошёл в src/")
+
+    def test_scoped_search_outside_src_is_free(self):
+        for tool, ti in (("glob", {"pattern": "docs/**/*.md"}),
+                         ("glob", {"pattern": "src/test/**/*.java"}),
+                         ("grep_search", {"pattern": "REQ-", "path": "docs"}),
+                         ("read_file", {"file_path": "README.md"})):
+            with self.subTest(tool=tool, ti=ti), tempfile.TemporaryDirectory() as td:
+                _mk_full_state(td, self.STEPS)
+                self.assertEqual(self._rc(td, tool, ti), 0, f"{tool} {ti} — ложный блок")
+
+    def test_matcher_routes_grep_search_to_gate(self):
+        import re as _re
+        groups = json.loads((HOOK.parent / "settings.hooks.json").read_text(
+            encoding="utf-8"))["hooks"]["PreToolUse"]
+        read = next(g for g in groups if any("grounding-evidence" in h["command"]
+                                              for h in g["hooks"]))
+        self.assertTrue(_re.search(read["matcher"], "grep_search"), read["matcher"])
+
+
 class TReadOnlyCommandsNotGated(unittest.TestCase):
     """Задача 011: ladder оценивал риск по ПУТИ из команды и не отличал чтение от записи.
 
@@ -944,6 +987,138 @@ class TConsentIsExternal(unittest.TestCase):
             self.assertEqual(r.returncode, 2)
             self.assertIn("record_approval.py", r.stderr)
             self.assertIn("--evidence", r.stderr)
+
+    # ── Цитата обязана быть СОГЛАСИЕМ на это действие (боевой прогон v0.4.6) ──────────
+
+    def _quote(self, d, user_texts, evidence, key="git-discard", extra=()):
+        """record_approval с цитатой против транскрипта из реплик `user_texts` (по порядку)."""
+        cmd = self.RA.format(key=key) + f' --evidence "{evidence}"'
+        p = Path(d) / "transcript.jsonl"
+        lines = [self._qwen("user", [{"text": t}]) for t in user_texts] + list(extra) + [
+            self._qwen("assistant", [{"functionCall": {"name": "run_shell_command",
+                                                       "args": {"command": cmd}}}])]
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return self._run(cmd, str(p))
+
+    def test_refusal_is_not_consent(self):
+        """E-CONSENT-MINE: отказ пользователя выписывался согласием — подстрока сходилась, смысл
+        не проверялся. Дальше маркер реально тратился на `git reset --hard`."""
+        with tempfile.TemporaryDirectory() as d:
+            refusal = "никогда не откатывай прогон автоматически"
+            r = self._quote(d, [refusal], refusal)
+            self.assertEqual(r.returncode, 2, "отказ засчитан согласием")
+            r = self._quote(d, ["да не надо, оставь как есть"], "да не надо, оставь как есть")
+            self.assertEqual(r.returncode, 2, "«да не надо» засчитано согласием")
+
+    def test_task_statement_is_not_consent(self):
+        """Постановка задачи есть в любом транскрипте — она не «да» на снятие защиты."""
+        with tempfile.TemporaryDirectory() as d:
+            task = "Почини баг STOR-123 в OrderService и прогони тесты"
+            self.assertEqual(self._quote(d, [task], task).returncode, 2)
+
+    def test_consent_comes_from_the_last_reply(self):
+        """Согласие — ответ на вопрос об ЭТОМ действии. «Да, …» из ответа на вопрос
+        BRD-интервью часом раньше согласием на git reset не становится."""
+        with tempfile.TemporaryDirectory() as d:
+            old = "Да, нужна интеграция с Kafka"
+            r = self._quote(d, [old, "/forge продолжай"], old)
+            self.assertEqual(r.returncode, 2, "цитата из старой реплики прошла")
+            self.assertIn("СТАРОЙ", r.stderr)
+            fresh = "да, сбрасывай рабочее дерево"
+            self.assertEqual(self._quote(d, [old, fresh], fresh).returncode, 0,
+                             "свежий ответ «да» отбит")
+
+    def test_reply_opening_with_refusal_is_not_consent(self):
+        """Кусок «Да, …» из реплики, начатой отказом, — подмена смысла, а не цитата."""
+        with tempfile.TemporaryDirectory() as d:
+            reply = "Нет. Да, понимаю, что ты хочешь откатить, но не надо"
+            r = self._quote(d, [reply], "Да, понимаю, что ты хочешь откатить")
+            self.assertEqual(r.returncode, 2)
+
+    def test_quote_is_whole_words(self):
+        """«да-нибудь потом откатим» не вырезается из «когда-нибудь потом откатим»."""
+        with tempfile.TemporaryDirectory() as d:
+            r = self._quote(d, ["когда-нибудь потом откатим, сейчас рано"],
+                            "да-нибудь потом откатим")
+            self.assertEqual(r.returncode, 2)
+
+    def test_ask_user_question_answer_is_consent(self):
+        """Ответ через ask_user_question — tool_result, но его пишет рантайм со слов
+        пользователя. Брифы велят спрашивать именно так, а сверка его не видела."""
+        answer = self._qwen("tool_result", [{"functionResponse": {
+            "name": "ask_user_question", "response": {"output":
+                "User has provided the following answers:\n\n**Откат**: Да, откатывай к 02-design"}}}])
+        with tempfile.TemporaryDirectory() as d:
+            r = self._quote(d, ["/forge продолжай"], "Да, откатывай к 02-design",
+                            key="rollback-f1-02-design", extra=[answer])
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_ask_user_question_header_is_not_a_quote(self):
+        """Заголовок вопроса пишет модель — цитатой засчитывается только выбранный ответ."""
+        answer = self._qwen("tool_result", [{"functionResponse": {
+            "name": "ask_user_question", "response": {"output":
+                "User has provided the following answers:\n\n**Да, сбросить всё**: Нет"}}}])
+        with tempfile.TemporaryDirectory() as d:
+            r = self._quote(d, ["/forge продолжай"], "Да, сбросить всё", extra=[answer])
+            self.assertEqual(r.returncode, 2)
+
+    def test_flat_transcript_format(self):
+        """Плоская форма записи (`parts` на верхнем уровне) — тоже реплика пользователя: иначе
+        гейт молча уходит в «сверить не с чем» и пропускает."""
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "transcript.jsonl"
+            p.write_text(json.dumps({"type": "user", "parts": [{"text": "/forge продолжай"}]},
+                                    ensure_ascii=False) + "\n", encoding="utf-8")
+            cmd = self.RA.format(key="git-discard") + f' --evidence "{self.QUOTE}"'
+            self.assertEqual(self._run(cmd, str(p)).returncode, 2)
+
+    def test_subagent_transcript_is_not_the_users(self):
+        """Реплика `user` в транскрипте субагента — постановка задачи от оркестратора, то есть
+        текст модели. Сверка идёт по основной сессии."""
+        with tempfile.TemporaryDirectory() as d:
+            sid = "aea1fe5c-e0ca-41f1-b538-fe9ecfaa8f71"
+            sub = Path(d) / "subagents" / sid / "agent-general-purpose-1.jsonl"
+            sub.parent.mkdir(parents=True)
+            sub.write_text(self._qwen("user", [{"text": f"ладно, {self.QUOTE}"}]) + "\n",
+                           encoding="utf-8")
+            main = Path(d) / "chats" / f"{sid}.jsonl"
+            main.parent.mkdir(parents=True)
+            main.write_text(self._qwen("user", [{"text": "/forge продолжай"}]) + "\n",
+                            encoding="utf-8")
+            cmd = self.RA.format(key="gate-override-x") + f' --evidence "{self.QUOTE}"'
+            self.assertEqual(self._run(cmd, str(sub)).returncode, 2)
+
+    def test_consent_keys_never_go_through_batch(self):
+        """E-CONSENT-BATCH: хук пропускал --batch целиком, скрипт мерил только длину — маркер
+        `git-discard` с цитатой `zzzzzzzzzzzzzzzzzz` записывался, и reset --hard проходил."""
+        with tempfile.TemporaryDirectory() as d:
+            for name, body in (
+                    ("a.yaml", "approvals:\n  - key: git-discard\n    reason: r\n"
+                               "    approver: user\n    evidence: zzzzzzzzzzzzzzzzzz\n"),
+                    ("b.json", json.dumps([{"key": "fix-plan-x", "reason": "r", "approver": "u"},
+                                           {"key": "rollback-f1-02-sdd", "reason": "r",
+                                            "approver": "u", "evidence": "да, откатывай"}]))):
+                (Path(d) / name).write_text(body, encoding="utf-8")
+                payload = {"hook_event_name": "PreToolUse", "cwd": d,
+                           "tool_name": "run_shell_command",
+                           "tool_input": {"command": f"python3 record_approval.py --batch {name}"}}
+                r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
+                                   capture_output=True, text=True, timeout=30)
+                self.assertEqual(r.returncode, 2, f"{name}: батч с согласием пропущен")
+                self.assertIn("По одному вызову", r.stderr)
+
+    def test_plan_approvals_batch_is_free(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "p.yaml").write_text(
+                "approvals:\n  - key: phase-04\n    reason: r\n    approver: lead\n"
+                "  - key: sdd-approved-f1\n    reason: r\n    approver: lead\n",
+                encoding="utf-8")
+            payload = {"hook_event_name": "PreToolUse", "cwd": d,
+                       "tool_name": "run_shell_command",
+                       "tool_input": {"command": "python3 record_approval.py --batch p.yaml"}}
+            r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
+                               capture_output=True, text=True, timeout=30)
+            self.assertEqual(r.returncode, 0, r.stderr)
 
 
 class TPolicyStructureEditIsR4(unittest.TestCase):

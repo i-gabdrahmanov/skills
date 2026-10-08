@@ -114,5 +114,23 @@ class TestLoopProtection(unittest.TestCase):
             self.assertIn('"decision": "block"', r.stdout)
 
 
+class TestUnreadableManifest(unittest.TestCase):
+    """Боевой прогон v0.4.6 (STATE-3): единственный активный манифест битый — хук молчал
+    (общий except → exit 0), тогда как update.py на том же стейте падал rc 4. Защита от
+    подвешенного пайплайна исчезала ровно тогда, когда стейт повреждён."""
+
+    def test_broken_manifest_blocks_once(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            _seed(tmp, [{"id": "fix-red", "status": "in_progress"}])
+            mp = tmp / "ground/statements/forgefix/BUG-1/manifest.json"
+            mp.write_text('{"steps": [{"id": "fix-red", "sta', encoding="utf-8")
+            payload = {"hook_event_name": "Stop", "cwd": str(tmp), "session_id": uuid.uuid4().hex}
+            r = _run(payload)
+            self.assertIn('"decision": "block"', r.stdout, r.stderr)
+            self.assertIn("не читается", r.stdout)
+            self.assertNotIn('"decision"', _run(payload).stdout, "блок повторился в той же сессии")
+
+
 if __name__ == "__main__":
     unittest.main()

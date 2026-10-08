@@ -236,6 +236,19 @@ def _master_text(spec_path: Path) -> str:
     return spec_path.read_text(encoding="utf-8", errors="replace") if spec_path.exists() else ""
 
 
+def _write_if_unchanged(spec_path: Path, before: str, after: str) -> bool:
+    """Записать мастер, только если он не менялся с чтения: remove/migrate читали файл,
+    ждали подтверждения и писали поверх — параллельный merge терялся целиком (SA-1).
+    Под тем же замком, что и merge; запись атомарная."""
+    with engine.master_lock(spec_path):
+        if _master_text(spec_path) != before:
+            print("✗ мастер изменился, пока шла операция (параллельный merge?) — ничего не "
+                  "записано, повтори команду", file=sys.stderr)
+            return False
+        engine.write_master(spec_path, after)
+    return True
+
+
 def _remind(spec_path: Path) -> None:
     print(f"   Мастер: {spec_path}")
     print("   Коммит/push мастер-репо — на тебе, forge не коммитит.")
@@ -314,7 +327,9 @@ def _state_of(slug: str, sdd: Path, spec_path: Path, capability: str, prefix: st
     if plan["status"] == "no-section":
         return "new"        # раздела требований нет — значит и требований дельты там нет
     if plan["status"] == "error":
-        return "merged"
+        # Дубли названий — дельта не слита и слиться не может, пока человек не разведёт их:
+        # «делать нечего» тут значило бы отпустить её в архив мимо мастера.
+        return "drifted" if plan.get("kind") == "duplicate-titles" else "merged"
     return _classify(plan.get("kinds", []))
 
 
@@ -1003,7 +1018,8 @@ def cmd_remove(args) -> int:
     g = _cap_grammar(root, prefix, capability)
     if _unsupported(g, root):
         return 3
-    res = engine.remove_requirement(_master_text(spec_path), args.req_id,
+    text0 = _master_text(spec_path)
+    res = engine.remove_requirement(text0, args.req_id,
                                     reason=args.reason, today=date.today().isoformat(),
                                     prefix=prefix, grammar=g)
     if res["status"] != "ok":
@@ -1012,7 +1028,8 @@ def cmd_remove(args) -> int:
     if not args.yes and not _confirm(f"Снять {args.req_id} «{res['title']}»?"):
         print("отменено")
         return 0
-    spec_path.write_text(res["text"], encoding="utf-8")
+    if not _write_if_unchanged(spec_path, text0, res["text"]):
+        return 2
     print(f"✅ снято {res['removed']} «{res['title']}» — причина в журнале изменений")
     _remind(spec_path)
     return 0
@@ -1212,7 +1229,8 @@ def cmd_migrate(args) -> int:
         print(f"\n(dry-run: перенесено требований {len(reqs)}, сценариев "
               f"{len(scens)}, без пары {len(orphans)})")
         return 0
-    spec_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    if not _write_if_unchanged(spec_path, text, "\n".join(out) + "\n"):
+        return 2
     print(f"✅ мигрировано: требований {len(reqs)}, сценариев {len(scens)}"
           f"{f', без пары {len(orphans)}' if orphans else ''}")
     print("   Проверь результат: /forge-spec check")

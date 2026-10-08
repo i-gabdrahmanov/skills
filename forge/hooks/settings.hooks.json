@@ -7,6 +7,8 @@
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/fork-syntax-guard.py", "name": "fork-syntax-guard"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/pii-boundary.py", "name": "pii-boundary"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/state-write-guard.py", "name": "state-write-guard"},
+        {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/tdd-guard.py", "name": "tdd-guard"},
+        {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/eval-guard.py", "name": "eval-guard"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/sod-enforcer.py", "name": "sod-enforcer"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/inline-phase-guard.py", "name": "inline-phase-guard"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/gate-guard.py", "name": "gate-guard"}
@@ -20,7 +22,7 @@
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/inline-phase-guard.py", "name": "inline-phase-guard"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/gate-guard.py", "name": "gate-guard"}
       ]},
-      {"matcher": "^(read_file|Read|ReadFile|search_file_content|Grep|GrepSearch|glob|Glob)$", "sequential": true, "hooks": [
+      {"matcher": "^(read_file|Read|ReadFile|grep_search|search_file_content|Grep|GrepSearch|glob|Glob)$", "sequential": true, "hooks": [
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/grounding-evidence.py", "name": "grounding-evidence"},
         {"type": "command", "command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/gate-guard.py", "name": "gate-guard"}
       ]}

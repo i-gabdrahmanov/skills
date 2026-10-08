@@ -215,10 +215,18 @@ def main() -> int:
             print(f"[check_fix_delta] FAIL: не читается мини-план {args.plan}: {e}", file=sys.stderr)
             return 2
 
+    try:
+        delta_text = delta_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        # не-UTF8 дельта давала сырой трейсбек и rc 1 — вне контракта 0/2 (CRASH-d)
+        print(f"[check_fix_delta] FAIL: дельта не читается как UTF-8 ({delta_path}): {e}",
+              file=sys.stderr)
+        return 2
+
     root = Path(args.project_root).resolve() if args.project_root else None
     master_reqs, spec_path = _load_master_reqs(root, args.spec, args.capability)
 
-    verdict = check_delta(delta_path.read_text(encoding="utf-8"),
+    verdict = check_delta(delta_text,
                           master_reqs=master_reqs, plan=plan, anchor=args.anchor,
                           max_requirements=args.max_requirements, max_lines=args.max_lines,
                           allow_scenario_drop=args.allow_scenario_drop)

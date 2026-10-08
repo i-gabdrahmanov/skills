@@ -310,5 +310,44 @@ class TestJpaGateScopedToTestSources(unittest.TestCase):
             self.assertEqual(r.returncode, 2, r.stderr)
 
 
+class TShellWriteIsAWrite(unittest.TestCase):
+    """Боевой прогон v0.4.6 (L-17b): хук смотрел только на Write/Edit, и на фазе RED
+    `cat > src/main/java/Foo.java <<EOF` проходил все хуки — отказ write_file обходился одной
+    shell-командой. Цели shell-записи судятся как Write."""
+
+    def _bash(self, project: Path, cmd: str) -> int:
+        payload = json.dumps({"hook_event_name": "PreToolUse", "cwd": str(project),
+                              "tool_name": "run_shell_command", "tool_input": {"command": cmd}})
+        return _run(payload).returncode
+
+    def test_shell_write_to_src_main_blocked_before_red(self):
+        for cmd in ("cat > service/src/main/java/A.java <<'EOF'\nclass A {}\nEOF",
+                    "echo 'class A {}' > service/src/main/java/A.java",
+                    "cp /tmp/A.java service/src/main/java/A.java",
+                    "sed -i 's/a/b/' service/src/main/java/A.java"):
+            with self.subTest(cmd=cmd), tempfile.TemporaryDirectory() as td:
+                project = Path(td).resolve()
+                _seed_red_pending(project)
+                self.assertEqual(self._bash(project, cmd), 2, f"прошло до RED: {cmd}")
+
+    def test_wired_on_shell_chain(self):
+        """Хук судит shell-запись, только если рантайм его зовёт на run_shell_command: до
+        v0.4.7 tdd-guard/eval-guard стояли в одной Write-цепочке."""
+        groups = json.loads((HOOK.parent / "settings.hooks.json").read_text(
+            encoding="utf-8"))["hooks"]["PreToolUse"]
+        bash = next(g for g in groups if "run_shell_command" in g.get("matcher", ""))
+        names = [Path(h["command"].split()[-1]).name for h in bash["hooks"]]
+        for hook in ("tdd-guard.py", "eval-guard.py", "sod-enforcer.py"):
+            self.assertIn(hook, names, f"{hook} не в Bash-цепочке")
+
+    def test_other_shell_work_free(self):
+        for cmd in ("./mvnw -q test > build/test.log 2>&1", "cat service/src/main/java/A.java",
+                    "echo x > service/src/test/java/ATest.java", "ls service/src/main/java"):
+            with self.subTest(cmd=cmd), tempfile.TemporaryDirectory() as td:
+                project = Path(td).resolve()
+                _seed_red_pending(project)
+                self.assertEqual(self._bash(project, cmd), 0, f"ложный блок: {cmd}")
+
+
 if __name__ == "__main__":
     unittest.main()

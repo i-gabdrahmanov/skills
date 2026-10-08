@@ -88,20 +88,33 @@ class ResolveRunByStep(unittest.TestCase):
         self._run("forgefix", "fix-order-id", [("fix-diag", "completed"),
                                                ("fix-red", "pending")], now - 100)
         self._run("feature-pipeline", "FORGE-2", [("02-sdd", "pending")], now)
-        self.assertEqual(SR._resolve_run(self.root, "fix-red"), ("forgefix", "fix-order-id"))
-        self.assertEqual(SR._resolve_run(self.root, "02-sdd"), ("feature-pipeline", "FORGE-2"))
+        self.assertEqual(SR._owner_run(self.root, "fix-red"), ("forgefix", "fix-order-id"))
+        self.assertEqual(SR._owner_run(self.root, "02-sdd"), ("feature-pipeline", "FORGE-2"))
 
     def test_live_owner_wins_over_completed_one(self):
         """Шаг с тем же id есть у вчерашней (завершённой) фичи и у идущей — пишем в идущую."""
         now = time.time()
         self._run("feature-pipeline", "OLD", [("02-sdd", "completed")], now)
         self._run("feature-pipeline", "NEW", [("02-sdd", "pending")], now - 100)
-        self.assertEqual(SR._resolve_run(self.root, "02-sdd"), ("feature-pipeline", "NEW"))
+        self.assertEqual(SR._owner_run(self.root, "02-sdd"), ("feature-pipeline", "NEW"))
 
-    def test_unknown_step_falls_back_to_active_run(self):
+    def test_unknown_step_has_no_owner(self):
+        """Шага нет ни в одном манифесте — evidence писать некуда. Фолбэк на активный прогон
+        засорял его журнал чужим origin'ом, а на пустом проекте хук сам создавал фантомный
+        namespace feature-pipeline/pipeline (боевой прогон v0.4.6, track F P3-1/P3-2)."""
         now = time.time()
         self._run("feature-pipeline", "ONLY", [("01-grounding", "pending")], now)
-        self.assertEqual(SR._resolve_run(self.root, "99-nope"), ("feature-pipeline", "ONLY"))
+        self.assertIsNone(SR._owner_run(self.root, "99-nope"))
+
+    def test_empty_project_gets_no_phantom_namespace(self):
+        import subprocess
+        payload = json.dumps({"hook_event_name": "SubagentStop", "cwd": str(self.root),
+                              "last_assistant_message": '{"step_id": "01-grounding", '
+                                                        '"status": "completed"}'})
+        subprocess.run([sys.executable, str(Path(SR.__file__))], input=payload,
+                       capture_output=True, text=True, timeout=60)
+        self.assertFalse((self.root / "ground" / "statements").exists(),
+                         "хук создал стейт на пустом проекте")
 
 
 if __name__ == "__main__":
