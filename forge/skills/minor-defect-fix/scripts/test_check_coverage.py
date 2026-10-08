@@ -121,6 +121,32 @@ def main():
     check("тесты исключены в обеих раскладках",
           _filter(["src/test/java/T.java", "mod/src/test/java/T.java"]) == [])
 
+    # 10. Порог — из политики прогона, а не зашитые 0.80 (боевой прогон D1: снимок fix-манифеста
+    #     0.7, а fix-verify мерил 0.80 — дефолт скрипта плюс `--threshold 0.80` в брифе).
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "ground").mkdir()
+        (root / "ground" / "policy.json").write_text(
+            json.dumps({"quality": {"coverage_threshold": 0.9}}), encoding="utf-8")
+        st = root / "ground" / "statements" / "forgefix" / "fix-x"
+        st.mkdir(parents=True)
+        (st / "manifest.json").write_text(json.dumps({
+            "version": 2, "skill": "forgefix", "feature": "fix-x",
+            "policy_snapshot": {"quality": {"coverage_threshold": 0.7}},
+            "steps": [{"id": "fix-verify", "status": "pending"}]}), encoding="utf-8")
+        rep = root / "jacoco.xml"
+        write_report(rep, covered=3, missed=1)  # 0.75
+        rc, j, raw = run("--root", str(root), "--changed", CHANGED, "--report", str(rep), "--json")
+        check("без --threshold порог = снимок прогона (0.7, не 0.80 и не policy.json 0.9)",
+              rc == 0 and j.get("threshold") == 0.7, raw)
+        rc, j, raw = run("--root", str(root), "--changed", CHANGED, "--report", str(rep),
+                         "--threshold", "0.5", "--json")
+        check("явный --threshold ниже политики не опускает порог", j.get("threshold") == 0.7, raw)
+        rc, j, raw = run("--root", str(root), "--changed", CHANGED, "--report", str(rep),
+                         "--threshold", "0.8", "--json")
+        check("явный --threshold выше политики поднимает порог",
+              rc == 2 and j.get("threshold") == 0.8, raw)
+
     print(f"\n{PASSED} passed, {FAILED} failed")
     return 1 if FAILED else 0
 

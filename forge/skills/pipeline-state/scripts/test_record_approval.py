@@ -642,7 +642,11 @@ class TestConsentEvidenceRequired(unittest.TestCase):
 
     def test_bypass_keys_require_evidence(self):
         for key in ("gate-override-coverage-judge", "rollback-f1-02-sdd",
-                    "skip-judges-f1", "policy-repin-f1", "acceptance-STOR-1-T1.3"):
+                    "skip-judges-f1", "policy-repin-f1", "acceptance-STOR-1-T1.3",
+                    # регрессия: доки числили его классом с цитатой, код — нет, и
+                    # `set quality.tdd false` снимался маркером без слова пользователя
+                    "policy-downgrade-quality.tdd",
+                    "abandon-f1", "archive-force-f1", "git-discard"):
             with self.subTest(key=key):
                 r = self._run("--key", key)
                 self.assertEqual(r.returncode, 2, f"{key} записался без цитаты: {r.stdout}")

@@ -92,9 +92,23 @@ def gather_build_files(root, build_system):
     return found
 
 
+# Блоки pom.xml, чей <groupId> — ЧУЖОЙ (родитель, зависимости, плагины): свой groupId проекта
+# лежит на верхнем уровне <project>. Без вырезания первым находился бы spring-boot-starter-parent.
+_POM_FOREIGN_BLOCKS = re.compile(
+    r"<(parent|dependencies|dependencyManagement|build|profiles|reporting|pluginRepositories|"
+    r"repositories|distributionManagement)\b.*?</\1>", re.S)
+
+
 def detect_group(root, build_files):
+    """groupId проекта → conventions.package_root. Gradle — `group = '…'`; Maven — <groupId>
+    верхнего уровня (раньше Maven не понимался вовсе: package_root на любом Maven-проекте
+    оставался в _incomplete, и preflight отвечал exit 2 до ручной правки)."""
     for bf in build_files:
-        m = re.search(r"group\s*=\s*['\"]([\w.]+)['\"]", read_text(bf))
+        text = read_text(bf)
+        if str(bf).endswith(".xml"):
+            m = re.search(r"<groupId>\s*([\w.]+)\s*</groupId>", _POM_FOREIGN_BLOCKS.sub("", text))
+        else:
+            m = re.search(r"group\s*=\s*['\"]([\w.]+)['\"]", text)
         if m:
             return m.group(1)
     return None

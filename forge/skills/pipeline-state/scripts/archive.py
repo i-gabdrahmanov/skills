@@ -25,12 +25,22 @@ control-plane, поэтому archive.py встаёт в один ряд с init
 в statements/, гейты рискуют примениться по чужому стейту. Из ground/archive/ прогон выпадает
 у всех резолверов сразу — поэтому и `put`, и `abandon` переносят стейт, а не только доки.
 
-Git-чекпойнты фичи (refs/forge/checkpoints/<feature>/*) при архивации УДАЛЯЮТСЯ: это точки
-восстановления для rollback.py, а откатывать завершённое некуда. Их restore не вернёт — число
-удалённых пишется в archive-meta.json.
+Git-чекпойнты фичи (refs/forge/checkpoints/<feature>/*) при архивации (`put`) УДАЛЯЮТСЯ: это
+точки восстановления для rollback.py, а откатывать завершённое некуда. Их restore не вернёт —
+число удалённых пишется в archive-meta.json. У `abandon` иначе: прогон не завершён, и его
+чекпойнты откладываются в refs/forge/abandoned/<метка>/ — с живого namespace сняты (новый
+прогон с тем же слагом не откатится на чужой снапшот), а `restore <feature>` возвращает прогон
+целиком, с ними.
 
 Провенанс переноса едет внутри самой перенесённой папки доков (archive-meta.json), поэтому
 list/restore работают, не читая манифест.
+
+Согласие (R4). `abandon` и `put --force` снимают с активных прогон, который по статусу шагов
+ещё живой (`put --force` к тому же удаляет его чекпойнты). Какой прогон
+брошен, знает только пользователь: на боевом прогоне модель сама сняла чужой прогон по
+подсказке preflight. Поэтому обе команды требуют approval-маркер `abandon-<feature>` /
+`archive-force-<slug>` с цитатой пользователя — его сверяет gate-guard и, вторым слоем, этот
+скрипт (exit 3 без маркера). Маркер одноразовый. `--dry-run` не гейтится.
 
 Usage:
     python3 archive.py [--project <root>] status [--json]
@@ -67,8 +77,10 @@ if _cached_util is not None and getattr(_cached_util, "__file__", None) and \
     del sys.modules["_util"]
 
 from _util import (archive_docs_dir, feature_docs_dir, ground_dir, manifest_path,  # noqa: E402
-                   repo_root, safe_load_json, state_archive_dir, state_dir, task_docs_dir)
+                   repo_root, safe_component, safe_load_json, state_archive_dir, state_dir,
+                   task_docs_dir)
 import read as _read  # summarize()  # noqa: E402
+import forge_events as FE  # noqa: E402 — согласия пользователя (ground/approvals.jsonl)
 # _util при импорте кладёт hooks/ в sys.path — оттуда берём ЕДИНЫЙ предикат живости прогона
 # (тот же, которым резолвят активную фичу хуки и config.py), а не вторую его копию здесь.
 import _config_loader as _CL  # noqa: E402
@@ -329,6 +341,29 @@ def _prune_empty(start: Path, stop: Path) -> None:
         cur = cur.parent
 
 
+def _require_drop_consent(project: Path, prefix: str, slug: str) -> str:
+    """Второй слой R4 (первый — gate-guard.check_archive_drop): снять прогон с активных можно
+    только с согласием пользователя. Возвращает ключ маркера; нет маркера → Fail(code=3)."""
+    key = safe_component(f"{prefix}-{slug}")
+    if FE.approval(project, key) is None:
+        raise Fail(f"снять прогон '{slug}' с активных — R4: прогон перестанет числиться живым "
+                   f"(у put --force удалятся и git-чекпойнты). Нужно согласие пользователя — "
+                   f"approval-маркер '{key}': record_approval.py --key {key} --approved-by user "
+                   f"--reason \"<почему брошен>\" --evidence \"<дословная цитата пользователя>\".\n"
+                   f"   Какой прогон брошен, решает пользователь: покажи `status` и спроси. "
+                   f"Ничего не изменилось.", code=3)
+    return key
+
+
+def _park_checkpoints(project: Path, feature: str, tag: str) -> int:
+    """Снять чекпойнты брошенного прогона с живого namespace, не теряя. Best-effort."""
+    try:
+        from checkpoint import park_checkpoints
+        return int(park_checkpoints(Path(project), feature, tag))
+    except Exception:  # noqa: BLE001 — не git-репо/нет ref'ов: уборка не обязана падать
+        return 0
+
+
 def _drop_checkpoints(project: Path, feature: str) -> int:
     """Снять git-чекпойнты завершённой фичи. Best-effort: нет git — просто 0."""
     try:
@@ -545,7 +580,11 @@ def abandon_run(project, feature: str, skill=None, reason: str = "",
         raise Fail(f"стейт прогона не переносится ({st_src} → {st_target}): {e}. "
                    f"Ничего не изменилось.")
 
-    dropped = _drop_checkpoints(project, feature)
+    # Чекпойнты брошенного прогона не удаляются, а паркуются (refs/forge/abandoned/<метка>):
+    # с живого namespace их снять надо — новый прогон с тем же слагом иначе откатывался бы на
+    # чужой снапшот, — но restore обязан вернуть прогон целиком, с точками отката.
+    tag = f"{skill}-{st_target.name}"
+    parked = _park_checkpoints(project, feature, tag)
 
     man = st["manifest"]
     meta = {
@@ -561,7 +600,9 @@ def abandon_run(project, feature: str, skill=None, reason: str = "",
         "reason": reason or "(причина не указана)",
         "state_source": _rel(st_src, ground_dir(project)),
         "state_target": _rel(st_target, ground_dir(project)),
-        "checkpoints_deleted": dropped,
+        "checkpoints_deleted": 0,
+        "checkpoints_parked": parked,
+        "checkpoints_tag": tag,
         "steps": st["steps"],
     }
     # Мета едет В САМ перенесённый стейт: доков у брошенного прогона нет, а без неё
@@ -569,12 +610,80 @@ def abandon_run(project, feature: str, skill=None, reason: str = "",
     (st_target / META_NAME).write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
                                        encoding="utf-8")
     plan["moved"] = True
-    plan["checkpoints_deleted"] = dropped
+    plan["checkpoints_parked"] = parked
+    return plan
+
+
+def _require_inside(path: Path, root: Path, field: str) -> None:
+    """Путь из archive-meta.json — только внутрь своего корня. Мета лежит в каталоге, который
+    правит модель, и `"source": "../…"` выносил restore за пределы docs/ground (tasks/015 п.2)."""
+    try:
+        p, r = Path(path).resolve(), Path(root).resolve()
+    except (OSError, ValueError):
+        raise Fail(f"archive-meta: поле {field} не резолвится: {path}")
+    if p == r or r not in p.parents:
+        raise Fail(f"archive-meta: поле {field} указывает за пределы {root}: {path}. "
+                   f"Мета правлена руками — ничего не изменилось.")
+
+
+def _abandoned_runs(project: Path) -> list:
+    """[(каталог стейта, мета)] брошенных прогонов: мета лежит в самом стейте
+    ground/archive/<skill>/<feature>/ — доков у них нет."""
+    out = []
+    sa = state_archive_dir(project)
+    if not sa.is_dir():
+        return out
+    for meta_file in sorted(sa.glob("*/*/" + META_NAME)):
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(meta, dict) and meta.get("abandoned"):
+            out.append((meta_file.parent, meta))
+    return out
+
+
+def _restore_abandoned(project: Path, slug: str, dry_run: bool) -> dict:
+    """Вернуть брошенный прогон: стейт ground/archive/ → statements/, отложенные чекпойнты —
+    на место. Раньше abandon был необратим: list/restore видели только docs/archive, а
+    чекпойнты удалялись (боевой прогон, A9)."""
+    name = slug.split("/")[-1]
+    hits = [(d, m) for d, m in _abandoned_runs(project)
+            if name in (m.get("feature"), d.name)]
+    if not hits:
+        raise Fail(f"нет в архиве: ни доков ({archive_docs_dir(project) / slug}), ни "
+                   f"брошенного прогона '{name}' (ground/archive/)")
+    if len(hits) > 1:
+        raise Fail("брошенных прогонов '{}' несколько: {}. Назови каталог."
+                   .format(name, ", ".join(_rel(d, ground_dir(project)) for d, _ in hits)), code=3)
+    src, meta = hits[0]
+    feature = meta.get("feature") or name
+    target = state_dir(project, meta.get("skill") or "feature-pipeline", feature)
+    _require_inside(target, ground_dir(project) / "statements", "skill/feature")
+    if target.exists():
+        raise Fail(f"место занято: {target} — идёт прогон с тем же слагом; сначала сними его", code=3)
+    plan = {"ok": True, "slug": feature, "abandoned": True, "source": str(src),
+            "target": str(target), "state_target": str(target), "dry_run": bool(dry_run)}
+    if dry_run:
+        plan["moved"] = False
+        return plan
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(target))
+    (target / META_NAME).unlink(missing_ok=True)
+    _prune_empty(src.parent, state_archive_dir(project))
+    try:
+        from checkpoint import unpark_checkpoints
+        plan["checkpoints_restored"] = int(unpark_checkpoints(
+            project, feature, meta.get("checkpoints_tag") or ""))
+    except Exception:  # noqa: BLE001 — не git-репо: вернули стейт без точек отката
+        plan["checkpoints_restored"] = 0
+    plan["moved"] = True
     return plan
 
 
 def restore_feature(project, slug, dry_run: bool = False) -> dict:
-    """Вернуть заархивированные доки обратно в feature-pipeline/."""
+    """Вернуть заархивированные доки обратно в feature-pipeline/ — либо брошенный прогон
+    (abandon) обратно в statements/."""
     project = Path(project)
     arc = archive_docs_dir(project)
     base = feature_docs_dir(project)
@@ -589,7 +698,7 @@ def restore_feature(project, slug, dry_run: bool = False) -> dict:
             raise Fail("в архиве несколько '{}': {}. Назови полный слаг."
                        .format(s, ", ".join(_rel(h, arc) for h in hits)), code=3)
         else:
-            raise Fail(f"нет в архиве: {arc / s}")
+            return _restore_abandoned(project, s, dry_run)
 
     meta_file = src / META_NAME
     rel = _rel(src, arc)
@@ -598,13 +707,16 @@ def restore_feature(project, slug, dry_run: bool = False) -> dict:
         meta = safe_load_json(meta_file, what=META_NAME)
         rel = meta.get("source") or rel
     target = base / rel
+    _require_inside(target, base, "source")
     if target.exists():
         raise Fail(f"место занято: {target} — уберите каталог или переименуйте архив")
 
+    g = ground_dir(project)
     st_src = st_target = None
     if meta.get("state_target") and meta.get("state_source"):
-        g = ground_dir(project)
         st_src, st_target = g / meta["state_target"], g / meta["state_source"]
+        _require_inside(st_src, g, "state_target")
+        _require_inside(st_target, g / "statements", "state_source")
         if not st_src.is_dir():
             st_src = st_target = None            # стейт уже убрали руками — вернём одни доки
         elif st_target.exists():
@@ -612,10 +724,11 @@ def restore_feature(project, slug, dry_run: bool = False) -> dict:
 
     # Стейты фиксов, уехавших вместе со стори, возвращаются вместе с ней.
     nested = []
-    g = ground_dir(project)
     for n in meta.get("nested_states") or []:
         a, b = g / n.get("state_target", ""), g / n.get("state_source", "")
         if n.get("state_target") and n.get("state_source") and a.is_dir():
+            _require_inside(a, g, "nested_states.state_target")
+            _require_inside(b, g / "statements", "nested_states.state_source")
             if b.exists():
                 raise Fail(f"место стейта фикса занято: {b} — уберите каталог или переименуйте")
             nested.append((a, b))
@@ -654,17 +767,23 @@ def restore_feature(project, slug, dry_run: bool = False) -> dict:
 
 
 def list_archived(project) -> list:
-    arc = archive_docs_dir(Path(project))
+    project = Path(project)
+    arc = archive_docs_dir(project)
     out = []
-    if not arc.is_dir():
-        return out
-    for meta_file in sorted(arc.glob("**/" + META_NAME)):
-        try:
-            meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            meta = {}
-        meta.setdefault("slug", _rel(meta_file.parent, arc))
-        meta["path"] = str(meta_file.parent)
+    if arc.is_dir():
+        for meta_file in sorted(arc.glob("**/" + META_NAME)):
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                meta = {}
+            meta.setdefault("slug", _rel(meta_file.parent, arc))
+            meta["path"] = str(meta_file.parent)
+            out.append(meta)
+    # Брошенные прогоны: доков нет, мета в самом стейте. Раньше list отвечал «Архив пуст»
+    # при живом ground/archive/ — снятый прогон пропадал из всех выдач.
+    for d, meta in _abandoned_runs(project):
+        meta.setdefault("slug", meta.get("feature") or d.name)
+        meta["path"] = str(d)
         out.append(meta)
     return out
 
@@ -740,9 +859,9 @@ def _print_status(data: dict) -> None:
         for r in orphans:
             print(f"   {'⚠' if r['live'] else '·'} {r['skill']}/{r['feature']}  {r['state']}"
                   f"{'  (числится живым — участвует в резолве активной фичи)' if r['live'] else ''}")
-        print("   Который из них идёт — знаешь ты; лишний не удаляй, а сними с активных.")
+        print("   Который из них идёт — знает пользователь; лишний не удаляй, а сними с активных.")
         print("   Убрать штатно: /forge-archive abandon <feature> --skill <S> "
-              "--reason \"<почему>\"")
+              "--reason \"<почему>\" — по его явному ответу (R4: маркер abandon-<feature>)")
         print("   (стейт переезжает в ground/archive/, руками из ground/statements/ — нельзя)")
     if data["archived"]:
         print(f"\nВ архиве ({len(data['archived'])}):")
@@ -804,14 +923,19 @@ def main(argv=None) -> int:
             else:
                 for a in rows:
                     print(f"{a.get('slug')}  [{a.get('skill', '?')}]  "
-                          f"{a.get('archived_at', '?')}  → {a.get('path')}")
+                          f"{a.get('archived_at', '?')}  → {a.get('path')}"
+                          f"{'  (брошен: ' + str(a.get('reason')) + ')' if a.get('abandoned') else ''}")
             return 0
 
         if cmd == "put":
             if args.force and not args.reason:
                 raise Fail("--force без --reason: причина обхода гейта обязана быть записана")
+            consent = (_require_drop_consent(project, "archive-force", args.slug)
+                       if args.force and not args.dry_run else None)
             res = archive_feature(project, args.slug, skill=args.skill, force=args.force,
                                   reason=args.reason, dry_run=args.dry_run)
+            if consent:
+                FE.revoke_approval(project, consent, reason=f"согласие потрачено: put --force {args.slug}")
             if as_json:
                 print(json.dumps(res, ensure_ascii=False, indent=2))
             elif args.dry_run:
@@ -829,8 +953,12 @@ def main(argv=None) -> int:
             if not (args.reason or "").strip():
                 raise Fail("--reason пустой: причина, по которой прогон брошен, обязана "
                            "быть записана — восстановить её потом нечем")
+            consent = (None if args.dry_run
+                       else _require_drop_consent(project, "abandon", args.feature))
             res = abandon_run(project, args.feature, skill=args.skill, reason=args.reason,
                               dry_run=args.dry_run)
+            if consent:
+                FE.revoke_approval(project, consent, reason=f"согласие потрачено: abandon {args.feature}")
             if as_json:
                 print(json.dumps(res, ensure_ascii=False, indent=2))
             elif args.dry_run:
@@ -839,9 +967,9 @@ def main(argv=None) -> int:
             else:
                 print(f"✅ прогон {res['skill']}/{res['feature']} снят с активных")
                 print(f"   стейт → {res['state_target']}")
-                if res.get("checkpoints_deleted"):
-                    print(f"   сняты git-чекпойнты фичи: {res['checkpoints_deleted']} шт. "
-                          f"(restore их не вернёт)")
+                if res.get("checkpoints_parked"):
+                    print(f"   git-чекпойнты отложены ({res['checkpoints_parked']} шт.) — "
+                          f"вернутся вместе с прогоном: archive.py restore {res['feature']}")
                 print("   Коммит — на тебе, forge не коммитит.")
             return 0
 
@@ -853,8 +981,10 @@ def main(argv=None) -> int:
                 print(f"dry-run: {res['source']} → {res['target']} (ничего не записано)")
             else:
                 print(f"✅ возвращено: {res['target']}")
-                if res.get("state_target"):
+                if res.get("state_target") and not res.get("abandoned"):
                     print(f"   стейт прогона → {res['state_target']}")
+                if res.get("checkpoints_restored"):
+                    print(f"   git-чекпойнты возвращены: {res['checkpoints_restored']} шт.")
             return 0
     except Fail as e:
         print(f"[archive] DENY: {e}", file=sys.stderr)

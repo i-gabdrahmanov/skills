@@ -178,7 +178,8 @@ Exit-коды:
 
 Создаёт `skills/feature-pipeline/scripts/init_pipeline_config.py` (вызывается первым
 запуском пайплайна; preflight при `exit 2` подсказывает готовую команду `init_command`
-в выводе JSON). Правится только через `config-helper/scripts/config.py set` — прямая
+в выводе JSON, а если файл есть, но не дозаполнен — `answer_commands`: `config.py set` по
+каждому полю из `_incomplete`). Правится только через `config-helper/scripts/config.py set` — прямая
 запись режется `state-write-guard`.
 
 **Живые блоки** (их реально читают хуки и скрипты):

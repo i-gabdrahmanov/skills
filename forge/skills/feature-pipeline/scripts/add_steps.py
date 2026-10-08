@@ -31,6 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import skill_paths  # find_project_root — ре-экспорт из hooks/_project
+from _project import locked_json_update  # noqa: E402 — skill_paths кладёт hooks/ в sys.path
 
 
 def _resolve_root(project_root: Path | None) -> Path:
@@ -316,31 +317,44 @@ def add_steps(skill: str, feature: str, steps: list, task_plan: dict | None = No
     if dep_err:
         return {"status": "error", "error_class": "validation", "error": dep_err}
 
-    existing_ids = {s["id"] for s in manifest.get("steps", [])}
-
     added = 0
     skipped = 0
+    rewired: list = []
 
-    for step in steps:
-        if step["id"] in existing_ids:
-            skipped += 1
-            continue
-        step["status"] = "pending"
-        step["attempts"] = 0
-        # Применяем required_judges по той же маске, что и init.py
-        req = _match_required_judges(step["id"])
-        if req:
-            step["required_judges"] = req
-        manifest["steps"].append(step)
-        added += 1
-
-    rewired = _rewire_verify_step(manifest, steps) if rewire_verify else []
-
-    if added > 0 or rewired:
-        manifest["last_update"] = __import__("datetime").datetime.now(
+    def _merge(m: dict):
+        """Шаги — в СВЕЖИЙ манифест, прочитанный под замком (см. ниже)."""
+        nonlocal added, skipped, rewired
+        existing_ids = {s["id"] for s in m.get("steps", [])}
+        for step in steps:
+            if step["id"] in existing_ids:
+                skipped += 1
+                continue
+            step["status"] = "pending"
+            step["attempts"] = 0
+            # Применяем required_judges по той же маске, что и init.py
+            req = _match_required_judges(step["id"])
+            if req:
+                step["required_judges"] = req
+            m["steps"].append(step)
+            existing_ids.add(step["id"])
+            added += 1
+        rewired = _rewire_verify_step(m, steps) if rewire_verify else []
+        if not (added or rewired):
+            return False                    # менять нечего — файл (и его mtime) не трогаем
+        m["last_update"] = __import__("datetime").datetime.now(
             __import__("datetime").timezone.utc
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Read-modify-write под замком манифеста (тот же manifest.lock, что держит update.py).
+    # Раньше здесь был голый write_text поверх копии, прочитанной выше: не атомарно, и запись
+    # параллельного update.py между чтением и записью терялась.
+    try:
+        manifest = locked_json_update(manifest_path, _merge)
+    except (json.JSONDecodeError, OSError) as e:
+        return {"status": "error", "error_class": "infra",
+                "error": f"Manifest повреждён ({manifest_path}): {e}"}
+
+    if added > 0 or rewired:
 
         # Фазовое состояние никуда не синхронизируется: оно ВЫЧИСЛЯЕТСЯ из манифеста
         # (pipeline_phases.live_state). Прежние gate.json/phase-defs.json были кэшем

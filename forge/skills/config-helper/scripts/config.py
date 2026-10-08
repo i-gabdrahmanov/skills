@@ -62,7 +62,8 @@ if _HOOKS not in sys.path:
     sys.path.append(_HOOKS)
 
 from _project import (  # noqa: E402  (после sys.path.append)
-    load_active_manifest, resolve_active_run as load_active_run, safe_component,
+    load_active_manifest, locked_json_update, resolve_active_run as load_active_run,
+    safe_component,
 )
 
 
@@ -437,10 +438,12 @@ def cmd_set(project: Path, params: list, args) -> int:
         except AmbiguousRun as ex:
             print(json.dumps({
                 "error": f"{e['id']} — per-feature значение, а {ex}",
-                "hint": (f"(1) назови фичу явно: --skill <S> --feature <F>; (2) если лишний "
-                         f"прогон брошен — убери его штатно: pipeline-state/scripts/archive.py "
-                         f"abandon <feature> --skill <S> --reason \"<почему>\" (он переезжает в "
-                         f"ground/archive/, а не теряется). Руками из ground/statements/ ничего "
+                "hint": (f"(1) назови фичу явно: --skill <S> --feature <F>; (2) какой прогон "
+                         f"брошен, знает только пользователь — спроси его; по явному ответу "
+                         f"убери лишний штатно: pipeline-state/scripts/archive.py abandon "
+                         f"<feature> --skill <S> --reason \"<почему>\" (R4: approval-маркер "
+                         f"abandon-<feature> с его цитатой; стейт переезжает в ground/archive/, "
+                         f"вернуть — archive.py restore). Руками из ground/statements/ ничего "
                          f"не удаляй — это control-plane, его режет state-write-guard."),
             }, ensure_ascii=False))
             return 3
@@ -526,9 +529,15 @@ def cmd_set(project: Path, params: list, args) -> int:
 
     bak = backup(target, project)
     if file_key == "manifest":
-        assign(data[section_name], sub_path, new_val)
-    else:
-        assign(data, sub_path, new_val)
+        # Манифест пишут и параллельные update.py (закрытие шагов): read-modify-write под его
+        # замком, по свежей копии — иначе решение пользователя или статус соседа терялись.
+        locked_json_update(target, lambda m: assign(m.setdefault(section_name, {}),
+                                                    sub_path, new_val))
+        print(json.dumps({"status": "applied", "id": e["id"], "file": str(target),
+                          "section": section_name, "old": old_display, "new": new_val,
+                          "backup": bak}, ensure_ascii=False))
+        return 0
+    assign(data, sub_path, new_val)
     if file_key == "gates":
         assign(data, "_meta.updated_at", iso_now())
     # Ответ на вопрос §0.1 снимает поле из маркера _incomplete (его читает preflight как
@@ -564,6 +573,50 @@ def _parse_enabled_by(raw: str):
     return raw  # путь-выражение вроде "gates.security_review"
 
 
+def _structure_consent(project: Path, key: str, what: str) -> "str | None":
+    """Второй слой R4 (первый — gate-guard.check_policy_structure_edit): ослабить политику
+    мимо `set` можно только с согласием пользователя. Возвращает ключ маркера (его потребят
+    после записи) либо None — тогда отказ уже напечатан. `--confirm` согласием не считается:
+    его ставит сама модель."""
+    key = safe_component(key)
+    try:
+        import forge_events as FE
+        rec = FE.approval(project, key)
+    except Exception as ex:  # noqa: BLE001 — без журнала approval не проверить
+        print(json.dumps({"error": f"forge_events недоступен, approval не проверить: {ex}"},
+                         ensure_ascii=False))
+        return None
+    if isinstance(rec, dict) and rec.get("produced_by") == "record_approval":
+        return key
+    print(json.dumps({
+        "error": f"{what} — R4-класс: нужен approval-маркер с провенансом record_approval",
+        "approval_key": key,
+        "hint": (f"(1) покажи пользователю, ЧТО ослабляется; (2) после явного «да»: "
+                 f"pipeline-state/scripts/record_approval.py --key {key} --approved-by user "
+                 f"--reason \"<почему>\" --evidence \"<дословная цитата пользователя>\"; "
+                 f"(3) повтори команду. Маркер одноразовый."),
+    }, ensure_ascii=False))
+    return None
+
+
+def _spend_structure_consent(project: Path, key: "str | None", what: str) -> None:
+    if key:
+        import forge_events as FE
+        FE.revoke_approval(project, key, reason=f"согласие потрачено: {what}")
+
+
+def _mandatory_phase(phase_id: str) -> bool:
+    """Обязательная фаза (resolve_phases.mandatory_phase_ids); список не загрузился — любая."""
+    try:
+        fp = str(Path(__file__).resolve().parents[2] / "feature-pipeline" / "scripts")
+        if fp not in sys.path:
+            sys.path.append(fp)
+        import resolve_phases as _rp
+        return phase_id in _rp.mandatory_phase_ids()
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def cmd_phase(project: Path, params: list, args) -> int:
     # phases_override — общая конфигурация (какие фазы включены в принципе), → policy.json.
     # Как и quality.*: пишется всегда, идущий прогон идёт по снимку (см. cmd_set).
@@ -582,6 +635,16 @@ def cmd_phase(project: Path, params: list, args) -> int:
     overrides = data.get("phases_override")
     if not isinstance(overrides, list):
         overrides = []
+
+    # Выключить ОБЯЗАТЕЛЬНУЮ фазу (или сделать её условной через --enabled-by) — снять её
+    # проверки во всех следующих прогонах. Включение и опциональные фазы свободны.
+    consent = None
+    if _mandatory_phase(args.phase_id) and (
+            args.action == "disable" or getattr(args, "enabled_by", None) is not None):
+        what = f"phase {args.action} {args.phase_id}"
+        consent = _structure_consent(project, f"policy-downgrade-phase.{args.phase_id}", what)
+        if consent is None:
+            return 2
 
     existing = next((o for o in overrides if o.get("id") == args.phase_id), None)
     if existing is None:
@@ -606,6 +669,7 @@ def cmd_phase(project: Path, params: list, args) -> int:
     data["phases_override"] = overrides
     bak = backup(target, project)
     atomic_write(target, data)
+    _spend_structure_consent(project, consent, f"phase {args.action} {args.phase_id}")
     print(json.dumps({"status": "applied", "action": args.action,
                       "phase": existing, "backup": bak}, ensure_ascii=False))
     return 0
@@ -628,6 +692,15 @@ def cmd_risk(project: Path, params: list, args) -> int:
     if data is None:
         print(json.dumps({"error": f"{target} не найден"}, ensure_ascii=False))
         return 3
+
+    # Ослабление (убрать паттерн, поднять cap роли) — R4; добавить паттерн — усиление, свободно.
+    consent = None
+    if args.action in ("list-remove", "cap-set"):
+        what = f"risk {args.action} {args.key}"
+        scope = "agent_caps" if args.action == "cap-set" else args.key
+        consent = _structure_consent(project, f"policy-downgrade-risk.{scope}", what)
+        if consent is None:
+            return 2
 
     if args.action in ("list-add", "list-remove"):
         key = args.key
@@ -668,6 +741,7 @@ def cmd_risk(project: Path, params: list, args) -> int:
 
     bak = backup(target, project)
     atomic_write(target, data)
+    _spend_structure_consent(project, consent, f"risk {args.action} {args.key}")
     print(json.dumps({"status": "applied", "action": args.action, "key": args.key,
                       "value": args.value, "file": str(target), "backup": bak},
                      ensure_ascii=False))
@@ -694,9 +768,11 @@ def _check_coverage_jacoco(project: Path) -> list:
         return [{"id": "quality.jacoco_configured", "file": "policy",
                  "path": "quality.jacoco_configured", "value": q.get("jacoco_configured", False),
                  "severity": "warning",
-                 "error": "coverage-гейт активен (eval_enabled + coverage_threshold>0), но "
-                          "jacoco_configured=false — coverage в --strict будет FAIL без отчёта. "
-                          "Подключи JaCoCo, либо выставь coverage_threshold=0, либо гоняй --lenient."}]
+                 "error": "jacoco_configured=false при активном coverage-гейте: подключи JaCoCo "
+                          "в сборку (jacoco-maven-plugin либо plugins { jacoco }) и выставь "
+                          "quality.jacoco_configured true — иначе на 05-verify/fix-verify нет "
+                          "отчёта покрытия и гейт упадёт. Снизить порог или выключить гейт — R4, "
+                          "только с согласием пользователя."}]
     return []
 
 
@@ -937,16 +1013,20 @@ def cmd_repin(project: Path, params: list, args) -> int:
             "hint": (f"(1) покажи пользователю расхождение: config.py repin --skill {args.skill} "
                      f"--feature {args.feature} --dry-run; (2) после явного «да»: "
                      f"pipeline-state/scripts/record_approval.py --key {approval_key} "
-                     f"--approved-by user --reason \"<почему>\"; (3) повтори. Маркер одноразовый. "
+                     f"--approved-by user --reason \"<почему>\" --evidence \"<дословная цитата "
+                     f"пользователя>\"; (3) повтори. Маркер одноразовый. "
                      f"Правка policy.json БЕЗ repin не гейтится — применится со следующего прогона."),
         }, ensure_ascii=False))
         return 3
 
     bak = backup(mp, project)
-    man["policy_snapshot"] = policy
-    man["policy_digest"] = new_digest
-    man["last_update"] = iso_now()
-    atomic_write(mp, man)
+
+    def _repin(m: dict):
+        m["policy_snapshot"] = policy
+        m["policy_digest"] = new_digest
+        m["last_update"] = iso_now()
+
+    man = locked_json_update(mp, _repin)          # под замком манифеста, как update.py
 
     # Событие в журнал прогона: переснятие политики — такой же факт о прогоне, как вердикт
     # судьи или согласие человека, и разбор «почему шаг закрылся под другим порогом»
@@ -978,16 +1058,21 @@ def main() -> int:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--project", default=None, help="Корень проекта (дефолт: git toplevel / cwd)")
     sub = p.add_subparsers(dest="cmd", required=True)
+    # --project принимается и ПОСЛЕ подкоманды: доки и брифы пишут его в обоих местах, а argparse
+    # на `set k v --project X` отвечал «unrecognized arguments» (боевой прогон, B4). SUPPRESS —
+    # чтобы отсутствие флага у подкоманды не затирало значение, данное до неё.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--project", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
-    pl = sub.add_parser("list", help="Каталог параметров с текущими значениями")
+    pl = sub.add_parser("list", parents=[common], help="Каталог параметров с текущими значениями")
     pl.add_argument("--category")
     pl.add_argument("--file", choices=["pipeline", "policy", "gates", "risk", "manifest"])
     pl.add_argument("--json", action="store_true")
 
-    pg = sub.add_parser("get", help="Текущее значение параметра")
+    pg = sub.add_parser("get", parents=[common], help="Текущее значение параметра")
     pg.add_argument("id")
 
-    ps = sub.add_parser("set", help="Установить значение параметра")
+    ps = sub.add_parser("set", parents=[common], help="Установить значение параметра")
     ps.add_argument("id")
     ps.add_argument("value")
     ps.add_argument("--dry-run", action="store_true")
@@ -998,7 +1083,7 @@ def main() -> int:
     ps.add_argument("--feature", default=None,
                     help="Для inputs.*/decisions.*: слаг фичи. По умолчанию — самая свежая фича по mtime.")
 
-    pp = sub.add_parser("phase", help="Вкл/выкл/добавить фазу в phases_override")
+    pp = sub.add_parser("phase", parents=[common], help="Вкл/выкл/добавить фазу в phases_override")
     pp.add_argument("action", choices=["enable", "disable", "add"])
     pp.add_argument("phase_id")
     pp.add_argument("--enabled-by", dest="enabled_by", default=None)
@@ -1008,24 +1093,24 @@ def main() -> int:
     pp.add_argument("--after", default=None,
                     help="Для add: id фазы, СРАЗУ ПОСЛЕ которой вставить новую (без него — в конец)")
 
-    pr = sub.add_parser("risk", help="Мутации risk-policy (всегда --confirm)")
+    pr = sub.add_parser("risk", parents=[common], help="Мутации risk-policy (всегда --confirm)")
     pr.add_argument("action", choices=["list-add", "list-remove", "cap-set"])
     pr.add_argument("key", help="имя ключа-списка или agent-regex для cap-set")
     pr.add_argument("value", help="паттерн (list) или R-level (cap-set)")
     pr.add_argument("--confirm", action="store_true")
 
-    prp = sub.add_parser("repin", help="Переснять снимок политики для идущего прогона")
+    prp = sub.add_parser("repin", parents=[common], help="Переснять снимок политики для идущего прогона")
     prp.add_argument("--skill", default=None, help="namespace прогона (по умолчанию — самый свежий)")
     prp.add_argument("--feature", default=None, help="слаг фичи (по умолчанию — самый свежий)")
     prp.add_argument("--reason", default=None, help="зачем переснимаем (уходит в журнал прогона)")
     prp.add_argument("--dry-run", action="store_true")
 
-    pv = sub.add_parser("validate", help="Проверить типы/диапазоны конфига + кросс-проверки")
+    pv = sub.add_parser("validate", parents=[common], help="Проверить типы/диапазоны конфига + кросс-проверки")
     pv.add_argument("--strict", action="store_true",
                     help="Предупреждения тоже валят (exit 1) — для preflight-гейта")
     pv.add_argument("--json", action="store_true")
 
-    pmd = sub.add_parser("migrate-deprecated",
+    pmd = sub.add_parser("migrate-deprecated", parents=[common],
                          help="Снять из policy.json устаревшие per-feature поля (с бэкапом)")
     pmd.add_argument("--dry-run", action="store_true")
 

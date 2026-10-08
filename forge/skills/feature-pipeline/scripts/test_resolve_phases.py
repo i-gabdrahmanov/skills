@@ -126,8 +126,14 @@ def main() -> int:
     # 7. Интеграция config-helper → resolve_phases: документированный путь
     #    «phase disable 04-tdd» не должен ломать резолвер (стык, который жил без теста).
     config_py = SCRIPT.parent.parent.parent / "config-helper" / "scripts" / "config.py"
+    record_approval = SCRIPT.parent.parent.parent / "pipeline-state" / "scripts" / "record_approval.py"
     with tempfile.TemporaryDirectory() as td:
         project = _project(td, FULL)
+        # 04-tdd — обязательная фаза: выключить её — R4, нужен маркер с цитатой пользователя
+        subprocess.run([sys.executable, str(record_approval), "--project", str(project),
+                        "--key", "policy-downgrade-phase.04-tdd", "--approved-by", "user",
+                        "--reason", "тест стыка", "--evidence", "да, выключай tdd для теста"],
+                       capture_output=True, text=True)
         r = subprocess.run([sys.executable, str(config_py), "--project", str(project),
                             "phase", "disable", "04-tdd"], capture_output=True, text=True)
         check("config.py phase disable → exit 0", r.returncode == 0, r.stdout + r.stderr)

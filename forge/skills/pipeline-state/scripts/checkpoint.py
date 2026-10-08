@@ -158,6 +158,46 @@ def list_checkpoints(project: Path, feature: str) -> list[dict]:
     return out
 
 
+# Чекпойнты брошенного прогона: снимаются с живого namespace (иначе новый прогон с тем же
+# слагом откатывался бы на чужой снапшот), но не удаляются — restore возвращает их на место.
+PARKED_NS = "refs/forge/abandoned"
+
+
+def _move_ref(project: Path, src: str, dst: str, sha: str) -> bool:
+    try:
+        return (_git(project, "update-ref", dst, sha).returncode == 0
+                and _git(project, "update-ref", "-d", src).returncode == 0)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def park_checkpoints(project: Path, feature: str, tag: str) -> int:
+    """refs фичи → refs/forge/abandoned/<tag>/<step-id>. Возвращает число перенесённых."""
+    project = Path(project)
+    return sum(_move_ref(project, cp["ref"],
+                         f"{PARKED_NS}/{safe_ref_part(tag)}/{cp['step_id']}", cp["sha"])
+               for cp in list_checkpoints(project, feature))
+
+
+def unpark_checkpoints(project: Path, feature: str, tag: str) -> int:
+    """Обратно: refs/forge/abandoned/<tag>/* → живой namespace фичи. Живой ref того же шага не
+    затирается (его поставил уже новый прогон). Возвращает число возвращённых."""
+    project = Path(project)
+    prefix = f"{PARKED_NS}/{safe_ref_part(tag)}/"
+    try:
+        r = _git(project, "for-each-ref", "--format=%(refname)%09%(objectname)", prefix)
+    except Exception:  # noqa: BLE001
+        return 0
+    n = 0
+    for line in (r.stdout.splitlines() if r.returncode == 0 else []):
+        ref, _, sha = line.partition("\t")
+        dst = checkpoint_ref(feature, ref[len(prefix):])
+        if _git(project, "rev-parse", "--verify", "--quiet", dst).returncode == 0:
+            continue
+        n += _move_ref(project, ref, dst, sha)
+    return n
+
+
 def delete_checkpoints(project: Path, feature: str) -> int:
     """Удаляет все refs фичи (уборка при init --force). Возвращает число удалённых."""
     n = 0

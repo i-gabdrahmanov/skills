@@ -487,5 +487,43 @@ class TStateMasterKey(unittest.TestCase):
             self.assertEqual(_bash(cmd).returncode, 0, f"ложный блок: {cmd}")
 
 
+
+class THarnessPathThroughSymlink(unittest.TestCase):
+    """Боевой прогон (A3): корень харнеса резолвнут (`Path(__file__).resolve()`), а цель записи
+    сравнивалась лексически. На macOS проект по пути /tmp/… живёт как /private/tmp/…, и запись в
+    hooks/ через симлинк-форму пути проходила при идущем прогоне."""
+
+    def test_write_via_symlink_alias_blocked(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as links:
+            proj = _project(td, with_manifest=True)
+            alias = Path(links) / "forge-alias"
+            alias.symlink_to(HARNESS, target_is_directory=True)
+            for tool, ti in (
+                    ("write_file", {"file_path": f"{alias}/hooks/gate-guard.py", "content": "x"}),
+                    ("run_shell_command", {"command": f"echo x > {alias}/hooks/gate-guard.py"})):
+                with self.subTest(tool=tool):
+                    r = _run_in(proj, tool, ti)
+                    self.assertEqual(r.returncode, 2, f"запись через симлинк прошла: {ti}")
+
+
+class TContainerRemoval(unittest.TestCase):
+    """Боевой прогон (PATH-6/7): паттерны держали имена файлов, и `rm -rf ground/`,
+    `rm -rf ground/statements/<s>/<f>`, `rm -rf .gigacode/hooks` проходили — снос стейта
+    или самих хуков целиком гасит все гейты."""
+
+    def test_blocked(self):
+        for cmd in ("rm -rf ground/", "rm -rf ground", "rm -rf ground/statements",
+                    "rm -rf ground/statements/feature-pipeline/FORGE-1", "rm -rf ground/*",
+                    "rm -rf .gigacode/hooks", "mv .gigacode/hooks /tmp/x", "rm -rf ./.gigacode"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_bash(cmd).returncode, 2, f"пропущено: {cmd}")
+
+    def test_archive_and_files_inside_unaffected(self):
+        for cmd in ("rm -rf build/",
+                    "rm -f .gigacode/hooks-notes.txt", "ls ground/statements"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_bash(cmd).returncode, 0, f"ложный блок: {cmd}")
+
 if __name__ == "__main__":
     unittest.main()

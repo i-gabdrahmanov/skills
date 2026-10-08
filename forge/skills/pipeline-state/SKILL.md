@@ -273,7 +273,9 @@ python <project>/.gigacode/skills/pipeline-state/scripts/read.py \
   `/forge-merge` или вручную через `/forge-archive`. Прогон, который БРОШЕН и доков не дал,
   уносит `archive.py abandon <feature> --skill <S> --reason '<почему>'`: `put` на него не
   работает (требует каталог доков), а пока он лежит в `statements/`, он числится живым и
-  участвует в резолве активной фичи. А вот прогоны, ВЫТЕСНЕННЫЕ `init.py --force` в
+  участвует в резолве активной фичи. `abandon` и `put --force` — R4: какой прогон брошен,
+  решает пользователь (маркер `abandon-<feature>` / `archive-force-<slug>` с его цитатой;
+  без него exit 3). А вот прогоны, ВЫТЕСНЕННЫЕ `init.py --force` в
   `ground/statements/<skill>/archived/`, по-прежнему накапливаются: туда попадает что угодно
   в любом статусе, и разбирает их пользователь руками.
 

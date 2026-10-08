@@ -327,7 +327,7 @@ prompt:
 Не добавляй лишних слоёв.
 
 Gate: ./gradlew compileTestJava (должен пройти, тесты должны падать).
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_tests_red.py --root . --task <taskId>
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_tests_red.py <папка>/task-plan.json --root . --task <taskId>
 
 Выходной JSON:
   {"step_id": "stubs-<taskId>", "status": "completed", "compiles": true, "tests_fail": true}
@@ -387,7 +387,7 @@ python3 <project>/.gigacode/skills/test-writer/scripts/analyze_tests.py --root <
 check_coverage отчёт: <путь или содержимое>
 
 Gate:
-python3 <project>/.gigacode/skills/minor-defect-fix/scripts/check_coverage.py --base dev --threshold 0.80
+python3 <project>/.gigacode/skills/minor-defect-fix/scripts/check_coverage.py --base dev   # порог — quality.coverage_threshold прогона
 
 Выходной JSON:
   {"step_id": "cover-gaps", "files_added": [...], "coverage_ok": true}

@@ -8,7 +8,10 @@
 Общий скрипт для minor-defect-fix (фаза тестов) и feature-pipeline (Фаза 4 / step 05-tests).
 
 Usage:
-    check_coverage.py [--root .] [--base HEAD] [--threshold 0.80] [--report XML]... [--changed "a.java b.java"] [--strict|--lenient] [--json]
+    check_coverage.py [--root .] [--base HEAD] [--threshold N] [--report XML]... [--changed "a.java b.java"] [--strict|--lenient] [--json]
+
+Порог: quality.coverage_threshold прогона (снимок политики поверх ground/policy.json); вне
+проекта forge — 0.80. Явный --threshold порог политики поднимает, но не опускает.
 
 fail-closed по умолчанию (--strict): если JaCoCo-отчёт не найден — покрытие НЕЛЬЗЯ проверить,
 поэтому гейт FAIL, а не «тихо пропустить». Раньше отсутствие отчёта давало exit 0 (pass),
@@ -28,6 +31,39 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+_DEFAULT_THRESHOLD = 0.80
+
+
+def _policy_threshold(root: Path) -> float | None:
+    """quality.coverage_threshold прогона — снимок политики живого прогона поверх
+    ground/policy.json, тот же эффективный конфиг, что читает coverage-judge. None — политики
+    нет (скрипт запущен вне проекта forge) либо значение негодное (вне [0, 1], NaN)."""
+    hooks = Path(__file__).resolve().parents[3] / "hooks"
+    try:
+        if str(hooks) not in sys.path:
+            sys.path.append(str(hooks))
+        from _config_loader import load_project_config
+        v = float(((load_project_config(root) or {}).get("quality") or {})["coverage_threshold"])
+    except Exception:  # noqa: BLE001 — нет бандла/политики/ключа: остаётся дефолт
+        return None
+    return v if 0.0 <= v <= 1.0 else None
+
+
+def _effective_threshold(cli: float | None, policy: float | None) -> float:
+    """Порог гейта. Политика прогона — пол: явный --threshold может его поднять, но не опустить.
+
+    Раньше дефолт был зашит (0.80), и бриф fix-ветки сам передавал `--threshold 0.80`: снимок
+    политики прогона (0.7 на боевом прогоне) fix-цепочка не видела вовсе, а понизить порог
+    можно было одним аргументом в --cmd гейта — мимо R4-гейта на quality.coverage_threshold."""
+    if policy is None:
+        return _DEFAULT_THRESHOLD if cli is None else cli
+    if cli is not None and cli < policy:
+        print(f"[check_coverage] --threshold {cli} ниже порога политики прогона {policy} — "
+              f"применён {policy}: порог понижается только правкой политики (R4, согласие "
+              f"пользователя).", file=sys.stderr)
+    return policy if cli is None or cli < policy else cli
+
 
 _DEFAULT_REPORTS = [
     "build/reports/jacoco/test/jacocoTestReport.xml",
@@ -108,7 +144,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Deterministic JaCoCo coverage gate for changed files.")
     ap.add_argument("--root", default=".")
     ap.add_argument("--base", default="HEAD", help="git ref to diff against (branch base or HEAD)")
-    ap.add_argument("--threshold", type=float, default=0.80)
+    ap.add_argument("--threshold", type=float, default=None,
+                    help="порог line-покрытия; по умолчанию quality.coverage_threshold прогона "
+                         "(снимок политики), без политики 0.80. Ниже политики не опускается.")
     ap.add_argument("--report", action="append", help="JaCoCo XML path/glob (repeatable)")
     ap.add_argument("--changed", help="explicit changed files (comma/space separated) — skips git")
     ap.add_argument("--exclude", action="append", default=None,
@@ -124,6 +162,7 @@ def main() -> int:
     args = ap.parse_args()
 
     root = Path(args.root).resolve()
+    threshold = _effective_threshold(args.threshold, _policy_threshold(root))
     reports = _resolve_reports(root, args.report or _DEFAULT_REPORTS)
 
     if args.changed is not None:
@@ -143,14 +182,14 @@ def main() -> int:
         if args.strict:
             verdict = {"status": "missing_report",
                        "reason": "JaCoCo XML не найден — покрытие невозможно проверить (strict)",
-                       "threshold": args.threshold, "changed": len(changed), "files": []}
+                       "threshold": threshold, "changed": len(changed), "files": []}
             print(json.dumps(verdict, ensure_ascii=False, indent=2) if args.json
                   else (f"Coverage gate: ✗ FAIL (JaCoCo XML не найден, strict). "
                         f"Подключи JaCoCo или прогоняй с --lenient. Изменённых .java: {len(changed)}"))
             return 2
         verdict = {"status": "skipped",
                    "reason": "JaCoCo report not found — coverage can't be checked (lenient)",
-                   "threshold": args.threshold, "changed": len(changed), "files": []}
+                   "threshold": threshold, "changed": len(changed), "files": []}
         print(json.dumps(verdict, ensure_ascii=False, indent=2) if args.json
               else f"Coverage gate: SKIPPED (JaCoCo XML не найден, lenient). Изменённых .java: {len(changed)}")
         return 0
@@ -169,12 +208,12 @@ def main() -> int:
             files.append({"path": path, "coverage": None, "status": "EMPTY"})
             continue
         ratio = c / total
-        st = "OK" if ratio >= args.threshold else "LOW"
+        st = "OK" if ratio >= threshold else "LOW"
         if st == "LOW":
             status = "fail"
         files.append({"path": path, "coverage": round(ratio, 3), "status": st})
 
-    verdict = {"status": status, "threshold": args.threshold,
+    verdict = {"status": status, "threshold": threshold,
                "reports": reports, "changed": len(changed),
                "excluded": len(excluded), "files": files}
     if args.json:
@@ -182,7 +221,7 @@ def main() -> int:
     else:
         mark = "✓ PASS" if status == "pass" else "✗ FAIL"
         excl = f", исключено: {len(excluded)}" if excluded else ""
-        print(f"Coverage gate: {mark}  (порог {args.threshold:.0%}, изменённых .java: {len(changed)}{excl})")
+        print(f"Coverage gate: {mark}  (порог {threshold:.0%}, изменённых .java: {len(changed)}{excl})")
         for f in files:
             cv = "  n/a" if f["coverage"] is None else f"{f['coverage']:.0%}"
             flag = {"OK": "✓", "LOW": "✗", "MISSING": "✗", "EMPTY": "·"}[f["status"]]

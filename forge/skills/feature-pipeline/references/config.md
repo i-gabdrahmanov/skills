@@ -527,7 +527,7 @@ coverage воркфлоу). `deploy.sh` раскладывает ВСЕ скил
       "id": "coverage-t1",
       "type": "coverage",
       "task_id": "T1",
-      "command": "python3 .../check_coverage.py --base HEAD~1 --threshold 0.80 --strict",
+      "command": "python3 .../check_coverage.py --base HEAD~1 --strict",
       "threshold": 0.80,
       "description": "Покрытие кода задачи T1 >= 80%"
     },

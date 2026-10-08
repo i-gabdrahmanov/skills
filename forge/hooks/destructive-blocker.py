@@ -37,24 +37,11 @@ except Exception as _e:  # pragma: no cover — сломанный бандл/и
 # Встроенный fail-closed CORE: проверяется ВСЕГДА (объединяется с risk-policy.json).
 # Гарантирует, что при отсутствии/повреждении политики блокировщик не открывается полностью,
 # и закрывает обходы (long-form флаги, rm /*, find -delete), мимо которых проходил policy-regex.
-# Флаги rm через явную границу «начало строки или пробел»: у `\b-` границы НЕТ (перед '-'
-# стоит пробел, оба символа не-словесные), поэтому прежние лукахеды `\b(?:-[a-z]*r[a-z]*)\b`
-# не срабатывали НИКОГДА — паттерн был мёртв, и `rm -rf /etc/passwd` проходил насквозь
-# (ловились только `rm -rf /` и `rm -rf ~/…`, где цель ровно корень/дом). tasks/011.
+# Рекурсивный `rm` по абсолютному пути/дому здесь не регуляркой, а разбором argv — см.
+# _rm_recursive_dangerous_targets.
 _TOK = r"(?:(?<=\s)|^)"
-_RM_RECURSIVE = _TOK + r"(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?=\s|$)"
-_RM_FORCE = _TOK + r"(?:-[a-zA-Z]*f[a-zA-Z]*|--force)(?=\s|$)"
-# Опасная цель: АБСОЛЮТНЫЙ путь, домашний каталог или голая звезда. Относительная цель
-# (`build/tmp`, `./target`) под рекурсивное удаление не подпадает — это штатная уборка.
-_DANGEROUS_TARGET = _TOK + r"(?:/\S*|~\S*|\$HOME\S*|\*)(?=\s|$)"
-
-# Паттерн «rm -rf по абсолютному пути» держим отдельной ссылкой: у него ЕСТЬ законное
-# исключение (уборка внутри своего же проекта), у остальных — нет. См. _rm_abs_inside_project.
-_RM_ABS_PATTERN = (r"\brm\b(?=.*" + _RM_RECURSIVE + r")(?=.*" + _RM_FORCE + r").*"
-                   + _DANGEROUS_TARGET)
 
 _CORE_BLACKLIST = [
-    _RM_ABS_PATTERN,
     r"\bfind\s+(?:/|~|\$HOME)\S*\s.*-(?:delete|exec\s+rm)\b",  # find в опасном корне + удаление
     # force-push и в короткой форме `-f` (кластер флагов), кроме --force-with-lease
     r"\bgit\s+push\b(?=.*(?:--force\b|\s-[A-Za-z]*f))(?!.*--force-with-lease)",
@@ -69,6 +56,10 @@ _CORE_BLACKLIST = [
     r"\bbase64\s+(?:-d|--decode|-D)\b[^|]*\|\s*(?:sudo\s+)?(?:ba)?sh\b",
     # python-деструктив без токена rm: shutil.rmtree корня/дома
     r"\brmtree\s*\(\s*['\"]?(?:/|~|\$HOME)",
+    # chmod с правами «всем всё»: 777/0777/7777 и a+rwx/+rwx, флаги в любой форме. Policy-строка
+    # `chmod\s+-R?\s*777` требовала дефис — голый `chmod 777 /etc` проходил (боевой прогон, A2),
+    # а в ядре chmod не было вовсе, хотя докстринг его обещал.
+    r"\bchmod\b(?:\s+--?[A-Za-z][\w-]*)*\s+(?:[0-7]?777\b|(?:a|ugo)?[+=]rwx\b)",
 ]
 
 # ── Контекстные проверки (одним regex не выражаются) ─────────────────────────────────
@@ -86,17 +77,26 @@ _BARE_DANGEROUS = frozenset((
 ))
 
 
-def _rm_bare_dangerous_target(cmd: str) -> bool:
-    """`rm` с ГОЛОЙ опасной целью: корень, дом, звезда, текущий каталог.
-
-    Абсолютные пути вида `/etc/passwd` ловит _RM_ABS_PATTERN (у него есть законное
-    исключение «внутри своего проекта»), здесь — только цели без содержательного пути."""
+def _segment_tokens(cmd: str) -> "list[list[str]]":
+    """argv по сегментам оболочки (;, &&, ||, |, &, перевод строки); кавычки сняты shlex'ом."""
+    out = []
     for seg in _CMD_SEP_RE.split(cmd):
         try:
             toks = shlex.split(seg, posix=True)
         except ValueError:                 # незакрытая кавычка — грубая токенизация
             toks = re.findall(r"[^\s'\"]+", seg)
-        if not toks or os.path.basename(toks[0]) != "rm":
+        if toks:
+            out.append(toks)
+    return out
+
+
+def _rm_bare_dangerous_target(cmd: str) -> bool:
+    """`rm` с ГОЛОЙ опасной целью: корень, дом, звезда, текущий каталог.
+
+    Абсолютные пути вида `/etc/passwd` ловит _rm_recursive_dangerous_targets (у неё есть
+    законное исключение «внутри своего проекта»), здесь — только цели без содержательного пути."""
+    for toks in _segment_tokens(cmd):
+        if os.path.basename(toks[0]) != "rm":
             continue
         for a in toks[1:]:
             if a.startswith("-"):
@@ -118,33 +118,71 @@ def _xargs_rm_from_dangerous_root(cmd: str) -> bool:
     return bool(_DANGEROUS_ROOT_RE.search(cmd.split("|")[0]))
 
 
-# `rm -rf <абсолютный путь>` ВНУТРИ своего проекта — штатная уборка, а не деструктив.
+# Рекурсивный `rm` по абсолютному пути / дому — разбором argv, как и голые цели выше.
+# Прежняя регулярка требовала ОДНОВРЕМЕННО флаг рекурсии и флаг force и видела цель только
+# без кавычек: `rm -r /etc`, `rm --recursive /etc`, `rm -rf "/etc/passwd"`, `rm -rf ${HOME}/x`,
+# `rm -rf \<перевод строки> /etc/passwd` проходили насквозь (боевой прогон, A1/A7). shlex
+# снимает кавычки, флаги читаются как флаги, а не подстроки.
+_HOME_FORMS = ("~", "$HOME", "${HOME}")
+
+
+def _is_dangerous_root(target: str) -> bool:
+    return target.startswith("/") or any(target == h or target.startswith(h + "/")
+                                         for h in _HOME_FORMS)
+
+
+def _rm_recursive_dangerous_targets(cmd: str) -> "list[str]":
+    """Цели РЕКУРСИВНОГО `rm` с опасным корнем (абсолютный путь, ~, $HOME, ${HOME}).
+
+    `rm` ищется в любой позиции сегмента — за `sudo`, `env`, `nice` и прочими обёртками,
+    как прежний `\brm\b`. Нерекурсивный `rm` файла сюда не попадает: удаление своего
+    временного файла в /tmp — штатная работа."""
+    out = []
+    for toks in _segment_tokens(cmd):
+        i = next((k for k, t in enumerate(toks) if os.path.basename(t) == "rm"), None)
+        if i is None:
+            continue
+        recursive, targets, opts = False, [], True
+        for a in toks[i + 1:]:
+            if opts and a == "--":
+                opts = False
+            elif opts and a.startswith("--"):
+                recursive = recursive or a == "--recursive"
+            elif opts and a.startswith("-") and len(a) > 1:
+                recursive = recursive or "r" in a or "R" in a
+            else:
+                targets.append(a)
+        if recursive:
+            out += [t for t in targets if _is_dangerous_root(t)]
+    return out
+
+
+# Рекурсивный `rm` ВНУТРИ своего проекта — штатная уборка, а не деструктив.
 # tasks/011 расширил опасную цель с «ровно / или ~» до любого абсолютного пути, чтобы ловить
 # `rm -rf /etc/passwd`; побочно под блок попал `rm -rf /путь/к/проекту/build` — то, что
-# gradle-разработчик набирает каждый день. Eval пинил именно это ожидание и с тех пор был
-# красным. Разводим по смыслу: снаружи проекта — деструктив, внутри — уборка.
-_ABS_TOKEN_RE = re.compile(_TOK + r"(/\S*)(?=\s|$)")
-
-
-def _rm_abs_inside_project(cmd: str, root) -> bool:
-    """Все абсолютные цели команды лежат СТРОГО внутри проекта (сам корень — не цель)."""
-    if root is None:
+# gradle-разработчик набирает каждый день. Разводим по смыслу: снаружи проекта — деструктив,
+# внутри — уборка.
+def _targets_inside_project(targets: "list[str]", root) -> bool:
+    """Все цели лежат СТРОГО внутри проекта (сам корень — не цель)."""
+    if root is None or not targets:
         return False                      # корень не резолвится → исключение не выдаём
     try:
         root = Path(os.path.normpath(str(Path(root).expanduser()))).resolve()
     except (OSError, ValueError):
         return False
-    targets = _ABS_TOKEN_RE.findall(cmd)
-    if not targets:
-        return False
+    home = os.path.expanduser("~")
     for t in targets:
         if "*" in t or "?" in t:          # глоб внутри проекта — цель неизвестна до раскрытия
             return False
+        for h in ("${HOME}", "$HOME"):
+            if t == h or t.startswith(h + "/"):
+                t = home + t[len(h):]
+                break
         try:
             # resolve с ОБЕИХ сторон: иначе /var vs /private/var (симлинк macOS) разводит
             # корень и цель по разным деревьям, и уборка своего же build выглядит внешней.
             # Заодно симлинк изнутри проекта наружу честно резолвится наружу и блокируется.
-            p = Path(os.path.normpath(t)).resolve()
+            p = Path(os.path.normpath(os.path.expanduser(t))).resolve()
         except (OSError, ValueError):
             return False
         if p == root or root not in p.parents:
@@ -161,6 +199,9 @@ def main() -> int:
         cmd = (data.get("tool_input") or {}).get("command")
         if not isinstance(cmd, str) or not cmd.strip():
             return 0
+        # Перенос строки через `\` для оболочки — пробел; без склейки цель на второй строке
+        # уходила в отдельный сегмент, и `rm -rf \<NL> /etc` выглядел как `rm -rf` без цели.
+        cmd = cmd.replace("\\\n", " ")
         # `git -C <p> push --force`/`git -c k=v push -f` обходили force-push-паттерны
         # (детект по `git\s+push`). Матчим по нормализованной команде (исполняется исходная).
         try:
@@ -181,17 +222,20 @@ def main() -> int:
             print("[destructive-blocker] DENY: `xargs rm` со списком из опасного корня "
                   "(/, ~, $HOME). Уборку делай в пределах рабочего каталога.", file=sys.stderr)
             return 2
-        exempt_rm_abs = False
-        if re.search(_RM_ABS_PATTERN, cmd, re.I):
+        rm_targets = _rm_recursive_dangerous_targets(cmd)
+        if rm_targets:
             try:
                 # R.project_root — тот же резолвер, что у остальных хуков (_project.find_project_root
                 # с git-фолбэком): «внутри проекта» обязано значить то же самое везде.
-                exempt_rm_abs = _rm_abs_inside_project(cmd, R.project_root(data.get("cwd") or ""))
+                inside = _targets_inside_project(rm_targets, R.project_root(data.get("cwd") or ""))
             except Exception:  # noqa: BLE001 — резолвер корня не ответил: остаёмся строгими
-                exempt_rm_abs = False
+                inside = False
+            if not inside:
+                print(f"[destructive-blocker] DENY: рекурсивный `rm` вне проекта: "
+                      f"{' '.join(rm_targets)[:200]}. Уборку делай внутри проекта "
+                      f"(`rm -rf build/`); чужие каталоги не трогай.", file=sys.stderr)
+                return 2
         for pat in list(policy) + _CORE_BLACKLIST:
-            if pat is _RM_ABS_PATTERN and exempt_rm_abs:
-                continue
             if re.search(pat, cmd, re.I):
                 print(f"[destructive-blocker] DENY: команда совпала с запретом /{pat}/. "
                       "Деструктивное действие заблокировано.", file=sys.stderr)

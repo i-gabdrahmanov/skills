@@ -83,6 +83,7 @@ BLOCKER-1.
 from __future__ import annotations
 
 import json
+import os
 import posixpath
 import re
 import shlex
@@ -159,6 +160,27 @@ _CP_RE = re.compile("|".join(_CP_PATTERNS), re.IGNORECASE)
 _CP_LIVE_RE = re.compile(
     "|".join(p for p in _CP_PATTERNS if "ground/archive" not in p), re.IGNORECASE)
 
+# Каталог, ВНУТРИ которого живой control-plane: снести его целиком — то же, что снести
+# манифест или хуки. Паттерны выше держат имена файлов, поэтому `rm -rf ground/`,
+# `rm -rf ground/statements/<skill>/<feature>` и `rm -rf .gigacode/hooks` проходили (боевой
+# прогон, PATH-6/7) — «начать заново» модель может и без умысла. Только для удаления/переноса,
+# не для записи: файлы внутри этих каталогов разбирают паттерны выше.
+_CP_CONTAINER_RE = re.compile(
+    r"(?<![\w-])(?:ground(?:/statements(?:/[^/]+){0,2})?|\.gigacode(?:/(?:hooks|skills))?)"
+    r"(?:/\*)?/?$", re.IGNORECASE)
+
+
+def _container_hint(target: str) -> str:
+    return (
+        f"[state-write-guard] DENY: удаление/перенос каталога '{target}' целиком снимает живой "
+        f"control-plane (стейт прогонов или сами хуки) — после этого все гейты становятся noop.\n"
+        f"  Начать прогон заново — pipeline-state/scripts/init.py --force (архивирует, а не "
+        f"теряет); убрать брошенный прогон — archive.py abandon (R4, по согласию пользователя); "
+        f"снять форж с проекта — uninstall.sh, его запускает пользователь. ground/archive/ "
+        f"чистить можно."
+    )
+
+
 # ── Каталог САМОГО ХАРНЕСА (код форжа) — тоже control-plane ───────────────────────────
 # Артефакты фазы (sdd.md, task-plan.json, fix-plan.md) должны идти в docs-каталог ПРОЕКТА
 # (`docs.*` → skill_paths.feature_docs_dir). Но брифы подставляют путь через плейсхолдер, и
@@ -188,7 +210,13 @@ def _in_harness(target: str, cwd: str = "") -> bool:
         if not p.is_absolute():
             p = Path(cwd or ".") / p
         p = Path(posixpath.normpath(str(p).replace("\\", "/")))
-        return p == _HARNESS_ROOT or _HARNESS_ROOT in p.parents
+        if p == _HARNESS_ROOT or _HARNESS_ROOT in p.parents:
+            return True
+        # Корень резолвнут (Path(__file__).resolve()), значит и цель резолвим: путь через
+        # симлинк — `/tmp/proj/.gigacode/hooks/x.py` при корне `/private/tmp/…` на macOS —
+        # лексически расходился с корнем, и запись в хуки проходила (боевой прогон, A3).
+        rp = Path(os.path.realpath(str(p)))
+        return rp == _HARNESS_ROOT or _HARNESS_ROOT in rp.parents
     except (OSError, ValueError):
         return False
 
@@ -423,6 +451,9 @@ def main() -> int:
             for t in (_collapse(x) for x in _unlink_targets(cmd)):
                 if _CP_LIVE_RE.search(t):
                     print(_unlink_hint(t), file=sys.stderr)
+                    return 2
+                if _CP_CONTAINER_RE.search(t):
+                    print(_container_hint(t), file=sys.stderr)
                     return 2
             for t in (_collapse(x) for x in _rm_targets(cmd)):
                 if _DOCS_RE.search(t):

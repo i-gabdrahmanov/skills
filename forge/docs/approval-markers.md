@@ -33,14 +33,28 @@ Approval-маркер — это «человек сказал да» на ри�
   * `R3` (security-sensitive пути) → `security-review`
   * `R4` (override гейтов, `skip-judges`, откат, репин политики) → `human-approval`
   * `R5` (деструктив) → `change-advisory`
-* Override гейта судьи (R4-класс) → маркер `gate-override-<judge>` (ставится через
-  `record_approval.py` ДО создания override'а; иначе `update._check_gate_override_approval`
-  блокирует `override_judge.py --judge <name>`).
+* Override гейта судьи (R4-класс) → маркер `gate-override-<judge>` на КАЖДОГО судью
+  (`--judge a,b,c` — три маркера; ставится через `record_approval.py` ДО создания override'а).
+  Без маркера `override_judge.py` блокирует gate-guard, а вторым слоем — сам скрипт (exit 3,
+  в т.ч. в `--batch`). Маркер одноразовый: созданный override его потребляет.
+* Снять прогон с активных (R4-класс: прогон перестаёт числиться живым; у `put --force` ещё и
+  удаляются git-чекпойнты, `abandon` их откладывает) → `abandon-<feature>` для `archive.py abandon`,
+  `archive-force-<slug>` для `archive.py put --force`. Какой прогон брошен, решает
+  пользователь. Маркер одноразовый; вторым слоем его сверяет сам `archive.py` (exit 3).
+* Стереть незакоммиченную работу целиком (`git reset --hard`, `clean -f`, `checkout .` /
+  `restore .`, `checkout -f`, `switch --discard-changes`, `stash drop|clear`) → `git-discard`.
+  Маркер одноразовый — gate-guard тратит его на пропуске команды. Точечный откат своего файла
+  (`git checkout -- <файл>`, `git restore <файл>`), `restore --staged`, `clean -n` свободны.
 * Понижение порогов харнеса (R4-класс) → `policy-downgrade-<параметр>`. Список
   параметров — `risk-policy.json:quality_downgrade.params` (`quality.tdd`,
   `quality.eval_enabled`, `coverage_threshold`, `max_judge_iterations`,
   `coverage_exclude_globs`, `security.*` и т.д.). ФАКТЫ о проекте в том же namespace
   (`build_command`, `test_command`, `jacoco_configured`) под гейт НЕ попадают.
+  Тот же класс — ослабление политики мимо `set`: `config.py risk list-remove <ключ>` →
+  `policy-downgrade-risk.<ключ>`, `risk cap-set` → `policy-downgrade-risk.agent_caps`,
+  `phase disable` обязательной фазы (или `--enabled-by`, делающий её условной) →
+  `policy-downgrade-phase.<фаза>`. `--confirm` этих команд согласием не считается — его
+  ставит сама модель. Маркер одноразовый; `risk list-add` и включение фазы свободны.
 * Закрытие документа фазы (`00-brd` / `02-sdd`) → `<doc>-approved-<feature>`.
 
 Полный список ключей — в `risk-policy.json` (`phase_approvals`, `level_requirements`,
@@ -53,14 +67,19 @@ Approval-маркер — это «человек сказал да» на ри�
 маркер → гейт снят» целиком помещалась внутри модели. Скрипт централизует согласие, но
 сам по себе его не доказывает.
 
-Поэтому для ключей **`gate-override-*`, `rollback-*`, `skip-judges-*`, `policy-downgrade-*`**
-обязателен `--evidence "<дословная фраза пользователя>"`:
+Поэтому для ключей **`gate-override-*`, `rollback-*`, `skip-judges-*`, `policy-repin-*`,
+`policy-downgrade-*`, `acceptance-*`, `abandon-*`, `archive-force-*`, `git-discard`** (список
+один на оба слоя — `forge_events.CONSENT_PREFIXES`) обязателен `--evidence "<дословная фраза пользователя>"`:
 
-* `gate-guard.check_record_approval` сверяет цитату с транскриптом сессии. Транскрипт
-  модель не пишет — это единственный канал, куда она не может дописать строку. Цитаты нет
-  в транскрипте → deny.
-* Транскрипт недоступен → предупреждение и пропуск: `--evidence` всё равно обязателен и
-  уходит в журнал под аудит. Запирать единственный аварийный выход наглухо нельзя.
+* `gate-guard.check_record_approval` сверяет цитату с **репликами пользователя** в транскрипте
+  сессии (записи `type:"user"`: qwen/gigacode — `parts[].text`, Claude Code — `content`).
+  Весь транскрипт целиком для сверки не годится: рантайм пишет запись модели с текущим
+  `functionCall` и его аргументами ДО PreToolUse, и подстрока находила выдуманную цитату в
+  самой команде `record_approval`. Свои реплики модели и вывод её команд (`echo` в
+  tool_result) тоже не считаются. Цитаты нет ни в одной реплике пользователя → deny.
+* Транскрипт недоступен или в нём не распознано ни одной реплики пользователя (формат
+  рантайма не тот) → предупреждение и пропуск: `--evidence` всё равно обязателен и уходит в
+  журнал под аудит. Запирать единственный аварийный выход наглухо нельзя.
 * Второй слой — сам `record_approval.py` (`_check_evidence`), включая `--batch`: гейт
   держится и при запуске мимо харнеса. Валидация батча атомарна — одна запись без цитаты
   отменяет весь батч.

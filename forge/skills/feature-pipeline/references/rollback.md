@@ -51,7 +51,8 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/rollback.py \
 
 # 3. Зафиксируй согласие (одноразовое: rollback потребляет маркер)
 python3 .../pipeline-state/scripts/record_approval.py --project <root> \
-  --key rollback-<slug>-02-sdd --approved-by user --reason "<кто/почему>"
+  --key rollback-<slug>-02-sdd --approved-by user --reason "<кто/почему>" \
+  --evidence "<дословная фраза пользователя из этого диалога>"
 
 # 4. Откат
 python3 .../pipeline-state/scripts/rollback.py \

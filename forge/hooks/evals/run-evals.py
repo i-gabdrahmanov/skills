@@ -216,7 +216,7 @@ def main() -> int:
         # ── pii-boundary ──
         c, _ = run_hook("pii-boundary.py", {"cwd": str(r), "tool_name": "Write",
                         "tool_input": {"file_path": str(r / "src/main/java/Foo.java"),
-                                       "content": "var x = \"john.doe@example.com\";"}})
+                                       "content": "var x = \"john.doe@client-bank.ru\";"}})
         check("PII в src/main → deny", c == 2)
         c, _ = run_hook("pii-boundary.py", {"cwd": str(r), "tool_name": "Write",
                         "tool_input": {"file_path": str(r / "src/test/java/FooTest.java"),

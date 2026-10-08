@@ -250,7 +250,19 @@ def main() -> int:
     args = ap.parse_args()
 
     root = Path(args.root).resolve()
-    plan = _load_json(args.plan) or {}
+    plan = _load_json(args.plan)
+    # Нечитаемый план — не «нет задач». Раньше `_load_json(...) or {}` превращал опечатку в
+    # пути, битый JSON или несуществующий файл в пустой план → «PASS (нет задач)», и RED-шаг
+    # закрывался без единого упавшего теста.
+    if not isinstance(plan, dict) or not isinstance(plan.get("tasks", []), list):
+        print(f"RED gate: FAIL — task-plan не читается или это не JSON-объект с tasks[]: "
+              f"{args.plan}. Без плана проверять нечего; это не то же, что «задач нет».")
+        return 2
+    if args.task and not any(isinstance(t, dict) and t.get("id") == args.task
+                             for t in plan.get("tasks", [])):
+        print(f"RED gate: FAIL — задачи '{args.task}' нет в task-plan ({args.plan}). Опечатка в "
+              f"--task давала пустой список и «PASS»; возьми id из task-plan.tasks[].id.")
+        return 2
     cfg = _load_json(args.pipeline_config or "") or {}
 
     # allow_invariants / invariant_pattern: CLI > policy.json|pipeline.json > дефолт.

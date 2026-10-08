@@ -85,7 +85,7 @@ class TPythonWriteVector(unittest.TestCase):
     """M5: запись PII через inline-python (без shell-редиректа) — раньше проходила мимо _target."""
 
     def test_block_open_write_pii_to_src_main(self):
-        cmd = "python3 -c \"open('src/main/java/X.java','w').write('user@example.com')\""
+        cmd = "python3 -c \"open('src/main/java/X.java','w').write('user@client-bank.ru')\""
         r = _run("run_shell_command", {"command": cmd})
         self.assertEqual(r.returncode, 2, r.stderr)
 
@@ -124,6 +124,102 @@ class TestPlaceholdersAreNotSecrets(unittest.TestCase):
         r = _run("write_file", {"file_path": "docs/x.md",
                                 "content": "api_key = AKIAIOSFODNN7EXAMPLE"})
         self.assertEqual(r.returncode, 2)
+
+
+class TExampleDataIsNotPII(unittest.TestCase):
+    """Боевой прогон (B1/B2): спека с примером user@example.com, UUID в sdd.md, README с
+    `git clone git@github.com:…`, `timeout-ms: 1500000000` в yml — всё DENY. Пример и
+    идентификатор — не персональные данные; настоящие телефоны/адреса — по-прежнему блок."""
+
+    def _write(self, path, content):
+        return _run("write_file", {"file_path": path, "content": content})
+
+    def test_examples_pass(self):
+        cases = [
+            ("docs/feature-pipeline/F/sdd.md", "Пример: клиент вводит user@example.com"),
+            ("docs/feature-pipeline/F/sdd.md", "orderId: 123e4567-e89b-12d3-a456-426614174000"),
+            ("README.md", "git clone git@github.com:org/petstore.git"),
+            ("src/main/resources/application.yml", "app.timeout-ms: 1500000000"),
+            ("docs/feature-pipeline/F/sdd.md", "Телефон поддержки: +7 (XXX) XXX-XX-XX"),
+            ("src/main/resources/application.yml", "mail.from: noreply@mail.example.org"),
+        ]
+        for path, content in cases:
+            with self.subTest(content=content):
+                r = self._write(path, content)
+                self.assertEqual(r.returncode, 0, f"ложный блок: {content} → {r.stderr}")
+
+    def test_real_contacts_still_blocked(self):
+        cases = [
+            ("docs/feature-pipeline/F/sdd.md", "Телефон поддержки: +7 (495) 123-45-67"),
+            ("docs/feature-pipeline/F/sdd.md", "звонить 8-999-123-45-67"),
+            ("docs/feature-pipeline/F/sdd.md", "моб. 89991234567"),
+            ("docs/feature-pipeline/F/sdd.md", "почта ivan.petrov@client-bank.ru"),
+            # домен лишь НАЧИНАЕТСЯ с example.com — это не зарезервированный адрес
+            ("docs/feature-pipeline/F/sdd.md", "почта ivan@example.com.ru"),
+        ]
+        for path, content in cases:
+            with self.subTest(content=content):
+                self.assertEqual(self._write(path, content).returncode, 2, f"пропущено: {content}")
+
+    def test_secret_named_as_secret(self):
+        """B2: `api_key=sk-live-1234567890` блокировался «телефоном» по хвосту цифр."""
+        r = self._write("docs/secret.md", "api_key=sk-live-1234567890")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("api", r.stderr)
+
+
+class TSecretFormsDetected(unittest.TestCase):
+    """Боевой прогон (PII-2): секрет в JSON-форме `{"api_key": "…"}` проходил — кавычка между
+    ключом и двоеточием ломала паттерн; не ловились и secretKey, github_pat_, JWT, Bearer,
+    Stripe *_live_, Google AIza, зашифрованный PEM. Для банка пропущенный секрет хуже ложного
+    блока — но Java-код с passwordEncoder/tokenService трогать нельзя."""
+
+    SECRETS = ['{"api_key": "sk_live_abcdef1234567890"}', "secretKey: s3cr3tValue99",
+               '"clientSecret": "abcdef123456"',
+               "token: github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuv",
+               "Authorization: Bearer abcdefghijklmnopqrstuvwx1234",
+               "jwt=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dGhpc2lzYXNpZ25hdHVyZQ",
+               "stripe: sk_live_51Habcdefghijklmnop", "key=AIzaSyA1234567890abcdefghijklmnopqrstuv",
+               "-----BEGIN ENCRYPTED PRIVATE KEY-----"]
+    JAVA = ["private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();",
+            "this.passwordEncoder = passwordEncoder;",
+            '@JsonProperty("token") private String token;',
+            'if ("password".equals(field)) { return; }', 'String tokenType = "Bearer";',
+            'map.put("password", value);', '@Value("${app.secret-key:}") String key;',
+            "tokenService.issue(user);"]
+
+    def test_secrets_blocked(self):
+        for content in self.SECRETS:
+            with self.subTest(content=content):
+                r = _run("write_file", {"file_path": "src/main/resources/application.yml",
+                                        "content": content})
+                self.assertEqual(r.returncode, 2, f"секрет прошёл: {content}")
+
+    def test_java_code_not_blocked(self):
+        for content in self.JAVA:
+            with self.subTest(content=content):
+                r = _run("write_file", {"file_path": "src/main/java/com/x/Sec.java",
+                                        "content": content})
+                self.assertEqual(r.returncode, 0, f"ложный блок: {content}")
+
+
+class TCardNeedsLuhn(unittest.TestCase):
+    """Номер карты — только с сошедшейся суммой Луна. Голое 13–16-значное число (epoch-millis
+    в JSON/yml) было DENY с диагнозом «карта» (боевой прогон, пункт 6 tasks/016)."""
+
+    def _write(self, content):
+        return _run("write_file", {"file_path": "src/main/resources/application.yml",
+                                   "content": content})
+
+    def test_real_card_blocked(self):
+        for content in ("card: 4111 1111 1111 1111", "pan=5500000000000004"):
+            with self.subTest(content=content):
+                self.assertEqual(self._write(content).returncode, 2)
+
+    def test_non_luhn_numbers_pass(self):
+        for content in ("ts: 1696598400000", "id: 4111111111111112", "deadline: 1700000000000"):
+            with self.subTest(content=content):
+                self.assertEqual(self._write(content).returncode, 0, f"ложный блок: {content}")
 
 
 class TestAllowedScopePrecedence(unittest.TestCase):

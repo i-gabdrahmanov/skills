@@ -17,10 +17,11 @@
   evidence, inline-phase, phase-gate). Блокировка = `exit 2` + причина в `stderr`.
 - **Судьи + execution-gates** — детерминированные проверки, которые закрывают шаг только при PASS.
 
-> Запуск рантайма обязателен с флагом `--experimental-hooks`, иначе `[HOOK_REGISTRY] 0 hook entries`
-> и весь control-plane молчит. Перед прогоном — `preflight.py` (exit 0 = харнес активен).
-> Запуск — **интерактивный** (`gigacode --experimental-hooks`, дальше `/forge <задача>`): в headless
-> (`-p`) рантайм не даёт выполнить `agent` без `-y`/YOLO, а фаза без субагента упирается в
+> Хуки рантайм читает из `<project>/.gigacode/settings.json` (gigacode 26.9 — без флагов;
+> `--experimental-hooks` и `-y` из CLI убраны). `[HOOK_REGISTRY] 0 hook entries` на старте —
+> control-plane молчит. Перед прогоном — `preflight.py` (exit 0 = харнес активен).
+> Запуск — **интерактивный** (`gigacode`, дальше `/forge <задача>`): в headless рантайм не даёт
+> выполнить `agent`, пока он не разрешён в `--allowed-tools`, а фаза без субагента упирается в
 > `inline-phase-guard` (INSTALL.md §4).
 
 ---
@@ -103,8 +104,10 @@ State намеспейсится по фиче: `<project>/ground/statements/fea
 | `config.py get` / `validate` | резолв мягкий: отказ читать сломал бы диагностику на пустом месте |
 
 Убрать лишний прогон: `archive.py abandon <feature> --skill <S> --reason '<почему>'` (стейт без
-доков) либо `put <slug> --force --reason` (стейт с доками). Руками из `ground/statements/` —
-нельзя, `state-write-guard` режет unlink.
+доков) либо `put <slug> --force --reason` (стейт с доками). Оба — R4: какой прогон брошен,
+решает пользователь, нужен маркер `abandon-<feature>` / `archive-force-<slug>` с его цитатой
+(вернуть брошенный — `archive.py restore <feature>`). Руками из `ground/statements/` — нельзя,
+`state-write-guard` режет unlink.
 
 > **`ground/` — рантайм-каталог данных в ЦЕЛЕВОМ проекте, не в source-репо Forge.** Его создаёт
 > `init.py` (`mkdir(parents=True)`), а `init_pipeline_config.py` кладёт туда `pipeline.json`.
@@ -213,7 +216,8 @@ sequenceDiagram
   контекст оркестратора.
 - **Judge:** `run_judge.py sdd <slug>` (`sdd-judge`).
 - **Гейт SDD** — утверждение спецификации (правки → возврат `sdd`; новое бизнес-требование → откат к BRD
-  через `pipeline-state/scripts/rollback.py --to-step 00-brd`: R4-гейт `--dry-run` → «да» → `record_approval`
+  через `pipeline-state/scripts/rollback.py --skill feature-pipeline --feature <слаг> --to-step 00-brd`:
+  R4-гейт `--dry-run` → «да» → `record_approval` (с `--evidence`)
   → откат; см. `feature-pipeline/references/rollback.md`).
 
 ### Фаза 2 — Design (вход — утверждённый `sdd.md`)

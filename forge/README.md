@@ -78,10 +78,13 @@ forge/
 | `update.py --skip-judges` — обойти все гейты закрытия | `skip-judges-<feature>` |
 | `config.py repin` — переснять политику идущего прогона | `policy-repin-<feature>` |
 | `config.py set` по переключателю enforcement (`quality.tdd`, `coverage_threshold`, `security.*`, …) | `policy-downgrade-<параметр>` |
+| `archive.py abandon` / `put --force` — снять прогон с активных | `abandon-<feature>` / `archive-force-<slug>` |
+| `config.py risk list-remove` / `cap-set`, `phase disable` обязательной фазы — ослабить политику мимо `set` | `policy-downgrade-risk.<ключ>` / `policy-downgrade-phase.<фаза>` |
+| `git reset --hard`, `clean -f`, `checkout .` / `restore .`, `stash drop\|clear` — стереть незакоммиченное целиком | `git-discard` (тратится на одну команду) |
 
-Для этих пяти классов `record_approval.py` требует **`--evidence "<дословная фраза
-пользователя>"`**, и цитата сверяется с транскриптом сессии: согласие обязано прийти извне
-модели, а не из её же вывода. Approval'ы ПЛАНА (`fix-plan-*`, `jira-plan-*`,
+Для этих классов `record_approval.py` требует **`--evidence "<дословная фраза
+пользователя>"`**, и цитата сверяется с репликами пользователя в транскрипте сессии (не с
+командой модели и не с выводом её команд): согласие обязано прийти извне модели. Approval'ы ПЛАНА (`fix-plan-*`, `jira-plan-*`,
 `<doc>-approved-*`) цитаты не требуют — они двигают прогон вперёд, а не убирают защиту.
 
 ФАКТЫ о проекте под гейт не попадают: `quality.build_command`, `test_command`,
@@ -115,16 +118,18 @@ bash deploy.sh /path/to/target-project
 # 3. проверить готовность (ENFORCEMENT ON?):
 python3 /path/to/target-project/.gigacode/hooks/preflight.py --project /path/to/target-project
 # ✅ exit 0 — можно работать
-# ❌ exit 1 — ENFORCEMENT OFF, чини деплой/флаг
+# ❌ exit 1 — ENFORCEMENT OFF, чини деплой
 
-# 4. запустить рантайм с хуками — ИНТЕРАКТИВНО (форк GigaCode — флаг обязателен):
-gigacode --experimental-hooks
+# 4. запустить рантайм — ИНТЕРАКТИВНО; хуки читаются из .gigacode/settings.json проекта:
+gigacode
 ```
 
 Дальше в сессии — команда `/forge <ключ Jira или описание>`: `router` классифицирует задачу и
-уводит в fix / full. **Headless (`-p`) для пайплайна не годится** без `-y`/YOLO и
-предзаписи решений: рантайм не даёт выполнить `agent`, фаза уходит inline и упирается в
-`inline-phase-guard` (см. INSTALL.md §4).
+уводит в fix / full. **Headless для пайплайна не годится** без разрешённых заранее инструментов
+(`--allowed-tools` с `agent`, `skill`, `run_shell_command`) и предзаписи решений: иначе рантайм
+не даёт выполнить `agent`, фаза уходит inline и упирается в `inline-phase-guard` (см. INSTALL.md §4).
+Флаги прежних инструкций не передавайте — в gigacode 26.9 флагов `--experimental-hooks` и `-y`
+нет: с ними сессия не стартует (`Unknown arguments`, exit 1).
 
 **Обновление** — `bash update.sh /path/to/target-project` (или повторный `deploy.sh`).
 **Деинсталляция** — `bash uninstall.sh /path/to/target-project` (снимает hooks/ + skills/ + блок
@@ -169,18 +174,14 @@ hooks из `settings.json`; `--purge-state` дополнительно снос�
 
 См. [`tasks/`](tasks/). Текущий бэклог (см. файлы для деталей):
 
-- **001** — падающий `hooks/tests/test_project_resolver.py::test_find_project_root` в
-  source-репо (нет git/build-маркеров; ложно-красный в extension-окружении).
 - **004** — инициализация git в каталоге форжа (или адаптация тестов к вложенной git-раскладке:
   git-корень внешний, `forge/` — подкаталог).
 - **005** — накладные расходы `grounding-evidence` на каждый `read_file` (наблюдение,
   пренебрежимо на малых проектах).
+- **016** — остаток боевого прогона v0.4.5 (2026-10-06): что закрыто и что нет — в файле.
 - **Из аудита 2026-09-28, НЕ закрыто** (подтверждено, но вне объёма правок):
-  гонка писателей `manifest.json` (read-modify-write без лока, общий `.json.tmp`, без
-  `fsync` — при параллельных `update.py` выживает одна запись из пяти; `events.jsonl`
-  под `flock` не теряет ничего); `grounding-evidence` слушает только Claude-алиасы
-  (`Read`/`ReadFile`), канон-имени `read_file` в наборе нет; `in_progress` не проставляет
-  никто автоматически, из-за чего мёртв интерлок отката (`rollback.py:421`);
+  `in_progress` не проставляет никто автоматически, из-за чего мёртв интерлок отката
+  (`rollback.py:421`);
   `minor-defect-fix` дублирует триггеры `forgefix` при противоположном контракте доставки;
   `.gigacode/` рядом с репо содержит PII (пути машины, прод-спека) и **уже в git-истории**,
   `.gitignore` его не покрывает.

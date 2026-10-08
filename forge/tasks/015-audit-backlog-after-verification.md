@@ -49,6 +49,8 @@ allow-list — редизайн, поэтому отложено сюда, а н
 
 ### 2. `archive.py`: traversal через model-writable `archive-meta.json`
 
+> **Закрыто 2026-10-08** (tasks/016): `archive._require_inside` — пути из меты только внутрь своих корней.
+
 `docs/archive/<slug>/archive-meta.json` правится моделью; `source`/`state_source` из него
 подставляются в путь восстановления без проверки. В прогоне restore напечатал назначение
 `ground/../../../../ESCAPED_STATE` — четыре уровня выше корня. Остановил не гейт, а
@@ -69,6 +71,8 @@ allow-list — редизайн, поэтому отложено сюда, а н
 (его проба даёт rc=2). Два хука про одно и то же разошлись. Вердикт: `4.1#116`.
 
 ### 5. Развилка: деструктив над незакоммиченной работой
+
+> **Решено 2026-10-08** (tasks/016): R4 с согласием пользователя — `gate-guard.check_git_discard`, маркер `git-discard` одноразовый; точечный откат файла свободен. `chmod 777` в любой форме — destructive-blocker. `chown -R` и `curl … | zsh` — по-прежнему не гейтятся.
 
 `git clean -xfd`, `git checkout -- .`, `git stash drop`, `git reset --hard HEAD~5`,
 `chmod -Rv 777`, `chown -R`, `curl … | zsh`, `curl -o … && bash` — ничем не блокируются.

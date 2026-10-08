@@ -4,9 +4,10 @@ resolve_hook_paths.py — подстановка ${PROJECT_ROOT} в settings.hoo
 
 Читает .gigacode/hooks/settings.hooks.json (эталон с плейсхолдером),
 заменяет ${PROJECT_ROOT} на реальный путь к корню проекта,
-и обновляет в существующем .gigacode/settings.json блок "hooks" целиком плюс СВОИ имена в
+и ставит в существующий .gigacode/settings.json СВОИ записи блока "hooks" плюс СВОИ имена в
 "mcpServers" (эталон hooks/settings.mcp.json — MCP-сервер forge-master для доступа к мастер-репо
-вне каталога проекта). Чужие MCP-серверы и прочие секции (permissions, $version, ...) НЕ трогает.
+вне каталога проекта). Хуки оператора (вне .gigacode/hooks/), чужие MCP-серверы и прочие
+секции (permissions, $version, ...) НЕ трогает.
 
 ЕДИНЫЙ владелец блока hooks в settings.json: и постановка (--resolve, зовёт deploy-local.sh),
 и снятие (--remove, зовёт uninstall.sh). Два владельца одного контракта разъезжаются —
@@ -243,7 +244,52 @@ def is_gigacode_hook_command(command) -> bool:
     return bool(script and _GIGACODE_HOOK_RE.search(_norm(script)))
 
 
-def strip_forge_hooks(settings: dict, project_root: str) -> tuple[dict, list, list, list]:
+def forge_hook_names(project_root: str, template_hooks: dict | None = None) -> set:
+    """Имена хуков, которые ставил форж: реестр установки `.gigacode/.forge-deployed`
+    (записи hooks/*) ∪ эталон settings.hooks.json ∪ надгробия tombstones.txt (если резолвер
+    запущен из исходника). Пусто — сведений нет, и своим считается всё из .gigacode/hooks/.
+
+    Зачем. Каталог .gigacode/hooks/ общий с оператором (co-located), а прежний предикат «всё,
+    что зовёт .gigacode/hooks/*.py» снимал из settings.json и хук оператора, лежащий там же."""
+    names: set = set()
+    sources = [Path(project_root) / ".gigacode" / ".forge-deployed",
+               Path(__file__).resolve().parents[1] / "tombstones.txt"]
+    for src in sources:
+        try:
+            lines = src.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            entry = line.split("#", 1)[0].strip()
+            if entry.startswith("hooks/"):
+                names.add(entry[len("hooks/"):])
+    def _walk(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k == "command" and hook_script_path(v):
+                    names.add(_norm(hook_script_path(v)).rsplit("/", 1)[-1])
+                else:
+                    _walk(v)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+    _walk(template_hooks or {})
+    return names
+
+
+def _is_forge_owned(command, names: set | None) -> bool:
+    """Зовёт ли command форжевый хук. Без сведений (names пуст) — любой из .gigacode/hooks/.
+    Запись на НЕСУЩЕСТВУЮЩИЙ файл тоже снимается: она и так ломает каждый вызов инструмента."""
+    if not is_gigacode_hook_command(command):
+        return False
+    if not names:
+        return True
+    script = hook_script_path(command)
+    return _norm(script).rsplit("/", 1)[-1] in names or not Path(script).exists()
+
+
+def strip_forge_hooks(settings: dict, project_root: str,
+                      names: set | None = None) -> tuple[dict, list, list, list]:
     """Снимает из блока hooks записи, зовущие .gigacode/hooks/ (forge-owned).
 
     Возвращает (новые settings, removed, removed_stale, kept_foreign) — списки имён.
@@ -276,7 +322,7 @@ def strip_forge_hooks(settings: dict, project_root: str) -> tuple[dict, list, li
                 cmd = entry.get("command") if isinstance(entry, dict) else None
                 label = (entry.get("name") if isinstance(entry, dict) else None) \
                     or hook_script_path(cmd)
-                if is_gigacode_hook_command(cmd):
+                if _is_forge_owned(cmd, names):
                     if is_forge_hook_command(cmd, project_root):
                         removed.append(label)
                     else:
@@ -300,6 +346,31 @@ def strip_forge_hooks(settings: dict, project_root: str) -> tuple[dict, list, li
     return result, removed, removed_stale, kept_foreign
 
 
+def merge_forge_hooks(settings: dict, resolved_hooks: dict, project_root: str) -> tuple[dict, list]:
+    """Поставить forge-хуки из эталона, сохранив хуки оператора. → (settings, kept_foreign).
+
+    Раньше блок hooks заменялся эталоном ЦЕЛИКОМ: каждый деплой/апгрейд молча стирал хуки,
+    которые оператор держал в том же settings.json (бэкап .bak — одно поколение, второй
+    деплой затирал и его). mcpServers при этом сливались бережно — два соседних блока одного
+    файла жили по разным правилам. Своё снимаем тем же предикатом, что и деинсталляция
+    (strip_forge_hooks: всё из .gigacode/hooks/, в т.ч. записи со старым путём проекта),
+    затем ставим эталон — повторный деплой идемпотентен. Группы форжа идут первыми."""
+    kept, _removed, _stale, kept_foreign = strip_forge_hooks(
+        settings, project_root, forge_hook_names(project_root, resolved_hooks))
+    operator = kept.get("hooks") if isinstance(kept.get("hooks"), dict) else {}
+    merged: dict = {}
+    for event, groups in resolved_hooks.items():
+        own = operator.get(event)
+        merged[event] = list(groups) + (list(own) if isinstance(own, list) else [])
+    for event, groups in operator.items():
+        merged.setdefault(event, groups)
+    # Позиция ключа hooks в файле сохраняется (повторный деплой байт-идентичен)
+    result = {k: (merged if k == "hooks" else kept[k]) for k in settings
+              if k == "hooks" or k in kept}
+    result.setdefault("hooks", merged)
+    return result, kept_foreign
+
+
 def run_remove(target_settings_path: Path, project_root: str, dry_run: bool) -> int:
     """--remove: снять forge-хуки из settings.json. Идемпотентно (повторный запуск — no-op).
 
@@ -320,7 +391,13 @@ def run_remove(target_settings_path: Path, project_root: str, dry_run: bool) -> 
                          ensure_ascii=False, indent=2))
         return 1
 
-    updated, removed, removed_stale, kept_foreign = strip_forge_hooks(existing, project_root)
+    tmpl_path = Path(project_root) / ".gigacode" / "hooks" / "settings.hooks.json"
+    try:
+        tmpl = json.loads(tmpl_path.read_text(encoding="utf-8")).get("hooks")
+    except (OSError, json.JSONDecodeError):
+        tmpl = None                          # хуки уже сняты — хватит реестра и надгробий
+    updated, removed, removed_stale, kept_foreign = strip_forge_hooks(
+        existing, project_root, forge_hook_names(project_root, tmpl))
     updated, removed_mcp = strip_forge_mcp(updated)
     summary = {
         "passed": True,
@@ -401,7 +478,10 @@ def main():
                 # _norm с обеих сторон: settings.json прошлых деплоев мог остаться со
                 # смешанным разделителем ("C:\\Work\\proj/.gigacode/..."), а project_root
                 # теперь прямой — без нормализации свои же хуки ложно попали бы в foreign.
-                foreign = [p for p in abs_paths if not _norm(p).startswith(_norm(expected_prefix))]
+                # Только пути .gigacode/hooks/ — свои хуки со старым путём проекта. Скрипты
+                # оператора в другом месте деплой сохраняет, и это не ошибка.
+                foreign = [p for p in abs_paths if _GIGACODE_HOOK_RE.search(_norm(p))
+                           and not _norm(p).startswith(_norm(expected_prefix))]
                 if foreign:
                     issues.append(
                         f"FOREIGN ABSOLUTE PATHS in settings.json hooks: {foreign}"
@@ -458,8 +538,8 @@ def main():
     else:
         existing = {}
 
-    # Обновляем блок hooks целиком и СВОИ имена в mcpServers (чужие серверы оператора — нет)
-    existing["hooks"] = resolved_hooks
+    # Ставим СВОИ хуки и СВОИ имена в mcpServers; хуки и серверы оператора остаются
+    existing, foreign_kept = merge_forge_hooks(existing, resolved_hooks, project_root)
     mcp_template_path = project_gigacode / "hooks" / "settings.mcp.json"
     mcp_resolved: dict = {}
     if mcp_template_path.exists():
@@ -495,6 +575,7 @@ def main():
                 "source": str(hooks_template_path),
                 "target": str(target_settings_path),
                 "hooks_updated": True,
+                "foreign_hooks_kept": foreign_kept,
                 "mcp_servers": sorted(mcp_resolved),
                 "other_sections_preserved": [
                     k for k in existing if k not in ("hooks", "mcpServers")

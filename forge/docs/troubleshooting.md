@@ -31,8 +31,9 @@ python3 .gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline
 ### A1. `[HOOK_REGISTRY] 0 hook entries` при старте
 **Симптом:** в выводе рантайма строка `0 hook entries`; гейты, TDD, risk-ladder, evidence — не срабатывают.
 **Причины и фиксы:**
-- **Не передан флаг запуска** → запускайте `gigacode --experimental-hooks` (это аргумент процесса,
-  в `settings.json` его прописать нельзя).
+- **Рантайм запущен не в корне проекта** → хуки читаются из `<project>/.gigacode/settings.json`;
+  запускайте `gigacode` из корня. Флага `--experimental-hooks` в gigacode 26.9 нет — с ним сессия
+  не стартует (`Unknown arguments`); на ранних сборках форка хуки были за этим флагом.
 - **Харнес не развёрнут в проект** → в `<project>/.gigacode/` должны лежать `hooks/`, `skills/`,
   `commands/` и `settings.json` с блоком hooks. Нет — `bash <forge>/deploy.sh <project>`
   (`<forge>` = корень исходника forge; user-guide §3).
@@ -78,12 +79,18 @@ python3 .gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline
 service-unit + моки, либо переключите на `test_layer=mixed` (escape-hatch).
 
 ### B3. `destructive-blocker`: команда в чёрном списке
-**Причина:** `rm -rf /`, `git push --force`, `git reset --hard`, `DROP ...` и т.п.
+**Причина:** `rm -rf /`, `git push --force`, `git reset --hard origin/…`, `DROP ...` и т.п.
 **Фикс:** не обходите проблему деструктивом — разбирайтесь с причиной. Чёрный список не отключается под прогон.
 
-**`rm -rf` по абсолютному пути** — граница проходит по корню проекта: `rm -rf <проект>/build`
+**Рекурсивный `rm` по абсолютному пути** (`-r`/`-R`/`--recursive` с `-f` или без, путь в
+кавычках, `~`, `$HOME`, `${HOME}`) — граница проходит по корню проекта: `rm -rf <проект>/build`
 это штатная уборка и проходит, а сам корень проекта, путь снаружи него, `~`, `/`, глоб
-(`<проект>/*`) и смешанные цели — блок. Символическая ссылка изнутри проекта наружу резолвится
+(`<проект>/*`) и смешанные цели — блок.
+
+**`git reset --hard`, `git clean -f`, `git checkout .` / `restore .`, `stash drop|clear`** —
+это не destructive-blocker, а R4 в `gate-guard`: стирают незакоммиченную работу целиком,
+нужен одноразовый маркер `git-discard` с цитатой пользователя. Откат своего файла
+(`git checkout -- <файл>`) не гейтится. Символическая ссылка изнутри проекта наружу резолвится
 наружу и тоже блокируется. Если корень проекта не резолвится, хук остаётся строгим.
 Заблокировало вашу уборку — проверьте, что цель действительно внутри проекта и без глоба.
 
@@ -128,7 +135,11 @@ service-unit + моки, либо переключите на `test_layer=mixed`
 ```bash
 # 1. посмотреть, какие прогоны числятся активными (блок «Стейт без доков»)
 python3 .gigacode/skills/pipeline-state/scripts/archive.py --project . status
-# 2. снять лишний с активных — стейт переедет в ground/archive/, а не потеряется
+# 2. снять лишний с активных — R4: сначала согласие пользователя (его дословная фраза),
+#    потом сам abandon. Вернуть, если сняли не тот: archive.py restore <feature>
+python3 .gigacode/skills/pipeline-state/scripts/record_approval.py --project . \
+  --key abandon-<feature> --approved-by user --reason "брошен: <почему>" \
+  --evidence "<дословная фраза пользователя>"
 python3 .gigacode/skills/pipeline-state/scripts/archive.py --project . \
   abandon <feature> --skill <S> --reason "брошен: <почему>"
 ```
@@ -205,8 +216,8 @@ Override **не подделывает вердикт**: FAIL остаётся �
 **Это блокер, а не деградация.** Inline-исполнение фазы запрещено хуком: повторный запуск субагента
 даёт тот же отказ по кругу.
 **Причины по частоте:**
-- **headless (`-p`) без `-y`/YOLO** — рантайм не даёт выполнить `agent`. Перезапуститесь
-  интерактивно (`gigacode --experimental-hooks`) или добавьте `-y` (user-guide §4).
+- **headless без `agent` в `--allowed-tools`** — рантайм не даёт выполнить `agent`.
+  Перезапуститесь интерактивно (`gigacode`) или разрешите инструменты списком (user-guide §4).
 - **хук `SubagentStart` не разложен / не сматчен** — тогда харнес не отличает субагента от
   оркестратора и блокирует **обоих**. Отказ это прямо сообщает («за эту сессию не пришло ни одного
   SubagentStart»). Проверка: `context-injector` в `.gigacode/settings.json`,
@@ -300,4 +311,4 @@ python3 .gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline
 ```
 
 > Если после всех шагов проблема не воспроизводится через `preflight`/`doctor` — это, скорее всего,
-> запуск без `--experimental-hooks`. Перепроверьте флаг первым делом.
+> запуск не из корня проекта (рантайм не видит `.gigacode/settings.json`). Проверьте это первым делом.

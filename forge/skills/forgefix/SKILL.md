@@ -95,7 +95,9 @@ exit 0 — продолжаем; exit 1 — стоп, чинить деплой/
 ```
 python3 <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.py --project <toplevel>
 ```
-и повтори preflight до exit 0. Без `ground/policy.json` (общий конфиг) ИЛИ активного
+и повтори preflight до exit 0. Пришли `answer_commands` вместо `init_command` — конфиг есть,
+но не дозаполнен: спроси пользователя эти значения, запиши их командами из списка и повтори
+preflight (init их не заполнит). Без `ground/policy.json` (общий конфиг) ИЛИ активного
 `manifest.json` (per-feature `inputs.*`/`decisions.*`) любой `config.py set` ниже вернёт exit 3,
 и решение (в т.ч. `inputs.story`) не запишется — прогон пойдёт дальше с потерянным ответом.
 
@@ -177,7 +179,7 @@ python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --proje
 - **exit 1** (внутри exit 3 ESCALATE, причины в артефакте гейта) — СТОП, спроси пользователя:
   «Похоже, это не минорный дефект (причины: …). Взять fix или full (фича с нуля)?»
   Не решай молча. Явное «продолжаем fix» — это R4: сначала
-  `record_approval.py --key gate-override-gate-result-fix-intake --approved-by user --reason "..."`,
+  `record_approval.py --key gate-override-gate-result-fix-intake --approved-by user --reason "..." --evidence "<его дословная фраза>"`,
   затем `override_judge.py --judge gate-result-fix-intake --reason "..."`, после чего закрывай шаг.
 - Нечитаемый вход — перечитай issue из MCP и повтори раннер.
 
@@ -406,7 +408,9 @@ prompt:
 2. ЕДИНЫМ РАННЕРОМ прогони составной гейт (он пишет evidence — без него шаг не закроется).
    Первый — module_tests.py guard: он через git stash снимает эталон «зелёного ДО» по ВСЕМ
    модулям, затронутым диффом, и сверяет. Сломал тест соседнего сервиса = FAIL.
-   python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgefix --feature <KEY|slug> --step-id fix-verify --timeout 3000 --cmd "python3 <project>/.gigacode/skills/feature-pipeline/scripts/module_tests.py guard --root <toplevel> --base HEAD && python3 <project>/.gigacode/skills/minor-defect-fix/scripts/check_coverage.py --root <toplevel> --base HEAD --threshold 0.80 --json"
+   python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgefix --feature <KEY|slug> --step-id fix-verify --timeout 3000 --cmd "python3 <project>/.gigacode/skills/feature-pipeline/scripts/module_tests.py guard --root <toplevel> --base HEAD && python3 <project>/.gigacode/skills/minor-defect-fix/scripts/check_coverage.py --root <toplevel> --base HEAD --json"
+   Порог покрытия скрипт берёт сам — quality.coverage_threshold прогона (снимок политики);
+   `--threshold` не передавай: ниже политики он порог всё равно не опустит.
    Регресс — НЕ подгоняй тест/код под зелёное: найди настоящую причину. Ниже порога — допиши
    тесты в src/test/ (стиль соседних) на ветки, которые ввёл фикс. После правок повтори раннер.
 Верни JSON: {"step_id":"fix-verify","status":"completed|failed","tests":{"passed":N,"failed":N,

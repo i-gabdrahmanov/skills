@@ -745,5 +745,104 @@ class TestAbandonRun(Base):
         self.assertEqual(archive.status(self.root)["stateless"], [])
 
 
+class TestAbandonIsReversible(Base):
+    """Боевой прогон (A9): abandon был необратим — list отвечал «Архив пуст» при живом
+    ground/archive/, restore искал только docs/archive, а git-чекпойнты удалялись."""
+
+    def setUp(self):
+        super().setUp()
+        import subprocess
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        (self.root / "a.txt").write_text("x", encoding="utf-8")
+        self.state = self._run("feature-pipeline", "FORGE-1",
+                               _steps(["01-grounding", "02-sdd"], status="pending"))
+        from checkpoint import create_checkpoint, list_checkpoints
+        create_checkpoint(self.root, "FORGE-1", "00-baseline")
+        self.cps = lambda: list_checkpoints(self.root, "FORGE-1")
+        self.assertEqual(len(self.cps()), 1)
+
+    def test_abandon_parks_checkpoints_and_restore_returns_everything(self):
+        res = archive.abandon_run(self.root, "FORGE-1", skill="feature-pipeline", reason="брошен")
+        self.assertEqual(res["checkpoints_parked"], 1)
+        self.assertEqual(self.cps(), [], "чекпойнт остался в живом namespace")
+        rows = archive.list_archived(self.root)
+        self.assertEqual([(r["slug"], r.get("abandoned")) for r in rows], [("FORGE-1", True)],
+                         "брошенный прогон не виден в list")
+        back = archive.restore_feature(self.root, "FORGE-1")
+        self.assertTrue((self.state / "manifest.json").is_file(), "стейт не вернулся")
+        self.assertFalse((self.state / archive.META_NAME).exists())
+        self.assertEqual(back["checkpoints_restored"], 1)
+        self.assertEqual(len(self.cps()), 1, "чекпойнт не вернулся на место")
+
+    def test_restore_refuses_when_slug_is_busy(self):
+        archive.abandon_run(self.root, "FORGE-1", skill="feature-pipeline", reason="брошен")
+        self._run("feature-pipeline", "FORGE-1", _steps(["01-grounding"], status="pending"))
+        with self.assertRaises(archive.Fail):
+            archive.restore_feature(self.root, "FORGE-1")
+
+
+class TestRestoreMetaIsUntrusted(Base):
+    """archive-meta.json лежит в каталоге, который правит модель: `"source": "../…"` выносил
+    restore за пределы docs/ (tasks/015 п.2, FORGE-CMDS AR-1)."""
+
+    def test_source_outside_docs_refused(self):
+        arc = self._arc("STOR-9")
+        arc.mkdir(parents=True)
+        (arc / "tech-design.md").write_text("x", encoding="utf-8")
+        (arc / archive.META_NAME).write_text(json.dumps({"source": "../../../escaped"}),
+                                             encoding="utf-8")
+        with self.assertRaises(archive.Fail) as cm:
+            archive.restore_feature(self.root, "STOR-9")
+        self.assertIn("за пределы", str(cm.exception))
+        self.assertTrue(arc.is_dir(), "на отказе архив не должен двигаться")
+        self.assertFalse((self.root.parent / "escaped").exists())
+
+
+class TestDropNeedsConsent(Base):
+    """`abandon` и `put --force` снимают живой прогон и удаляют его чекпойнты — R4.
+
+    Инцидент боевого прогона: preflight на двух живых прогонах подсказал команду abandon, и
+    модель сама сняла прогон, который сочла брошенным, — вместе с git-чекпойнтами. Гейта не
+    было ни в хуке, ни в скрипте. Это второй слой (первый — gate-guard.check_archive_drop)."""
+
+    def setUp(self):
+        super().setUp()
+        self.state = self._run("forgelite", "KEY-10398",
+                               _steps(["01-grounding"], status="in_progress"))
+
+    def _cli(self, *args):
+        return archive.main(["--project", str(self.root), *args])
+
+    def _grant(self, key):
+        archive.FE.append_approval(self.root, key, approved_by="user", reason="тест",
+                                   evidence="да, KEY-10398 брошен, снимай")
+
+    def test_abandon_without_consent_changes_nothing(self):
+        rc = self._cli("abandon", "KEY-10398", "--skill", "forgelite", "--reason", "брошен")
+        self.assertEqual(rc, 3)
+        self.assertTrue(self.state.exists(), "без согласия стейт уехал")
+
+    def test_abandon_with_consent_spends_it(self):
+        self._grant("abandon-KEY-10398")
+        rc = self._cli("abandon", "KEY-10398", "--skill", "forgelite", "--reason", "брошен")
+        self.assertEqual(rc, 0)
+        self.assertFalse(self.state.exists())
+        self.assertIsNone(archive.FE.approval(self.root, "abandon-KEY-10398"),
+                          "согласие не потрачено — им можно снять ещё один прогон")
+
+    def test_dry_run_is_free(self):
+        rc = self._cli("abandon", "KEY-10398", "--skill", "forgelite", "--reason", "x",
+                       "--dry-run")
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.state.exists())
+
+    def test_put_force_needs_consent(self):
+        self._run("feature-pipeline", "STOR-300", _steps(["01-grounding"], status="pending"))
+        self._docs("STOR-300")
+        rc = self._cli("put", "STOR-300", "--force", "--reason", "надоело")
+        self.assertEqual(rc, 3)
+        self.assertFalse((self.root / "docs" / "archive").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

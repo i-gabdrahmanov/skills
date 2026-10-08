@@ -272,5 +272,29 @@ class TestStepRequirementPhaseAliases(unittest.TestCase):
         self.assertIn("манифест", why)
 
 
+
+class TTargetPathIsLinear(unittest.TestCase):
+    """Боевой прогон (ENC-3): `_target_path` на длинном токене без «/» перебирал разбиения
+    квадратично (32K символов → 4,7 с, 256K → минуты), и gate-guard/tdd-guard упирались в
+    таймаут хука — а таймаут рантайм читает как «возражений нет»."""
+
+    def test_long_token_is_fast(self):
+        import time
+        t0 = time.time()
+        mod._target_path("run_shell_command", {"command": "echo " + "a" * 256000})
+        self.assertLess(time.time() - t0, 1.0)
+
+    def test_same_targets_as_before(self):
+        cases = {
+            "cat src/main/resources/application.yml": "src/main/resources/application.yml",
+            "rm -rf ./target": "./target",
+            "vim Foo.java pom.xml": "Foo.java pom.xml",
+            "cp db/changelog/master.yaml /tmp/x": "db/changelog/master.yaml /tmp/x",
+            "mvn -q test": "",
+        }
+        for cmd, want in cases.items():
+            with self.subTest(cmd=cmd):
+                self.assertEqual(mod._target_path("run_shell_command", {"command": cmd}), want)
+
 if __name__ == "__main__":
     unittest.main()

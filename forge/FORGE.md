@@ -72,7 +72,12 @@ risk ladder, evidence bundle и security-гейты; доставка (commit/pu
 RED/GREEN. **R3** — создание задач во внешнем трекере (`command_risk.R3`: `jira … create`,
 `acli … create`, `rest/api/N/issue`) и security-sensitive пути (`path_risk.R3`).
 **R4** — действия, СНИМАЮЩИЕ enforcement: `override_judge`, `rollback`, `update --skip-judges`,
-`config.py repin`, `config.py set` по переключателю enforcement. Каждое — со своим
+`config.py repin`, `config.py set` по переключателю enforcement, `config.py risk
+list-remove|cap-set` и `phase disable` обязательной фазы (`--confirm` согласием не считается —
+его ставит сама модель), `archive.py abandon` / `put --force` (снять прогон с активных вместе
+с его чекпойнтами), git-команды, стирающие незакоммиченную работу целиком (`reset --hard`,
+`clean -f`, `checkout .`/`restore .`, `stash drop|clear` — маркер `git-discard`; точечный откат
+файла свободен). Каждое — со своим
 approval-маркером (см. §Approval markers). **R5** — деструктивные операции
 (`destructive-blocker`), миграции и прод-конфиги (`path_risk.R5/R4`).
 `gate-guard` блокирует любое R2+ действие, пока `decisions.criticality` не задана.
@@ -184,11 +189,15 @@ R4-гейта, копировала оттуда готовую команду �
 целиком помещалась внутри модели.
 
 Поэтому для ключей, которые СНИМАЮТ enforcement — `gate-override-*`, `rollback-*`,
-`skip-judges-*`, `policy-downgrade-*` — обязателен `--evidence "<дословная фраза
-пользователя>"`, и цитата сверяется с транскриптом сессии
-(`gate-guard.check_record_approval`; на `PreToolUse` рантайм отдаёт `transcript_path`).
-Транскрипт модель не пишет — это единственный канал, куда она не может дописать строку.
-Не найдена цитата в транскрипте → deny. Транскрипт недоступен → предупреждение и пропуск:
+`skip-judges-*`, `policy-repin-*`, `policy-downgrade-*`, `acceptance-*`, `abandon-*`,
+`archive-force-*`, `git-discard` (`forge_events.CONSENT_PREFIXES`, один список на оба слоя) — обязателен
+`--evidence "<дословная фраза пользователя>"`, и цитата сверяется с **репликами
+пользователя** в транскрипте сессии (`gate-guard.check_record_approval`; на `PreToolUse`
+рантайм отдаёт `transcript_path`). Именно с репликами, а не со всем файлом: qwen пишет запись
+модели с текущим `functionCall` и его аргументами ДО PreToolUse, и подстрока по всему
+транскрипту находила выдуманную цитату в самой команде (боевой прогон v0.4.5, tasks/016).
+Свои реплики модели и вывод её команд тоже не считаются. Не найдена цитата → deny.
+Транскрипт недоступен или реплик пользователя в нём не распознано → предупреждение и пропуск:
 `--evidence` всё равно обязателен и уходит в журнал под аудит, а запирать единственный
 аварийный выход наглухо нельзя.
 
@@ -203,8 +212,9 @@ Approval'ы ПЛАНА (`fix-plan-*`, `jira-plan-*`, `<doc>-approved-*`) цит�
 * `record_approval.py --project <root> --batch approvals.yaml` — атомарный батч
   (KIDPPRB-9254 п.6): flock, всё-или-ничего, идемпотентность по ключу.
 * `override_judge.py --project <root> --judge <name> --feature <slug> --reason "..."`
-  — override гейта судьи (R4-класс; сам требует approval `gate-override-<judge>` ДО
-  создания).
+  — override гейта судьи (R4-класс; сам требует approval `gate-override-<judge>` на КАЖДОГО
+  судью ДО создания — `--judge a,b,c` и `--batch` тоже; без маркера exit 3, маркер
+  потребляется созданным override).
 
 Двойной backstop BLOCKER-1: **deny на запись** (`state-write-guard.py` ловит Write/Edit в
 `ground/approvals*` и Bash-редиректы `>`/`tee`/`dd of=`/`sed -i`/`cp`/`mv`/`truncate`/
@@ -532,10 +542,11 @@ git-история и связанные `tasks/`.
   `PreToolUse` их нет ни у оркестратора, ни у субагента (замерено e2e на qwen-code 0.21.14).
   SoD через `agent_caps` поэтому неактивен by design; основной SoD форсит `sod-enforcer` по id
   активного шага, а актора для `inline-phase-guard` даёт отметка сессии `subagent_scope.py`.
-- **Инструмент `agent` в headless (`-p`) требует `-y`/YOLO** — иначе рантайм не даёт его
-  выполнить, и модель уходит делать работу фазы сама (прямо в блок inline-phase-guard). Отсюда
-  канон запуска — **интерактив** (`gigacode --experimental-hooks` → `/forge <задача>`); headless
-  описан отдельным режимом с `-y` и предзаписью решений (INSTALL.md §4). Отказ
+- **Инструмент `agent` в headless надо разрешить заранее** (`--allowed-tools`; флагов
+  `-y`/YOLO и `--experimental-hooks` в gigacode 26.9 нет — сессия с ними не стартует) — иначе
+  рантайм не даёт его выполнить, и модель уходит делать работу фазы сама (прямо в блок
+  inline-phase-guard). Отсюда канон запуска — **интерактив** (`gigacode` → `/forge <задача>`);
+  headless описан отдельным режимом с `--allowed-tools` и предзаписью решений (INSTALL.md §4). Отказ
   inline-phase-guard различает «actor-сигнал работает» и «`SubagentStart` не приходил вовсе»,
   чтобы вторая причина не читалась как первая и не уводила в цикл перезапусков (tasks/008).
 - **Гейт-хуки fail-OPEN при таймауте/краше** (>60с). Тяжёлые гейты запускает оркестратор.
@@ -593,14 +604,12 @@ git-история и связанные `tasks/`.
 
 **Подтверждено, но НЕ закрыто** — брать в следующий заход:
 
-- **Гонка писателей манифеста.** `update.py` делает read-modify-write без лока, общий
-  `manifest.json.tmp`, без `fsync`: при параллельных `04-test-T1/T2` (норма для пайплайна)
-  выживает одна запись из пяти, и каждый вызов печатает `{"status":"updated"}`.
-  `events.jsonl` под `flock` (`_project.append_locked`) не теряет ни строки — дефект ровно
-  в плоскости манифеста. Лечится тем же локом + `mkstemp` + `fsync`.
-- **`grounding-evidence` слушает только Claude-алиасы** (`{Read, ReadFile}`): канон-имени
-  `read_file` в наборе нет, поэтому штатное чтение grounding-excerpt не пишет evidence.
-  Матчеры цепочки при этом правильные — расходится внутренний набор хука.
+- ~~Гонка писателей манифеста~~ — закрыто (tasks/016): `update.py` держит read-modify-write
+  под замком прогона (`_project.exclusive_lock`, `manifest.lock`) и пишет через свой tmp на
+  процесс. Остальные писатели манифеста (add_steps, config.py, rollback, init) замок не берут —
+  они не работают параллельно шагам, но это следующий кандидат.
+- ~~`grounding-evidence` слушает только Claude-алиасы~~ — закрыто в tasks/015
+  (`_READ_FILE_TOOLS` содержит `read_file`).
 - **`in_progress` не проставляет никто автоматически** (`pipeline_phases.py:282` это прямо
   признаёт). CLI-путь есть (`update.py --status in_progress`), но раз его никто не зовёт,
   интерлок отката `rollback.py:421` («откат только между шагами») мёртв.
