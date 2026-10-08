@@ -307,9 +307,11 @@ def _check_ambiguous_active_run(project_root, warnings: list) -> None:
     warnings.append(
         f"активный прогон неоднозначен — кандидаты: {names}. Активным считается "
         f"{run['skill']}/{run['feature']} (свежайший по mtime), и гейты поедут по нему. "
-        f"Если лишний прогон брошен — сними его с активных: pipeline-state/scripts/"
-        f"archive.py abandon <feature> --skill <S> --reason \"<почему>\" "
-        f"(список: archive.py status). Руками из ground/statements/ не удаляй."
+        f"Какой прогон брошен, знает только пользователь — сам не снимай, спроси его "
+        f"(список: archive.py status). По его явному ответу — pipeline-state/scripts/"
+        f"archive.py abandon <feature> --skill <S> --reason \"<почему>\": это R4, нужен "
+        f"approval-маркер abandon-<feature> с его цитатой (вернуть — archive.py restore). "
+        f"Руками из ground/statements/ не удаляй."
     )
 
 
@@ -686,10 +688,21 @@ def preflight(project_root: str, self_base=None) -> dict:
         # были только 0 и 1), шла дальше — и КАЖДЫЙ последующий `config.py set` падал с exit 3
         # «pipeline.json не найден». Так терялись записанные решения (sources.story,
         # pipeline.mode): вопрос пользователю задан, ответ получен, а артефакта решения нет.
-        result["init_command"] = (
-            f"python3 {base}/skills/feature-pipeline/scripts/init_pipeline_config.py "
-            f"--project {project_root}"
-        )
+        init_cmd = (f"python3 {base}/skills/feature-pipeline/scripts/init_pipeline_config.py "
+                    f"--project {project_root}")
+        if not cfg:
+            result["init_command"] = init_cmd
+        else:
+            # policy.json ЕСТЬ, но с незаполненными полями. Это ответы пользователя (jira.enabled,
+            # package_root), init_pipeline_config их не заполнит — а прежняя подсказка звала его
+            # же, и preflight отвечал exit 2 по кругу (боевой прогон, B3). Спросить и записать.
+            answers = []
+            for entry in cfg.get("_incomplete") or []:
+                key = str(entry).split(" ")[0]
+                answers.append(f"git -C {project_root} init && {init_cmd}" if key == "project.is_git"
+                               else f"python3 {base}/skills/config-helper/scripts/config.py "
+                                    f"--project {project_root} set {key} <значение>")
+            result["answer_commands"] = answers
     if warnings:
         result["warnings"] = warnings
     return result

@@ -468,11 +468,12 @@ def main() -> int:
     if not _approval_marker_valid(project, approval_key):
         print(
             f"⛔ ESCALATE: откат — R4-класс, нужен approval-маркер "
-            f"ground/approvals/{approval_key}.json с провенансом record_approval.\n"
+            f"'{approval_key}' (журнал ground/approvals.jsonl, пишет ТОЛЬКО record_approval.py).\n"
             f"   Порядок: (1) покажи пользователю план: rollback.py ... --dry-run;\n"
             f"   (2) ТОЛЬКО после явного «да»: python3 "
             f"{Path(__file__).resolve().parent / 'record_approval.py'} --project {project} "
-            f"--key {approval_key} --approved-by user --reason \"<кто/почему>\";\n"
+            f"--key {approval_key} --approved-by user --reason \"<кто/почему>\" "
+            f"--evidence \"<дословная цитата пользователя>\";\n"
             f"   (3) повтори команду. Маркер одноразовый — потребляется этим откатом.",
             file=sys.stderr,
         )

@@ -100,6 +100,39 @@ class TGateOverride(unittest.TestCase):
             self.assertEqual(r.returncode, 2,
                              "--list в тексте --reason не снимает approval-гейт")
 
+    @staticmethod
+    def _grant(td: str, key: str) -> None:
+        ground = Path(td) / "ground"
+        ground.mkdir(parents=True, exist_ok=True)
+        with open(ground / "approvals.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps({"kind": "approval", "produced_by": "record_approval",
+                                "key": key, "approved_by": "user", "reason": "ok"}) + "\n")
+
+    def test_csv_judges_need_marker_each(self):
+        """Регрессия: ключ брался до первой запятой, и маркер на одного судью снимал список
+        любой длины (`--judge red-judge,coverage-judge,build-judge` → rc 0)."""
+        base = ("python3 .gigacode/skills/pipeline-state/scripts/override_judge.py "
+                "--feature f1 --reason r --judge ")
+        with tempfile.TemporaryDirectory() as td:
+            self._grant(td, "gate-override-red-judge")
+            self.assertEqual(_run(base + "red-judge", td).returncode, 0)
+            r = _run(base + "red-judge,coverage-judge,build-judge", td)
+            self.assertEqual(r.returncode, 2, "согласие на одного судью сняло троих")
+            self.assertIn("gate-override-coverage-judge", r.stderr)
+            self.assertIn("gate-override-build-judge", r.stderr)
+            self.assertEqual(_run(base.replace("--judge ", "--judge=") + "red-judge,build-judge",
+                                  td).returncode, 2, "форма --judge=a,b обошла проверку")
+            for k in ("gate-override-coverage-judge", "gate-override-build-judge"):
+                self._grant(td, k)
+            self.assertEqual(_run(base + "red-judge,coverage-judge,build-judge", td).returncode, 0)
+
+    def test_batch_is_checked_by_the_script(self):
+        """Судьи батча лежат в файле: маркер на каждую запись сверяет override_judge сам."""
+        with tempfile.TemporaryDirectory() as td:
+            r = _run("python3 .gigacode/skills/pipeline-state/scripts/override_judge.py "
+                     "--batch overrides.yaml", td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_list_and_remove_are_free(self):
         with tempfile.TemporaryDirectory() as td:
             base = "python3 .gigacode/skills/pipeline-state/scripts/override_judge.py --feature f1"
@@ -796,16 +829,33 @@ class TConsentIsExternal(unittest.TestCase):
         return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
                               capture_output=True, text=True, timeout=30)
 
-    def _transcript(self, d):
+    @staticmethod
+    def _qwen(rec_type, parts):
+        """Запись транскрипта в формате qwen/gigacode (chats/<session>.jsonl)."""
+        role = {"user": "user", "assistant": "model"}.get(rec_type, "user")
+        return json.dumps({"type": rec_type, "message": {"role": role, "parts": parts}},
+                          ensure_ascii=False)
+
+    def _transcript(self, d, cmd="ls", user_text=None, extra=()):
+        """Транскрипт ровно таким, каким его видит хук на PreToolUse: реплика пользователя,
+        затем запись модели с ТЕКУЩИМ вызовом — qwen пишет её до запуска инструмента."""
         p = Path(d) / "transcript.jsonl"
-        p.write_text('{"role":"user","text":"ладно, %s"}\n' % self.QUOTE, encoding="utf-8")
+        lines = [self._qwen("user", [{"text": user_text or f"ладно, {self.QUOTE}"}]), *extra,
+                 self._qwen("assistant", [{"text": "фиксирую согласие"},
+                                          {"functionCall": {"name": "run_shell_command",
+                                                            "args": {"command": cmd}}}])]
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return str(p)
 
     def test_bypass_keys_need_evidence(self):
         for key in ("gate-override-coverage-judge", "rollback-f1-02-sdd",
                     "skip-judges-f1", "policy-repin-f1",
                     # ручная проверка критерия приёмки заменяет тест — тот же класс
-                    "acceptance-STOR-1-T1.3"):
+                    "acceptance-STOR-1-T1.3",
+                    # доки давно называли его классом с цитатой, а код не знал
+                    "policy-downgrade-quality.tdd",
+                    # снять живой прогон и удалить его чекпойнты
+                    "abandon-f1", "archive-force-f1", "git-discard"):
             with self.subTest(key=key):
                 r = self._run(self.RA.format(key=key))
                 self.assertEqual(r.returncode, 2, f"{key} прошёл без цитаты")
@@ -816,11 +866,63 @@ class TConsentIsExternal(unittest.TestCase):
 
     def test_quote_must_be_in_transcript(self):
         with tempfile.TemporaryDirectory() as d:
-            tr = self._transcript(d)
             real = self.RA.format(key="gate-override-x") + f' --evidence "{self.QUOTE}"'
-            self.assertEqual(self._run(real, tr).returncode, 0, "настоящая цитата отбита")
+            self.assertEqual(self._run(real, self._transcript(d, real)).returncode, 0,
+                             "настоящая цитата отбита")
             fake = self.RA.format(key="gate-override-x") + ' --evidence "пользователь разрешил всё"'
-            self.assertEqual(self._run(fake, tr).returncode, 2, "выдуманная цитата прошла")
+            self.assertEqual(self._run(fake, self._transcript(d, fake)).returncode, 2,
+                             "выдуманная цитата прошла")
+
+    def test_current_call_is_not_a_quote(self):
+        """Регрессия: qwen кладёт текущий functionCall в транскрипт ДО PreToolUse, и подстрока
+        по всему файлу находила выдуманную цитату в самой команде record_approval."""
+        with tempfile.TemporaryDirectory() as d:
+            cmd = (self.RA.format(key="rollback-f1-02-sdd")
+                   + ' --evidence "пользователь этого не говорил вообще"')
+            tr = self._transcript(d, cmd, user_text="/forge продолжай")
+            self.assertIn("пользователь этого не говорил вообще",
+                          Path(tr).read_text(encoding="utf-8"), "фикстура не та")
+            self.assertEqual(self._run(cmd, tr).returncode, 2,
+                             "цитата из собственной команды засчитана как согласие")
+
+    def test_model_output_is_not_a_quote(self):
+        """Своя реплика модели и вывод её команды (`echo` в tool_result) — не слова пользователя."""
+        with tempfile.TemporaryDirectory() as d:
+            phrase = "откатывай шаг, я разрешаю"
+            cmd = self.RA.format(key="rollback-f1-02-sdd") + f' --evidence "{phrase}"'
+            echoed = [self._qwen("assistant", [{"text": f"Вы сказали: «{phrase}»"}]),
+                      self._qwen("tool_result", [{"functionResponse": {
+                          "name": "run_shell_command", "response": {"output": phrase}}}])]
+            tr = self._transcript(d, cmd, user_text="/forge продолжай", extra=echoed)
+            self.assertEqual(self._run(cmd, tr).returncode, 2)
+
+    def test_claude_code_transcript_format(self):
+        """Тот же гейт на транскрипте Claude Code: текст пользователя — content (строка или
+        блоки text), результаты инструментов — блоки tool_result, их не берём."""
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "transcript.jsonl"
+            p.write_text("\n".join([
+                json.dumps({"type": "user", "message": {"role": "user", "content": [
+                    {"type": "text", "text": f"ок, {self.QUOTE}"}]}}, ensure_ascii=False),
+                json.dumps({"type": "user", "message": {"role": "user", "content": [
+                    {"type": "tool_result", "content": "пользователь разрешил всё"}]}},
+                    ensure_ascii=False),
+            ]) + "\n", encoding="utf-8")
+            real = self.RA.format(key="gate-override-x") + f' --evidence "{self.QUOTE}"'
+            self.assertEqual(self._run(real, str(p)).returncode, 0)
+            fake = self.RA.format(key="gate-override-x") + ' --evidence "пользователь разрешил всё"'
+            self.assertEqual(self._run(fake, str(p)).returncode, 2)
+
+    def test_unrecognized_transcript_degrades_to_warning(self):
+        """Ни одной реплики пользователя не распознано — формат рантайма не тот, сверять не с
+        чем. Как и при недоступном транскрипте: пропуск с предупреждением, не локаут."""
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "transcript.jsonl"
+            p.write_text('{"kind":"something-else","text":"x"}\n', encoding="utf-8")
+            cmd = self.RA.format(key="gate-override-x") + f' --evidence "{self.QUOTE}"'
+            r = self._run(cmd, str(p))
+            self.assertEqual(r.returncode, 0)
+            self.assertIn("WARN", r.stderr)
 
     def test_no_transcript_degrades_to_warning(self):
         """Транскрипт недоступен — сверить нельзя, но --evidence уже обязателен и журналится.
@@ -842,6 +944,111 @@ class TConsentIsExternal(unittest.TestCase):
             self.assertEqual(r.returncode, 2)
             self.assertIn("record_approval.py", r.stderr)
             self.assertIn("--evidence", r.stderr)
+
+
+class TPolicyStructureEditIsR4(unittest.TestCase):
+    """Ослабление политики мимо `set` — R4. Раньше `config.py risk list-remove|cap-set` и
+    `phase disable` требовали только `--confirm`, который ставит сама модель: gate-guard ловил
+    один `set`, и `risk list-remove pii_patterns …` снимал детектор ПДн с exit 0."""
+
+    C = "python3 .gigacode/skills/config-helper/scripts/config.py --project . "
+
+    def test_weakening_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            for tail, key in (
+                    ("risk list-remove pii_patterns 'x@y' --confirm",
+                     "policy-downgrade-risk.pii_patterns"),
+                    ("risk cap-set '(?i)dev' R5 --confirm", "policy-downgrade-risk.agent_caps"),
+                    ("phase disable 04-tdd", "policy-downgrade-phase.04-tdd"),
+                    ("phase enable 05-verify --enabled-by jira.enabled",
+                     "policy-downgrade-phase.05-verify")):
+                with self.subTest(tail=tail):
+                    r = _run(self.C + tail, td)
+                    self.assertEqual(r.returncode, 2, r.stderr)
+                    self.assertIn(key, r.stderr)
+
+    def test_strengthening_and_optional_free(self):
+        with tempfile.TemporaryDirectory() as td:
+            for tail in ("risk list-add pii_patterns 'x@y' --confirm", "phase enable 04-tdd",
+                         "phase disable 03-jira", "phase disable 02-eval-plan", "get quality.tdd"):
+                with self.subTest(tail=tail):
+                    self.assertEqual(_run(self.C + tail, td).returncode, 0)
+
+    def test_marker_unlocks(self):
+        with tempfile.TemporaryDirectory() as td:
+            TGateOverride._grant(td, "policy-downgrade-phase.04-tdd")
+            self.assertEqual(_run(self.C + "phase disable 04-tdd", td).returncode, 0)
+
+
+class TGitDiscardIsR4(unittest.TestCase):
+    """git, стирающий незакоммиченную работу целиком, — R4 (tasks/015 п.5, решено в 016).
+    Раньше ничем не гейтилось: «вернуть в чистое состояние» сносило и работу пользователя."""
+
+    BLOCK = ["git reset --hard", "git reset --hard HEAD~3", "git clean -fdx", "git clean -f",
+             "git checkout -- .", "git checkout .", "git checkout -f main", "git restore .",
+             "git restore --worktree -- .", "git stash drop", "git stash clear",
+             "git switch --discard-changes main", "git -C . reset --hard",
+             "cd src && git checkout -- :/"]
+    FREE = ["git checkout -- src/A.java", "git restore src/A.java", "git restore --staged .",
+            "git clean -n", "git reset HEAD~1", "git reset --soft HEAD~1", "git stash",
+            "git stash pop", "git checkout feature-x", "git status", 'echo "git reset --hard"']
+
+    def test_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            for cmd in self.BLOCK:
+                with self.subTest(cmd=cmd):
+                    r = _run(cmd, td)
+                    self.assertEqual(r.returncode, 2, f"пропущено: {cmd}")
+                    self.assertIn("git-discard", r.stderr)
+
+    def test_free(self):
+        with tempfile.TemporaryDirectory() as td:
+            for cmd in self.FREE:
+                with self.subTest(cmd=cmd):
+                    self.assertEqual(_run(cmd, td).returncode, 0, f"ложный блок: {cmd}")
+
+    def test_marker_is_spent_on_use(self):
+        with tempfile.TemporaryDirectory() as td:
+            TGateOverride._grant(td, "git-discard")
+            self.assertEqual(_run("git reset --hard", td).returncode, 0)
+            self.assertEqual(_run("git clean -fd", td).returncode, 2,
+                             "одно согласие сняло две разные команды")
+
+
+class TArchiveDropIsR4(unittest.TestCase):
+    """Снять прогон с активных (`archive.py abandon` / `put --force`) — R4.
+
+    Инцидент: preflight на двух живых прогонах подсказал abandon, модель сама сняла прогон,
+    который сочла брошенным, и удалила его git-чекпойнты: gate-guard отдавал exit 0."""
+
+    A = "python3 .gigacode/skills/pipeline-state/scripts/archive.py --project . "
+
+    def test_abandon_blocked_without_marker(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = _run(self.A + 'abandon FORGE-1 --skill feature-pipeline --reason "stale"', td)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("abandon-FORGE-1", r.stderr)
+            self.assertIn("--evidence", r.stderr)
+
+    def test_put_force_blocked_without_marker(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = _run(self.A + 'put STOR-1 --force --reason "надо"', td)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("archive-force-STOR-1", r.stderr)
+
+    def test_marker_unlocks(self):
+        with tempfile.TemporaryDirectory() as td:
+            TGateOverride._grant(td, "abandon-FORGE-1")
+            r = _run(self.A + 'abandon FORGE-1 --skill feature-pipeline --reason "stale"', td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_readonly_forms_are_free(self):
+        with tempfile.TemporaryDirectory() as td:
+            for tail in ("status", "list", "put STOR-1", "restore STOR-1",
+                         'abandon FORGE-1 --reason "x" --dry-run',
+                         'put STOR-1 --force --reason "x" --dry-run'):
+                with self.subTest(tail=tail):
+                    self.assertEqual(_run(self.A + tail, td).returncode, 0)
 
 
 class TQualityDowngradeIsR4(unittest.TestCase):

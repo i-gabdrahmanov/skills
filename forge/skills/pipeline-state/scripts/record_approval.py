@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""record_approval.py — фиксирует approval-маркер ground/approvals/<key>.json с провенансом.
+"""record_approval.py — фиксирует approval-маркер (строка в ground/approvals.jsonl) с провенансом.
 
 Зачем (BLOCKER-1). Approval-маркеры — это «человек сказал да» для рисковых действий:
 снятие детерминированного гейта (`gate-override-<judge>`, R4), доставка (`human-approval` R4,
@@ -15,7 +15,8 @@
 Usage:
     # одиночное согласие
     record_approval.py --project <root> --key gate-override-subagent-origin \\
-        --approved-by user --reason "agent() недоступен на этом рантайме, деградация согласована"
+        --approved-by user --reason "agent() недоступен на этом рантайме, деградация согласована" \\
+        --evidence "<дословная фраза пользователя>"   # для ключей, снимающих enforcement"
     record_approval.py --project <root> --key human-approval --approved-by user --reason "..."
 
     # batch: для прогона на 30+ модулях (KIDPPRB-9254 п.6) — один вызов на все approvals,
@@ -136,15 +137,12 @@ def _load_batch_file(path: Path) -> list[dict]:
 # цепочка «баннер подсказал команду → модель её выполнила → гейт снят» проходила без
 # человека. Дословная фраза пользователя — единственное, что модель не может сочинить
 # незаметно: она сверяется с транскриптом и остаётся в журнале под аудит.
-# acceptance-<ID> — ручное подтверждение критерия приёмки (verify:"manual"): оно заменяет
-# собой тест, то есть снимает проверку критерия ровно как override гейта.
-_CONSENT_BYPASS_PREFIXES = ("gate-override", "rollback", "skip-judges", "policy-repin",
-                            "acceptance")
+# Какие ключи этого класса — FE.CONSENT_PREFIXES: список один на оба слоя.
 _EVIDENCE_MIN_CHARS = 12          # «да», «ок», «+» цитатой пользователя не являются
 
 
 def _evidence_required(key: str) -> bool:
-    return any(key == p or key.startswith(p + "-") for p in _CONSENT_BYPASS_PREFIXES)
+    return FE.consent_required(key)
 
 
 def _check_evidence(key: str, evidence: "str | None") -> "str | None":

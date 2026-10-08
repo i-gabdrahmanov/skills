@@ -34,7 +34,10 @@ description: >
   ```
   **exit 2 = конфиг ещё не инициализирован** (первый прогон в проекте: нет `ground/policy.json`).
   Это не ошибка — выполни готовую команду из поля `init_command` вывода preflight
-  (`init_pipeline_config.py --project <toplevel>`) и повтори preflight до exit 0. **Не пропускай
+  (`init_pipeline_config.py --project <toplevel>`) и повтори preflight до exit 0. Если вместо
+  `init_command` пришли `answer_commands` — конфиг есть, но не дозаполнен: это вопросы
+  пользователю (нужна ли Jira, корневой пакет). Спроси, запиши ответы этими командами
+  (`config.py set <ключ> <значение>`) и повтори preflight; init их не заполнит. **Не пропускай
   этот шаг:** без `policy.json` КАЖДЫЙ `config.py set` ниже вернёт exit 3 «файл не найден», и
   все решения прогона (`inputs.mode`, `inputs.story`) молча не запишутся. Per-feature поля
   (`inputs.*`/`decisions.*`) дополнительно требуют активного `manifest.json` (см. `## v2 model`).

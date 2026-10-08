@@ -216,6 +216,14 @@ for _p in DEFAULT_PHASES:
     _p["brief"] = f"references/phases/{_p['id']}.md"
 
 
+def mandatory_phase_ids() -> list:
+    """Фазы, которые идут в КАЖДОМ прогоне (enabled_by=None). Опциональные включаются условием
+    (03-jira — jira.enabled, 02-eval-plan — quality.eval_enabled) и выключаются свободно, а
+    выключить обязательную (`config.py phase disable 04-tdd`) — снять проверку целиком. Поэтому
+    по ним это R4: gate-guard.check_policy_structure_edit и второй слой в config.py."""
+    return [p["id"] for p in DEFAULT_PHASES if p.get("enabled_by") is None]
+
+
 def resolve_phases(project_root, feature_slug=None, gates_path=None):
     """Основная функция: возвращает список активных фаз."""
     pipeline = _load_policy(project_root)

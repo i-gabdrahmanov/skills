@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import time
@@ -113,9 +114,20 @@ class TBlacklistForms(unittest.TestCase):
         self.assertEqual(_run("git push -fv origin main").returncode, 2)
 
     def test_allow_force_with_lease_non_protected(self):
-        # моя правка (core) НЕ блокирует --force-with-lease; protected-ветку (origin/main/master)
-        # отдельно режет предсуществующая policy-строка — здесь ветка непротектед → проходит.
         self.assertEqual(_run("git push --force-with-lease upstream hotfix").returncode, 0)
+
+    def test_allow_force_with_lease_to_main(self):
+        """Боевой прогон: policy-строка `push.*--force(-with-lease)?.*(main|master|origin)` резала
+        единственный безопасный force-push (lease сверяет удалённую ветку перед перезаписью),
+        а голый --force на те же ветки и так держит core."""
+        for cmd in ("git push --force-with-lease origin main",
+                    "git push --force-with-lease=main:abc123 origin main",
+                    "git push origin main --force-with-lease"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_run(cmd).returncode, 0, f"ложный блок: {cmd}")
+        for cmd in ("git push --force origin main", "git push origin main -f"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_run(cmd).returncode, 2, f"пропущен force-push: {cmd}")
 
     def test_block_python_rmtree_root(self):
         self.assertEqual(
@@ -215,9 +227,77 @@ class TBareDangerousTargets(unittest.TestCase):
                 self.assertEqual(_run(cmd).returncode, 0, f"ложный блок: {cmd}")
 
     def test_absolute_outside_project_still_blocked(self):
-        """Регресс tasks/011: `rm -rf /etc/passwd` держит _RM_ABS_PATTERN, не эта проверка."""
+        """Регресс tasks/011: `rm -rf /etc/passwd` держит _rm_recursive_dangerous_targets."""
         self.assertEqual(_run("rm -rf /etc/passwd").returncode, 2)
 
+
+class TRecursiveRmByArgv(unittest.TestCase):
+    """Боевой прогон (A1/A7): регулярка требовала одновременно -r и -f и видела цель только без
+    кавычек — `rm -r /etc`, `rm -rf "/etc/passwd"`, `rm -rf ${HOME}/x`, перенос строки
+    проходили с exit 0. Теперь rm разбирается по argv."""
+
+    BLOCK = [
+        "rm -r /etc/passwd", "rm -R /etc", "rm --recursive /etc",
+        'rm -rf "/etc/passwd"', "rm -rf '/usr/local/lib'", 'rm -rf "$HOME/x"',
+        "rm -rf ${HOME}/x", "rm -r ~/Documents", "sudo rm -r /var/lib/x",
+        "rm -rf \\\n  /etc/passwd", "echo ok\nrm -r /etc", "cd /tmp && rm -fr -- /opt/app",
+    ]
+    PASS = [
+        "rm /tmp/forge-probe.txt",         # не рекурсивный: свой временный файл
+        "rm -f /tmp/forge-probe.txt",
+        "rm -rf build/ ./target",          # относительная уборка
+        "git rm --cached -r src/old",
+        'echo "rm -rf /etc"',              # текст, а не вызов
+    ]
+
+    def test_blocked(self):
+        for cmd in self.BLOCK:
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_run(cmd).returncode, 2, f"пропущен деструктив: {cmd!r}")
+
+    def test_passes(self):
+        for cmd in self.PASS:
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_run(cmd).returncode, 0, f"ложный блок: {cmd!r}")
+
+    def test_quoted_and_home_targets_inside_project_allowed(self):
+        """Исключение «уборка внутри проекта» работает и для кавычек, и для ~ / $HOME."""
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td).resolve()              # подменённый HOME: в настоящий не пишем
+            proj = home / "proj"
+            (proj / ".git").mkdir(parents=True)
+            env = dict(os.environ, HOME=str(home))
+            for cmd in (f'rm -rf "{proj}/build"', "rm -r ~/proj/build",
+                        'rm -rf "$HOME/proj/build"', "rm -rf ${HOME}/proj/target"):
+                with self.subTest(cmd=cmd):
+                    payload = json.dumps({"hook_event_name": "PreToolUse", "cwd": str(proj),
+                                          "tool_name": "run_shell_command",
+                                          "tool_input": {"command": cmd}})
+                    r = subprocess.run([sys.executable, str(HOOK)], input=payload, env=env,
+                                       capture_output=True, text=True, timeout=30)
+                    self.assertEqual(r.returncode, 0, f"ложный блок: {cmd} → {r.stderr}")
+            r = subprocess.run([sys.executable, str(HOOK)], env=env, input=json.dumps(
+                {"hook_event_name": "PreToolUse", "cwd": str(proj),
+                 "tool_name": "run_shell_command", "tool_input": {"command": "rm -rf ~/other"}}),
+                capture_output=True, text=True, timeout=30)
+            self.assertEqual(r.returncode, 2, "каталог дома вне проекта обязан блокироваться")
+
+
+
+class TChmodWorldWritable(unittest.TestCase):
+    """Боевой прогон (A2): policy-строка требовала дефис (`chmod\\s+-R?\\s*777`), и голый
+    `chmod 777 /etc` проходил; формы 0777/7777/a+rwx не ловились вовсе, в ядре chmod не было."""
+
+    def test_blocked(self):
+        for cmd in ("chmod 777 /etc", "chmod -R 777 /etc", "chmod -Rf 777 .", "chmod 0777 x",
+                    "chmod 7777 x", "chmod a+rwx x", "chmod +rwx x", "chmod --recursive 777 d"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_run(cmd).returncode, 2, f"пропущено: {cmd}")
+
+    def test_ordinary_modes_pass(self):
+        for cmd in ("chmod +x gradlew", "chmod 755 build/run.sh", "chmod u+rwx x", "chmod 644 a"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_run(cmd).returncode, 0, f"ложный блок: {cmd}")
 
 if __name__ == "__main__":
     unittest.main()

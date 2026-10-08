@@ -311,6 +311,78 @@ class TestResolveCli(unittest.TestCase):
             root_fwd = str(proj.resolve()).replace("\\", "/")
             self.assertEqual(script, f"{root_fwd}/.gigacode/hooks/phase-gate.py")
 
+    def test_operator_hooks_survive_redeploy(self):
+        """Регрессия: блок hooks заменялся эталоном целиком — каждый деплой молча стирал
+        хуки оператора из того же settings.json (бэкап .bak — одно поколение)."""
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td)
+            hooks = proj / ".gigacode" / "hooks"
+            hooks.mkdir(parents=True)
+            (hooks / "settings.hooks.json").write_text(json.dumps({"hooks": {"Stop": [
+                {"hooks": [{"command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/phase-gate.py",
+                            "name": "phase-gate"}]}]}}), encoding="utf-8")
+            notify = {"command": "/usr/local/bin/notify.sh", "name": "operator-notify"}
+            audit = {"command": "python3 /opt/tools/audit.py", "name": "operator-audit"}
+            (proj / ".gigacode" / "settings.json").write_text(json.dumps({"hooks": {
+                "Stop": [{"hooks": [notify]},
+                         # форж-хук со старым путём проекта (проект переезжал)
+                         {"hooks": [{"command": "python3 /old/proj/.gigacode/hooks/phase-gate.py"}]}],
+                "Notification": [{"hooks": [audit]}]}}), encoding="utf-8")
+            for _ in range(2):        # повторный деплой идемпотентен
+                r = subprocess.run(
+                    [sys.executable, str(HOOKS / "resolve_hook_paths.py"), "--project", str(proj)],
+                    capture_output=True, text=True, timeout=30)
+                self.assertEqual(r.returncode, 0, r.stderr)
+            written = json.loads((proj / ".gigacode" / "settings.json").read_text(encoding="utf-8"))
+            stop = [h for g in written["hooks"]["Stop"] for h in g["hooks"]]
+            self.assertEqual(stop.count(notify), 1, f"хук оператора потерян/задвоен: {stop}")
+            self.assertEqual(written["hooks"]["Notification"], [{"hooks": [audit]}])
+            forge = [h["command"] for h in stop if "/.gigacode/hooks/" in h["command"]]
+            self.assertEqual(len(forge), 1, f"форж-хук задвоен или со старым путём: {forge}")
+            self.assertNotIn("/old/proj/", forge[0])
+            # --check не считает скрипт оператора вне .gigacode/hooks/ «чужим путём форжа»
+            r = subprocess.run(
+                [sys.executable, str(HOOKS / "resolve_hook_paths.py"), "--project", str(proj),
+                 "--check"], capture_output=True, text=True, timeout=30)
+            self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_operator_script_inside_gigacode_hooks_survives(self):
+        """Каталог .gigacode/hooks/ общий с оператором (co-located). Прежний предикат «всё, что
+        зовёт .gigacode/hooks/*.py» снимал из settings.json и его хук. Своё — по реестру
+        установки и эталону; запись на несуществующий файл снимается (она и так сломана)."""
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td)
+            hooks = proj / ".gigacode" / "hooks"
+            hooks.mkdir(parents=True)
+            (hooks / "settings.hooks.json").write_text(json.dumps({"hooks": {"Stop": [
+                {"hooks": [{"command": "${PYTHON} ${PROJECT_ROOT}/.gigacode/hooks/phase-gate.py",
+                            "name": "phase-gate"}]}]}}), encoding="utf-8")
+            (hooks / "phase-gate.py").write_text("", encoding="utf-8")
+            (hooks / "my-notify.py").write_text("", encoding="utf-8")       # скрипт оператора
+            (proj / ".gigacode" / ".forge-deployed").write_text(
+                "hooks/phase-gate.py\nhooks/settings.hooks.json\n", encoding="utf-8")
+            root = str(proj.resolve()).replace("\\", "/")
+            mine = {"command": f"python3 {root}/.gigacode/hooks/my-notify.py", "name": "mine"}
+            gone = {"command": f"python3 {root}/.gigacode/hooks/log-agent.py"}  # снятый хук
+            (proj / ".gigacode" / "settings.json").write_text(json.dumps({"hooks": {
+                "Stop": [{"hooks": [mine]}, {"hooks": [gone]}]}}), encoding="utf-8")
+            r = subprocess.run(
+                [sys.executable, str(HOOKS / "resolve_hook_paths.py"), "--project", str(proj)],
+                capture_output=True, text=True, timeout=30)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            written = json.loads((proj / ".gigacode" / "settings.json").read_text(encoding="utf-8"))
+            cmds = [h["command"] for g in written["hooks"]["Stop"] for h in g["hooks"]]
+            self.assertIn(mine["command"], cmds, "хук оператора из .gigacode/hooks/ снят")
+            self.assertNotIn(gone["command"], cmds, "запись на удалённый файл осталась")
+            self.assertEqual(sum("phase-gate.py" in c for c in cmds), 1)
+            # и деинсталляция снимает только своё
+            r = subprocess.run(
+                [sys.executable, str(HOOKS / "resolve_hook_paths.py"), "--project", str(proj),
+                 "--remove"], capture_output=True, text=True, timeout=30)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            written = json.loads((proj / ".gigacode" / "settings.json").read_text(encoding="utf-8"))
+            cmds = [h["command"] for g in written["hooks"]["Stop"] for h in g["hooks"]]
+            self.assertEqual(cmds, [mine["command"]])
 
 
 class TestMcpServers(unittest.TestCase):

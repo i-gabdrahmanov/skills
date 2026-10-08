@@ -344,6 +344,24 @@ def approval(root: Path, key: str) -> Optional[dict]:
     return legacy if (legacy is None or legacy.get("key") == key) else None
 
 
+# Классы согласий, которые СНИМАЮТ enforcement либо уничтожают работу: для них
+# record_approval требует --evidence с дословной фразой пользователя, gate-guard сверяет её
+# с репликами пользователя в транскрипте. Список один на оба слоя: две копии в gate-guard и
+# record_approval уже разъехались — `policy-downgrade` доки называли классом с цитатой, а
+# код его не знал, и `set quality.tdd false` выписывался без единого слова человека.
+#   abandon-<feature>       — archive.py abandon: снимает живой прогон и удаляет его чекпойнты;
+#   archive-force-<slug>    — archive.py put --force: то же для прогона с доками;
+#   acceptance-<ID>         — ручное подтверждение критерия приёмки заменяет его тест;
+#   git-discard             — git reset --hard / clean -f / checkout . стирают незакоммиченное.
+CONSENT_PREFIXES = ("gate-override", "rollback", "skip-judges", "policy-repin",
+                    "policy-downgrade", "acceptance", "abandon", "archive-force", "git-discard")
+
+
+def consent_required(key: str) -> bool:
+    """Нужна ли для ключа цитата пользователя (см. CONSENT_PREFIXES)."""
+    return any(key == p or key.startswith(p + "-") for p in CONSENT_PREFIXES)
+
+
 def revoke_approval(root: Path, key: str, reason: str = "") -> dict:
     """Потребить/снять согласие (rollback).
 

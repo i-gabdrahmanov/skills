@@ -213,6 +213,23 @@ class TestDetectGroup(unittest.TestCase):
         """Нет build-файлов."""
         self.assertIsNone(ipc.detect_group(str(self.root), []))
 
+    def test_maven_group_is_projects_own(self):
+        """Maven: groupId верхнего уровня, а не родителя/зависимостей. Раньше pom.xml не
+        понимался вовсе — package_root на Maven оставался в _incomplete (боевой прогон B3)."""
+        _touch(self.root / "pom.xml", """<project>
+  <parent><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-parent</artifactId></parent>
+  <groupId>ru.bank.petstore</groupId><artifactId>petstore</artifactId>
+  <dependencies><dependency><groupId>org.projectlombok</groupId></dependency></dependencies>
+</project>""")
+        self.assertEqual(ipc.detect_group(str(self.root), [str(self.root / "pom.xml")]),
+                         "ru.bank.petstore")
+
+    def test_maven_inherited_group_not_guessed(self):
+        """groupId только у родителя — свой не угадываем (спросит оркестратор)."""
+        _touch(self.root / "pom.xml", "<project><parent><groupId>org.acme</groupId></parent>"
+                                      "<artifactId>child</artifactId></project>")
+        self.assertIsNone(ipc.detect_group(str(self.root), [str(self.root / "pom.xml")]))
+
 
 class TestDetectVersions(unittest.TestCase):
     """Тесты детекта версий Java и Spring."""

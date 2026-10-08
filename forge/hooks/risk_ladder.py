@@ -370,14 +370,27 @@ def project_root(cwd: str) -> Path:
 
 
 # ── извлечение цели действия ──────────────────────────────────────────────────────────
+_PATH_RUN_RE = re.compile(r"[\w./~-]+")
+_FILE_EXT_RE = re.compile(r"[\w-]+\.(?:java|kt|ya?ml|properties|sql|xml|md)")
+_MAX_NAME_LEN = 512      # «имя файла» длиннее — не имя, а данные (base64, hex-дамп)
+
+
 def _target_path(tool_name: str, tool_input: dict) -> str:
     if tool_name in ("Write", "WriteFile", "Edit", "edit", "write_file", "NotebookEdit"):
         return str(tool_input.get("file_path") or tool_input.get("path") or "")
     if tool_name in ("Bash", "run_shell_command"):
         cmd = str(tool_input.get("command") or "")
-        # грубо вытащить путь-аргумент с расширением/слэшем для оценки blast-radius
-        m = re.findall(r"[\w./~-]+/[\w./-]+|[\w-]+\.(?:java|kt|ya?ml|properties|sql|xml|md)", cmd)
-        return " ".join(m)
+        # Грубо вытащить путь-аргумент с расширением/слэшем для оценки blast-radius — линейно.
+        # Прежняя регулярка `[\w./~-]+/[\w./-]+|…` на длинном токене без «/» перебирала
+        # разбиения квадратично (32K символов → 4,7 с, 256K → минуты): хук упирался в таймаут,
+        # а таймаут рантайм читает как «возражений нет» (боевой прогон, ENC-3).
+        out = []
+        for tok in _PATH_RUN_RE.findall(cmd):
+            if "/" in tok[1:]:
+                out.append(tok)
+            elif len(tok) <= _MAX_NAME_LEN:
+                out += _FILE_EXT_RE.findall(tok)
+        return " ".join(out)
     return ""
 
 

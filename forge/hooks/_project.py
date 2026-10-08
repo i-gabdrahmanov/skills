@@ -23,6 +23,7 @@ import os
 import re
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -166,6 +167,52 @@ def append_locked(path, text: str) -> None:
                     msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
             except Exception:
                 pass
+
+
+@contextmanager
+def exclusive_lock(path):
+    """Эксклюзивный замок на время блока — для read-modify-write общего файла.
+
+    Замок держится на ОТДЕЛЬНОМ файле `path`, а не на самом файле данных: тот заменяется
+    атомарно (os.replace), и замок на его старом inode не держал бы ничего. Платформы — как
+    у append_locked (flock на POSIX, msvcrt.locking на Windows)."""
+    path = str(path)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "a+", encoding="utf-8") as f:
+        if fcntl:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        else:
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            yield
+        finally:
+            try:
+                if fcntl:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                else:
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+            except Exception:
+                pass
+
+
+def locked_json_update(path, mutate) -> dict:
+    """Read-modify-write JSON-файла под замком `<path>.lock` (у манифеста — manifest.lock, тот
+    же, что держит update.py). mutate(data) правит СВЕЖУЮ копию, прочитанную уже под замком, —
+    запись соседа между чтением и записью не теряется. Tmp свой на процесс. → данные.
+
+    mutate вернул False — менять нечего, файл не пишется: лишняя запись двигает mtime, а по нему
+    резолвится активный прогон."""
+    path = Path(path)
+    with exclusive_lock(path.with_suffix(".lock")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if mutate(data) is False:
+            return data
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    return data
 
 
 # ── Пути control-plane (ground/) — ЕДИНЫЙ резолвер ───────────────────────────

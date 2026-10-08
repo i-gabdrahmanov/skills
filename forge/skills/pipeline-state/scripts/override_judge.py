@@ -56,10 +56,19 @@ override'ов и пишет их атомарно за один проход:
     новая запись создаётся заново.
   • Валидация: пустые task/gate/reason отвергаются целиком (все или ничего).
 
+Согласие (R4). Создание override — снятие гейта, поэтому на КАЖДОГО судью нужен
+approval-маркер `gate-override-<judge>` с провенансом record_approval (record_approval сам
+требует для него цитату пользователя). Проверка двухслойная, как у rollback/update/config:
+gate-guard режет команду на PreToolUse, а скрипт сверяет маркеры сам — гейт держится и при
+запуске мимо харнеса, и в batch, где судьи лежат в файле. Маркер одноразовый: созданный
+override его потребляет, повторное снятие того же гейта после --remove — новое согласие.
+
 Exit:
     0 — override создан / показан / удалён / batch применён (включая «ничего не изменилось»
         если все записи уже активны)
     1 — ошибка (не указана причина, файл не найден, невалидный batch и т.д.)
+    3 — ESCALATE: нет согласия пользователя (approval gate-override-<judge>) хотя бы на
+        одного судью; ничего не записано
 """
 
 import argparse
@@ -81,7 +90,8 @@ if _cached_util is not None and getattr(_cached_util, "__file__", None) and \
         Path(_cached_util.__file__).resolve().parent != _HERE:
     del sys.modules["_util"]
 
-from _util import override_path, overrides_dir, repo_root, resolve_skill  # noqa: E402,F401
+from _util import (override_path, overrides_dir, repo_root, resolve_skill,  # noqa: E402,F401
+                   safe_component)
 import forge_events as FE
 
 
@@ -101,6 +111,41 @@ class BatchFormatError(ValueError):
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ── Согласие пользователя на снятие гейта (второй слой; первый — gate-guard) ──────────
+
+def _consent_key(judge: str) -> str:
+    return safe_component(f"gate-override-{judge}")
+
+
+def _missing_consent(project: Path, judges: list[str]) -> list[str]:
+    """Ключи согласий, которых нет либо которые уже потрачены, — без повторов, по порядку."""
+    out: list[str] = []
+    for key in (_consent_key(j) for j in judges):
+        if key not in out and FE.approval(project, key) is None:
+            out.append(key)
+    return out
+
+
+def _escalate(missing: list[str]) -> int:
+    keys = ", ".join(missing)
+    print(f"⛔ ESCALATE: override снимает гейт — R4-класс, нужно согласие пользователя на КАЖДОГО "
+          f"судью; нет approval-маркера: {keys}. Ничего не записано.\n"
+          f"   Порядок: (1) покажи пользователю, какой гейт и почему снимаешь, и спроси;\n"
+          f"   (2) ТОЛЬКО после явного «да»: python3 "
+          f"{Path(__file__).resolve().parent / 'record_approval.py'} --key <ключ> "
+          f"--approved-by user --reason \"<почему>\" --evidence \"<дословная цитата пользователя>\""
+          f" — на каждый ключ из списка;\n"
+          f"   (3) повтори команду. Маркер одноразовый — его потребляет созданный override.",
+          file=sys.stderr)
+    return 3
+
+
+def _spend_consent(project: Path, judges: list[str], feature: str) -> None:
+    """Потребить согласия: одно «да» = одно снятие гейта (как у rollback и repin)."""
+    for key in dict.fromkeys(_consent_key(j) for j in judges):
+        FE.revoke_approval(project, key, reason=f"согласие потрачено на override ({feature})")
 
 
 def _load_batch_file(path: Path) -> list[dict]:
@@ -291,15 +336,22 @@ def cmd_batch(args, project: Path) -> int:
     total_written = 0
     ts = iso_now()
 
+    plan = []
     for (skill, feature), items in by_path.items():
         active = _active_override_targets(project, skill, feature)
         to_write = [it for it in items if it["judge"] not in active]
         skipped.extend({"skill": skill, "feature": feature, "judge": it["judge"]}
                        for it in items if it["judge"] in active)
+        if to_write:
+            plan.append((skill, feature, to_write))
 
-        if not to_write:
-            continue
+    # Согласие на КАЖДЫЙ новый override — до первой записи (атомарность). Уже активные
+    # пропущены идемпотентностью выше: они ничего не снимают и согласия не тратят.
+    missing = _missing_consent(project, [it["judge"] for _, _, tw in plan for it in tw])
+    if missing:
+        return _escalate(missing)
 
+    for skill, feature, to_write in plan:
         records = [
             _build_override_record(project, skill, feature,
                                    it["judge"], it["payload"], ts)
@@ -318,6 +370,7 @@ def cmd_batch(args, project: Path) -> int:
             print(f"ERROR: запись в {events_path} провалилась: {e}", file=sys.stderr)
             return 1
         total_written += len(records)
+        _spend_consent(project, [it["judge"] for it in to_write], feature)
 
     # Отчёт — и в stdout, и в JSON-режиме без изменений (тот же набор полей, что и
     # для одиночного cmd_create: status/count/path).
@@ -349,6 +402,9 @@ def cmd_create(args, project: Path, judges: list[str] | None = None) -> int:
     # Поддержка batch: --judge допускает CSV ('a,b,c') — одним вызовом снимет несколько гейтов
     # (п.6 KIDPPRB-9254: 6 override'ов на gate-result раньше требовали 6 отдельных вызовов).
     targets = judges or [args.judge]
+    missing = _missing_consent(project, targets)
+    if missing:
+        return _escalate(missing)
     # getattr для back-compat: старые тесты (и сторонние скрипты) могут не передавать
     # новые поля. Дефолты совпадают со значениями argparse.
     approver = getattr(args, "approver", None) or "user"
@@ -371,6 +427,7 @@ def cmd_create(args, project: Path, judges: list[str] | None = None) -> int:
         FE.append_event(project, args.skill, args.feature, "override",
                         target=judge, **record)
         created += 1
+    _spend_consent(project, targets, args.feature)
 
     path = FE.events_path(project, args.skill, args.feature)
     if args.json:

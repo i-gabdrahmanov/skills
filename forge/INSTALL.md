@@ -22,8 +22,10 @@ hooks/ + skills/ + команды в `<project>/.gigacode/` и доводит `s
   на импорте, отдаёт `exit 1` — рантайм читает это как «возражений нет» и выполняет
   вызов. Кривой python здесь = молча снятый enforcement.
   Если годного нет, установщик берёт что есть и печатает `⚠ ВНИМАНИЕ` — читай вывод.
-- Флаг `--experimental-hooks` при запуске `gigacode` (в форке GigaCode хуки за флагом;
-  без него рантайм стартует с `[HOOK_REGISTRY] 0 hook entries` — control-plane молчит).
+- gigacode, запущенный в корне проекта: хуки он читает из `<project>/.gigacode/settings.json`.
+  В 26.9 — без флагов: `--experimental-hooks` (за ним хуки стояли в ранних сборках форка) и
+  `-y` из CLI убраны, с ними сессия не стартует (`Unknown arguments`, exit 1). Признак, что
+  хуки не загрузились, — `[HOOK_REGISTRY] 0 hook entries` на старте; тогда первым делом §3.
 
 ## 1. Убрать остатки прежней extension-раскладки (если была)
 
@@ -109,7 +111,7 @@ python3 /path/to/target-project/.gigacode/hooks/preflight.py --project /path/to/
 ```
 
 - ✅ `exit 0` — можно работать.
-- ❌ `exit 1` — ENFORCEMENT OFF, проверь `deploy.sh` и флаг `--experimental-hooks`.
+- ❌ `exit 1` — ENFORCEMENT OFF, проверь `deploy.sh` и что рантайм запущен в корне проекта.
 - ❌ `exit 2` — конфиг не инициализирован (`ground/policy.json`; legacy-имя — `pipeline.json`).
   Нормально для первого запуска.
 
@@ -118,7 +120,7 @@ python3 /path/to/target-project/.gigacode/hooks/preflight.py --project /path/to/
 **Канон — интерактивный запуск:**
 
 ```bash
-gigacode --experimental-hooks
+gigacode
 ```
 
 Дальше в сессии — команда:
@@ -130,19 +132,20 @@ gigacode --experimental-hooks
 `/forge` зовёт `router`: он классифицирует задачу и уводит в **fix** (минорный дефект)
 или **full** (новая функциональность). Путь известен заранее — `/forge-fix` напрямую.
 
-### Headless (`-p`) — отдельный режим, не дефолт
+### Headless — отдельный режим, не дефолт
 
-`gigacode --experimental-hooks -p "<задача>"` для пайплайна **не работает** по двум независимым
-причинам, и обе — ограничения рантайма, а не настройка:
+`gigacode "<задача>"` (позиционный промпт; `-p` в 26.9 объявлен устаревшим) для пайплайна
+**не работает** без подготовки по двум независимым причинам, и обе — ограничения рантайма:
 
-1. **Инструмент `agent` в headless требует `-y`/YOLO.** Без него рантайм не даёт выполнить вызов
-   субагента, а каждая продуктивная фаза обязана идти субагентом (BR-10). Модель уходит делать
-   работу фазы сама и упирается в `inline-phase-guard` (`exit 2`); запуск ещё одного субагента даёт
-   тот же отказ по кругу.
+1. **Инструменты с подтверждением надо разрешить заранее.** Без этого вызов `agent`, `skill`,
+   `run_shell_command` получает «requires user approval but cannot execute in non-interactive
+   mode»: субагент фазы не стартует, а каждая продуктивная фаза обязана идти субагентом (BR-10).
+   Модель уходит делать работу фазы сама и упирается в `inline-phase-guard` (`exit 2`). Флага
+   `-y`/YOLO в 26.9 нет — разрешение даётся списком `--allowed-tools`.
 2. **`ask_user_question` в headless не рендерится** — пользовательские гейты (BRD, SDD, дизайн,
    критичность, «создавать задачи в Jira?») ответить нечем.
 
-Если headless нужен (CI, пакетный прогон) — запускать с `-y` **и** предзаписать всё, что
+Если headless нужен (CI, пакетный прогон) — разрешить инструменты **и** предзаписать всё, что
 пайплайн иначе спросит, ДО прогона:
 
 ```bash
@@ -153,7 +156,9 @@ python3 <project>/.gigacode/skills/config-helper/scripts/config.py set <key> <va
 python3 <project>/.gigacode/skills/pipeline-state/scripts/record_approval.py \
         --project <project> --key <key> --approved-by user --reason "<кто/почему>"
 
-gigacode --experimental-hooks -y -p "<задача>"
+gigacode --approval-mode auto-edit \
+  --allowed-tools "run_shell_command,write_file,edit,read_file,glob,grep_search,agent,skill" \
+  "<задача>"
 ```
 
 Нет предзаписи → `gate-guard` заблокирует продуктивную запись фазы. Это правильное поведение:

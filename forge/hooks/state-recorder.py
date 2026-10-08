@@ -7,8 +7,9 @@
   1. Берём финальный JSON субагента — из last_assistant_message, иначе из хвоста
      agent_transcript_path (последний валидный ```json``` блок или {…}).
   2. Если в нём есть поле "step_id" (контракт субагентов пайплайна) — пишем шаг напрямую
-     через update.py в namespace активной фичи (каждый SubagentStop — отдельный процесс,
-     поэтому буферизация между вызовами невозможна; прежний FlushGate был мёртвым кодом).
+     через update.py в namespace прогона, которому принадлежит шаг (каждый SubagentStop —
+     отдельный процесс, поэтому буферизация между вызовами невозможна; прежний FlushGate
+     был мёртвым кодом).
   3. Если step_id нет — НИЧЕГО не делаем (не угадываем и не логируем). Никакого
      дампа вывода на диск: субагенты вне контракта пайплайна не оставляют артефактов.
 
@@ -122,31 +123,38 @@ def _status_from(obj: dict) -> str:
     return "completed"
 
 
-def _resolve_active(root: Path) -> tuple[str, str]:
-    """(skill, feature) активной фичи = самый свежий manifest.json в ground/statements/*/*/
-    ПО ВСЕМ skill-namespace (feature-pipeline, forgefix) — один control-plane на все ветки.
-    Fallback (SKILL, 'pipeline')."""
-    base = root / "ground" / "statements"
-    best, bm = None, -1.0
+def _resolve_run(root: Path, step_id: str = "") -> tuple[str, str]:
+    """(skill, feature) прогона, которому ПРИНАДЛЕЖИТ шаг: среди манифестов с этим step_id —
+    свежайший живой, иначе свежайший вообще. Шага нет ни в одном манифесте — активный прогон
+    (_project.resolve_active_run). Fallback (SKILL, 'pipeline').
+
+    Раньше здесь был свой обход «свежайший manifest.json по mtime» — без фильтра живости и без
+    оглядки на шаг; общий резолвер (29a76ba) его не заменил. Фикс внутри стори — это два живых
+    прогона законно, и пока манифест стори свежее, origin шага `fix-red` уходил в журнал стори,
+    а закрытие фикса вечно упиралось в origin-гейт. step_id сам говорит, чей он."""
     try:
-        for skill_dir in base.iterdir():
-            if not skill_dir.is_dir():
+        from _project import iter_runs, resolve_active_run
+        from _config_loader import run_is_live
+        owners = []
+        for _mt, skill, feature, mp in iter_runs(root):           # свежие первыми
+            try:
+                man = json.loads(mp.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
                 continue
-            for d in skill_dir.iterdir():
-                if not d.is_dir() or d.name == "archived":
-                    continue
-                mp = d / "manifest.json"
-                if not mp.exists():
-                    continue
-                try:
-                    m = mp.stat().st_mtime
-                except OSError:
-                    continue
-                if m > bm:
-                    best, bm = (skill_dir.name, d.name), m
+            steps = man.get("steps") if isinstance(man, dict) else None
+            if isinstance(steps, list) and any(isinstance(s, dict) and s.get("id") == step_id
+                                               for s in steps):
+                owners.append((run_is_live(man), skill, feature))
+        if owners:
+            live = [o for o in owners if o[0]]
+            _, skill, feature = (live or owners)[0]
+            return skill, feature
+        run = resolve_active_run(root)
+        if run["path"] is not None:
+            return run["skill"], run["feature"]
     except Exception:
         pass
-    return best or (SKILL, "pipeline")
+    return SKILL, "pipeline"
 
 
 def main() -> int:
@@ -180,7 +188,7 @@ def main() -> int:
         step_id = obj.get("step_id")
         if step_id:
             status = _status_from(obj)
-            skill, feature = _resolve_active(root)
+            skill, feature = _resolve_run(root, str(step_id))
             # Evidence-маркер происхождения: пишем ДО update.py, т.к. его _check_subagent_origin
             # теперь требует наличия _origins/<step_id>.json (а не доверяет --closed-by).
             # Это единственное место, где маркер рождается — на реальном SubagentStop.
@@ -219,7 +227,7 @@ def _write_origin_marker(root: Path, skill: str, feature: str, step_id: str, dat
 def _direct_update(root: Path, skill: str, feature: str, step_id: str, status: str, obj: dict) -> None:
     """Прямая запись в pipeline-state (fallback, когда FlushGate неактивен).
 
-    Пишет в namespace активной фичи (--skill/--feature) — резолвится по свежести манифеста,
+    Пишет в namespace прогона, которому принадлежит шаг (--skill/--feature, см. _resolve_run),
     чтобы обслуживать и feature-pipeline, и forgefix. Ошибки не глушим: при ненулевом коде
     логируем stderr update.py (иначе судейная блокировка остаётся незаметной).
     """

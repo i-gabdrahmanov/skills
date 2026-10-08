@@ -78,12 +78,15 @@ description: >
 | `get <id>` | текущее значение + default + источник |
 | `set <id> <value> [--dry-run] [--confirm]` | валидирует, бэкапит, пишет атомарно; печатает было→стало |
 | `phase <enable\|disable\|add> <phase-id> [--enabled-by EXPR] [--skill S] [--gates G...] [--desc D] [--after ID]` | мержит фазу в `phases_override`; для `add` `--after` задаёт позицию новой фазы (без него — в конец) |
-| `risk <list-add\|list-remove> <key> <pattern> --confirm` | правка списков risk-policy (destructive_blacklist и др.) |
-| `risk cap-set <agent-regex> <R-level> --confirm` | separation-of-duties: кап риска по типу агента |
+| `risk <list-add\|list-remove> <key> <pattern> --confirm` | правка списков risk-policy (destructive_blacklist и др.); `list-remove` — **R4**: маркер `policy-downgrade-risk.<key>` |
+| `risk cap-set <agent-regex> <R-level> --confirm` | separation-of-duties: кап риска по типу агента — **R4**: маркер `policy-downgrade-risk.agent_caps` |
 | `validate [--strict] [--json]` | проверка конфига на ЧТЕНИЕ: типы/диапазоны/enum + кросс-проверки |
 
 Exit-коды: `0` ок · `1` валидация/блок (sensitive без `--confirm`; `validate` нашёл ошибку) ·
-`2` ошибка аргументов · `3` файл/параметр не найден.
+`2` ошибка аргументов либо R4 без approval-маркера · `3` файл/параметр не найден.
+`--confirm` — подтверждение намерения, а не согласие человека: ослабление политики
+(`risk list-remove`, `cap-set`, `phase disable` обязательной фазы) требует маркера
+`record_approval.py --key <ключ> --evidence "<дословная фраза пользователя>"`, одноразового.
 
 ### validate — конфиг проверяется на чтение, а не только на запись
 
@@ -144,12 +147,12 @@ python3 .../config.py validate --strict   # preflight: варнинги = оши
 | «подними покрытие до 90%» 🔒 | `set quality.coverage_threshold 0.9` — **R4** (переключатель enforcement, см. рамку ниже) |
 | «выключи TDD» 🔒 | `set quality.tdd false` — **R4**. Убирает RED-шаги `04-test-*` и блок tdd-guard; фазу Build НЕ гасит — код пишется всё равно; `tdd_enforced` — мёртвый gates-флаг, ничем не читается |
 | «какая у нас команда сборки» | `set quality.build_command './gradlew build'` — это ФАКТ о проекте, не гейт: свободно |
-| «применить настройку к идущему прогону» 🔒 | `repin --skill <S> --feature <F>` — **R4**: сначала `repin --dry-run` (покажи пользователю расхождение), затем после явного «да» `record_approval.py --key policy-repin-<feature> --approved-by user --reason "<почему>"`, и только потом `repin`. Маркер одноразовый |
+| «применить настройку к идущему прогону» 🔒 | `repin --skill <S> --feature <F>` — **R4**: сначала `repin --dry-run` (покажи пользователю расхождение), затем после явного «да» `record_approval.py --key policy-repin-<feature> --approved-by user --reason "<почему>" --evidence "<его дословная фраза>"`, и только потом `repin`. Маркер одноразовый |
 | «включи security review» | `set security_review true` |
 | «разреши авто-аппрув до R2» 🔒 | `python3 skills/feature-pipeline/scripts/set_criticality.py --criticality low --skill <skill> --feature <feature>` (фича-уровень; порог R2) — для project-wide уровня: `set risk.autonomy_auto_max R2 --confirm` |
 | «доки клади в отдельный репо /abs/spec» | `set docs.mode separate-repo` + `set docs.repo_path /abs/spec` |
 | «настрой Jira, ключ NPF» | `set jira.enabled true` + `set jira.project_key NPF` |
-| «отключи фазу tdd в пайплайне» 🔒 | `phase disable 04-tdd` (после подтверждения) |
+| «отключи фазу tdd в пайплайне» 🔒 | `phase disable 04-tdd` — **R4** (обязательная фаза): после явного «да» `record_approval.py --key policy-downgrade-phase.04-tdd --approved-by user --reason "<почему>" --evidence "<его фраза>"`, затем команда. Опциональные (`03-jira`, `02-eval-plan`) выключаются свободно |
 | «запрети команду DROP SCHEMA» 🔒 | `risk list-add destructive_blacklist "DROP SCHEMA" --confirm` |
 | «проверь, нет ли ошибок в конфиге» | `validate` |
 | «JaCoCo подключён?» / «почему coverage падает» | `validate` (покажет кросс-проверку JaCoCo) |

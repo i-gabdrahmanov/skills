@@ -116,6 +116,20 @@ def _strip_infra_paths(content: str, data: dict) -> str:
     return content
 
 
+def _luhn_ok(digits: str) -> bool:
+    """Контрольная сумма Луна — её сходится у каждого настоящего номера карты."""
+    if not digits:
+        return False
+    total, double = 0, False
+    for ch in reversed(digits):
+        d = ord(ch) - 48
+        if double:
+            d = d * 2 - 9 if d > 4 else d * 2
+        total += d
+        double = not double
+    return total % 10 == 0
+
+
 def main() -> int:
     try:
         raw = sys.stdin.read()
@@ -136,13 +150,26 @@ def main() -> int:
             return 0  # все цели в разрешённом scope (тесты/фикстуры/ground)
 
         content = _strip_infra_paths(content, data)
-        for pat in R.load_policy().get("pii_patterns", []):
-            if re.search(pat, content):
-                print(f"[pii-boundary] DENY: запись PII/секрета (паттерн /{pat[:32]}…/) в "
-                      f"'{guarded[0] if guarded else '?'}' вне разрешённого scope. "
-                      f"Убери ПДн или пиши в test/fixtures.",
-                      file=sys.stderr)
-                return 2
+        policy = R.load_policy()
+        # Заведомо не ПДн (UUID, git@host:, зарезервированные example-домены) — вырезаем до
+        # сканирования, иначе пример в спеке выглядит утечкой (см. _pii_safe_note в политике).
+        for pat in policy.get("pii_safe_patterns", []):
+            content = re.sub(pat, " ", content)
+        hit = next((pat for pat in policy.get("pii_patterns", []) if re.search(pat, content)),
+                   None)
+        # Номер карты — только с сошедшейся контрольной суммой Луна: голое 13–19-значное число
+        # (epoch-millis в JSON/yml) иначе было DENY с диагнозом «карта».
+        hit = hit or next((pat for pat in policy.get("pii_luhn_patterns", [])
+                           if any(_luhn_ok(re.sub(r"\D", "", m.group(0)))
+                                  for m in re.finditer(pat, content))), None)
+        if hit:
+            print(f"[pii-boundary] DENY: запись PII/секрета (паттерн /{hit[:32]}…/) в "
+                  f"'{guarded[0] if guarded else '?'}' вне разрешённого scope. "
+                  f"Убери ПДн или пиши в test/fixtures. Пример в спеке/доке — на "
+                  f"зарезервированном домене (user@example.com), телефон — маской "
+                  f"(+7 (XXX) XXX-XX-XX), секрет — плейсхолдером (${{DB_PASSWORD}}).",
+                  file=sys.stderr)
+            return 2
     except Exception:
         return 0
     return 0

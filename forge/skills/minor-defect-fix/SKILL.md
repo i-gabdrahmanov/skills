@@ -272,7 +272,8 @@ prompt:
 1. Gradle: `./gradlew test jacocoTestReport`. Maven: `mvn -q test jacoco:report`.
 2. Покрытие НЕ считай вручную — прогони детерминированный gate (он сам берёт изменённые
    `*.java`, парсит JaCoCo XML, даёт per-file OK/LOW/MISSING, exit 2 при недоборе):
-   `python3 <project>/.gigacode/skills/minor-defect-fix/scripts/check_coverage.py --root <toplevel> --base HEAD --threshold 0.80 --json`
+   `python3 <project>/.gigacode/skills/minor-defect-fix/scripts/check_coverage.py --root <toplevel> --base HEAD --json`
+   (порог — quality.coverage_threshold прогона; вне проекта forge — 0.80)
 3. Регресс затронутых модулей — детерминированный gate. Он сам через git stash снимает эталон
    «зелёного ДО» по ВСЕМ модулям, затронутым диффом (не только тому, что ты правил!), возвращает
    правки и сверяет. Сломал/не прогнал тест ДРУГОГО сервиса = exit 2. Это закрывает «тронул

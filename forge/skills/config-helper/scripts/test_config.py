@@ -22,6 +22,13 @@ def run(project: Path, *args, stdin: str | None = None, approve_gated: bool = Tr
     им передаётся approve_gated=False."""
     if approve_gated and len(args) >= 2 and args[0] == "set" and _is_gated(args[1]):
         approve(project, args[1])
+    elif approve_gated and len(args) >= 3 and args[0] == "phase" and (
+            args[1] == "disable" or "--enabled-by" in args):
+        approve_key(project, f"policy-downgrade-phase.{args[2]}")
+    elif approve_gated and len(args) >= 3 and args[0] == "risk" and args[1] in ("list-remove",
+                                                                                 "cap-set"):
+        scope = "agent_caps" if args[1] == "cap-set" else args[2]
+        approve_key(project, f"policy-downgrade-risk.{scope}")
     r = subprocess.run([sys.executable, str(SCRIPT), "--project", str(project), *args],
                        capture_output=True, text=True)
     return r.returncode, r.stdout.strip(), r.stderr.strip()
@@ -54,6 +61,14 @@ def approve(project: Path, param_id: str):
         [sys.executable, str(_RECORD_APPROVAL), "--project", str(project),
          "--key", f"policy-downgrade-{param_id}", "--approved-by", "user",
          "--reason", "фикстура теста", "--evidence", "да, меняй параметр для теста"],
+        capture_output=True, text=True, check=False)
+
+
+def approve_key(project: Path, key: str):
+    subprocess.run(
+        [sys.executable, str(_RECORD_APPROVAL), "--project", str(project),
+         "--key", key, "--approved-by", "user",
+         "--reason", "фикстура теста", "--evidence", "да, ослабляй политику для теста"],
         capture_output=True, text=True, check=False)
 
 
@@ -246,6 +261,34 @@ def main():
         rc, out, _ = run(project, "risk", "cap-set", "(?i)jira", "R3", "--confirm")
         risk = json.loads((project / "hooks" / "risk-policy.json").read_text(encoding="utf-8"))
         check("risk cap-set пишет", rc == 0 and risk["agent_caps"]["(?i)jira"] == "R3", out)
+
+        # R4: ослабление политики мимо `set`. Раньше хватало --confirm, а его ставит сама
+        # модель: `risk list-remove pii_patterns …` снимал детектор ПДн с exit 0.
+        rc, out, _ = run(project, "risk", "list-remove", "destructive_blacklist", "DROP SCHEMA",
+                         "--confirm", approve_gated=False)
+        check("risk list-remove без согласия → exit 2",
+              rc == 2 and "policy-downgrade-risk.destructive_blacklist" in out, out)
+        rc, out, _ = run(project, "risk", "list-remove", "destructive_blacklist", "DROP SCHEMA",
+                         "--confirm")
+        risk = json.loads((project / "hooks" / "risk-policy.json").read_text(encoding="utf-8"))
+        check("risk list-remove с согласием пишет",
+              rc == 0 and "DROP SCHEMA" not in risk["destructive_blacklist"], out)
+        run(project, "risk", "list-add", "destructive_blacklist", "DROP SCHEMA", "--confirm")
+        rc, out, _ = run(project, "risk", "list-remove", "destructive_blacklist", "DROP SCHEMA",
+                         "--confirm", approve_gated=False)
+        check("согласие одноразовое — второй list-remove снова просит", rc == 2, out)
+        rc, out, _ = run(project, "phase", "disable", "05-verify", approve_gated=False)
+        check("phase disable обязательной фазы без согласия → exit 2", rc == 2, out)
+        rc, out, _ = run(project, "phase", "disable", "03-jira", approve_gated=False)
+        check("phase disable опциональной фазы — свободно", rc == 0, out)
+        rc, out, _ = run(project, "phase", "enable", "05-verify", approve_gated=False)
+        check("phase enable — свободно (усиление)", rc == 0, out)
+
+        # B4: --project ПОСЛЕ подкоманды — так его пишут доки и брифы; argparse отвечал
+        # «unrecognized arguments».
+        r = subprocess.run([sys.executable, str(SCRIPT), "get", "quality.tdd",
+                            "--project", str(project)], capture_output=True, text=True)
+        check("--project после подкоманды принимается", r.returncode == 0, r.stderr)
 
         # ── validate (P3-15) ──
         # На текущем стейте: eval_enabled=True, coverage_threshold>0, jacoco не выставлен →

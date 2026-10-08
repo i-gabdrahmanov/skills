@@ -136,6 +136,30 @@ class TestPreflight(unittest.TestCase):
             self.assertEqual(res["errors"], [], res)
             self.assertTrue(any("incomplete" in m for m in res.get("init_needed", [])), res)
 
+    def test_incomplete_config_points_to_answers_not_init(self):
+        """Боевой прогон B3: на дозаполнении preflight звал тот же init_pipeline_config, который
+        эти поля не заполняет, — exit 2 по кругу. Нужна команда записи ответа."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _make(tmp, wired=ESSENTIAL)
+            (tmp / "ground" / "pipeline.json").write_text(
+                json.dumps({"_incomplete": ["jira.enabled", "conventions.package_root"]}),
+                encoding="utf-8")
+            res = preflight.preflight(str(tmp), self_base=tmp / ".gigacode")
+            self.assertNotIn("init_command", res)
+            cmds = res.get("answer_commands", [])
+            self.assertEqual(len(cmds), 2, res)
+            self.assertTrue(all("config.py" in c and " set " in c for c in cmds), cmds)
+            self.assertTrue(any("set jira.enabled" in c for c in cmds), cmds)
+
+    def test_missing_config_still_points_to_init(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _make(tmp, wired=ESSENTIAL)
+            (tmp / "ground" / "pipeline.json").unlink()
+            res = preflight.preflight(str(tmp), self_base=tmp / ".gigacode")
+            self.assertIn("init_pipeline_config.py", res.get("init_command", ""))
+
     def test_corrupt_pipeline_json_is_hard_error(self):
         # Битый JSON (конфиг ЕСТЬ, но не читается) — в v2 load_project_config
         # эмитит UserWarning и возвращает {} (best-effort). preflight должен

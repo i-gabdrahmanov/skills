@@ -20,7 +20,6 @@ so it is safe to re-run after a resume. Fails if the manifest does not exist yet
 """
 import argparse
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +38,7 @@ if _cached_util is not None and getattr(_cached_util, "__file__", None) and \
     del sys.modules["_util"]
 
 from _util import repo_root  # noqa: E402
+from _project import locked_json_update  # noqa: E402 — _util кладёт hooks/ в sys.path
 
 # Единый источник истины фаз/судей — pipeline_phases (из feature-pipeline/scripts).
 # best-effort: pipeline-state может жить отдельно — тогда судьи/gate не трогаем.
@@ -108,40 +108,44 @@ def main():
               file=sys.stderr)
         sys.exit(2)
 
-    added, skipped = [], []
     for s in steps_data:
         if "id" not in s:
             print(f"ERROR: step missing 'id': {s}", file=sys.stderr)
             sys.exit(2)
-        if s["id"] in existing_ids:
-            skipped.append(s["id"])
-            continue
-        step = {
-            "id": s["id"],
-            "title": s.get("title", s["id"]),
-            "status": s.get("status", "pending"),
-            "depends_on": s.get("depends_on", []),
-            "attempts": 0,
-        }
-        # Паритет с feature-pipeline/add_steps: проставляем required_judges по единой маске.
-        # Для не-feature-pipeline step-id маска вернёт [] — безопасно.
-        if pp is not None:
-            req = pp.match_required_judges(s["id"])
-            if req:
-                step["required_judges"] = req
-        manifest["steps"].append(step)
-        existing_ids.add(s["id"])
-        added.append(s["id"])
 
-    if added:
-        manifest["last_update"] = iso_now()
-        tmp = manifest_path.with_suffix(".json.tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(manifest, f, indent=2, ensure_ascii=False)
-        os.replace(tmp, manifest_path)
+    added, skipped = [], []
 
-        # Синхронизировать нечего: фазовое состояние выводится из манифеста
-        # (pipeline_phases.live_state), кэша gate.json на диске больше нет.
+    def _merge(m: dict):
+        """Шаги — в СВЕЖИЙ манифест, прочитанный под замком: параллельный update.py мог
+        записать его между чтением выше и этой записью."""
+        ids = {st["id"] for st in m.get("steps", [])}
+        for s in steps_data:
+            if s["id"] in ids:
+                skipped.append(s["id"])
+                continue
+            step = {
+                "id": s["id"],
+                "title": s.get("title", s["id"]),
+                "status": s.get("status", "pending"),
+                "depends_on": s.get("depends_on", []),
+                "attempts": 0,
+            }
+            # Паритет с feature-pipeline/add_steps: проставляем required_judges по единой маске.
+            # Для не-feature-pipeline step-id маска вернёт [] — безопасно.
+            if pp is not None:
+                req = pp.match_required_judges(s["id"])
+                if req:
+                    step["required_judges"] = req
+            m["steps"].append(step)
+            ids.add(s["id"])
+            added.append(s["id"])
+        if not added:
+            return False                    # менять нечего — файл (и его mtime) не трогаем
+        m["last_update"] = iso_now()
+
+    manifest = locked_json_update(manifest_path, _merge)
+    # Синхронизировать нечего: фазовое состояние выводится из манифеста
+    # (pipeline_phases.live_state), кэша gate.json на диске больше нет.
 
     # `gate_synced` осталось от кэша gate.json, которого больше нет: переменную удалили, а
     # ссылку в выводе — нет. NameError падал на КАЖДОМ вызове, причём ПОСЛЕ записи манифеста:

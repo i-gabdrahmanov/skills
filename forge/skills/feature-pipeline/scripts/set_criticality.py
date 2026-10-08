@@ -32,6 +32,7 @@ from pathlib import Path
 # путь — без валидации версии (это writer, не reader).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "hooks"))
 from _config_loader import manifest_path  # noqa: E402
+from _project import locked_json_update  # noqa: E402
 
 # Единый источник правды о связи критичность → порог авто-прохода risk-ladder.
 # Импортируется тестом (test_set_criticality.py) и должен совпадать с таблицей в SKILL.md
@@ -96,21 +97,14 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
+    # Read-modify-write под замком манифеста (тот же manifest.lock, что держит update.py):
+    # критичность пишется посреди прогона, когда параллельные шаги закрываются своими
+    # update.py, — без замка одна из записей терялась.
     try:
-        manifest = json.loads(mp.read_text(encoding="utf-8"))
+        locked_json_update(mp, lambda m: apply(m, args.criticality))
     except (json.JSONDecodeError, OSError) as e:
         print(f"ERROR: не прочитать {mp}: {e}", file=sys.stderr)
         return 2
-
-    apply(manifest, args.criticality)
-
-    # Атомарная запись: write to .tmp + rename, чтобы частичная запись не оставила
-    # манифест в полу-обновлённом виде (update.py читает его под flock'ом и любая
-    # порча → откат по manifest.migration.audit). tmp рядом с целевым файлом,
-    # чтобы rename был атомарным (os.replace в пределах одной ФС).
-    tmp = mp.with_suffix(mp.suffix + ".tmp")
-    tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(mp)
 
     key = args.criticality.strip().lower()
     print(f"✅ criticality={key} → auto_max_risk={risk} записано в {mp}")

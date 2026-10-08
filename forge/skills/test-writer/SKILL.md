@@ -133,4 +133,4 @@ fix-red) — верни ровно его. Если формат не задан
 | `check_tests_red.py` / `record_gate --expect red` | RED: compile OK + по-тестово ВСЕ новые упали |
 | red-judge (LLM + флор) | вакуумные тесты, Spring-контекст, mock-стабы «для галочки» |
 | `check_tautological_tests.py` | пустые тела, `assertTrue(true)`, тест без assert/verify |
-| `check_coverage.py` | покрытие изменённых файлов ниже порога (обычно 0.80) |
+| `check_coverage.py` | покрытие изменённых файлов ниже порога (quality.coverage_threshold прогона) |

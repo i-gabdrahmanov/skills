@@ -188,6 +188,35 @@ class TestPerTestRed(unittest.TestCase):
         rc = self._main(self._runner([("t1", "red")]), compile_cmd="false")
         self.assertEqual(rc, 2)
 
+    def test_unreadable_plan_fails(self):
+        """Регрессия: битый/несуществующий task-plan превращался в пустой план → «PASS (нет
+        задач)», и RED-шаг закрывался без единого упавшего теста."""
+        runner = self._runner([("t1", "green")], exit_code=0)
+        for body in (None, "{ broken json", "[]"):
+            with self.subTest(body=body):
+                if body is None:
+                    self.plan_path.unlink(missing_ok=True)
+                else:
+                    self.plan_path.write_text(body, encoding="utf-8")
+                self.assertEqual(self._main(runner), 2)
+
+    def test_unknown_task_id_fails(self):
+        """Опечатка в --task давала пустой список задач → «PASS»."""
+        sys.argv = ["check_tests_red.py", str(self.plan_path), "--root", str(self.root),
+                    "--compile-cmd", "true", "--test-cmd", "true", "--task", "T9"]
+        try:
+            rc = ctr.main()
+        except SystemExit as e:
+            rc = e.code or 0
+        self.assertEqual(rc, 2)
+
+    def test_plan_without_code_tasks_still_passes(self):
+        """Валидный план без задач, пишущих код, — по-прежнему законный PASS."""
+        self.plan_path.write_text(json.dumps({"tasks": [
+            {"id": "T1", "layers": ["migration"], "artifacts": ["db/V1__x.sql"]}]}),
+            encoding="utf-8")
+        self.assertEqual(self._main("false"), 0)
+
 
 class TestInvariantsRedGate(unittest.TestCase):
     """KIDPPRB-9254 п.3: mixed RED/green для ИНВАРИАНТОВ через --allow-invariants.
@@ -408,9 +437,10 @@ class TestMain(unittest.TestCase):
         self.assertEqual(rc, 0)
 
     def test_filter_by_task_missing(self):
-        """--task для несуществующей задачи → ничего не проверяется → pass."""
+        """--task для несуществующей задачи → FAIL. Раньше здесь был пин «ничего не
+        проверяется → pass»: опечатка в id закрывала RED-шаг без единого упавшего теста."""
         rc = self._run_main(["--task", "BOGUS"])
-        self.assertEqual(rc, 0)
+        self.assertEqual(rc, 2)
 
     def test_with_json_flag(self):
         """--json не падает."""

@@ -351,27 +351,45 @@ def check_gate_override(command: str, root: Path) -> str | None:
             return None
         # readonly (--list/--remove) свободны — но проверяем по РЕАЛЬНЫМ токенам-аргументам,
         # а не подстрокой: иначе `--reason "cleanup --list"` ложно трактуется как readonly (обход).
+        argv = _gated_argv(command, pat)
         ro_flags = policy.get("readonly_arg_flags") or ["--list", "--remove"]
-        if any(f in _gated_argv(command, pat) for f in ro_flags):
+        if any(f in argv for f in ro_flags):
             return None
-        m = re.search(r"--judge[\s=]+[\"']?([\w./-]+)", command)
-        judge = m.group(1) if m else ""
+        if "--batch" in argv or any(a.startswith("--batch=") for a in argv):
+            # Судьи лежат в YAML/JSON, командной строки хук не хватает. Маркер на КАЖДУЮ
+            # запись батча сверяет сам override_judge (второй слой) — ровно как record_approval
+            # держит цитату для своих батчей.
+            return None
         prefix = policy.get("approval_prefix", "gate-override")
-        key = f"{prefix}-{judge}" if judge else prefix
-        if _approval_valid(root, key):
+        # `--judge a,b,c` снимает три гейта одним вызовом, поэтому и маркер нужен на каждого.
+        # Прежний регэксп брал имя до первой запятой: согласие на одного судью открывало
+        # список любой длины.
+        judges = [j.strip() for j in _opt_value(argv, "--judge").split(",") if j.strip()]
+        keys = [_safe_key(f"{prefix}-{j}") for j in judges]
+        missing = [k for k in keys if not _approval_valid(root, k)]
+        if keys and not missing:
             return None
-        exists_no_prov = R.approval_exists(root, key) and not _approval_valid(root, key)
+        if len(missing) > 1:
+            key = "<ключ>"
+            need = f"approval-маркер на КАЖДОГО судью — не хватает: {', '.join(missing)}"
+        else:
+            key = missing[0] if missing else f"{prefix}-<judge>"
+            need = f"approval-маркер '{key}'"
+        exists_no_prov = any(R.approval_exists(root, k) for k in missing)
         prov_note = (
             " Маркер есть, но БЕЗ провенанса record_approval — рукописный маркер не считается "
             "(его мог выписать сам агент). " if exists_no_prov else " "
         )
+        if not judges:
+            prov_note = " В команде нет --judge — ключ маркера не резолвится. "
         return (
-            f"снятие гейта (override_judge) — R4-класс, нужен approval-маркер '{key}'"
+            f"снятие гейта (override_judge) — R4-класс, нужен {need}"
             f" (журнал ground/approvals.jsonl, пишет ТОЛЬКО record_approval.py).{prov_note}Порядок: (1) останови работу и спроси "
             f"пользователя (покажи, что не сходится); (2) ТОЛЬКО после явного «да» зафиксируй "
             f"согласие СКРИПТОМ pipeline-state/scripts/record_approval.py --key {key} "
             f"--approved-by user --reason \"<кто/почему>\" --evidence \"<дословная цитата пользователя>\" (он штампует провенанс; прямой Write "
-            f"в approvals/ заблокирован state-write-guard); (3) повтори команду. "
+            f"в approvals/ заблокирован state-write-guard); (3) повтори команду. Маркер "
+            f"одноразовый — потребляется созданием override. "
             f"Молча снимать гейт нельзя. --list/--remove не гейтятся."
         )
     except Exception as e:
@@ -386,31 +404,76 @@ def check_gate_override(command: str, root: Path) -> str | None:
 # внутри модели, человека в ней не было ни на одном шаге.
 #
 # Чинится тем, что согласие обязано ПРИЙТИ ИЗВНЕ: `--evidence` с дословной цитатой
-# пользователя, и цитата сверяется с транскриптом сессии. Транскрипт модель не пишет — это
-# единственный доступный хуку канал, куда она не может дописать строку (на PreToolUse поле
-# `transcript_path` есть; замерено e2e на qwen-code 0.21.14, docs/v2/01-runtime-config-surface.md).
+# пользователя, и цитата сверяется с репликами ПОЛЬЗОВАТЕЛЯ в транскрипте сессии
+# (на PreToolUse поле `transcript_path` есть; замерено e2e на qwen-code 0.21.14,
+# docs/v2/01-runtime-config-surface.md).
 #
-# Гейт стоит на классах, которые СНИМАЮТ enforcement. Approval'ы плана (fix-plan-*,
-# jira-plan-*, <doc>-approved-*) не гейтятся: они двигают прогон вперёд, а не убирают защиту,
-# и их брифы и так проводят через явный вопрос.
-# acceptance-<ID> — ручное подтверждение критерия приёмки (verify:"manual" в task-plan):
-# заменяет тест критерия, поэтому того же класса, что и override гейта.
-_CONSENT_BYPASS_RE = re.compile(r"^(?:gate-override|rollback|skip-judges|policy-repin|acceptance)\b")
+# Именно реплики пользователя, а не весь транскрипт. qwen пишет запись `assistant` вместе с
+# `functionCall` и его аргументами в chats/<session>.jsonl в конце стрима — ДО запуска
+# инструмента (recordAssistantTurn). То есть к PreToolUse в транскрипте уже лежит сама
+# команда `record_approval … --evidence "<цитата>"`, и подстрока по всему файлу находила
+# цитату в ней же: проходила любая выдумка без кавычек (не проходили только цитаты с `"` —
+# в JSONL они экранированы). Туда же попадали собственные реплики модели и вывод её команд
+# (`echo "<фраза>"` в tool_result) — согласие можно было «процитировать» у самого себя.
+#
+# Гейт стоит на классах, которые СНИМАЮТ enforcement (FE.CONSENT_PREFIXES). Approval'ы
+# плана (fix-plan-*, jira-plan-*, <doc>-approved-*) не гейтятся: они двигают прогон вперёд,
+# а не убирают защиту, и их брифы и так проводят через явный вопрос.
 _EVIDENCE_MIN_CHARS = 12          # «да», «ок», «+» цитатой пользователя не являются
+# Потолок чтения транскрипта: файл читается целиком (реплика с согласием может быть далеко
+# от хвоста — после неё модель успевает прочитать десятки файлов), но не бесконечно.
+_TRANSCRIPT_MAX_BYTES = 64 * 1024 * 1024
 
 
-def _transcript_text(transcript_path: str, limit: int = 200000) -> str | None:
-    """Хвост транскрипта сессии; None — прочитать не удалось."""
+def _user_texts(rec) -> "list[str]":
+    """Тексты, которые в этой записи транскрипта написал ПОЛЬЗОВАТЕЛЬ; [] — запись не его.
+
+    qwen/gigacode: `{"type":"user","message":{"parts":[{"text":…}]}}`; результаты
+    инструментов там — отдельный тип `tool_result`. Claude Code: `{"type":"user",
+    "message":{"content":"…" | [{"type":"text","text":…}]}}`; результаты инструментов —
+    блоки `tool_result` в той же user-записи, их не берём."""
+    if not isinstance(rec, dict) or rec.get("type") != "user":
+        return []
+    msg = rec.get("message")
+    if not isinstance(msg, dict):
+        return []
+    out = []
+    parts = msg.get("parts")
+    if isinstance(parts, list):
+        out += [p["text"] for p in parts if isinstance(p, dict) and isinstance(p.get("text"), str)]
+    content = msg.get("content")
+    if isinstance(content, str):
+        out.append(content)
+    elif isinstance(content, list):
+        out += [b["text"] for b in content
+                if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)]
+    return out
+
+
+def _transcript_user_text(transcript_path: str) -> str | None:
+    """Всё, что пользователь написал в этой сессии; None — сверить не с чем (файла нет либо в
+    нём не распознано ни одной реплики пользователя — формат рантайма не тот)."""
     if not transcript_path:
         return None
     try:
-        return Path(transcript_path).read_text(encoding="utf-8", errors="replace")[-limit:]
+        with open(transcript_path, "rb") as f:
+            raw = f.read(_TRANSCRIPT_MAX_BYTES)
     except Exception:  # noqa: BLE001 — рантайм не отдал путь/файл недоступен
         return None
+    texts = []
+    for line in raw.decode("utf-8", errors="replace").splitlines():
+        if '"user"' not in line:           # дешёвый префильтр: файл бывает в десятки МБ
+            continue
+        try:
+            texts += _user_texts(json.loads(line))
+        except ValueError:
+            continue
+    return "\n".join(texts) if texts else None
 
 
 def _evidence_in_transcript(evidence: str, transcript: str) -> bool:
-    """Цитата встречается в транскрипте (по нормализованным пробелам, регистронезависимо)."""
+    """Цитата встречается в репликах пользователя (по нормализованным пробелам,
+    регистронезависимо)."""
     norm = lambda s: re.sub(r"\s+", " ", s).strip().lower()
     return norm(evidence) in norm(transcript)
 
@@ -431,7 +494,8 @@ def _opt_value(argv: "list[str]", name: str) -> str:
 
 def check_record_approval(command: str, root: Path, transcript_path: str) -> str | None:
     """R4-класс: `record_approval.py` для ключей, снимающих enforcement, требует `--evidence`
-    с цитатой пользователя, сверяемой с транскриптом. Возвращает причину блокировки или None.
+    с цитатой пользователя, сверяемой с его репликами в транскрипте. Возвращает причину
+    блокировки или None.
 
     Второй слой — сам record_approval.py валидирует `--evidence` (гейт держится и мимо
     харнеса). Ошибка разбора → fail-CLOSED."""
@@ -447,7 +511,7 @@ def check_record_approval(command: str, root: Path, transcript_path: str) -> str
             # классов ключей, и валидация батча атомарна (одна плохая запись → ни одной).
             return None
         key = _safe_key(_opt_value(argv, "--key"))
-        if not key or not _CONSENT_BYPASS_RE.match(key):
+        if not key or not FE.consent_required(key):
             return None                    # approval плана/документа — не этот класс
 
         evidence = _opt_value(argv, "--evidence")
@@ -455,23 +519,24 @@ def check_record_approval(command: str, root: Path, transcript_path: str) -> str
                 f"обязательна. ")
         tail = ("\n  Порядок: (1) покажи пользователю, ЧТО не сходится, и спроси прямо; "
                 "(2) повтори команду с --evidence \"<дословная фраза пользователя из этого "
-                "диалога>\". Цитата сверяется с транскриптом сессии — своими словами её "
-                "заменить нельзя, это и есть смысл гейта.")
+                "диалога>\". Цитата сверяется с репликами пользователя в транскрипте — "
+                "свои реплики и вывод команд не считаются, пересказ своими словами тоже.")
         if len(evidence) < _EVIDENCE_MIN_CHARS:
             return head + (f"В команде нет --evidence (или он короче {_EVIDENCE_MIN_CHARS} "
                            f"символов: «да»/«ок» цитатой не считаются).") + tail
 
-        transcript = _transcript_text(transcript_path)
+        transcript = _transcript_user_text(transcript_path)
         if transcript is None:
-            # Транскрипт недоступен — сверить нельзя. Не запираем единственный аварийный
-            # выход наглухо: --evidence уже обязателен и уходит в журнал под аудит.
-            print(f"[gate-guard] WARN: транскрипт сессии недоступен — цитата --evidence для "
-                  f"'{key}' записана БЕЗ сверки. Проверяется постфактум по ground/approvals.jsonl.",
+            # Сверить не с чем. Не запираем единственный аварийный выход наглухо:
+            # --evidence уже обязателен и уходит в журнал под аудит.
+            print(f"[gate-guard] WARN: реплики пользователя в транскрипте не найдены (файла нет "
+                  f"либо формат рантайма не распознан) — цитата --evidence для '{key}' "
+                  f"записана БЕЗ сверки. Проверяется постфактум по ground/approvals.jsonl.",
                   file=sys.stderr)
             return None
         if not _evidence_in_transcript(evidence, transcript):
-            return head + ("Переданная цитата в транскрипте сессии НЕ найдена — значит, "
-                           "пользователь этого не говорил.") + tail
+            return head + ("Переданной цитаты нет ни в одной реплике пользователя — значит, "
+                           "он этого не говорил.") + tail
         return None
     except Exception as e:
         return f"deny-first: ошибка проверки record_approval ({e})."
@@ -617,6 +682,81 @@ def check_quality_downgrade(command: str, root: Path) -> str | None:
         return f"deny-first: ошибка проверки quality/security-downgrade ({e})."
 
 
+def _subcommand_args(argv: "list[str]", sub: str) -> "list[str]":
+    """Позиционные аргументы после подкоманды `sub` config.py; опции со значением пропущены."""
+    try:
+        i = argv.index(sub)
+    except ValueError:
+        return []
+    out, skip_next = [], False
+    for a in argv[i + 1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if a.startswith("--"):
+            if "=" not in a and a not in ("--confirm", "--dry-run", "--json"):
+                skip_next = True
+            continue
+        out.append(a)
+    return out
+
+
+def _mandatory_phase(phase_id: str) -> bool:
+    """Обязательная ли фаза (resolve_phases.mandatory_phase_ids). Список не загрузился —
+    обязательной считается любая: снять фазу без ясности опаснее лишнего вопроса."""
+    try:
+        import resolve_phases as _rp            # каталог скриптов уже в sys.path (pipeline_phases)
+        return phase_id in _rp.mandatory_phase_ids()
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def check_policy_structure_edit(command: str, root: Path) -> str | None:
+    """R4-класс: ослабить политику санкционным скриптом мимо `set` — убрать паттерн из
+    risk-policy (`config.py risk list-remove`), поднять cap роли (`risk cap-set`), выключить
+    обязательную фазу (`config.py phase disable 04-tdd`, либо `enable/add --enabled-by …`,
+    делающий её условной). Требует approval-маркера policy-downgrade-risk.<ключ> /
+    policy-downgrade-phase.<фаза> с цитатой пользователя. Возвращает причину блокировки или None.
+
+    Регрессия: этим командам хватало `--confirm`, а его модель ставит сама — gate-guard ловил
+    только `config.py set`, и `risk list-remove pii_patterns …` снимал детектор ПДн с exit 0.
+    Добавить паттерн или включить фазу — свободно: это усиление. Второй слой — config.py.
+    Ошибка разбора → fail-CLOSED."""
+    try:
+        if not command or not re.search(r"config\.py", command):
+            return None
+        argv = _gated_argv(command, r"config\.py")
+        if "--dry-run" in argv:
+            return None
+        key = what = ""
+        risk = _subcommand_args(argv, "risk")
+        phase = _subcommand_args(argv, "phase")
+        if risk and risk[0] in ("list-remove", "cap-set"):
+            target = "agent_caps" if risk[0] == "cap-set" else (risk[1] if len(risk) > 1 else "")
+            key = _safe_key(f"policy-downgrade-risk.{target or '<ключ>'}")
+            what = (f"`config.py risk {risk[0]}` ослабляет risk-policy.json ({target or '?'}): "
+                    f"детекторы и лестница рисков — это защита харнеса, а не настройка проекта")
+        elif len(phase) >= 2 and _mandatory_phase(phase[1]) and (
+                phase[0] == "disable"
+                or any(a == "--enabled-by" or a.startswith("--enabled-by=") for a in argv)):
+            key = _safe_key(f"policy-downgrade-phase.{phase[1]}")
+            what = (f"`config.py phase {phase[0]} {phase[1]}` выключает (или делает условной) "
+                    f"обязательную фазу — её проверки не пойдут ни в одном следующем прогоне")
+        if not key or _approval_valid(root, key):
+            return None
+        return (
+            f"{what}. R4-класс: нужен approval-маркер '{key}' (журнал ground/approvals.jsonl, "
+            f"пишет ТОЛЬКО record_approval.py). `--confirm` согласием не считается — его ставит "
+            f"сама модель. Порядок: (1) покажи пользователю, ЧТО ослабляется и почему; (2) после "
+            f"явного «да» — pipeline-state/scripts/record_approval.py --key {key} --approved-by "
+            f"user --reason \"<почему>\" --evidence \"<дословная цитата пользователя>\"; "
+            f"(3) повтори команду. Маркер одноразовый. Добавить паттерн (`risk list-add`) или "
+            f"включить фазу — не гейтится."
+        )
+    except Exception as e:
+        return f"deny-first: ошибка проверки правки политики ({e})."
+
+
 def check_skip_judges(command: str, root: Path) -> str | None:
     """R4-класс: `update.py --skip-judges` снимает ВСЕ гейты закрытия шага (судьи, gate-result,
     subagent-origin, обязательные решения, артефакты) — bypass в одну опцию. Требует
@@ -705,6 +845,150 @@ def check_rollback(command: str, root: Path) -> str | None:
         return f"deny-first: ошибка проверки rollback ({e})."
 
 
+def _archive_drop_target(argv: "list[str]", put_force_prefix: str,
+                         abandon_prefix: str) -> "tuple[str, str] | None":
+    """(префикс ключа, слаг) для команды archive.py, СНИМАЮЩЕЙ прогон с активных; иначе None.
+
+    Снимают двое: `abandon <feature>` и `put <slug> --force` (гейты готовности обойдены —
+    уезжает незавершённый прогон). Остальные подкоманды и --dry-run ничего не уносят."""
+    idx = next((i for i, a in enumerate(argv) if re.search(r"archive\.py$", a)), None)
+    if idx is None:
+        return None
+    rest = argv[idx + 1:]
+    if "--dry-run" in rest:
+        return None
+    pos, i = [], 0
+    while i < len(rest):
+        if rest[i] in ("--project", "--skill", "--reason"):
+            i += 2                       # опция со значением: значение — не подкоманда
+            continue
+        if not rest[i].startswith("-"):
+            pos.append(rest[i])
+        i += 1
+    if not pos:
+        return None
+    slug = pos[1] if len(pos) > 1 else ""
+    if pos[0] == "abandon":
+        return abandon_prefix, slug
+    if pos[0] == "put" and "--force" in rest:
+        return put_force_prefix, slug
+    return None
+
+
+def check_archive_drop(command: str, root: Path) -> str | None:
+    """R4-класс: снять прогон с активных — `archive.py abandon` либо `put --force`. Прогон
+    перестаёт числиться живым и выпадает из резолва активной фичи; у `put --force` ещё и
+    удаляются git-чекпойнты (у abandon — откладываются, вернёт `restore`). Требует
+    approval-маркера abandon-<feature> /
+    archive-force-<slug> с цитатой пользователя. Возвращает причину блокировки или None.
+
+    Инцидент: preflight на двух живых прогонах подсказывал команду abandon, и модель сама
+    сняла прогон, который сочла брошенным, — вместе с чекпойнтами. Какой прогон лишний, знает
+    только пользователь. Второй слой — archive.py сверяет маркер сам. Ошибка разбора →
+    fail-CLOSED."""
+    try:
+        policy = R.load_policy().get("archive_drop") or {}
+        pat = policy.get("command_pattern", r"archive\.py")
+        if not command or not re.search(pat, command):
+            return None
+        argv = _gated_argv(command, pat)
+        target = _archive_drop_target(argv, policy.get("put_force_prefix", "archive-force"),
+                                      policy.get("abandon_prefix", "abandon"))
+        if target is None:
+            return None
+        prefix, slug = target
+        key = _safe_key(f"{prefix}-{slug}") if slug else f"{prefix}-<feature>"
+        if slug and _approval_valid(root, key):
+            return None
+        prov_note = (" Маркер есть, но БЕЗ провенанса record_approval — рукописный маркер не "
+                     "считается. " if slug and R.approval_exists(root, key) else " ")
+        return (
+            f"снять прогон с активных (archive.py abandon / put --force) — R4-класс: прогон "
+            f"перестаёт числиться живым, гейты поедут по другому (у put --force ещё и удалятся "
+            f"git-чекпойнты). Нужен "
+            f"approval-маркер '{key}' (журнал ground/approvals.jsonl, пишет ТОЛЬКО "
+            f"record_approval.py).{prov_note}Какой прогон брошен, знает только пользователь — "
+            f"в списке может быть тот, что идёт прямо сейчас. Порядок: (1) покажи `archive.py "
+            f"status` и спроси, какой прогон снимать; (2) ТОЛЬКО после явного ответа — "
+            f"pipeline-state/scripts/record_approval.py --key {key} --approved-by user "
+            f"--reason \"<почему брошен>\" --evidence \"<дословная цитата пользователя>\"; "
+            f"(3) повтори команду. Маркер одноразовый. --dry-run и status не гейтятся."
+        )
+    except Exception as e:
+        return f"deny-first: ошибка проверки archive.py ({e})."
+
+
+# Pathspec «всё дерево»: точечный откат своего файла (`git checkout -- src/A.java`) — штатная
+# работа и не гейтится; гейтится сброс ВСЕГО незакоммиченного.
+_WHOLE_TREE = frozenset((".", "./", ":/", ":/*", "*"))
+
+
+def _git_discard(argv: "list[str]") -> str:
+    """Описание git-команды, стирающей незакоммиченную работу целиком; '' — не такая.
+
+    reset --hard, clean -f, checkout/restore всего дерева (или checkout -f), switch
+    --discard-changes|-f, stash drop|clear. Точечные формы и безопасные (`restore --staged`,
+    `clean -n`, `reset` без --hard, `stash`/`stash pop`) — ''."""
+    if not argv or os.path.basename(argv[0]) != "git" or len(argv) < 2:
+        return ""
+    sub, args = argv[1], argv[2:]
+    forced = any(a == "--force" or (a.startswith("-") and not a.startswith("--") and "f" in a)
+                 for a in args)
+    whole = any(a in _WHOLE_TREE for a in args)
+    if sub == "reset" and "--hard" in args:
+        return "git reset --hard"
+    if sub == "clean" and forced and "-n" not in args and "--dry-run" not in args:
+        return "git clean -f"
+    if sub == "checkout" and (whole or "-f" in args or "--force" in args):
+        return "git checkout всего дерева / -f"
+    if sub == "restore" and whole and not ("--staged" in args and not
+                                           ({"--worktree", "-W"} & set(args))):
+        return "git restore всего дерева"
+    if sub == "switch" and ("--discard-changes" in args or "-f" in args or "--force" in args):
+        return "git switch --discard-changes"
+    if sub == "stash" and args[:1] in (["drop"], ["clear"]):
+        return f"git stash {args[0]}"
+    return ""
+
+
+def check_git_discard(command: str, root: Path) -> str | None:
+    """R4-класс: git-команда стирает незакоммиченную работу целиком (reset --hard, clean -f,
+    checkout/restore всего дерева, stash drop|clear). Требует approval-маркера `git-discard` с
+    цитатой пользователя; маркер ОДНОРАЗОВЫЙ — тратится здесь же, на пропуске команды.
+    Возвращает причину блокировки или None.
+
+    Доставку (commit/push) форж не гейтит сознательно — это работа пользователя. Но эти
+    команды уничтожают не доставку, а рабочее дерево: «вернуть в чистое состояние» сносит и
+    несохранённую работу самого пользователя, а вернуть её нечем (tasks/015 п.5). Ошибка
+    разбора → fail-CLOSED."""
+    try:
+        if not command or "git" not in command:
+            return None
+        policy = R.load_policy().get("git_discard") or {}
+        key = _safe_key(policy.get("approval_key", "git-discard"))
+        what = ""
+        for argv in _command_segments(R.normalize_git_command(command)):
+            what = _git_discard(argv)
+            if what:
+                break
+        if not what:
+            return None
+        if _approval_valid(root, key):
+            FE.revoke_approval(root, key, reason=f"согласие потрачено: {command[:120]}")
+            return None
+        return (
+            f"`{what}` стирает незакоммиченную работу целиком — и твою, и пользователя; вернуть "
+            f"её нечем. R4-класс: нужен approval-маркер '{key}' (журнал ground/approvals.jsonl, "
+            f"пишет ТОЛЬКО record_approval.py). Порядок: (1) покажи пользователю `git status`, что "
+            f"пропадёт, и спроси; (2) после явного «да» — pipeline-state/scripts/record_approval.py "
+            f"--key {key} --approved-by user --reason \"<почему>\" --evidence \"<дословная цитата "
+            f"пользователя>\"; (3) повтори команду. Маркер одноразовый — тратится на неё. "
+            f"Откатить СВОЙ файл — `git checkout -- <файл>` / `git restore <файл>` — не гейтится."
+        )
+    except Exception as e:
+        return f"deny-first: ошибка проверки git-команды ({e})."
+
+
 def _kind(tool_name: str, command: str) -> str:
     """git commit/push НЕ классифицируем: доставку делает пользователь сам (промптом/руками),
     пайплайн заканчивается верифицированным артефактом и git-команды не гейтит."""
@@ -778,9 +1062,24 @@ def main() -> int:
         if deny:
             return _block(deny)
 
+        # ── R4-класс: ослабить risk-policy / выключить обязательную фазу (config.py risk|phase) ──
+        deny = check_policy_structure_edit(command, root)
+        if deny:
+            return _block(deny)
+
         # ── R4-класс: откат пайплайна (rollback.py) без approval ──
         # Тоже ДО auto-early-return: classify даёт скрипту default-R1 → прошёл бы авто.
         deny = check_rollback(command, root)
+        if deny:
+            return _block(deny)
+
+        # ── R4-класс: снять прогон с активных (archive.py abandon / put --force) ──
+        deny = check_archive_drop(command, root)
+        if deny:
+            return _block(deny)
+
+        # ── R4-класс: git стирает незакоммиченную работу (reset --hard, clean -f, …) ──
+        deny = check_git_discard(command, root)
         if deny:
             return _block(deny)
 

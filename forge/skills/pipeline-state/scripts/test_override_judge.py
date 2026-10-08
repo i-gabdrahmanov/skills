@@ -30,6 +30,18 @@ def _load(name: str, path: Path):
 ov_mod = _load("override_judge", SCRIPTS / "override_judge.py")
 up_mod = _load("update", SCRIPTS / "update.py")
 
+# Судьи, которых снимают тесты механики ниже. Override — R4: без согласия пользователя на
+# каждого судью скрипт отвечает ESCALATE (TestOverrideConsent), поэтому в фикстурах механики
+# согласие выдаётся заранее — эти тесты не про класс согласия.
+_JUDGES = ("red-judge", "quality", "red", "coverage", "a", "b", "c")
+
+
+def _consent(project: Path, *judges: str) -> None:
+    """Согласие пользователя на снятие гейта — так, как его пишет record_approval."""
+    for j in judges or _JUDGES:
+        ov_mod.FE.append_approval(project, f"gate-override-{j}", approved_by="user",
+                                  reason="тест", evidence="снимай, я подтверждаю")
+
 
 class TestOverrideJudge(unittest.TestCase):
 
@@ -38,6 +50,7 @@ class TestOverrideJudge(unittest.TestCase):
         self.project = Path(self._tmp.name)
         self.skill = "feature-pipeline"
         self.feature = "test-feature"
+        _consent(self.project)
         self.judges_dir = (
             self.project / "ground" / "statements" / self.skill / self.feature / "judges"
         )
@@ -284,6 +297,7 @@ class TestOverrideJudgeBatch(unittest.TestCase):
         self.project = Path(self._tmp.name)
         self.skill = "feature-pipeline"
         self.feature = "KIDPPRB-9254"
+        _consent(self.project)
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -542,6 +556,8 @@ overrides:
             json = False
 
         self.assertEqual(ov_mod.cmd_remove(RemoveArgs(), self.project), 0)
+        # Первое согласие потрачено на снятый override — новое снятие, новое «да»
+        _consent(self.project, "quality")
         # Повторный батч должен ПРОПИСАТЬ quality заново
         path = self._write_batch_yaml(f"""
 overrides:
@@ -659,6 +675,68 @@ overrides:
         self.assertEqual(self._override_records(), [])
 
 
+class TestOverrideConsent(unittest.TestCase):
+    """Второй слой R4 в самом скрипте: снятие гейта — только с согласием на КАЖДОГО судью.
+
+    Регрессия: FORGE.md обещал «override_judge сам требует approval», а скрипт не читал
+    маркеры вовсе — гейт держал только gate-guard, и его ключ брался до первой запятой:
+    согласие на одного судью снимало `--judge a,b,c` целиком."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.project = Path(self._tmp.name)
+        self.skill = "feature-pipeline"
+        self.feature = "F-1"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _cli(self, *extra):
+        import subprocess
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "override_judge.py"), "--project", str(self.project),
+             "--skill", self.skill, "--feature", self.feature, "--reason", "r", *extra],
+            capture_output=True, text=True, cwd=str(SCRIPTS))
+
+    def _active(self):
+        return {o["target"] for o in ov_mod.FE.overrides(self.project, self.skill, self.feature)}
+
+    def test_no_consent_escalates_and_writes_nothing(self):
+        r = self._cli("--judge", "red-judge")
+        self.assertEqual(r.returncode, 3, r.stdout)
+        self.assertIn("gate-override-red-judge", r.stderr)
+        self.assertEqual(self._active(), set())
+
+    def test_csv_needs_consent_for_each_judge(self):
+        _consent(self.project, "red-judge")
+        r = self._cli("--judge", "red-judge,coverage-judge")
+        self.assertEqual(r.returncode, 3, "согласие на одного судью сняло двоих")
+        self.assertIn("gate-override-coverage-judge", r.stderr)
+        self.assertEqual(self._active(), set(), "частичная запись — должно быть всё или ничего")
+        _consent(self.project, "coverage-judge")
+        self.assertEqual(self._cli("--judge", "red-judge,coverage-judge").returncode, 0)
+        self.assertEqual(self._active(), {"red-judge", "coverage-judge"})
+
+    def test_consent_is_spent(self):
+        """Одно «да» — одно снятие: после --remove тот же маркер гейт снова не снимет."""
+        _consent(self.project, "red-judge")
+        self.assertEqual(self._cli("--judge", "red-judge").returncode, 0)
+        self.assertIsNone(ov_mod.FE.approval(self.project, "gate-override-red-judge"))
+        self.assertEqual(self._cli("--judge", "red-judge", "--remove").returncode, 0)
+        self.assertEqual(self._cli("--judge", "red-judge").returncode, 3)
+
+    def test_batch_without_consent_writes_nothing(self):
+        path = self.project / "b.json"
+        path.write_text(json.dumps([{"task": self.feature, "gate": "red", "reason": "r"},
+                                    {"task": self.feature, "gate": "quality", "reason": "r"}]),
+                        encoding="utf-8")
+        _consent(self.project, "red")
+        args = type("A", (), {"project": str(self.project), "skill": self.skill,
+                              "batch": str(path), "json": False})()
+        self.assertEqual(ov_mod.cmd_batch(args, self.project), 3)
+        self.assertEqual(self._active(), set())
+
+
 class TestOverrideJudgeCLIArgs(unittest.TestCase):
     """CLI argparse: новые флаги --evidence, --approver, --batch работают."""
 
@@ -667,6 +745,7 @@ class TestOverrideJudgeCLIArgs(unittest.TestCase):
         self.project = Path(self._tmp.name)
         self.skill = "feature-pipeline"
         self.feature = "KIDPPRB-9254"
+        _consent(self.project)
 
     def tearDown(self):
         self._tmp.cleanup()

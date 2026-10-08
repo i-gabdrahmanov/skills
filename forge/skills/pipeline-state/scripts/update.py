@@ -44,6 +44,7 @@ from _util import (gate_result_path, judges_dir, load_project_config, origins_di
                    overrides_dir, repo_root, safe_load_json,
                    task_docs_dir as _task_docs_dir)
 import forge_events as FE  # журнал evidence (импорт _util уже положил hooks/ в sys.path)
+from _project import exclusive_lock  # noqa: E402
 
 # Соглашение «какие фазы обязаны идти через субагента» — ЕДИНЫЙ источник pipeline_phases
 # (co-located feature-pipeline). best-effort импорт + inline-fallback, чтобы переименование
@@ -789,6 +790,16 @@ def main():
         print(f"ERROR: manifest not found at {manifest_path}. Run init.py first.", file=sys.stderr)
         sys.exit(3)
 
+    # Чтение → гейты → запись манифеста — под замком прогона. Параллельные шаги (04-test-T1,
+    # 04-test-T2, …) закрываются отдельными процессами update.py, и без замка каждый читал
+    # манифест до записи соседа и затирал её своей копией: выживала одна запись из
+    # нескольких, а все вызовы печатали {"status":"updated"}.
+    with exclusive_lock(pdir / "manifest.lock"):
+        _apply(args, project, pdir, manifest_path)
+
+
+def _apply(args, project: Path, pdir: Path, manifest_path: Path) -> None:
+    """Переход шага в манифесте. Зовётся ТОЛЬКО под замком манифеста (см. main)."""
     manifest = safe_load_json(manifest_path, what="manifest")
 
     step = next((s for s in manifest["steps"] if s["id"] == args.step_id), None)
@@ -922,7 +933,10 @@ def main():
 
     manifest["last_update"] = now
 
-    tmp = manifest_path.with_suffix(".json.tmp")
+    # Свой tmp на процесс: общий manifest.json.tmp делят и писатели вне этого замка
+    # (add_steps, config.py, rollback), и при совпадении во времени os.replace уносил чужую
+    # недописанную копию.
+    tmp = manifest_path.with_name(f"manifest.json.{os.getpid()}.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
     os.replace(tmp, manifest_path)

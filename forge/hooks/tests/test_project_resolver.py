@@ -44,13 +44,18 @@ class TestProjectResolver(unittest.TestCase):
         self.assertTrue(path.exists(), f"{path} does not exist")
 
     def test_find_project_root(self):
-        """find_project_root находит корень проекта по .git."""
-        root = find_project_root()
-        self.assertTrue(root.exists())
-        # Должен содержать .git или build.gradle
-        has_git = (root / ".git").exists()
-        has_build = (root / "build.gradle").exists()
-        self.assertTrue(has_git or has_build, f"{root} не содержит .git или build.gradle")
+        """find_project_root поднимается от вложенного каталога к корню с .git.
+
+        Раньше тест звал find_project_root() от cwd процесса и требовал .git/build.gradle в
+        ответе — то есть проверял, ГДЕ лежит копия форжа, а не резолвер: в распакованном
+        дистрибутиве (боевой прогон v0.4.5, tasks/001) база всегда была красной, 117/118,
+        и настоящий фейл на её фоне не видно."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            (root / ".git").mkdir()
+            nested = root / "service" / "src" / "main"
+            nested.mkdir(parents=True)
+            self.assertEqual(find_project_root(nested).resolve(), root)
 
     def test_find_project_root_fallback(self):
         """find_project_root возвращает cwd если ничего не нашёл."""

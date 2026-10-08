@@ -28,6 +28,14 @@ sys.path.insert(0, str(SCRIPTS))
 MIN_PYTHON = (3, 9)
 
 
+
+def _first_sentence(msg: str, limit: int = 220) -> str:
+    """Первая фраза сообщения (до «. »), не длиннее limit — без обрыва посреди слова."""
+    head = msg.split(". ")[0].strip()
+    if len(head) <= limit:
+        return head
+    return head[:limit].rsplit(" ", 1)[0] + "…"
+
 def _load(path: Path, name: str):
     spec = importlib.util.spec_from_file_location(name, path)
     m = importlib.util.module_from_spec(spec)
@@ -202,7 +210,10 @@ def run_checks(project_root: Path | None = None) -> dict:
                 detail = ""
                 try:
                     v = json.loads(r.stdout)
-                    detail = "; ".join(i.get("error", "")[:90] for i in v.get("issues", [])[:3])
+                    # Первая фраза целиком, а не [:90]: обрезка по символам рубила
+                    # сообщение на тире («jacoco_configured=false — »), и совет терялся.
+                    detail = "; ".join(_first_sentence(i.get("error", ""))
+                                       for i in v.get("issues", [])[:3])
                 except Exception:
                     detail = (r.stdout or r.stderr).strip()[:180]
                 warn("config-valid", detail or "config validate FAIL")

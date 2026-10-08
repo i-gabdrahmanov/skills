@@ -11,7 +11,6 @@ patch_manifest_judges.py — добавляет required_judges в сущест�
 """
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -30,6 +29,7 @@ if _cached_util is not None and getattr(_cached_util, "__file__", None) and \
 
 import judges_registry  # noqa: E402
 from _util import safe_load_json  # noqa: E402
+from _project import locked_json_update  # noqa: E402 — _util кладёт hooks/ в sys.path
 
 # Back-compat: модули doctor/тесты читают REQUIRED_JUDGES_MASK как атрибут.
 # Источник — единый реестр (judges-registry.json), не отдельная копия.
@@ -41,9 +41,7 @@ def _match_phase(step_id: str) -> list:
     return judges_registry.match_step(step_id)
 
 
-def patch_manifest(manifest_path: Path, dry_run: bool = False) -> bool:
-    manifest = safe_load_json(manifest_path, what="manifest")
-
+def _patch_steps(manifest: dict) -> int:
     changed = 0
     for step in manifest.get("steps", []):
         step_id = step.get("id", "")
@@ -56,18 +54,29 @@ def patch_manifest(manifest_path: Path, dry_run: bool = False) -> bool:
             # Обновить, если маска изменилась
             step["required_judges"] = required
             changed += 1
+    return changed
 
-    if changed == 0:
-        return False
 
+def patch_manifest(manifest_path: Path, dry_run: bool = False) -> bool:
     if dry_run:
-        print(f"[dry-run] {manifest_path}: {changed} шагов с новыми required_judges")
-        return True
+        changed = _patch_steps(safe_load_json(manifest_path, what="manifest"))
+        if changed:
+            print(f"[dry-run] {manifest_path}: {changed} шагов с новыми required_judges")
+        return bool(changed)
 
-    tmp = manifest_path.with_suffix(".json.tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2, ensure_ascii=False)
-    tmp.replace(manifest_path)
+    # Read-modify-write под замком манифеста (тот же manifest.lock, что держит update.py).
+    safe_load_json(manifest_path, what="manifest")      # битый манифест — прежний внятный отказ
+    changed = 0
+
+    def _apply(m: dict):
+        nonlocal changed
+        changed = _patch_steps(m)
+        if not changed:
+            return False                    # менять нечего — файл (и его mtime) не трогаем
+
+    locked_json_update(manifest_path, _apply)
+    if not changed:
+        return False
     print(f"{manifest_path}: {changed} шагов пропатчено")
     return True
 
