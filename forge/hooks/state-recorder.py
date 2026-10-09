@@ -123,17 +123,10 @@ def _status_from(obj: dict) -> str:
     return "completed"
 
 
-def _resolve_run(root: Path, step_id: str = "") -> tuple[str, str]:
-    """(skill, feature) прогона, которому ПРИНАДЛЕЖИТ шаг: среди манифестов с этим step_id —
-    свежайший живой, иначе свежайший вообще. Шага нет ни в одном манифесте — активный прогон
-    (_project.resolve_active_run). Fallback (SKILL, 'pipeline').
-
-    Раньше здесь был свой обход «свежайший manifest.json по mtime» — без фильтра живости и без
-    оглядки на шаг; общий резолвер (29a76ba) его не заменил. Фикс внутри стори — это два живых
-    прогона законно, и пока манифест стори свежее, origin шага `fix-red` уходил в журнал стори,
-    а закрытие фикса вечно упиралось в origin-гейт. step_id сам говорит, чей он."""
+def _owner_run(root: Path, step_id: str) -> "tuple[str, str] | None":
+    """(skill, feature) прогона, в манифесте которого ЕСТЬ этот шаг; None — такого нет."""
     try:
-        from _project import iter_runs, resolve_active_run
+        from _project import iter_runs
         from _config_loader import run_is_live
         owners = []
         for _mt, skill, feature, mp in iter_runs(root):           # свежие первыми
@@ -145,16 +138,13 @@ def _resolve_run(root: Path, step_id: str = "") -> tuple[str, str]:
             if isinstance(steps, list) and any(isinstance(s, dict) and s.get("id") == step_id
                                                for s in steps):
                 owners.append((run_is_live(man), skill, feature))
-        if owners:
-            live = [o for o in owners if o[0]]
-            _, skill, feature = (live or owners)[0]
-            return skill, feature
-        run = resolve_active_run(root)
-        if run["path"] is not None:
-            return run["skill"], run["feature"]
-    except Exception:
-        pass
-    return SKILL, "pipeline"
+    except Exception:  # noqa: BLE001
+        return None
+    if not owners:
+        return None
+    live = [o for o in owners if o[0]]
+    _, skill, feature = (live or owners)[0]
+    return skill, feature
 
 
 def main() -> int:
@@ -188,7 +178,16 @@ def main() -> int:
         step_id = obj.get("step_id")
         if step_id:
             status = _status_from(obj)
-            skill, feature = _resolve_run(root, str(step_id))
+            run = _owner_run(root, str(step_id))
+            if run is None:
+                # Шага нет ни в одном читаемом манифесте: писать некуда. Раньше запись уходила
+                # в активный прогон (чужой журнал засорялся origin'ом шага, которого у него
+                # нет), а на пустом проекте — в фантомный feature-pipeline/pipeline, который
+                # хук сам и создавал (боевой прогон v0.4.6, track F P3-1/P3-2).
+                print(f"[state-recorder] шаг '{step_id}' не найден ни в одном манифесте "
+                      f"прогона — evidence не записано", file=sys.stderr)
+                return 0
+            skill, feature = run
             # Evidence-маркер происхождения: пишем ДО update.py, т.к. его _check_subagent_origin
             # теперь требует наличия _origins/<step_id>.json (а не доверяет --closed-by).
             # Это единственное место, где маркер рождается — на реальном SubagentStop.
@@ -227,7 +226,7 @@ def _write_origin_marker(root: Path, skill: str, feature: str, step_id: str, dat
 def _direct_update(root: Path, skill: str, feature: str, step_id: str, status: str, obj: dict) -> None:
     """Прямая запись в pipeline-state (fallback, когда FlushGate неактивен).
 
-    Пишет в namespace прогона, которому принадлежит шаг (--skill/--feature, см. _resolve_run),
+    Пишет в namespace прогона, которому принадлежит шаг (--skill/--feature, см. _owner_run),
     чтобы обслуживать и feature-pipeline, и forgefix. Ошибки не глушим: при ненулевом коде
     логируем stderr update.py (иначе судейная блокировка остаётся незаметной).
     """

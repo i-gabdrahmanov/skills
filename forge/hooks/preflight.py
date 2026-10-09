@@ -17,6 +17,7 @@ Exit 2 — конфиг не инициализирован (ground/policy.json 
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -104,6 +105,17 @@ def _find_foreign_hook_paths(settings: dict, project_root=None, prefixes=None) -
     if prefixes is None:
         prefixes = [f"{project_root}/.gigacode/hooks/"]
     prefixes = [p.replace("\\", "/") for p in prefixes]
+    # Тот же каталог под другим именем: путь хука оператора записан через симлинк-алиас
+    # (`/tmp/…` при корне `/private/tmp/…` на macOS) — префикс по строке не совпадал, и рабочий
+    # хук объявлялся «чужим», а вердикт — ENFORCEMENT OFF (боевой прогон v0.4.6, A-F2).
+    real_prefixes = [os.path.realpath(p.rstrip("/")).replace("\\", "/") + "/" for p in prefixes]
+
+    def _inside(p: str) -> bool:
+        p = p.replace("\\", "/")
+        if any(p.startswith(pref) for pref in prefixes):
+            return True
+        rp = os.path.realpath(p).replace("\\", "/")
+        return any(rp.startswith(pref) for pref in real_prefixes)
 
     def _walk(node, path=""):
         if isinstance(node, str) and path.endswith("command"):
@@ -111,7 +123,7 @@ def _find_foreign_hook_paths(settings: dict, project_root=None, prefixes=None) -
             m = re.search(r"(\S+\.py)\s*$", node)
             if m:
                 p = m.group(1)
-                if not any(p.replace("\\", "/").startswith(pref) for pref in prefixes):
+                if not _inside(p):
                     found.append(p)
         elif isinstance(node, dict):
             for k, v in node.items():
@@ -355,12 +367,16 @@ def _check_runtime_settings_dirs(project_root, base, warnings: list) -> None:
         )
 
 
-def _group_matcher_for(hooks_block: dict, event: str, hook_py: str) -> str | None:
-    """matcher группы события `event`, содержащей хук `hook_py` (или None)."""
+def _group_matcher_for(hooks_block: dict, event: str, hook_py: str,
+                       without: str | None = None) -> str | None:
+    """matcher группы события `event`, содержащей хук `hook_py` и НЕ содержащей `without`
+    (или None)."""
+    def _has(group, name):
+        return any(re.search(rf"\b{re.escape(name)}\b", str(h.get("command", "")))
+                   for h in group.get("hooks", []))
     for group in hooks_block.get(event, []):
-        for h in group.get("hooks", []):
-            if re.search(rf"\b{re.escape(hook_py)}\b", str(h.get("command", ""))):
-                return group.get("matcher", "")
+        if _has(group, hook_py) and not (without and _has(group, without)):
+            return group.get("matcher", "")
     return None
 
 
@@ -374,7 +390,10 @@ def _check_matchers_canonical(hooks_block: dict, wiring_src: str | None) -> list
             f"{_CANON_SHELL!r} → destructive/pii/sod/gate на shell не сработают (BLOCKER-0). "
             f"Ожидается напр. ^(run_shell_command|Bash)$."
         )
-    write_m = _group_matcher_for(hooks_block, "PreToolUse", "tdd-guard.py")
+    # tdd-guard стоит и в Bash-цепочке (судит цели shell-записи) — Write-цепочка та, где он
+    # есть, а destructive-blocker нет.
+    write_m = _group_matcher_for(hooks_block, "PreToolUse", "tdd-guard.py",
+                                 without="destructive-blocker.py")
     if write_m is not None:
         missing = [n for n in _CANON_WRITES if not re.search(write_m, n)]
         if missing:
@@ -717,7 +736,12 @@ if __name__ == "__main__":
             sys.exit(0)
         if arg in ("--project", "-p"):
             continue
-        if arg.startswith("-") and not arg.startswith("--project="):
+        if arg.startswith("--project="):
+            # `--project=PATH` проходил фильтр опций и уходил в позиционный корень целиком:
+            # анализировался несуществующий `<cwd>/--project=<path>` (боевой прогон v0.4.6, CLI-4).
+            project_root = Path(arg.split("=", 1)[1]).resolve()
+            continue
+        if arg.startswith("-"):
             continue
         project_root = Path(arg).resolve()
     if any(a == "--project" for a in sys.argv[1:]):

@@ -350,6 +350,7 @@ def main():
               cfg.get("jira", {}).get("project_key") is None, str(cfg.get("jira")))
 
     test_enforcement_switches_are_r4()
+    test_battle_046_contracts()
 
     print(f"\n{PASSED} passed, {FAILED} failed")
     return 1 if FAILED else 0
@@ -389,6 +390,61 @@ def test_enforcement_switches_are_r4():
         rc, out, _ = run(project, "set", "quality.tdd", "false", approve_gated=False)
         body = json.loads((project / "ground" / "policy.json").read_text(encoding="utf-8"))
         check("с approval quality.tdd пишется", rc == 0 and body["quality"]["tdd"] is False, out)
+
+
+def test_battle_046_contracts():
+    """Боевой прогон v0.4.6: контракты config.py, разошедшиеся с документами."""
+    with tempfile.TemporaryDirectory() as d:
+        project = Path(d)
+        seed_policy(project)
+        pol = project / "ground" / "policy.json"
+
+        # B-F2: --dry-run показывает «было → станет» и ничего не пишет — свободен, как обещают
+        # risk-policy.json и gate-guard; второй слой требовал на него approval.
+        before = pol.read_text(encoding="utf-8")
+        rc, out, _ = run(project, "set", "quality.coverage_threshold", "0.5", "--dry-run",
+                         approve_gated=False)
+        check("set <переключатель> --dry-run без approval → rc 0",
+              rc == 0 and '"dry_run": true' in out, out)
+        check("--dry-run ничего не пишет", pol.read_text(encoding="utf-8") == before)
+
+        # G-P1: значение вне словаря строкового параметра принималось молча.
+        rc, out, _ = run(project, "set", "spec.grammar.requirement_kind", "table-like")
+        check("значение вне enum строкового параметра → rc 1", rc == 1, out)
+        rc, out, _ = run(project, "set", "spec.grammar.requirement_kind", "title-only")
+        check("значение из enum принимается", rc == 0, out)
+
+        # «none» из словаря — значение, а не null (иначе читатель брал дефолт from-bracket).
+        rc, out, _ = run(project, "set", "spec.grammar.provenance", "none")
+        got = json.loads(pol.read_text(encoding="utf-8")).get("spec", {}).get("grammar", {})
+        check("set spec.grammar.provenance none → строка 'none'",
+              rc == 0 and got.get("provenance") == "none", f"{got} {out}")
+
+        # APPR-2: NaN/inf проходили границы и уезжали в policy.json литералом NaN.
+        for v in ("nan", "inf", "Infinity"):
+            rc, out, _ = run(project, "set", "quality.coverage_threshold", v)
+            check(f"coverage_threshold {v} → rc 1", rc == 1, out)
+        json.loads(pol.read_text(encoding="utf-8"))   # файл — валидный JSON
+
+    # P3-5: предупреждение о снимке называет прогон, который резолвер хуков считает активным
+    # (свежайший живой), а не первый живой по алфавиту.
+    import os
+    import time
+    with tempfile.TemporaryDirectory() as d:
+        project = Path(d)
+        seed_policy(project)
+        for feat in ("STOR-101", "STOR-901"):
+            md = project / "ground" / "statements" / "feature-pipeline" / feat
+            md.mkdir(parents=True)
+            (md / "manifest.json").write_text(json.dumps(
+                {"skill": "feature-pipeline", "feature": feat,
+                 "steps": [{"id": "02-design", "status": "pending"}]}), encoding="utf-8")
+        old = time.time() - 3600
+        os.utime(project / "ground/statements/feature-pipeline/STOR-101/manifest.json",
+                 (old, old))
+        rc, out, err = run(project, "set", "spec.grammar.requirement_kind", "numbered")
+        check("WARNING о снимке называет свежайший живой прогон",
+              rc == 0 and "STOR-901" in err and "STOR-101" not in err, err)
 
 
 if __name__ == "__main__":

@@ -77,7 +77,8 @@ except Exception:  # noqa: BLE001
         return [(s.get("id"), d) for s in steps if isinstance(s, dict)
                 for d in (s.get("depends_on") or []) if d not in known]
 
-from _util import repo_root, feature_docs_dir, safe_slug, safe_load_json, is_jira_key  # noqa: E402
+from _util import (repo_root, feature_docs_dir, safe_slug, safe_load_json,  # noqa: E402
+                   is_jira_key, bad_step_id)
 # Снимок политики на прогон: читаем ИСТОЧНИК (raw=True) — эффективный конфиг здесь означал бы
 # «снимок поверх снимка», а digest считаем по тому же каноникализованному виду, что и
 # preflight при сверке дрейфа.
@@ -315,11 +316,24 @@ def main():
               f"Пайплайн встал бы молча — добавь шаг или убери зависимость.", file=sys.stderr)
         sys.exit(2)
 
-    steps = []
+    _seen: "set[str]" = set()
     for s in steps_data:
         if "id" not in s:
             print(f"ERROR: step missing 'id': {s}", file=sys.stderr)
             sys.exit(2)
+        _why = bad_step_id(s["id"])
+        if _why:
+            print(f"ERROR: {_why}", file=sys.stderr)
+            sys.exit(2)
+        if s["id"] in _seen:
+            # update.py правил бы первый из двойников, второй висел бы вечно (ST-2);
+            # add_steps такие дубли и так отбрасывает
+            print(f"ERROR: шаг '{s['id']}' в наборе дважды", file=sys.stderr)
+            sys.exit(2)
+        _seen.add(s["id"])
+
+    steps = []
+    for s in steps_data:
         req = judges_registry.match_step(s["id"])
         step = {
             "id": s["id"],

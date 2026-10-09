@@ -89,7 +89,24 @@ def main() -> int:
         # кэшем: он был производной ЭТОГО же манифеста, и без манифеста давать он мог только
         # устаревший ответ.
         if mp and mp.exists():
-            manifest = json.loads(mp.read_text(encoding="utf-8"))
+            try:
+                manifest = json.loads(mp.read_text(encoding="utf-8"))
+                if not isinstance(manifest, dict):
+                    raise ValueError("манифест — не JSON-объект")
+            except (ValueError, OSError) as e:
+                # Битый манифест активного прогона: состояние пайплайна неизвестно. Хук молчал
+                # (общий except → exit 0) ровно тогда, когда стейт повреждён, — update.py на
+                # том же стейте честно падал rc 4 (боевой прогон v0.4.6, STATE-3). Блок — один
+                # раз на сессию, как и висящий шаг: петли «не могу завершить ход» нет.
+                if _already_blocked(str(data.get("session_id") or ""), f"unreadable:{mp}"):
+                    return 0
+                print(json.dumps({"decision": "block", "reason": (
+                    f"manifest.json активного прогона не читается ({mp}: {e}) — состояние "
+                    f"пайплайна неизвестно, гейты по нему не работают. Не завершай ход молча: "
+                    f"сообщи пользователю. Починка — откат файла из git (`git show HEAD:<путь>`) "
+                    f"либо init.py --force (архивирует прогон); руками manifest.json не правь — "
+                    f"его режет state-write-guard.")}, ensure_ascii=False))
+                return 0
             skill, feature = mp.parent.parent.name, mp.parent.name
             for s in manifest.get("steps", []):
                 sid, st = s.get("id"), s.get("status")

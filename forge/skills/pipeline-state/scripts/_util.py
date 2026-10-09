@@ -73,9 +73,23 @@ def safe_load_json(path, *, what: str = "JSON-файл", exit_code: int = 4) -> 
     а не роняет необработанный JSONDecodeError. Файл на диске не трогается."""
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as e:
+    except (ValueError, OSError) as e:      # ValueError — и JSON, и не-UTF8 (STATE-8)
         print(f"ERROR: {what} нечитаем/повреждён: {path}: {e}", file=sys.stderr)
         raise SystemExit(exit_code)
+
+
+# id шага — компонент пути (<id>.json рядом с манифестом, git-ref чекпойнта), поэтому только
+# безопасная форма. `../../outside` принимался init.py, и update.py клал выход шага в
+# ground/statements/outside.json — вне каталога прогона (боевой прогон v0.4.6, STATE-6/7).
+_STEP_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def bad_step_id(sid) -> "str | None":
+    """Причина, по которой id шага недопустим; None — допустим."""
+    if not isinstance(sid, str) or not _STEP_ID_RE.fullmatch(sid) or ".." in sid:
+        return (f"id шага {sid!r} недопустим: только латиница, цифры, «.», «_», «-», без «..» "
+                f"и не с точки/дефиса (id — часть пути и git-ref)")
+    return None
 
 
 def repo_root() -> str:

@@ -299,5 +299,50 @@ class TChmodWorldWritable(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertEqual(_run(cmd).returncode, 0, f"ложный блок: {cmd}")
 
+class TBattle046(unittest.TestCase):
+    """Боевой прогон v0.4.6: обходы блокировщика, каждый — ALLOWED всей Bash-цепочкой."""
+
+    def _cwd(self, command: str, cwd: str):
+        payload = json.dumps({"hook_event_name": "PreToolUse", "cwd": cwd,
+                              "tool_name": "run_shell_command",
+                              "tool_input": {"command": command}})
+        return subprocess.run([sys.executable, str(HOOK)], input=payload,
+                              capture_output=True, text=True, timeout=30).returncode
+
+    def test_root_without_project_is_not_a_project(self):
+        """E-CWD-ROOT: сессия из `/` — резолвер без маркеров отдаёт cwd, и `rm -rf /usr`
+        считался «уборкой внутри проекта»."""
+        for cmd in ("rm -rf /usr", "rm -rf /etc/services"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._cwd(cmd, "/"), 2)
+        with tempfile.TemporaryDirectory() as bare:          # каталог без маркеров проекта
+            self.assertEqual(self._cwd(f"rm -rf {Path(bare).resolve()}/x", bare), 2)
+
+    def test_shell_wrappers_are_unwrapped(self):
+        """E-08: скрипт `-c` приходил одним токеном — rm внутри не видел никто."""
+        for cmd in ("bash -c 'rm -rf /etc/services'", "sh -c \"rm -rf /usr/local/x\"",
+                    "sudo bash -c \"rm -rf /etc/services\"", "eval \"rm -rf /etc\"",
+                    "bash -c 'rm -rf /'"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_run(cmd).returncode, 2, f"пропущено: {cmd}")
+
+    def test_find_execdir_and_ok(self):
+        for cmd in ("find / -maxdepth 2 -execdir rm -rf {} \\;", "find /etc -ok rm {} \\;",
+                    "find ~ -okdir rm {} \\;"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_run(cmd).returncode, 2, f"пропущено: {cmd}")
+
+    def test_dd_to_device_any_operand_order(self):
+        for cmd in ("dd of=/dev/sda if=x.iso bs=1M", "dd of=/dev/disk2 bs=1m"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_run(cmd).returncode, 2, f"пропущено: {cmd}")
+        self.assertEqual(_run("dd if=/dev/zero of=/dev/null bs=1M count=10").returncode, 0,
+                         "приёмник /dev/null — не диск")
+
+    def test_rsync_delete_outside_project(self):
+        self.assertEqual(_run("rsync -a --delete /tmp/empty/ /etc/").returncode, 2)
+        self.assertEqual(_run("rsync -a --delete build/ dist/").returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

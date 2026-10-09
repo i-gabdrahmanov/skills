@@ -236,5 +236,21 @@ class TestAllowedScopePrecedence(unittest.TestCase):
         self.assertFalse(m._allowed_scope("src/main/resources/application.yml"))
 
 
+class TEmailPatternIsLinear(unittest.TestCase):
+    """Неограниченный `[…]+@` на длинном прогоне символов без `@` — квадратичный поиск:
+    256К символов шли 50 с, дольше таймаута хука, и запись уходила НЕпросканированной
+    (боевой прогон v0.4.6, E-REPOS-PV). Квантификаторы ограничены по RFC."""
+
+    def test_long_run_is_fast_and_email_still_caught(self):
+        import time
+        t0 = time.time()
+        r = _run("write_file", {"file_path": "docs/blob.txt", "content": "a" * 65536 + "!@"})
+        self.assertLess(time.time() - t0, 5, "email-паттерн квадратичен по длине контента")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = _run("write_file", {"file_path": "docs/contacts.md",
+                                "content": "пишите ivan.petrov@corp.ru"})
+        self.assertEqual(r.returncode, 2, "email перестал ловиться")
+
+
 if __name__ == "__main__":
     unittest.main()

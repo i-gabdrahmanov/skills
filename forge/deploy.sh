@@ -102,10 +102,22 @@ copy_tree() {  # $1=src-dir  $2=dst-dir
   find "$2" -type d \( -name '__pycache__' -o -name '.pytest_cache' \) -exec rm -rf {} + 2>/dev/null || true
   find "$2" -type f \( -name '*.pyc' -o -name '.DS_Store' \) -delete 2>/dev/null || true
 }
+# Конфиг оператора таргета (соответствие проект→спека с реальными путями ЭТОЙ машины)
+# откладываем на время копирования: строкой ниже снимается config.json исходника (локальный
+# конфиг машины, откуда деплоят), и безусловный rm снимал заодно и конфиг таргета — каждый
+# deploy/update молча обнулял его до `{"projects": {}}` (боевой прогон v0.4.6, A-F1).
+MDF_KEEP=""
+if [ -f "$GIG/skills/minor-defect-fix/config.json" ]; then
+  MDF_KEEP="$(mktemp)"
+  cp -p "$GIG/skills/minor-defect-fix/config.json" "$MDF_KEEP"
+fi
 copy_tree "$SRC/hooks" "$GIG/hooks"
 copy_tree "$SRC/skills" "$GIG/skills"
-# локальный конфиг оператора в таргет не тащим — ниже (если файла нет) заведётся пустой
+# локальный конфиг исходника в таргет не тащим — ниже (если файла нет) заведётся пустой
 rm -f "$GIG/skills/minor-defect-fix/config.json"
+if [ -n "$MDF_KEEP" ]; then
+  mv "$MDF_KEEP" "$GIG/skills/minor-defect-fix/config.json"
+fi
 # hooks.json — legacy extension-формат (${CLAUDE_PLUGIN_ROOT}), при project-модели не используется.
 # Используется settings.hooks.json, из которой deploy-local.sh генерирует settings.json.
 rm -f "$GIG/hooks/hooks.json"
@@ -250,8 +262,8 @@ else
   else
     rc=$?
     if [ "$rc" -eq 2 ]; then
-      echo "  (проект ещё не инициализирован — ground/pipeline.json появится при первом"
-      echo "   запуске пайплайна; это ожидаемо сразу после деплоя, не ошибка)"
+      echo "  (проект ещё не инициализирован — ground/policy.json заведёт init_command из"
+      echo "   вывода preflight выше (init_pipeline_config.py); сразу после деплоя это ожидаемо)"
     else
       echo "  (preflight сообщил о проблемах — см. вывод выше)"
     fi

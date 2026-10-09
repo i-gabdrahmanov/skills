@@ -131,5 +131,49 @@ class RealManifestNoInProgress(unittest.TestCase):
             self.assertIn("max_step_reopens", r.stderr)
 
 
+class TBattle046(unittest.TestCase):
+    """Боевой прогон v0.4.6: SoD-щели (track C F-2, L-17a/b)."""
+
+    def test_maven_wrapper_is_a_build(self):
+        """`./mvnw` — штатный запуск Spring-проекта — не совпадал с `\\bmvn\\b`."""
+        for step in ("02-sdd", "02-design", "03-jira"):
+            with self.subTest(step=step), tempfile.TemporaryDirectory() as d:
+                tmp = Path(d); _make(tmp, step)
+                self.assertEqual(_run(tmp, {"tool_name": "run_shell_command",
+                                            "tool_input": {"command": "./mvnw test"}}), 2)
+
+    def test_build_regex_is_one_constant(self):
+        """Константа продублирована в inline-phase-guard — расхождение снова открыло бы mvnw."""
+        import importlib.util
+        mods = []
+        for name in ("sod-enforcer.py", "inline-phase-guard.py"):
+            spec = importlib.util.spec_from_file_location(name.replace("-", "_")[:-3],
+                                                          HOOK.parent / name)
+            m = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m)
+            mods.append(m.BUILD_CMD_RE)
+        self.assertEqual(mods[0], mods[1])
+
+    def test_shell_write_into_blocked_path(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make(tmp, "04-test-T1")
+            for cmd in ("echo 'class Probe {}' > src/main/java/Foo.java",
+                        "echo x > src/main/resources/application.yml"):
+                with self.subTest(cmd=cmd):
+                    self.assertEqual(_run(tmp, {"tool_name": "run_shell_command",
+                                                "tool_input": {"command": cmd}}), 2)
+            self.assertEqual(_run(tmp, {"tool_name": "run_shell_command",
+                                        "tool_input": {"command": "echo x > src/test/java/T.java"}}), 0)
+
+    def test_edit_stub_checked(self):
+        """У Edit пишется new_string — стаб правкой проходил мимо blocked_content_patterns."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make(tmp, "04-test-T1")
+            stub = 'throw new UnsupportedOperationException("not implemented");'
+            self.assertEqual(_run(tmp, {"tool_name": "edit", "tool_input": {
+                "file_path": str(tmp / "src/test/java/XTest.java"),
+                "old_string": "x", "new_string": stub}}), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

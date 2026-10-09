@@ -32,9 +32,12 @@ Exit: 0 = ок, 2 = ошибка (нет дельты / не резолвитс�
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import sys
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -408,6 +411,58 @@ def spec_options(project_root: Path) -> dict:
     return cfg.get("spec") or {}
 
 
+# ── запись мастера: замок и атомарность ────────────────────────────────
+
+def master_lock(spec_path: Path):
+    """Замок на read-plan-write мастера. Два параллельных merge читали один и тот же файл,
+    нумеровали свои требования одной пачкой ID и писали поверх друг друга: проигравший терял
+    фичу целиком — 200 требований и строку журнала, 10 из 10 повторов (боевой прогон v0.4.6,
+    SA-1). Замок — в temp-каталоге, по пути мастера: файл-замок рядом со спекой оседал бы в
+    репо доков."""
+    hooks = Path(__file__).resolve().parents[3] / "hooks"
+    if str(hooks) not in sys.path:
+        sys.path.insert(0, str(hooks))
+    from _project import exclusive_lock
+    key = hashlib.sha1(str(Path(spec_path).resolve()).encode("utf-8")).hexdigest()[:16]
+    return exclusive_lock(Path(tempfile.gettempdir()) / f"forge-master-{key}.lock")
+
+
+def write_master(spec_path: Path, text: str) -> None:
+    """Атомарно: tmp рядом и os.replace — оборванная запись не оставит мастер обрезанным."""
+    tmp = spec_path.with_name(f".{spec_path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, spec_path)
+
+
+def delta_candidates(delta_text: str) -> "tuple[list[dict], dict | None]":
+    """(кандидаты дельты, отказ) — отказ, если сливать нечего или сопоставлять нельзя.
+
+    Пустая дельта давала кандидата без названия, и в мастер уходил блок `### REQ-NNN: ` с
+    журнальной строкой, а состояние дельты становилось «слито» (SA-2). Два требования с одним
+    названием: сопоставление с мастером идёт по названию, первое выпадало из него навсегда, а
+    `--allow-modify` перезаписывал второе первым — близнецы и вечный drifted (SA-3)."""
+    cands = [c for c in parse_delta(delta_text)
+             if (c.get("title") or "").strip() or (c.get("statement") or "").strip()
+             or c.get("scenarios")]
+    if not cands:
+        return [], {"status": "error", "kind": "empty-delta",
+                    "error": "в дельте нет требований — сливать нечего"}
+    seen: "set[str]" = set()
+    dups: "list[str]" = []
+    for c in cands:
+        k = _norm(c["title"])
+        if k in seen and c["title"] not in dups:
+            dups.append(c["title"])
+        seen.add(k)
+    if dups:
+        return cands, {"status": "error", "kind": "duplicate-titles",
+                       "error": ("в дельте несколько требований с одним названием: "
+                                 + ", ".join(f"«{t}»" for t in dups)
+                                 + " — мастер сопоставляется по названию: переименуй или слей "
+                                   "их в дельте, затем повтори")}
+    return cands, None
+
+
 # ── верхнеуровневая операция ───────────────────────────────────────────
 
 def merge(sdd_path: Path, spec_path: Path, template_path: Path, feature: str, capability: str,
@@ -418,7 +473,20 @@ def merge(sdd_path: Path, spec_path: Path, template_path: Path, feature: str, ca
           impl: "dict | None" = None, superseded: "set[str] | None" = None) -> dict:
     """`ensure` — дописать недостающий раздел требований/журнала в конец существующего мастера
     (по подтверждению человека). Без него отсутствие раздела — статус `no-section` ещё на
-    плане, а не ошибка посреди записи."""
+    плане, а не ошибка посреди записи. Запись — под master_lock (см. там)."""
+    kw = dict(prefix=prefix, dry_run=dry_run, allow_modify=allow_modify, modify_ids=modify_ids,
+              grammar=grammar, ensure=ensure, headings=headings, impl=impl, superseded=superseded)
+    if dry_run:
+        return _merge(sdd_path, spec_path, template_path, feature, capability, **kw)
+    with master_lock(spec_path):
+        return _merge(sdd_path, spec_path, template_path, feature, capability, **kw)
+
+
+def _merge(sdd_path: Path, spec_path: Path, template_path: Path, feature: str, capability: str,
+           *, prefix: str, dry_run: bool, allow_modify: bool, modify_ids: "set[str] | None",
+           grammar: "SG.Grammar | None", ensure: bool,
+           headings: "tuple[str | None, str | None]", impl: "dict | None",
+           superseded: "set[str] | None") -> dict:
     if not sdd_path.exists():
         return {"status": "error", "error": f"нет дельты (sdd.md): {sdd_path}"}
 
@@ -433,6 +501,9 @@ def merge(sdd_path: Path, spec_path: Path, template_path: Path, feature: str, ca
 
     delta = sdd_path.read_text(encoding="utf-8", errors="replace")
     today = date.today().isoformat()
+    candidates, refusal = delta_candidates(delta)
+    if refusal:
+        return {**refusal, "spec": str(spec_path)}
 
     created = False
     if not spec_path.exists():
@@ -452,13 +523,12 @@ def merge(sdd_path: Path, spec_path: Path, template_path: Path, feature: str, ca
             created = True
         else:
             spec_path.parent.mkdir(parents=True, exist_ok=True)
-            spec_path.write_text(template_skeleton(template_path, capability), encoding="utf-8")
+            write_master(spec_path, template_skeleton(template_path, capability))
             created = True
             text = spec_path.read_text(encoding="utf-8", errors="replace")
     else:
         text = spec_path.read_text(encoding="utf-8", errors="replace")
 
-    candidates = parse_delta(delta)
     ops = plan_ops(parse_master(text, prefix, g), candidates, g)
     # Требования стори, которые позже переписал её слитый фикс: расхождение с мастером тут
     # ожидаемо, и «~» откатил бы правку фикса старой дельтой стори.
@@ -492,7 +562,7 @@ def merge(sdd_path: Path, spec_path: Path, template_path: Path, feature: str, ca
                     allow_modify=allow_modify, modify_ids=modify_ids, grammar=g, impl=impl)
     if res.get("error"):
         return {"status": "error", "error": res["error"]}
-    spec_path.write_text(res["text"], encoding="utf-8")
+    write_master(spec_path, res["text"])
 
     blocked = [o["id"] for o in res["blocked"]]
     return {"status": "blocked" if blocked else "ok", "spec": str(spec_path), "created": created,

@@ -450,6 +450,12 @@ def cmd_create(args, project: Path, judges: list[str] | None = None) -> int:
 
 
 def cmd_list(args, project: Path) -> int:
+    if not args.feature:
+        # overrides живут в журнале прогона — без --feature список не адресуется; было сырым
+        # TypeError (statements_dir / None) на read-only команде (боевой прогон v0.4.6, CLI-5)
+        print("ERROR: --list требует --feature <слаг прогона> (и --skill, если не "
+              "feature-pipeline)", file=sys.stderr)
+        return 2
     records = FE.overrides(project, args.skill, args.feature)
 
     if args.json:

@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import functools
 import glob
 import json
 import os
@@ -474,12 +475,38 @@ def _command(tool_name: str, tool_input: dict) -> str:
     return ""
 
 
+# ── Паттерны пути: без квадратичного хвоста ─────────────────────────────────────────
+# Паттерны path_risk написаны «на весь путь»: `(?i).*(risk[-_]?model|…).*`. Под re.search
+# ведущий `.*` ничего не меняет в ответе, но делает поиск квадратичным: с каждой позиции
+# движок съедает строку до конца и откатывается назад. Цель Bash-команды — склейка всех
+# путей из неё (heredoc с кодом даёт десятки КБ): 32К символов `a/a/…` давали 52 с, а таймаут
+# хука рантайм читает как «возражений нет» — гейт снимался длинной командой (боевой прогон
+# v0.4.6, E-REPOS-GG). Ведущий `.*` срезаем при компиляции, а цель ограничиваем хвостом:
+# путь длиннее PATH_MAX — не путь, а `$`-якоря паттернов смотрят именно в конец.
+_MAX_TARGET_LEN = 4096
+
+
+@functools.lru_cache(maxsize=1024)
+def _path_re(pat: str):
+    flags, body = "", pat
+    m = re.match(r"\(\?[aiLmsux]+\)", body)
+    if m:
+        flags, body = m.group(0), body[m.end():]
+    while body.startswith(".*") and not body.startswith((".*?", ".*+")):
+        body = body[2:]
+    try:
+        return re.compile(flags + body)
+    except re.error:
+        return re.compile(pat)
+
+
 def classify(tool_name: str, tool_input: dict, root: Path | None = None) -> dict:
     """Вернуть {level, reason, target, command}. Берём максимум из path_risk и command_risk."""
     policy = load_policy()
     tool_input = tool_input or {}
     target = _target_path(tool_name, tool_input)
     command = _command(tool_name, tool_input)
+    probe = target[-_MAX_TARGET_LEN:]
 
     best = policy.get("default_level", "R1")
     reason = "default"
@@ -487,7 +514,7 @@ def classify(tool_name: str, tool_input: dict, root: Path | None = None) -> dict
     # path_risk — по убыванию риска R5..R0, первое совпадение даёт класс
     for lvl in ("R5", "R4", "R3", "R2", "R1", "R0"):
         for pat in policy.get("path_risk", {}).get(lvl, []):
-            if target and re.search(pat, target):
+            if probe and _path_re(pat).search(probe):
                 if level_order(lvl) >= level_order(best) or reason == "default":
                     best, reason = lvl, f"path~{pat}"
                 break

@@ -145,5 +145,39 @@ class TestStatePathShape(unittest.TestCase):
                 self.assertIs(getattr(_util, name), getattr(_project, name))
 
 
+class TStepIdIsAPathComponent(unittest.TestCase):
+    """Боевой прогон v0.4.6 (STATE-6/7, ST-2, STATE-8): id шага — часть пути и git-ref."""
+
+    def _cli(self, script, *argv):
+        import subprocess
+        r = subprocess.run([sys.executable, str(SCRIPTS / script), *argv],
+                           capture_output=True, text=True, timeout=120)
+        return r.returncode, r.stdout + r.stderr
+
+    def test_traversal_and_duplicate_ids_refused(self):
+        for steps in ([{"id": "../../outside"}], [{"id": ".hidden"}], [{"id": "a/b"}],
+                      [{"id": "dup"}, {"id": "dup"}]):
+            with self.subTest(steps=steps), tempfile.TemporaryDirectory() as d:
+                rc, out = self._cli("init.py", "--project", d, "--skill", "forgefix",
+                                    "--feature", "BUG-1", "--steps", json.dumps(steps))
+                self.assertEqual(rc, 2, out)
+                self.assertFalse((Path(d) / "ground" / "statements" / "forgefix" / "BUG-1"
+                                  / "manifest.json").exists())
+
+    def test_structurally_broken_manifest_is_clean_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            mp = Path(d) / "ground" / "statements" / "forgefix" / "BUG-1"
+            mp.mkdir(parents=True)
+            for body in ('{"skill": "forgefix"}', '{"steps": [{"status": "pending"}]}',
+                         '{"steps": {"id": "x"}}'):
+                with self.subTest(body=body):
+                    (mp / "manifest.json").write_text(body, encoding="utf-8")
+                    rc, out = self._cli("update.py", "--project", d, "--skill", "forgefix",
+                                        "--feature", "BUG-1", "--step-id", "fix-red",
+                                        "--status", "in_progress")
+                    self.assertEqual(rc, 4, out)
+                    self.assertNotIn("Traceback", out)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -31,8 +31,11 @@ def find_artifact(root: Path, artifact: str) -> "Path | None":
 
     Публичный: им же сверяет реализацию с планом /forge-merge (impl_check.py)."""
     art = artifact.strip().replace("\\", "/").lstrip("/")
-    if (root / art).exists():
-        return root / art
+    direct = (root / art)
+    # Только внутри проекта: `../outside.md` находился вне корня и засчитывался артефактом
+    # задачи — гейт Build отвечал PASS по чужому файлу (боевой прогон v0.4.6, CK-3).
+    if direct.exists() and _inside(root, direct):
+        return direct
     suffix = "/" + art
     name = Path(art).name
     for p in root.rglob(name):
@@ -43,8 +46,24 @@ def find_artifact(root: Path, artifact: str) -> "Path | None":
     return None
 
 
+def _inside(root: Path, p: Path) -> bool:
+    try:
+        p.resolve().relative_to(root.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def _exists(root: Path, artifact: str) -> bool:
     return find_artifact(root, artifact) is not None
+
+
+def _fail(args, reason: str) -> int:
+    if args.json:
+        print(json.dumps({"status": "fail", "reason": reason}, ensure_ascii=False, indent=2))
+    else:
+        print(f"Build gate: ✗ FAIL  ({reason})")
+    return 2
 
 
 def main() -> int:
@@ -59,10 +78,20 @@ def main() -> int:
     args = ap.parse_args()
 
     root = Path(args.root).resolve()
-    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
-    tasks = plan.get("tasks", [])
+    # Нечитаемый/битый план и неизвестная --task — FAIL (rc 2), как у RED-гейта: сырой
+    # трейсбек давал rc 1 — вне контракта 0/2 (CRASH-a/b), а опечатка в --task давала
+    # «PASS (задач: 0)» — шаг закрывался, не проверив ни одного артефакта.
+    try:
+        plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return _fail(args, f"task-plan не читается: {args.plan}: {e}")
+    if not isinstance(plan, dict) or not isinstance(plan.get("tasks", []), list):
+        return _fail(args, f"task-plan не объект с полем tasks: {args.plan}")
+    tasks = [t for t in plan.get("tasks", []) if isinstance(t, dict)]
     if args.task:
         tasks = [t for t in tasks if t.get("id") == args.task]
+        if not tasks:
+            return _fail(args, f"задачи {args.task!r} нет в task-plan: {args.plan}")
 
     missing = []
     for t in tasks:

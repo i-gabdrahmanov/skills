@@ -810,5 +810,18 @@ overrides:
         self.assertEqual(rc.returncode, 1)
 
 
+class TListNeedsFeature(unittest.TestCase):
+    def test_list_without_feature_is_clean_error(self):
+        """CLI-5: --list без --feature — сырой TypeError (statements_dir / None)."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            r = subprocess.run([sys.executable, str(Path(__file__).resolve().parent /
+                                                    "override_judge.py"),
+                                "--project", d, "--list"], capture_output=True, text=True,
+                               timeout=60)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertNotIn("Traceback", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

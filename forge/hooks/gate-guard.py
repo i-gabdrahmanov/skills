@@ -108,7 +108,11 @@ _WRITE_TOOLS = ("Write", "WriteFile", "Edit", "edit", "write_file", "NotebookEdi
 # в дизайне). Роль внутри фазы форсит sod-enforcer, происхождение шага — update._check_subagent_origin.
 # Читающие инструменты (Claude-нотация + канон рантайма) — см. main().
 _READ_TOOLS = ("Read", "ReadFile", "read_file",
-               "Grep", "GrepSearch", "grep", "search_file_content", "Glob", "glob")
+               "Grep", "GrepSearch", "grep", "grep_search", "search_file_content", "Glob", "glob")
+# Поиск: цель — каталог и шаблон, а не файл. Без `path` он идёт от корня проекта, то есть и
+# по src/ (см. check_phase_gate).
+_SEARCH_TOOLS = ("Grep", "GrepSearch", "grep", "grep_search", "search_file_content",
+                 "Glob", "glob")
 
 _GENERIC_AGENT_TYPES = frozenset({
     "general-purpose", "general_purpose", "generalpurpose",
@@ -244,6 +248,22 @@ def check_phase_gate(tool_name: str, tool_input: dict, agent_type: str | None,
                ("ground/phases", "grounding-excerpt", "ground/policy", "ground/pipeline",
                 ".gigacode/")):
             return True
+
+        # Поиск без `path` идёт от корня проекта — по src/ тоже. Пустая цель была fail-open:
+        # канонический вызов `glob {"pattern": "src/**/*.java"}` и `grep_search {"pattern":
+        # "class"}` проходили блок чтения src/ до grounding'а (боевой прогон v0.4.6, B-F1).
+        # Целью считаем шаблон glob'а, а у поиска без каталога — весь проект.
+        if not file_path and tool_name in _SEARCH_TOOLS and blocked_paths:
+            pattern = re.sub(r"^(?:\./)+", "", str(tool_input.get("pattern") or "")
+                             .replace("\\", "/"))
+            is_glob = tool_name in ("Glob", "glob")
+            if is_glob and pattern and not pattern.startswith(("*", "{")):
+                if not any(bp in pattern + "/" for bp in blocked_paths):
+                    return True            # glob по docs/**, ground/** и т.п.
+                file_path = pattern
+            else:
+                file_path = (f"{pattern or '*'} (поиск без path — по всему проекту, включая "
+                             f"{blocked_paths[0]}; укажи path вне него)")
 
         # Пропускаем чтение README, .md, .json, .yml — если не в src/
         if not any(bp in file_path for bp in blocked_paths):
@@ -425,18 +445,47 @@ _EVIDENCE_MIN_CHARS = 12          # «да», «ок», «+» цитатой п�
 _TRANSCRIPT_MAX_BYTES = 64 * 1024 * 1024
 
 
+# Ответ на `ask_user_question` — тоже слова пользователя, хотя приходит результатом
+# инструмента: рантайм пишет туда выбранный вариант либо введённый текст. Брифы и баннеры
+# велят спрашивать именно им, а сверка брала одни записи `type:"user"` — и согласие, данное
+# по правилам, отбивалось как «пользователь этого не говорил». Берём ТОЛЬКО значения ответов:
+# заголовок вопроса (`**<header>**:`) пишет модель. Остальные tool_result — вывод команд
+# модели (`echo "<фраза>"`), их не берём по-прежнему.
+_ASK_TOOLS = ("ask_user_question", "AskUserQuestion")
+_ASK_ANSWER_RE = re.compile(r"^\s*\*\*.+?\*\*:\s*(.+?)\s*$")
+
+
 def _user_texts(rec) -> "list[str]":
     """Тексты, которые в этой записи транскрипта написал ПОЛЬЗОВАТЕЛЬ; [] — запись не его.
 
-    qwen/gigacode: `{"type":"user","message":{"parts":[{"text":…}]}}`; результаты
-    инструментов там — отдельный тип `tool_result`. Claude Code: `{"type":"user",
-    "message":{"content":"…" | [{"type":"text","text":…}]}}`; результаты инструментов —
-    блоки `tool_result` в той же user-записи, их не берём."""
-    if not isinstance(rec, dict) or rec.get("type") != "user":
+    qwen/gigacode: `{"type":"user","message":{"parts":[{"text":…}]}}` (и плоская форма
+    `{"type":"user","parts":[…]}`); результаты инструментов там — отдельный тип
+    `tool_result`, из них берутся только ответы `ask_user_question`. Claude Code:
+    `{"type":"user","message":{"content":"…" | [{"type":"text","text":…}]}}`; результаты
+    инструментов — блоки `tool_result` в той же user-записи, их не берём."""
+    if not isinstance(rec, dict):
         return []
     msg = rec.get("message")
-    if not isinstance(msg, dict):
+    if rec.get("type") == "tool_result":
+        parts = msg.get("parts") if isinstance(msg, dict) else None
+        out = []
+        for p in parts if isinstance(parts, list) else []:
+            fr = p.get("functionResponse") if isinstance(p, dict) else None
+            if not isinstance(fr, dict) or fr.get("name") not in _ASK_TOOLS:
+                continue
+            resp = fr.get("response")
+            text = resp.get("output") if isinstance(resp, dict) else resp
+            if isinstance(text, str):
+                answers = [m.group(1) for m in map(_ASK_ANSWER_RE.match, text.splitlines()) if m]
+                if answers:
+                    out.append("\n".join(answers))
+        return out
+    if rec.get("type") != "user":
         return []
+    if not isinstance(msg, dict):
+        msg = rec if isinstance(rec.get("parts"), list) else None
+        if msg is None:
+            return []
     out = []
     parts = msg.get("parts")
     if isinstance(parts, list):
@@ -450,32 +499,117 @@ def _user_texts(rec) -> "list[str]":
     return out
 
 
-def _transcript_user_text(transcript_path: str) -> str | None:
-    """Всё, что пользователь написал в этой сессии; None — сверить не с чем (файла нет либо в
-    нём не распознано ни одной реплики пользователя — формат рантайма не тот)."""
+def _main_transcript(transcript_path: str) -> str:
+    """Транскрипт ОСНОВНОЙ сессии. У субагента qwen ведёт свой файл
+    `<проект>/subagents/<сессия>/agent-*.jsonl`, и реплика `user` в нём — постановка задачи,
+    которую написал оркестратор, то есть модель. Согласием она быть не может: если рантайм
+    отдаст хуку путь субагента, сверяемся с `<проект>/chats/<сессия>.jsonl`."""
+    p = Path(transcript_path)
+    if len(p.parents) >= 3 and p.parents[1].name == "subagents":
+        return str(p.parents[2] / "chats" / f"{p.parent.name}.jsonl")
+    return transcript_path
+
+
+def _transcript_utterances(transcript_path: str) -> "list[str] | None":
+    """Реплики пользователя в этой сессии по порядку (одна запись — одна реплика); None —
+    сверить не с чем (файла нет либо в нём не распознано ни одной реплики — формат рантайма
+    не тот)."""
     if not transcript_path:
         return None
     try:
-        with open(transcript_path, "rb") as f:
+        with open(_main_transcript(transcript_path), "rb") as f:
             raw = f.read(_TRANSCRIPT_MAX_BYTES)
     except Exception:  # noqa: BLE001 — рантайм не отдал путь/файл недоступен
         return None
-    texts = []
+    out = []
     for line in raw.decode("utf-8", errors="replace").splitlines():
-        if '"user"' not in line:           # дешёвый префильтр: файл бывает в десятки МБ
+        if '"user"' not in line and '"tool_result"' not in line:   # дешёвый префильтр
             continue
         try:
-            texts += _user_texts(json.loads(line))
+            texts = _user_texts(json.loads(line))
         except ValueError:
             continue
-    return "\n".join(texts) if texts else None
+        if texts:
+            out.append("\n".join(texts))
+    return out or None
 
 
-def _evidence_in_transcript(evidence: str, transcript: str) -> bool:
-    """Цитата встречается в репликах пользователя (по нормализованным пробелам,
-    регистронезависимо)."""
-    norm = lambda s: re.sub(r"\s+", " ", s).strip().lower()
-    return norm(evidence) in norm(transcript)
+def _norm_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+def _quote_in(evidence: str, utterance: str) -> bool:
+    """Цитата — целые слова реплики (по нормализованным пробелам, регистронезависимо): из
+    «когда-нибудь потом» не вырезается «да-нибудь потом»."""
+    q, u = _norm_ws(evidence), _norm_ws(utterance)
+    if not q:
+        return False
+    start = u.find(q)
+    while start >= 0:
+        end = start + len(q)
+        if ((start == 0 or not (u[start - 1].isalnum() or u[start - 1] == "_"))
+                and (end == len(u) or not (u[end].isalnum() or u[end] == "_"))):
+            return True
+        start = u.find(q, start + 1)
+    return False
+
+
+def _evidence_problem(evidence: str, utterances: "list[str]") -> str | None:
+    """Почему цитата не засчитывается согласием; None — засчитывается.
+
+    Согласие — ответ на вопрос о ЭТОМ действии, поэтому цитата берётся из ПОСЛЕДНЕЙ реплики
+    пользователя: модель спросила — пользователь ответил — модель фиксирует. Раньше годилась
+    любая реплика сессии, и согласие собиралось из старых: из постановки задачи, из ответа на
+    вопрос BRD-интервью «Да, нужна интеграция с Kafka», из отказа. Реплика, начатая
+    отрицанием («Нет. Да, понимаю, но…»), согласием не бывает, какой бы кусок из неё ни
+    процитировать."""
+    last = utterances[-1]
+    if not _quote_in(evidence, last):
+        if any(_quote_in(evidence, u) for u in utterances[:-1]):
+            return ("цитата из СТАРОЙ реплики пользователя. Согласие — ответ на вопрос об ЭТОМ "
+                    "действии: спроси сейчас и процитируй его ответ.")
+        return ("переданной цитаты нет ни в одной реплике пользователя — значит, он этого не "
+                "говорил.")
+    first = FE.consent_words(last)[:1]
+    if first and first[0] in FE.NEGATION_WORDS:
+        return (f"последняя реплика пользователя начинается с отрицания («{first[0]}») — это "
+                f"отказ, а не согласие.")
+    return FE.consent_quote_problem(evidence)
+
+
+# Батч согласий: ключи лежат в файле, которого хук в командной строке не видит, а второй слой
+# (record_approval) транскрипта не видит вовсе — цитату там сверять не с чем. Через батч
+# согласие выписывалось с мусорной цитатой `zzzzzzzzzzzzzzzzzz`, и `git reset --hard` после
+# него проходил (боевой прогон v0.4.6, E-CONSENT-BATCH). Согласие — по одному вызову на ключ.
+_BATCH_KEY_RE = re.compile(r"""["']?\bkey["']?\s*:\s*["']?([^"'\s,}\]#]+)""")
+
+
+def _batch_keys(path: str, cwd: str) -> "list[str]":
+    """Ключи approval'ов из batch-файла: разбор YAML/JSON, плюс текстовый поиск `key:` — на
+    случай, если хуку файл не разобрать (нет PyYAML), а скрипту — разобрать."""
+    p = Path(path)
+    if not p.is_absolute():
+        p = Path(cwd or ".") / p
+    try:
+        with open(p, "rb") as f:
+            text = f.read(4 * 1024 * 1024).decode("utf-8", errors="replace")
+    except Exception:  # noqa: BLE001 — файла нет: record_approval сам откажет
+        return []
+    keys = [m.group(1) for m in _BATCH_KEY_RE.finditer(text)]
+    data = None
+    try:
+        data = json.loads(text)
+    except ValueError:
+        try:
+            import yaml  # type: ignore
+            data = yaml.safe_load(text)
+        except Exception:  # noqa: BLE001
+            data = None
+    if isinstance(data, dict):
+        data = data.get("approvals")
+    if isinstance(data, list):
+        keys += [str(i["key"]) for i in data if isinstance(i, dict) and i.get("key")]
+    return keys
 
 
 def _opt_value(argv: "list[str]", name: str) -> str:
@@ -492,24 +626,36 @@ def _opt_value(argv: "list[str]", name: str) -> str:
     return ""
 
 
-def check_record_approval(command: str, root: Path, transcript_path: str) -> str | None:
+def check_record_approval(command: str, root: Path, transcript_path: str,
+                          cwd: str = "") -> str | None:
     """R4-класс: `record_approval.py` для ключей, снимающих enforcement, требует `--evidence`
-    с цитатой пользователя, сверяемой с его репликами в транскрипте. Возвращает причину
+    — согласие из ПОСЛЕДНЕЙ реплики пользователя (см. _evidence_problem). Возвращает причину
     блокировки или None.
 
-    Второй слой — сам record_approval.py валидирует `--evidence` (гейт держится и мимо
-    харнеса). Ошибка разбора → fail-CLOSED."""
+    Второй слой — сам record_approval.py проверяет, что цитата выражает согласие (гейт
+    держится и мимо харнеса). Ошибка разбора → fail-CLOSED."""
     try:
         if not command or not re.search(r"record_approval\.py", command):
             return None
         argv = _gated_argv(command, r"record_approval\.py")
         if not argv:
             return None
-        if "--batch" in argv or any(a.startswith("--batch=") for a in argv):
-            # Ключи лежат в YAML/JSON, командной строки хук не хватает. Инвариант держит
-            # сам record_approval: _validate_approval_item требует цитату для тех же
-            # классов ключей, и валидация батча атомарна (одна плохая запись → ни одной).
-            return None
+        tail = ("\n  Порядок: (1) покажи пользователю, ЧТО снимается и почему, и спроси прямо — "
+                "ask_user_question с вариантом-фразой «Да, <действие>» либо вопросом в чате; "
+                "(2) повтори команду с --evidence \"<его ответ дословно>\". Цитата сверяется с "
+                "ПОСЛЕДНЕЙ репликой пользователя в транскрипте и обязана быть согласием "
+                "(«да, …», «согласен …», «подтверждаю …»): старые реплики, постановка задачи, "
+                "свои реплики и вывод команд не считаются, пересказ своими словами тоже.")
+        batch = _opt_value(argv, "--batch")
+        if batch or "--batch" in argv:
+            consent = sorted({k for k in map(_safe_key, _batch_keys(batch, cwd))
+                              if k and FE.consent_required(k)})
+            if not consent:
+                return None                # согласия плана/документов батчем — можно
+            return (f"согласия, снимающие enforcement ({', '.join(consent)}), батчем не "
+                    f"записываются: цитату в файле сверить не с чем. По одному вызову на ключ: "
+                    f"record_approval.py --key <ключ> … --evidence \"<ответ пользователя>\"."
+                    + tail)
         key = _safe_key(_opt_value(argv, "--key"))
         if not key or not FE.consent_required(key):
             return None                    # approval плана/документа — не этот класс
@@ -517,26 +663,23 @@ def check_record_approval(command: str, root: Path, transcript_path: str) -> str
         evidence = _opt_value(argv, "--evidence")
         head = (f"запись согласия по ключу '{key}' снимает enforcement — цитата пользователя "
                 f"обязательна. ")
-        tail = ("\n  Порядок: (1) покажи пользователю, ЧТО не сходится, и спроси прямо; "
-                "(2) повтори команду с --evidence \"<дословная фраза пользователя из этого "
-                "диалога>\". Цитата сверяется с репликами пользователя в транскрипте — "
-                "свои реплики и вывод команд не считаются, пересказ своими словами тоже.")
         if len(evidence) < _EVIDENCE_MIN_CHARS:
             return head + (f"В команде нет --evidence (или он короче {_EVIDENCE_MIN_CHARS} "
                            f"символов: «да»/«ок» цитатой не считаются).") + tail
 
-        transcript = _transcript_user_text(transcript_path)
-        if transcript is None:
+        utterances = _transcript_utterances(transcript_path)
+        if utterances is None:
             # Сверить не с чем. Не запираем единственный аварийный выход наглухо:
-            # --evidence уже обязателен и уходит в журнал под аудит.
+            # --evidence уже обязателен, record_approval проверит, что это согласие, и
+            # цитата уйдёт в журнал под аудит.
             print(f"[gate-guard] WARN: реплики пользователя в транскрипте не найдены (файла нет "
                   f"либо формат рантайма не распознан) — цитата --evidence для '{key}' "
                   f"записана БЕЗ сверки. Проверяется постфактум по ground/approvals.jsonl.",
                   file=sys.stderr)
             return None
-        if not _evidence_in_transcript(evidence, transcript):
-            return head + ("Переданной цитаты нет ни в одной реплике пользователя — значит, "
-                           "он этого не говорил.") + tail
+        problem = _evidence_problem(evidence, utterances)
+        if problem:
+            return head + problem[0].upper() + problem[1:] + tail
         return None
     except Exception as e:
         return f"deny-first: ошибка проверки record_approval ({e})."
@@ -788,6 +931,7 @@ def check_skip_judges(command: str, root: Path) -> str | None:
             f"статусов после init.py --force. Порядок: (1) объясни пользователю, зачем обходить "
             f"гейты, и спроси; (2) после явного «да» — pipeline-state/scripts/record_approval.py "
             f"--key {key} --approved-by user --reason \"<зачем обход>\" --evidence \"<дословная цитата пользователя>\"; (3) повтори команду. "
+            f"Маркер одноразовый — тратится на одно закрытие; утверждение BRD/SDD флаг не снимает. "
             f"Штатное закрытие шага этого флага НЕ требует — прогони гейт фазы."
         )
     except Exception as e:
@@ -1040,7 +1184,8 @@ def main() -> int:
         # ── R4-класс: запись самого согласия (record_approval) без цитаты пользователя ──
         # Первым в ряду R4: остальные гейты ссылаются на approval-маркер как на доказательство
         # человеческого «да», и если выписать маркер может сама модель, они все декоративны.
-        deny = check_record_approval(command, root, str(data.get("transcript_path") or ""))
+        deny = check_record_approval(command, root, str(data.get("transcript_path") or ""),
+                                     str(data.get("cwd") or ""))
         if deny:
             return _block(deny)
 

@@ -354,23 +354,22 @@ def _live_run(project: Path):
     политики в манифесте (см. _config_loader.load_project_config), а этот предикат нужен
     только чтобы честно сказать: «записано, но к идущему прогону не применится».
     """
-    base = project / "ground" / "statements"
-    if not base.is_dir():
+    # Тот же резолвер, что у хуков: первый живой по алфавиту называл в предупреждении чужой
+    # прогон (STOR-101), когда активным для гейтов был свежайший (STOR-901) — и совет
+    # `repin --feature STOR-101` переснимал не тот снимок (боевой прогон v0.4.6, P3-5).
+    try:
+        from _project import resolve_active_run
+        from _config_loader import run_is_live
+        run = resolve_active_run(project)
+    except Exception:  # noqa: BLE001 — без резолвера просто не предупреждаем
         return None
     try:
-        from _config_loader import run_is_live
-    except Exception:  # noqa: BLE001 — без предиката просто не предупреждаем
+        man = load_json(run["path"]) if run.get("path") else None
+    except (OSError, ValueError):          # битый манифест: предупреждать не о чем
         return None
-    for skill_dir in sorted(base.iterdir()):
-        if not skill_dir.is_dir():
-            continue
-        for d in sorted(skill_dir.iterdir()):
-            if not d.is_dir() or d.name == "archived":
-                continue
-            man = load_json(d / "manifest.json")
-            if isinstance(man, dict) and run_is_live(man):
-                return skill_dir.name, d.name
-    return None
+    if not (isinstance(man, dict) and run_is_live(man)):
+        return None                        # единственный прогон резолвер не парсит — проверяем
+    return run["skill"], run["feature"]
 
 
 def cmd_set(project: Path, params: list, args) -> int:
@@ -397,7 +396,9 @@ def cmd_set(project: Path, params: list, args) -> int:
     #    снимался штатной командой, причём на ВЕСЬ проект: policy.json переживает прогон и
     #    действует на соседние. Снимок политики не защита: окно ДО init.py открыто.
     #    Слой держится и при запуске мимо харнеса — как у repin.
-    if _is_enforcement_switch(str(e["id"])):
+    # --dry-run только показывает «было → станет» и ничего не пишет — свободен, как в
+    # gate-guard и в cmd_repin; здесь он упирался в approval раньше выхода (B-F2).
+    if _is_enforcement_switch(str(e["id"])) and not args.dry_run:
         # Санитайзер ОБЩИЙ с gate-guard и record_approval — иначе слои искали бы маркер
         # под разными именами и гейт держался бы только в одном из них.
         approval_key = safe_component(f"policy-downgrade-{e['id']}")

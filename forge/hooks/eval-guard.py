@@ -30,6 +30,7 @@ from pathlib import Path
 # громким отказом, а не тишиной. Инвариант «пол интерпретатора» держит test_python_floor.py.
 try:
     import risk_ladder as R
+    import _shell_targets as ST
 except Exception as _e:  # pragma: no cover — сломанный бандл/интерпретатор
     # Форточка на команды ВОССТАНОВЛЕНИЯ: сплошной deny запирал и починку бандла
     # (баннер советовал `bash .gigacode/deploy-local.sh`, а матчер ^Bash$ её же и резал).
@@ -164,7 +165,13 @@ def main() -> int:
     root = Path(R.project_root(cwd))
     tool_name = data.get("tool_name", "")
     tool_input = data.get("tool_input") or {}
-    target = _target_path(tool_name, tool_input)
+    # Shell-запись в src/main — та же запись: `cat > src/main/java/Foo.java <<EOF` проходил
+    # EDD-гейт, глядевший только на Write/Edit (боевой прогон v0.4.6, L-17b).
+    if tool_name in ("Bash", "run_shell_command"):
+        targets = ST.write_targets(str(tool_input.get("command") or ""))
+    else:
+        targets = [_target_path(tool_name, tool_input)]
+    targets = [t for t in targets if _is_src_main(t)]
 
     # 1. Проверяем, включён ли eval (fail-open).
     # B2 fix: используем канонический v2-reader с dual-read fallback (policy.json → pipeline.json).
@@ -177,7 +184,7 @@ def main() -> int:
         return 0
 
     # 2. Фильтр: только запись в src/main (не src/test)
-    if not _is_src_main(target):
+    if not targets:
         return 0
 
     # 3. Находим активную фичу
@@ -237,7 +244,9 @@ def main() -> int:
     if not current_task_id:
         # На параллельных задачах current_step_id намеренно отдаёт None — определяем задачу по
         # самому файлу (её `artifacts` в task-plan), иначе EDD-гейт молча пропускает запись.
-        current_task_id = _task_of_target(eval_plan_path.parent / "task-plan.json", target)
+        current_task_id = next((tid for tid in (
+            _task_of_target(eval_plan_path.parent / "task-plan.json", t) for t in targets)
+            if tid), None)
     if not current_task_id:
         return 0
 

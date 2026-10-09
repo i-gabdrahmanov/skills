@@ -49,12 +49,18 @@ def _groups(event: str) -> list[dict]:
     return block.get(event, [])
 
 
-def _group_with_hook(event: str, hook_basename: str) -> dict | None:
+def _group_with_hook(event: str, hook_basename: str, without: str | None = None) -> dict | None:
     for g in _groups(event):
-        for h in g.get("hooks", []):
-            if _basename(h.get("command", "")) == hook_basename:
-                return g
+        names = {_basename(h.get("command", "")) for h in g.get("hooks", [])}
+        if hook_basename in names and (without is None or without not in names):
+            return g
     return None
+
+
+def _write_group() -> dict | None:
+    """Write/Edit-цепочка. tdd-guard стоит и в Bash-цепочке (судит цели shell-записи), поэтому
+    ищем группу с ним, но без destructive-blocker — тот бывает только в Bash."""
+    return _group_with_hook("PreToolUse", "tdd-guard", without="destructive-blocker")
 
 
 class TestMatcherCanonicalNames(unittest.TestCase):
@@ -69,7 +75,7 @@ class TestMatcherCanonicalNames(unittest.TestCase):
         )
 
     def test_write_chain_matches_canonical_edits(self):
-        g = _group_with_hook("PreToolUse", "tdd-guard")
+        g = _write_group()
         self.assertIsNotNone(g, "не нашёл Write/Edit-цепочку (по tdd-guard)")
         matcher = g.get("matcher", "")
         for name in (CANON_WRITE, CANON_EDIT, CANON_NOTEBOOK):
@@ -80,7 +86,7 @@ class TestMatcherCanonicalNames(unittest.TestCase):
             )
 
     def test_write_chain_does_not_overmatch_reads(self):
-        g = _group_with_hook("PreToolUse", "tdd-guard")
+        g = _write_group()
         matcher = g.get("matcher", "")
         for name in (CANON_READ, CANON_SHELL):
             self.assertFalse(

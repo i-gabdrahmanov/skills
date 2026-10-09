@@ -25,7 +25,7 @@ forge/
 │   ├── *.py                  # хук-скрипты + зависимости (_project.py, risk_ladder.py, forge_events.py)
 │   ├── risk-policy.json      # deny-политика (R0–R5 ladder)
 │   ├── DEPLOY.md             # полный ростер хуков: события, порядок, диагностика
-│   ├── test_*.py, tests/     # юнит-тесты control-plane (30 файлов)
+│   ├── test_*.py, tests/     # юнит-тесты control-plane (31 файл)
 │   ├── evals/run-evals.py    # eval-набор (поведенческие пины хуков)
 │   ├── resolve_hook_paths.py # подстановка ${PYTHON}/${PROJECT_ROOT} в settings.hooks.json
 │   └── run-hook-tests.sh     # юнит-тесты хуков + evals одной командой
@@ -75,17 +75,24 @@ forge/
 |---|---|
 | `override_judge.py` — снять вердикт судьи | `gate-override-<judge>` |
 | `rollback.py` — откатить прогон к шагу | `rollback-<feature>-<step>` |
-| `update.py --skip-judges` — обойти все гейты закрытия | `skip-judges-<feature>` |
+| `update.py --skip-judges` — обойти гейты закрытия шага (утверждение BRD/SDD не снимает) | `skip-judges-<feature>` (тратится на одно закрытие) |
 | `config.py repin` — переснять политику идущего прогона | `policy-repin-<feature>` |
 | `config.py set` по переключателю enforcement (`quality.tdd`, `coverage_threshold`, `security.*`, …) | `policy-downgrade-<параметр>` |
 | `archive.py abandon` / `put --force` — снять прогон с активных | `abandon-<feature>` / `archive-force-<slug>` |
 | `config.py risk list-remove` / `cap-set`, `phase disable` обязательной фазы — ослабить политику мимо `set` | `policy-downgrade-risk.<ключ>` / `policy-downgrade-phase.<фаза>` |
 | `git reset --hard`, `clean -f`, `checkout .` / `restore .`, `stash drop\|clear` — стереть незакоммиченное целиком | `git-discard` (тратится на одну команду) |
+| `check_acceptance` — засчитать критерий приёмки ручной проверкой вместо теста | `acceptance-<ID>` |
 
-Для этих классов `record_approval.py` требует **`--evidence "<дословная фраза
-пользователя>"`**, и цитата сверяется с репликами пользователя в транскрипте сессии (не с
-командой модели и не с выводом её команд): согласие обязано прийти извне модели. Approval'ы ПЛАНА (`fix-plan-*`, `jira-plan-*`,
-`<doc>-approved-*`) цитаты не требуют — они двигают прогон вперёд, а не убирают защиту.
+Для этих классов `record_approval.py` требует **`--evidence "<дословный ответ
+пользователя>"`**. Цитата обязана быть СОГЛАСИЕМ на это действие: она берётся из ПОСЛЕДНЕЙ
+реплики пользователя (ответ в чате или в `ask_user_question`), содержит слово согласия
+(«да, …», «согласен», «подтверждаю», «разрешаю», «ок, …», «давай») без отрицания рядом и не
+является вопросом. Постановка задачи, старые реплики, отказ («никогда не откатывай…»), свои
+реплики модели и вывод её команд согласием не считаются. Согласия этих классов пишутся только
+одиночным вызовом — `--batch` с ними хук не пропускает. Approval'ы ПЛАНА (`fix-plan-*`,
+`jira-plan-*`, `<doc>-approved-*`) цитаты не требуют — они двигают прогон вперёд, а не
+убирают защиту. Создание Jira-задач (R3) ждёт маркер `jira-create`
+(`risk-policy.json: kind_approval`), а не общий `security-review`.
 
 ФАКТЫ о проекте под гейт не попадают: `quality.build_command`, `test_command`,
 `jacoco_configured`, `test_layer` настраиваются свободно — это работа `config-helper`.
@@ -95,8 +102,8 @@ forge/
 ## Тесты
 
 ```bash
-python3 skills/run_all_tests.py          # весь набор: скиллы + хуки + корень (113 файлов тестов)
-python3 skills/run_all_tests.py --skill hooks   # только control-plane (30)
+python3 skills/run_all_tests.py          # весь набор: скиллы + хуки + корень (119 файлов тестов)
+python3 skills/run_all_tests.py --skill hooks   # только control-plane (31)
 bash hooks/run-hook-tests.sh             # юнит-тесты хуков + eval-набор
 ```
 Пол интерпретатора — **Python 3.9** (`hooks/test_python_floor.py` держит его кодом: всё дерево
@@ -154,7 +161,7 @@ hooks из `settings.json`; `--purge-state` дополнительно снос�
 
 ## Проверено
 
-- `python3 skills/run_all_tests.py` — 113/113 (control-plane + skills + корень).
+- `python3 skills/run_all_tests.py` — 119/119 (control-plane + skills + корень).
 - `bash cleanup-legacy.sh --apply` на user-уровне с extension-остатками — успех,
   операторские скиллы (pptx/pdf/skill-creator) не тронуты.
 - `destructive-blocker` блокирует на точном payload qwen (`git push -f origin main` →

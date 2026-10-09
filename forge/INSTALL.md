@@ -62,7 +62,8 @@ bash deploy.sh /path/to/target-project
 
 `deploy.sh` делает:
 1. Копирует `hooks/` и `skills/` (co-located) в `<target>/.gigacode/`.
-2. Удаляет `__pycache__`, `.DS_Store`, локальный `config.json`.
+2. Удаляет `__pycache__`, `.DS_Store` и локальный `config.json` исходника; конфиг оператора
+   таргета (`skills/minor-defect-fix/config.json`) переживает редеплой.
 3. Удаляет хуки-сироты (были в старом деплое, но нет в исходнике).
 4. Снимает надгробия — скиллы/команды/хуки, которые форж клал раньше и удалил из репо
    (по реестру `.gigacode/.forge-deployed` прошлой установки + `tombstones.txt`).
@@ -99,10 +100,10 @@ bash deploy.sh /path/to/target-project
    > Если `ground/` уже попал в историю, `.gitignore` его оттуда не уберёт — файлы уже
    > отслеживаются. Снять с учёта, сохранив на диске:
    > `git rm -r --cached ground && git add ground/policy.json`.
-7. Запускает `deploy-local.sh` — генерирует `settings.json` из `settings.hooks.json`
+9. Запускает `deploy-local.sh` — генерирует `settings.json` из `settings.hooks.json`
    (подставляет `${PYTHON}` = выбранный здоровый интерпретатор и `${PROJECT_ROOT}` =
    абсолютный путь проекта).
-8. Прогоняет `preflight.py` (advisory).
+10. Прогоняет `preflight.py` (advisory).
 
 ## 3. Проверка готовности
 

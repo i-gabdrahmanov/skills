@@ -4,6 +4,7 @@ dotted-path, валидация значения по записи реестр�
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 from datetime import datetime, timezone
@@ -41,7 +42,7 @@ def atomic_write(path, data: Any) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(p.suffix + ".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+        json.dump(data, f, indent=2, ensure_ascii=False, allow_nan=False)
         f.write("\n")
     os.replace(tmp, p)
 
@@ -193,6 +194,13 @@ def coerce_and_validate(entry: dict, raw) -> Any:
     t = entry.get("type")
     s = str(raw).strip()
 
+    # Значение из словаря параметра — это значение, а не null: `none` у spec.grammar.provenance
+    # и scenario_style — законный выбор («тегов нет»), а ветка null ниже превращала его в
+    # null, и читатель подставлял дефолт from-bracket — ровно обратное сказанному.
+    allowed = entry.get("enum")
+    if isinstance(allowed, list) and s in allowed:
+        return s
+
     # Явный null разрешён для string/bool-параметров с допустимым null-дефолтом
     if s.lower() in _NULL:
         # `none_is_value` — параметры, для которых 'none' это ОСОЗНАННЫЙ ОТВЕТ пользователя
@@ -230,6 +238,10 @@ def coerce_and_validate(entry: dict, raw) -> Any:
             v = float(s)
         except ValueError:
             raise ValueError(f"ожидалось число, получено {raw!r}")
+        # nan/inf проходили границы (сравнение с NaN всегда False) и уезжали в policy.json
+        # литералом NaN — невалидный JSON для всех, кроме Python (боевой прогон v0.4.6, APPR-2).
+        if not math.isfinite(v):
+            raise ValueError(f"ожидалось конечное число, получено {raw!r}")
         _check_range(entry, v)
         return v
 
@@ -240,6 +252,11 @@ def coerce_and_validate(entry: dict, raw) -> Any:
         return s
 
     if t == "string":
+        # Словарь у строкового параметра — закрытый: значение вне него принималось молча и
+        # переводило весь спек-контур в fail-closed (`set spec.grammar.requirement_kind
+        # table-like` → rc 0, затем каждый merge — exit 3), G-P1.
+        if isinstance(allowed, list) and allowed:
+            raise ValueError(f"значение {s!r} не входит в допустимые: {allowed}")
         return str(raw)
 
     if t == "list":

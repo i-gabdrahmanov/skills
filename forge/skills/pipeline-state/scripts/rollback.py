@@ -161,12 +161,22 @@ def _journal_scope(project: Path, skill: str, feature: str,
     warnings: list[str] = []
     if not jpath.exists():
         return paths, warnings
-    for line in jpath.read_text(encoding="utf-8").splitlines():
+    # Построчно: один не-UTF8 байт в журнале ронял откат UnicodeDecodeError'ом даже на
+    # --dry-run (боевой прогон v0.4.6, STATE-4). Потеря строки обязана быть видна — молча
+    # сузить набор восстановления = неполный откат.
+    for i, bline in enumerate(jpath.read_bytes().splitlines(), 1):
+        try:
+            line = bline.decode("utf-8")
+        except UnicodeDecodeError:
+            warnings.append(f"журнал: строка {i} не UTF-8 — её пути не восстановлены, "
+                            f"проверь руками: {jpath}")
+            continue
         if not line.strip():
             continue
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
+            warnings.append(f"журнал: строка {i} не JSON — её пути не восстановлены: {jpath}")
             continue
         ts = _parse_ts(rec.get("ts", ""))
         if after_ts is not None and (ts is None or ts <= after_ts):

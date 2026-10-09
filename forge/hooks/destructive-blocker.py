@@ -42,14 +42,17 @@ except Exception as _e:  # pragma: no cover — сломанный бандл/и
 _TOK = r"(?:(?<=\s)|^)"
 
 _CORE_BLACKLIST = [
-    r"\bfind\s+(?:/|~|\$HOME)\S*\s.*-(?:delete|exec\s+rm)\b",  # find в опасном корне + удаление
+    # find в опасном корне + удаление; -execdir/-ok/-okdir — те же rm (боевой прогон v0.4.6)
+    r"\bfind\s+(?:/|~|\$HOME)\S*\s.*-(?:delete\b|(?:exec|execdir|ok|okdir)\s+(?:\S*/)?rm\b)",
     # force-push и в короткой форме `-f` (кластер флагов), кроме --force-with-lease
     r"\bgit\s+push\b(?=.*(?:--force\b|\s-[A-Za-z]*f))(?!.*--force-with-lease)",
     # SQL-деструктив — только в КОНТЕКСТЕ выполнения: вызов БД-клиента либо начало сегмента
     # команды. Голый матч по подстроке блокировал текст: `echo "-- DROP TABLE users" >> notes.md`.
     r"(?:\b(?:psql|mysql|mariadb|sqlite3|sqlplus|clickhouse-client|mongosh?|cqlsh|liquibase|flyway)\b[^;|&]*"
     r"|(?:^|[;&|]\s*))(?:DROP|TRUNCATE)\s+(?:TABLE|DATABASE|SCHEMA)\b",
-    r"\bmkfs\b|\bdd\s+if=.*of=/dev/",
+    # dd на блочное устройство — в любом порядке операндов (`dd of=/dev/sda if=x.iso` проходил,
+    # L-3); безобидные приёмники /dev/null|zero|stdout|stderr — не цель.
+    r"\bmkfs\b|\bdd\b[^|;&]*\bof=/dev/(?!(?:null|zero|stdout|stderr|fd/)\b)",
     r":\(\)\s*\{.*\};:",
     r"(?:curl|wget)\s+[^|]*\|\s*(?:sudo\s+)?(?:ba)?sh",
     # обфусцированный exec: base64 -d | (ba)sh
@@ -77,16 +80,33 @@ _BARE_DANGEROUS = frozenset((
 ))
 
 
-def _segment_tokens(cmd: str) -> "list[list[str]]":
-    """argv по сегментам оболочки (;, &&, ||, |, &, перевод строки); кавычки сняты shlex'ом."""
+_SHELLS = ("sh", "bash", "zsh", "dash", "ksh")
+
+
+def _segment_tokens(cmd: str, depth: int = 0) -> "list[list[str]]":
+    """argv по сегментам оболочки (;, &&, ||, |, &, перевод строки); кавычки сняты shlex'ом.
+
+    `bash -c '<скрипт>'` / `sh -c` / `eval` раскрываются на один уровень: скрипт приходил одним
+    токеном, и `bash -c 'rm -rf /etc/services'`, `sudo bash -c …` проходили блокировщик
+    (боевой прогон v0.4.6, E-08)."""
     out = []
     for seg in _CMD_SEP_RE.split(cmd):
         try:
             toks = shlex.split(seg, posix=True)
         except ValueError:                 # незакрытая кавычка — грубая токенизация
             toks = re.findall(r"[^\s'\"]+", seg)
-        if toks:
-            out.append(toks)
+        if not toks:
+            continue
+        out.append(toks)
+        if depth:
+            continue
+        i = next((k for k, t in enumerate(toks) if os.path.basename(t) in _SHELLS), None)
+        if i is not None and "-c" in toks[i + 1:]:
+            j = toks.index("-c", i + 1)
+            if j + 1 < len(toks):
+                out += _segment_tokens(toks[j + 1], depth + 1)
+        elif os.path.basename(toks[0]) == "eval" and len(toks) > 1:
+            out += _segment_tokens(" ".join(toks[1:]), depth + 1)
     return out
 
 
@@ -96,9 +116,10 @@ def _rm_bare_dangerous_target(cmd: str) -> bool:
     Абсолютные пути вида `/etc/passwd` ловит _rm_recursive_dangerous_targets (у неё есть
     законное исключение «внутри своего проекта»), здесь — только цели без содержательного пути."""
     for toks in _segment_tokens(cmd):
-        if os.path.basename(toks[0]) != "rm":
-            continue
-        for a in toks[1:]:
+        i = next((k for k, t in enumerate(toks) if os.path.basename(t) == "rm"), None)
+        if i is None:
+            continue                       # rm — и за sudo/env/nice, как в рекурсивной проверке
+        for a in toks[i + 1:]:
             if a.startswith("-"):
                 continue                   # флаг в любой форме (-rf, --recursive, --)
             if a.rstrip("/") in _BARE_DANGEROUS or a in _BARE_DANGEROUS:
@@ -154,6 +175,15 @@ def _rm_recursive_dangerous_targets(cmd: str) -> "list[str]":
                 targets.append(a)
         if recursive:
             out += [t for t in targets if _is_dangerous_root(t)]
+    # `rsync --delete SRC/ DST/` стирает в DST всё, чего нет в SRC: перепутанные операнды —
+    # классика «пустой каталог поверх /etc» (E-15). Цель — DST, правила те же, что у rm -r.
+    for toks in _segment_tokens(cmd):
+        i = next((k for k, t in enumerate(toks) if os.path.basename(t) == "rsync"), None)
+        if i is None or not any(t.startswith("--delete") or t == "--del" for t in toks[i + 1:]):
+            continue
+        files = [t for t in toks[i + 1:] if not t.startswith("-")]
+        if len(files) >= 2 and _is_dangerous_root(files[-1]):
+            out.append(files[-1])
     return out
 
 
@@ -162,6 +192,25 @@ def _rm_recursive_dangerous_targets(cmd: str) -> "list[str]":
 # `rm -rf /etc/passwd`; побочно под блок попал `rm -rf /путь/к/проекту/build` — то, что
 # gradle-разработчик набирает каждый день. Разводим по смыслу: снаружи проекта — деструктив,
 # внутри — уборка.
+# Корень, внутри которого рекурсивный rm — «уборка», обязан быть ПРОЕКТОМ. Резолвер без
+# маркеров возвращает сам cwd, и сессия, запущенная из `/` (headless `gigacode -p` из корня),
+# получала корень `/`: `rm -rf /usr` выглядел уборкой внутри проекта и проходил все хуки
+# (боевой прогон v0.4.6, E-CWD-ROOT). Так же — дом пользователя и каталог без маркеров.
+_PROJECT_MARKERS = (".git", "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle",
+                    "settings.gradle.kts", "ground")
+
+
+def _is_real_project(root: Path) -> bool:
+    if root == Path(root.anchor):
+        return False
+    try:
+        if root == Path.home().resolve():
+            return False
+    except (OSError, RuntimeError):
+        pass
+    return any((root / m).exists() for m in _PROJECT_MARKERS)
+
+
 def _targets_inside_project(targets: "list[str]", root) -> bool:
     """Все цели лежат СТРОГО внутри проекта (сам корень — не цель)."""
     if root is None or not targets:
@@ -170,6 +219,8 @@ def _targets_inside_project(targets: "list[str]", root) -> bool:
         root = Path(os.path.normpath(str(Path(root).expanduser()))).resolve()
     except (OSError, ValueError):
         return False
+    if not _is_real_project(root):
+        return False                      # «/», дом, каталог без маркеров — не проект
     home = os.path.expanduser("~")
     for t in targets:
         if "*" in t or "?" in t:          # глоб внутри проекта — цель неизвестна до раскрытия

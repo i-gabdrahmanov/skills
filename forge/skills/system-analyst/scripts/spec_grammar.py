@@ -536,6 +536,13 @@ def load_profile(root, cfg: Optional[dict] = None, detected: Optional[dict] = No
     root = Path(root)
     if cfg is None:
         try:
+            # Холодный запуск CLI этого модуля hooks/ в sys.path не кладёт: импорт падал, except
+            # глотал, и на проекте с неподдержанным профилем утилита разбора отвечала «форма
+            # родная, supported: true» — ровно когда merge отказывал (боевой прогон v0.4.6, G-P2).
+            import sys
+            hooks = Path(__file__).resolve().parents[3] / "hooks"
+            if hooks.is_dir() and str(hooks) not in sys.path:
+                sys.path.insert(0, str(hooks))
             from _config_loader import load_project_config
             cfg = load_project_config(root) or {}
         except Exception:  # noqa: BLE001 — битый бандл: работаем на NATIVE + детекте

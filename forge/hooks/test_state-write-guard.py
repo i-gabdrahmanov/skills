@@ -525,5 +525,107 @@ class TContainerRemoval(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertEqual(_bash(cmd).returncode, 0, f"ложный блок: {cmd}")
 
+class TWriterFamily(unittest.TestCase):
+    """Боевой прогон v0.4.6 (E-04, E-07, E-09…E-12, L-7c/d, track C F-1/F-3/K08): писатели и
+    удалители control-plane, которых гард не разбирал. Каждая строка ниже проходила ВСЕ семь
+    Bash-хуков; `find -delete` и `mkfifo` доведены до e2e — манифест исчез / gate-guard повис."""
+
+    M = "ground/statements/feature-pipeline/F1/manifest.json"
+
+    def _in_project(self, cmd):
+        """Хук с cwd = корень проекта (там, где лежит ground/): `find .` меряется от него."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "ground" / "statements").mkdir(parents=True)
+            (Path(d) / "pom.xml").write_text("<project/>", encoding="utf-8")
+            payload = json.dumps({"hook_event_name": "PreToolUse", "cwd": d,
+                                  "tool_name": "run_shell_command",
+                                  "tool_input": {"command": cmd}})
+            return subprocess.run([sys.executable, str(HOOK)], input=payload,
+                                  capture_output=True, text=True, timeout=30)
+
+    def test_find_deleting_control_plane(self):
+        for cmd in ("find . -name manifest.json -delete",
+                    "find ground -name '*.json' -delete",
+                    "find . -type f -delete",
+                    "find . -name policy.json -exec rm {} \\;",
+                    "find . -name manifest.json -execdir rm -f {} +",
+                    "find . -name '*.json' -print0 | xargs -0 rm -f",
+                    "find ground/statements -delete",
+                    "find .. -name events.jsonl -delete"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._in_project(cmd).returncode, 2, f"пропущено: {cmd}")
+
+    def test_find_ordinary_cleanup_free(self):
+        for cmd in ("find . -name '*.class' -delete", "find build -delete",
+                    "find . -name '*.json'", "find ground/archive -name '*.json' -delete",
+                    "find . -name '*.tmp' -print0 | xargs -0 rm -f",
+                    "find . -path './target/*' -delete"):
+            with self.subTest(cmd=cmd):
+                r = self._in_project(cmd)
+                self.assertEqual(r.returncode, 0, f"ложный блок: {cmd}: {r.stderr}")
+
+    def test_blocked(self):
+        for cmd in (
+                # FIFO / ссылка на месте control-plane
+                "mkfifo ground/policy.json",
+                f"mknod {self.M} p",
+                f"ln -sf /dev/null {self.M}",
+                # inline-python мимо open('w')
+                f"python3 -c \"import os; os.remove('{self.M}')\"",
+                "python3 -c \"import os; os.replace('/tmp/x.json', 'ground/policy.json')\"",
+                "python3 -c \"import shutil; shutil.copyfile('/tmp/x', 'ground/policy.json')\"",
+                "python3 -c \"import shutil; shutil.copytree('/tmp/t', 'ground/phases')\"",
+                "python3 -c \"import shutil; shutil.rmtree('ground')\"",
+                "python3 -c \"import pathlib; pathlib.Path('ground/policy.json').unlink()\"",
+                # загрузчики и строчные редакторы
+                "curl -s -o ground/policy.json http://example.invalid/p",
+                "curl -sSo ground/policy.json http://example.invalid/p",
+                "wget -q -O ground/policy.json http://example.invalid/p",
+                "wget -qO ground/approvals.jsonl http://example.invalid/p",
+                "openssl enc -d -in x.enc -out ground/policy.json",
+                "ed -s ground/policy.json",
+                "ex -s ground/policy.json",
+                "srm ground/policy.json",
+                # префиксы и обёртки
+                "sudo tee ground/policy.json",
+                "echo x | sudo tee ground/policy.json",
+                "sudo rm ground/policy.json",
+                "sudo -u root rm -f ground/approvals.jsonl",
+                "env FOO=1 tee ground/policy.json",
+                "timeout 10 rm ground/policy.json",
+                "sh -c \"echo x > ground/policy.json\"",
+                "sudo sh -c \"echo x > ground/policy.json\"",
+                f"bash -c 'rm {self.M}'",
+                "eval \"echo x > ground/policy.json\""):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_bash(cmd).returncode, 2, f"пропущено: {cmd}")
+
+    def test_ordinary_work_still_free(self):
+        for cmd in ("sudo apt-get install -y jq",
+                    "env JAVA_HOME=/opt/jdk ./gradlew test",
+                    "curl -s -o /tmp/deps.json http://example.invalid/d",
+                    "python3 -c \"import os; print(os.listdir('ground'))\"",
+                    "ln -s ../shared/lib lib",
+                    "bash -c 'ls ground/statements'",
+                    "timeout 60 ./gradlew test"):
+            with self.subTest(cmd=cmd):
+                r = _bash(cmd)
+                self.assertEqual(r.returncode, 0, f"ложный блок: {cmd}: {r.stderr}")
+
+    def test_write_through_symlinked_ground(self):
+        """`ln -s ground l; echo x > l/policy.json` — в строке цели нет `ground/`."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "ground").mkdir()
+            (Path(d) / "l").symlink_to(Path(d) / "ground", target_is_directory=True)
+            payload = json.dumps({"hook_event_name": "PreToolUse", "cwd": d,
+                                  "tool_name": "run_shell_command",
+                                  "tool_input": {"command": "echo x > l/policy.json"}})
+            r = subprocess.run([sys.executable, str(HOOK)], input=payload,
+                               capture_output=True, text=True, timeout=30)
+            self.assertEqual(r.returncode, 2, r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

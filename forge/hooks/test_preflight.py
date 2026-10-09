@@ -317,6 +317,36 @@ class TestFindForeignHookPaths(unittest.TestCase):
         self.assertEqual(found, [], found)
 
 
+class TestBattle046(unittest.TestCase):
+    """Боевой прогон v0.4.6: ложный ENFORCEMENT OFF и мусорный корень из CLI."""
+
+    def test_symlink_alias_of_own_dir_is_not_foreign(self):
+        """A-F2: хук оператора записан через симлинк-алиас корня (`/tmp` ↔ `/private/tmp`) —
+        префикс по строке не совпадал, рабочий хук объявлялся «чужим»."""
+        import os
+        with tempfile.TemporaryDirectory() as real, tempfile.TemporaryDirectory() as links:
+            root = Path(real).resolve()
+            (root / ".gigacode" / "hooks").mkdir(parents=True)
+            (root / ".gigacode" / "hooks" / "op-hook.py").write_text("", encoding="utf-8")
+            alias = Path(links) / "alias"
+            os.symlink(root, alias)
+            cmd = f"/usr/bin/python3 -X utf8 {alias}/.gigacode/hooks/op-hook.py"
+            settings = {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"command": cmd}]}]}}
+            self.assertEqual(preflight._find_foreign_hook_paths(settings, str(root)), [])
+            other = f"/usr/bin/python3 -X utf8 {links}/elsewhere/.gigacode/hooks/x.py"
+            settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = other
+            self.assertEqual(len(preflight._find_foreign_hook_paths(settings, str(root))), 1)
+
+    def test_project_equals_form(self):
+        """CLI-4: `--project=PATH` уходил в позиционный корень целиком."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            r = subprocess.run([sys.executable, str(HOOKS / "preflight.py"), f"--project={d}"],
+                               capture_output=True, text=True, timeout=60)
+            base = json.loads(r.stdout)["layout"]["base"]
+            self.assertEqual(Path(base).parent, Path(d).resolve(), base)
+
+
 class TestHookCommandsRunnable(unittest.TestCase):
     """Задача 007: устаревший путь в settings.json кирпичит сессию целиком.
 

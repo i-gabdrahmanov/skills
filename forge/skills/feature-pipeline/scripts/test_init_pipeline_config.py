@@ -818,5 +818,20 @@ class TestMigrationV1ToV2(unittest.TestCase):
         self.assertTrue(mp.exists(), f"set_criticality ожидает manifest по {mp}")
 
 
+class TestGroundIsAFile(unittest.TestCase):
+    def test_ground_file_is_clean_error(self):
+        """CLI-8: `ground` — файл → сырой FileExistsError на первом запуске."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "ground").write_text("x", encoding="utf-8")
+            (Path(d) / "pom.xml").write_text("<project/>", encoding="utf-8")
+            r = subprocess.run([sys.executable, str(Path(__file__).resolve().parent /
+                                                    "init_pipeline_config.py"),
+                                "--project", d], capture_output=True, text=True, timeout=120)
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertNotIn("Traceback", r.stderr)
+            self.assertIn("файл", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

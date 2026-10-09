@@ -70,7 +70,16 @@ fi
 
 # ── 2. удаляем из исходника → повторный деплой обязан снять сироту ────────────
 rm -rf "$SRC/skills/zzz-temp" "$SRC/commands/zzz-temp.md" "$SRC/hooks/zzz-temp-hook.py"
+# Конфиг оператора minor-defect-fix — соответствие проект→спека с путями этой машины.
+printf '{\n  "projects": {"/work/proj": "docs/specs/orders.md"}\n}\n' \
+  > "$GIG/skills/minor-defect-fix/config.json"
 run_deploy
+
+if grep -q '/work/proj' "$GIG/skills/minor-defect-fix/config.json" 2>/dev/null; then
+  ok "редеплой сохранил конфиг оператора minor-defect-fix"
+else
+  bad "конфиг оператора" "deploy обнулил minor-defect-fix/config.json (боевой прогон v0.4.6, A-F1)"
+fi
 
 if [ ! -e "$GIG/skills/zzz-temp" ]; then
   ok "скилл, удалённый из репо, снят при апгрейде"

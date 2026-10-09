@@ -73,7 +73,7 @@ except Exception:
 # Команда сборки/тестов/линта — Gradle ИЛИ Maven ИЛИ standalone-линтер (checkstyle/ktlint/…).
 # Gradle/Maven-таск (напр. `./gradlew checkstyleMain`) уже покрыт `./gradlew`; standalone-инструмент
 # добавлен явно, чтобы «checkstyle inline» ловился независимо от способа запуска.
-BUILD_CMD_RE = r"(?:\./gradlew\s+|\bmvn\b|\b(?:checkstyle|ktlint|detekt|spotless)\b)"
+BUILD_CMD_RE = r"(?:\./gradlew\s+|\bmvnw?\b|\b(?:checkstyle|ktlint|detekt|spotless)\b)"
 
 # Python-subprocess обёртка над build-командой. Escape-hatch для двух путей:
 #   1. orchestrator (main agent) → Bash(`python3 -c "import subprocess; subprocess.run('./gradlew test', ...)"`).

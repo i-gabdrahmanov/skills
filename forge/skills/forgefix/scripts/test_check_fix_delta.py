@@ -163,5 +163,18 @@ class TestCheckFixDelta(unittest.TestCase):
         self.assertTrue(any("не резолвится" in w for w in json.loads(r.stdout)["warnings"]))
 
 
+class TestNonUtf8Delta(unittest.TestCase):
+    def test_non_utf8_delta_is_clean_fail(self):
+        """CRASH-d: не-UTF8 дельта — сырой трейсбек и rc 1 вне контракта 0/2."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "sdd.md"
+            p.write_bytes(b"\xff\xfe# SDD")
+            r = subprocess.run([sys.executable, str(SCRIPT), str(p)], capture_output=True,
+                               text=True, timeout=60)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertNotIn("Traceback", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -253,5 +253,22 @@ class TestRobustness(Base):
             json.loads(line)
 
 
+class TestNonUtf8Line(Base):
+    """Боевой прогон v0.4.6 (STATE-1): один байт \\xff в журнале обнулял его целиком —
+    evidence прогона пропадало молча, а свежее согласие записывалось «успешно» и гейтом не
+    виделось. Битая строка теряется одна, остальные читаются."""
+
+    def test_one_bad_byte_loses_one_line(self):
+        FE.append_event(self.p, S, F, "gate", step_id="05-tests", passed=True)
+        FE.append_approval(self.p, "git-discard", approved_by="user", reason="r")
+        for log in (FE.events_path(self.p, S, F), FE.approvals_path(self.p)):
+            with open(log, "ab") as f:
+                f.write(b"\xff\xfe garbage\n")
+        FE.append_event(self.p, S, F, "origin", step_id="05-tests")
+        self.assertIsNotNone(FE.gate(self.p, S, F, "05-tests"))
+        self.assertIsNotNone(FE.origin(self.p, S, F, "05-tests"))
+        self.assertIsNotNone(FE.approval(self.p, "git-discard"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

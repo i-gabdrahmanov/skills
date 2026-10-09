@@ -176,5 +176,45 @@ class TestMain(unittest.TestCase):
         self.assertEqual(rc, 0)
 
 
+class TestBattle046(unittest.TestCase):
+    """Боевой прогон v0.4.6: CRASH-a/b (rc 1 вне контракта 0/2), CK-3 (артефакт вне корня),
+    плюс опечатка в --task давала «PASS (задач: 0)» — как у RED-гейта до 016."""
+
+    def _cli(self, *argv) -> "tuple[int, str]":
+        import subprocess
+        r = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "check_build.py"),
+                            *argv], capture_output=True, text=True, timeout=60)
+        return r.returncode, r.stdout + r.stderr
+
+    def test_unreadable_plans_fail_cleanly(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            cases = {"bad.json": "{not-json", "arr.json": "[]"}
+            for name, body in cases.items():
+                (root / name).write_text(body, encoding="utf-8")
+            for plan in ("bad.json", "arr.json", "missing.json"):
+                with self.subTest(plan=plan):
+                    rc, out = self._cli(str(root / plan), "--root", d)
+                    self.assertEqual(rc, 2, out)
+                    self.assertNotIn("Traceback", out)
+
+    def test_unknown_task_is_fail(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "p.json").write_text(json.dumps({"tasks": [{"id": "T1", "artifacts": []}]}),
+                                            encoding="utf-8")
+            rc, out = self._cli(str(Path(d) / "p.json"), "--root", d, "--task", "T9")
+            self.assertEqual(rc, 2, out)
+
+    def test_artifact_outside_root_is_missing(self):
+        with tempfile.TemporaryDirectory() as outer:
+            root = Path(outer) / "proj"
+            root.mkdir()
+            (Path(outer) / "outside.md").write_text("x", encoding="utf-8")
+            (root / "p.json").write_text(json.dumps(
+                {"tasks": [{"id": "T1", "artifacts": ["../outside.md"]}]}), encoding="utf-8")
+            rc, out = self._cli(str(root / "p.json"), "--root", str(root))
+            self.assertEqual(rc, 2, out)
+
+
 if __name__ == "__main__":
     unittest.main()

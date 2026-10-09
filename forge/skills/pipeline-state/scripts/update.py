@@ -44,7 +44,7 @@ from _util import (gate_result_path, judges_dir, load_project_config, origins_di
                    overrides_dir, repo_root, safe_load_json,
                    task_docs_dir as _task_docs_dir)
 import forge_events as FE  # журнал evidence (импорт _util уже положил hooks/ в sys.path)
-from _project import exclusive_lock  # noqa: E402
+from _project import exclusive_lock, safe_component  # noqa: E402
 
 # Соглашение «какие фазы обязаны идти через субагента» — ЕДИНЫЙ источник pipeline_phases
 # (co-located feature-pipeline). best-effort импорт + inline-fallback, чтобы переименование
@@ -619,14 +619,17 @@ def _config_get(project: Path, dotpath: str, skill: str | None = None,
         return None
 
 
-def _check_skip_judges(project: Path, feature: str) -> None:
+def _check_skip_judges(project: Path, feature: str) -> str:
     """`--skip-judges` снимает ВСЕ гейты закрытия шага — это R4, а не служебный флаг.
 
     Флаг задумывался под один случай (восстановление статусов после `init.py --force`), но по
     факту был готовым bypass'ом в одну опцию: судьи, gate-result, subagent-origin, обязательные
     решения и артефакты — всё разом. Теперь нужен approval-маркер `skip-judges-<feature>` с
     провенансом `record_approval`, т.е. явное «да» пользователя. Второй слой — gate-guard
-    блокирует саму команду с флагом; здесь проверка держится и при запуске мимо харнеса."""
+    блокирует саму команду с флагом; здесь проверка держится и при запуске мимо харнеса.
+
+    → ключ маркера: _apply тратит его после записи манифеста. Маркер не тратился, и одно
+    согласие навсегда снимало гейты закрытия ВСЕХ шагов фичи (боевой прогон v0.4.6)."""
     prefix = "skip-judges"
     try:
         policy = _policy().get("skip_judges") or {}
@@ -635,18 +638,19 @@ def _check_skip_judges(project: Path, feature: str) -> None:
         pass
     key = f"{prefix}-{feature}"
     if _approval_marker_valid(project, key):
-        return
+        return key
     rec_script = Path(__file__).resolve().parent / "record_approval.py"
     sys.stderr.write(
         "\n" + "=" * 60 + "\n"
-        "⛔ STOP: --skip-judges снимает ВСЕ гейты закрытия шага (судьи, gate-result,\n"
+        "⛔ STOP: --skip-judges снимает гейты закрытия шага (судьи, gate-result,\n"
         "   subagent-origin, обязательные решения, артефакты) — это R4-класс.\n"
         f"   Нужен approval-маркер '{key}' (журнал ground/approvals.jsonl) с провенансом record_approval.\n"
         "   Порядок: (1) объясни пользователю, ЗАЧЕМ обходить гейты (легитимный случай —\n"
         "   восстановление статусов после init.py --force) и спроси; (2) после явного «да»:\n"
         f"   python3 {rec_script} --project {project} --key {key} --approved-by user "
-        f"--reason \"<зачем обход>\"\n"
-        "   (3) повтори команду. Штатное закрытие шага флага НЕ требует.\n"
+        f"--reason \"<зачем обход>\" --evidence \"<ответ пользователя дословно>\"\n"
+        "   (3) повтори команду. Маркер одноразовый — на каждое закрытие свой.\n"
+        "   Утверждение BRD/SDD флаг не снимает. Штатное закрытие шага флага НЕ требует.\n"
         + "=" * 60 + "\n"
     )
     sys.exit(3)
@@ -801,8 +805,14 @@ def main():
 def _apply(args, project: Path, pdir: Path, manifest_path: Path) -> None:
     """Переход шага в манифесте. Зовётся ТОЛЬКО под замком манифеста (см. main)."""
     manifest = safe_load_json(manifest_path, what="manifest")
+    steps = manifest.get("steps") if isinstance(manifest, dict) else None
+    if not isinstance(steps, list) or not all(isinstance(s, dict) and "id" in s for s in steps):
+        # валидный JSON без steps / шаг без id — был голый KeyError и rc 1 (STATE-8)
+        print(f"ERROR: manifest повреждён структурно (нет списка steps с id): {manifest_path}",
+              file=sys.stderr)
+        sys.exit(4)
 
-    step = next((s for s in manifest["steps"] if s["id"] == args.step_id), None)
+    step = next((s for s in steps if s["id"] == args.step_id), None)
     if step is None:
         print(f"ERROR: step '{args.step_id}' not found in manifest", file=sys.stderr)
         sys.exit(2)
@@ -811,8 +821,7 @@ def _apply(args, project: Path, pdir: Path, manifest_path: Path) -> None:
     prev_status = step.get("status")
 
     # Обход всех гейтов закрытия — только с явным согласием пользователя (R4)
-    if args.skip_judges:
-        _check_skip_judges(project, args.feature)
+    skip_consent = _check_skip_judges(project, args.feature) if args.skip_judges else None
 
     # Брейк ре-итераций: переоткрытие закрытого шага лимитируется quality.max_step_reopens.
     # `skipped` входит в список закрытых наравне с completed/failed: без него петля
@@ -835,10 +844,15 @@ def _apply(args, project: Path, pdir: Path, manifest_path: Path) -> None:
         _check_subagent_origin(step, args.closed_by, project, args.skill, args.feature)
         _check_gate_result(step, project, args.skill, args.feature)
         _check_judges(step, project, args.skill, args.feature)
-        _check_doc_approval(step, project, args.skill, args.feature)
         _check_grounding_substance(step, project, args.skill, args.feature)
         _check_required_decisions(step, project, args.skill, args.feature)
         _check_step_artifacts(step, project, args.skill, args.feature)
+    # Утверждение BRD/SDD человеком — не «гейт закрытия», и --skip-judges его не снимает: флаг
+    # обещает обойти судей, gate-result, origin, решения и артефакты, а 02-sdd с ним
+    # закрывался без sdd-approved (боевой прогон v0.4.6). Восстановлению статусов после
+    # init.py --force это не мешает — маркер утверждения лежит в проектном журнале.
+    if args.status == "completed":
+        _check_doc_approval(step, project, args.skill, args.feature)
 
     # Fallback=STOP: обязательный шаг нельзя тихо пропустить (skipped) без override
     if not args.skip_judges and args.status == "skipped":
@@ -880,7 +894,9 @@ def _apply(args, project: Path, pdir: Path, manifest_path: Path) -> None:
             output_data = json.loads(raw)
 
     if output_data is not None and args.status == "completed":
-        out_file = pdir / f"{args.step_id}.json"
+        # Имя — через общий санитайзер (как _project.step_output_path): сырой id в пути
+        # уводил выход шага за каталог прогона (STATE-6/7).
+        out_file = pdir / f"{safe_component(args.step_id)}.json"
         tmp = out_file.with_suffix(".json.tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(output_data, f, indent=2, ensure_ascii=False)
@@ -940,6 +956,10 @@ def _apply(args, project: Path, pdir: Path, manifest_path: Path) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
     os.replace(tmp, manifest_path)
+
+    if skip_consent:
+        FE.revoke_approval(project, skip_consent,
+                           reason=f"согласие потрачено: --skip-judges {args.step_id} → {args.status}")
 
     print(json.dumps({
         "status": "updated",
