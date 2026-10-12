@@ -481,18 +481,20 @@
       "type": "enum",
       "enum": [
         "fix",
-        "full"
+        "full",
+        "tech"
       ],
       "default": "",
       "category": "pipeline",
       "sensitive": false,
       "title": "Режим пайплайна (выбранный путь)",
-      "description": "Выбранный путь: fix (минорный дефект, forgefix — спека правится точечно) | full (фича с нуля, feature-pipeline). v2: пишется в manifest.json активной фичи (inputs.mode). Записывает router — для аудита и headless-предзаписи выбора. ДЕЙСТВУЕТ В ПАРЕ С decisions.mode_task: manifest живёт одну фичу, и mode_task пин-щитит от «липкого режима» между прогонами одной и той же feature. legacy: читается через dual-read из pipeline.mode в pipeline.json",
+      "description": "Выбранный путь: fix (минорный дефект, forgefix — спека правится точечно) | full (фича с нуля, feature-pipeline) | tech (техзадача без изменения поведения — апгрейд библиотек, правка конфигурации, forgetech; спека не правится). v2: пишется в manifest.json активной фичи (inputs.mode). Записывает router — для аудита и headless-предзаписи выбора. ДЕЙСТВУЕТ В ПАРЕ С decisions.mode_task: manifest живёт одну фичу, и mode_task пин-щитит от «липкого режима» между прогонами одной и той же feature. legacy: читается через dual-read из pipeline.mode в pipeline.json",
       "aliases": [
         "режим",
         "путь",
         "mode",
-        "fix/full"
+        "fix/full",
+        "fix/full/tech"
       ],
       "deprecated_aliases": [
         "pipeline.mode"
@@ -538,6 +540,27 @@
       ],
       "deprecated_aliases": [
         "sources.story"
+      ]
+    },
+    {
+      "id": "inputs.archetype",
+      "file": "manifest",
+      "path": "inputs.archetype",
+      "type": "enum",
+      "enum": [
+        "dependency-upgrade",
+        "config-change"
+      ],
+      "default": "",
+      "category": "pipeline",
+      "sensitive": false,
+      "title": "Архетип техзадачи (tech-путь)",
+      "description": "Вид техзадачи: dependency-upgrade (поднять версии библиотек/BOM) | config-change (правка конфигурации — хосты, таймауты, ключи по профилям). v2: пишется в manifest.json активной фичи (inputs.archetype). Определяет обязательный состав tech-sdd.md и change-plan.json (check_tech_sdd.py) и набор инвариантов снимка. required_decisions для фазы tech-diag (gate-guard блокирует запись спеки без него) и required_decisions_on_close для tech-intake.",
+      "aliases": [
+        "архетип",
+        "archetype",
+        "вид техзадачи",
+        "тип техзадачи"
       ]
     },
     {

@@ -30,13 +30,14 @@ forge/
 │   ├── resolve_hook_paths.py # подстановка ${PYTHON}/${PROJECT_ROOT} в settings.hooks.json
 │   └── run-hook-tests.sh     # юнит-тесты хуков + evals одной командой
 ├── commands/
-│   ├── forge.md            # /forge       → router (классификация fix | full)
+│   ├── forge.md            # /forge       → router (классификация fix | full | tech)
 │   ├── forge-fix.md        # /forge-fix   → forgefix (минорный дефект, спека правится точечно)
+│   ├── forge-tech.md       # /forge-tech  → forgetech (техзадача: апгрейд/конфиг, поведение не меняется)
 │   ├── forge-spec.md       # /forge-spec  → требования-мастер: status/diff/merge/remove/check/research
 │   ├── forge-merge.md      # /forge-merge → свести дельту с мастером и убрать доки в архив
 │   └── forge-archive.md    # /forge-archive → архив доков готовых строек: status/put/list/restore
 ├── skills/
-│   ├── 19 скиллов/SKILL.md        # router, feature-pipeline, forgefix, sdd, tech-design, …
+│   ├── 20 скиллов/SKILL.md        # router, feature-pipeline, forgefix, forgetech, sdd, …
 │   ├── SKILLS-REGISTRY.md         # реестр с owner/validity/evals
 │   └── run_all_tests.py           # единый CI-вход: скиллы + хуки + корень
 ├── docs/                   # user-guide, troubleshooting, pipeline-*, v2/ (исторический анализ)
@@ -55,13 +56,13 @@ forge/
 
 ## Состав
 
-- **Скиллы:** 19 (`router`, `feature-pipeline`, `forgefix`, `sdd`, `tech-design`,
+- **Скиллы:** 20 (`router`, `feature-pipeline`, `forgefix`, `forgetech`, `sdd`, `tech-design`,
   `jira-task-writer`, `java-spring-dev`, `test-writer`, `system-analyst`, `project-grounder`,
   `pipeline-state`, `brd-grounder`, `brd-interview`, `business-requirements`, `defect-analyzer`,
   `bugfix-developer`, `minor-defect-fix`, `config-helper`, `harness-verifier`).
   Полный реестр с owner/validity/evals — [`SKILLS-REGISTRY.md`](SKILLS-REGISTRY.md).
-- **Команды:** 5 (`/forge`, `/forge-fix`, `/forge-spec`, `/forge-merge`, `/forge-archive`).
-- **Хуки:** 15 (`gate-guard`, `tdd-guard`, `eval-guard`, `sod-enforcer`, `inline-phase-guard`,
+- **Команды:** 6 (`/forge`, `/forge-fix`, `/forge-tech`, `/forge-spec`, `/forge-merge`, `/forge-archive`).
+- **Хуки:** 16 (`gate-guard`, `tdd-guard`, `tech-guard`, `eval-guard`, `sod-enforcer`, `inline-phase-guard`,
   `state-write-guard`, `pii-boundary`, `destructive-blocker`, `fork-syntax-guard`,
   `grounding-evidence`, `prompt-guard`, `file-journal`, `state-recorder`, `context-injector`,
   `phase-gate`) + `preflight.py` для самопроверки.
@@ -82,6 +83,7 @@ forge/
 | `config.py risk list-remove` / `cap-set`, `phase disable` обязательной фазы — ослабить политику мимо `set` | `policy-downgrade-risk.<ключ>` / `policy-downgrade-phase.<фаза>` |
 | `git reset --hard`, `clean -f`, `checkout .` / `restore .`, `stash drop\|clear` — стереть незакоммиченное целиком | `git-discard` (тратится на одну команду) |
 | `check_acceptance` — засчитать критерий приёмки ручной проверкой вместо теста | `acceptance-<ID>` |
+| утвердить план техзадачи (tech-путь): согласие задаёт скоуп записи и привязано к sha256 `change-plan.json` (`--bind-file`) | `tech-plan-<feature>` (гасится `tech_plan.py amend`/`revoke`) |
 
 Для этих классов `record_approval.py` требует **`--evidence "<дословный ответ
 пользователя>"`**. Цитата обязана быть СОГЛАСИЕМ на это действие: она берётся из ПОСЛЕДНЕЙ

@@ -65,6 +65,10 @@ PRODUCERS = {
     # Переснятие снимка политики под идущим прогоном (config.py repin). Факт о прогоне:
     # без него разбор «почему шаг закрылся под другим порогом» упирается в пустоту.
     "repin": "config.py",
+    # Снимок «до» tech-ветки (check_invariants.py snapshot): предусловие правки targets —
+    # tech-guard не пускает запись, пока снимка нет. Тело снимка — файл в snapshots/,
+    # запись журнала несёт его sha256 (подменённый файл снимком не считается).
+    "tech-snapshot": "check_invariants",
 }
 
 
@@ -364,7 +368,11 @@ def approval(root: Path, key: str) -> Optional[dict]:
 #   acceptance-<ID>         — ручное подтверждение критерия приёмки заменяет его тест;
 #   git-discard             — git reset --hard / clean -f / checkout . стирают незакоммиченное.
 CONSENT_PREFIXES = ("gate-override", "rollback", "skip-judges", "policy-repin",
-                    "policy-downgrade", "acceptance", "abandon", "archive-force", "git-discard")
+                    "policy-downgrade", "acceptance", "abandon", "archive-force", "git-discard",
+                    # tech-plan-<F>: утверждение плана техзадачи ЗАДАЁТ скоуп записи (targets)
+                    # и разрешённый diff (expected_changes). Самовыписанное согласие = сам себе
+                    # расширил, что можно менять, — тот же класс, что снятие гейта.
+                    "tech-plan")
 
 
 def consent_required(key: str) -> bool:
@@ -430,6 +438,12 @@ def consent_quote_problem(quote: str) -> Optional[str]:
     if neg is not None:
         return f"в цитате отрицание («{neg}») — это отказ или оговорка, а не согласие"
     return None
+
+
+def file_sha256(path: Path) -> str:
+    """sha256 содержимого файла (привязка согласия/снимка к конкретной версии артефакта)."""
+    import hashlib
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def revoke_approval(root: Path, key: str, reason: str = "") -> dict:

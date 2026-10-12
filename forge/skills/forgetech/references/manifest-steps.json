@@ -1,0 +1,7 @@
+[
+  {"id": "tech-intake", "title": "Вход (Jira/описание) + скоуп-чек «техзадача» + архетип",          "depends_on": []},
+  {"id": "tech-diag",   "title": "Диагностика: текущее состояние + tech-sdd.md + change-plan.json",  "depends_on": ["tech-intake"]},
+  {"id": "tech-apply",  "title": "Снимок «до» → правка в пределах targets → точный diff = заявленное", "depends_on": ["tech-diag"]},
+  {"id": "tech-verify", "title": "Регресс тестов затронутых модулей + инварианты против снимка",     "depends_on": ["tech-apply"]},
+  {"id": "tech-record", "title": "Итоговая сводка report.md (скриптом по снимку и гейтам)",          "depends_on": ["tech-verify"]}
+]

@@ -47,3 +47,8 @@ ground/
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+
+# forge: логи боевых прогонов и аудиты — локальные материалы
+forge/*логи*/
+forge/*лог_anon.rtf
+forge/GLM_*

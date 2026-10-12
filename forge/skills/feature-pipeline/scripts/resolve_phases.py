@@ -107,13 +107,16 @@ def _with_run_snapshot(root, cfg):
 # и предписанное значение отбивалось как unknown mode → rc 3 на резолве КАЖДОЙ фазы.
 # Имена скиллов оставлены синонимами: манифесты, заведённые до унификации, не должны
 # внезапно падать. Согласованность карты с реестром пинит test_mode_vocab_matches_registry.
-_MODE_TO_SKILLS = {
-    "fix":              {"forgefix"},
-    "full":             {"feature-pipeline"},
-    # legacy-синонимы (манифесты старых прогонов)
-    "forgefix":         {"forgefix"},
-    "feature-pipeline": {"feature-pipeline"},
-}
+def _mode_to_skills() -> dict:
+    """Карта mode → {skill}: плоские ветки (fix, tech) — из реестра hooks/_branches.py."""
+    import _branches as BR  # hooks/ в sys.path кладёт skill_paths при импорте модуля
+    out = {"full": {"feature-pipeline"}, **BR.mode_to_skills(),
+           # legacy-синонимы (манифесты старых прогонов)
+           "forgefix": {"forgefix"}, "feature-pipeline": {"feature-pipeline"}}
+    return out
+
+
+_MODE_TO_SKILLS = _mode_to_skills()
 
 
 def _find_manifest(root, feature_slug):

@@ -27,6 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _project import skills_dir, resolve_skill_path, gigacode_home, resolve_active_run
+import _branches as BR
 
 _POLICY_PATH = gigacode_home() / "hooks" / "risk-policy.json"
 
@@ -631,13 +632,14 @@ def evidence_ok(root: Path, threshold: float = 0.95) -> tuple[bool, str]:
     return (worst >= threshold), f"min completeness={worst:.2f} (порог {threshold})"
 
 
-# Одна и та же ФАЗА называется по-разному в двух ветках forge: full (02-design) и
-# fix (fix-diag). level_requirements.steps ссылается на full-имя, а
-# check_requirement резолвил его буквально — в fix такого шага нет НИКОГДА, значит
+# Одна и та же ФАЗА называется по-разному в ветках forge: full (02-design), fix (fix-diag),
+# tech (tech-diag). level_requirements.steps ссылается на full-имя, а
+# check_requirement резолвил его буквально — в плоской ветке такого шага нет НИКОГДА, значит
 # требование R2 (`src/main/**.java`!) было невыполнимо в принципе: любая запись прод-кода
-# упиралась в «шаг 02-design не completed (=None)» без легального выхода. Резолвим по фазе.
+# упиралась в «шаг 02-design не completed (=None)» без легального выхода. Резолвим по фазе;
+# design-шаги плоских веток — из реестра _branches.
 _STEP_PHASE_ALIASES = {
-    "02-design": ("02-design", "fix-diag"),
+    "02-design": ("02-design",) + BR.design_steps(),
     "02-sdd": ("02-sdd",),
     "01-grounding": ("01-grounding",),
 }

@@ -150,7 +150,8 @@ def resolve_skill(project, explicit=None) -> str:
 
 # ── Каталог доков задачи ─────────────────────────────────────────────────────────────
 def task_docs_dir(project, skill: str, feature: str) -> Path:
-    """Каталог артефактов задачи: у фикса — <docs>/<стори>/fixes/<баг>, иначе <docs>/<feature>.
+    """Каталог артефактов задачи: у фикса — <docs>/<стори>/fixes/<баг>, у техзадачи —
+    <docs>/tech/<задача>, иначе <docs>/<feature>.
 
     Единая реализация: этим резолвером пользуются и гейт артефактов при закрытии шага
     (update._docs_dir_for), и архивация (archive.py). Копия в каждом вызывающем разошлась бы
@@ -163,6 +164,8 @@ def task_docs_dir(project, skill: str, feature: str) -> Path:
     if _fp not in sys.path:                     # зовётся в цикле по прогонам — без дублей
         sys.path.insert(0, _fp)
     import skill_paths as SP  # noqa: E402
+    if skill == "forgetech":
+        return SP.tech_docs_dir(project, feature)
     if skill != "forgefix":
         return SP.feature_docs_dir(project) / feature
     try:

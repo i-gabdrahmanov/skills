@@ -1079,7 +1079,7 @@ def main() -> int:
     ps.add_argument("--dry-run", action="store_true")
     ps.add_argument("--confirm", action="store_true", help="Подтверждение для sensitive-параметров")
     ps.add_argument("--skill", default=None,
-                    help="Для inputs.*/decisions.*: namespace скилла (forgefix/feature-pipeline). "
+                    help="Для inputs.*/decisions.*: namespace скилла (forgefix/forgetech/feature-pipeline). "
                          "По умолчанию — самая свежая фича по mtime.")
     ps.add_argument("--feature", default=None,
                     help="Для inputs.*/decisions.*: слаг фичи. По умолчанию — самая свежая фича по mtime.")

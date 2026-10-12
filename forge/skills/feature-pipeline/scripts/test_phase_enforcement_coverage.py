@@ -49,6 +49,11 @@ REPRESENTATIVE = {
     "fix-green":   ("fix-green",   "Write", {"file_path": "src/main/java/X.java"}),
     "fix-verify":  ("fix-verify",  "Bash",  {"command": "./gradlew test"}),
     "fix-spec":    ("fix-spec",    "Write", {"file_path": "docs/feature-pipeline/f/sdd.md"}),
+    # Tech-ветка (forgetech): техзадача без изменения поведения.
+    "tech-diag":   ("tech-diag",   "Write", {"file_path": "docs/feature-pipeline/tech/t/change-plan.json"}),
+    "tech-apply":  ("tech-apply",  "Write", {"file_path": "pom.xml"}),
+    "tech-verify": ("tech-verify", "Bash",  {"command": "./gradlew test"}),
+    "tech-record": ("tech-record", "Write", {"file_path": "docs/feature-pipeline/tech/t/report.md"}),
 }
 
 

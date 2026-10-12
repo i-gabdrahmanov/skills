@@ -12,9 +12,10 @@
 
 | Skill | Owner | Validity | Scope | Evals |
 |---|---|---|---|---|
-| router | @team | 2026-12 | точка входа: выбор режима fix/full, делегация на общий control-plane | — (вход не форсится рантаймом; смягчения — preflight, check_fix_scope) |
+| router | @team | 2026-12 | точка входа: выбор режима fix/full/tech, делегация на общий control-plane | — (вход не форсится рантаймом; смягчения — preflight, check_fix_scope, check_tech_scope) |
 | feature-pipeline | @team | 2026-12 | Java/Spring фичи end-to-end до верифицированного артефакта (режим full; доставка — на пользователе) | gate-скрипты + hooks/evals |
 | forgefix | @team | 2026-12 | минорный дефект (режим fix: диагностика→**гейт фикс-плана**→RED воспроизводит баг→минимальный фикс→verify→точечная дельта спеки внутри папки стори; доставка — на пользователе) | check_fix_scope.py + find_spec_anchor.py + record_approval (fix-plan) + record_gate (RED/GREEN/verify) + check_fix_delta.py |
+| forgetech | @team | 2026-12 | техзадача без изменения поведения (режим tech: апгрейд библиотек/конфиг; tech-sdd.md+change-plan.json→**утверждение плана (sha256)**→снимок «до»→правка в targets→точный diff+регресс→report.md; доставка — на пользователе) | check_tech_scope.py + check_tech_sdd.py + check_invariants.py (snapshot/expect/compare) + tech_report.py + test_forgetech.py |
 | pipeline-state | @team | 2026-12 | оркестраторы >3 субагентов | test_archive.py + косвенно через evals |
 | project-grounder | @team | 2026-12 | фаза 1: инвентарь для гейтов дизайна (своих скриптов нет — зовёт system-analyst) | ensure_inventory.py, verify_coverage.py |
 | system-analyst | @team | 2026-12 | скан Java/Spring сервиса; требования-мастер (spec_cli/merge/check) и ресерч ФОРМЫ спеки проекта (analyze_spec → spec-conventions.json, spec_grammar) | verify_coverage.py, test_spec_grammar.py, test_analyze_spec.py |
@@ -40,6 +41,7 @@
 | gate-guard + risk_ladder + risk-policy.json | @team | 2026-12 | risk ladder R0–R5, deny-first | hooks/evals/run-evals.py |
 | destructive-blocker | @team | 2026-12 | блок деструктивных команд | run-evals.py |
 | tdd-guard / eval-guard | @team | 2026-12 | блок src/main без RED-теста / без пройденных eval'ов задачи | run-evals.py |
+| tech-guard | @team | 2026-12 | скоуп записи tech-ветки: только tech-apply, согласие на текущий план (sha256), снимок «до», targets | test_tech-guard.py |
 | sod-enforcer / inline-phase-guard | @team | 2026-12 | separation of duties / блок inline-работы в subagent-фазах | run-evals.py |
 | pii-boundary | @team | 2026-12 | граница PII при записи | run-evals.py |
 | prompt-guard | @team | 2026-12 | детект prompt-injection | run-evals.py |

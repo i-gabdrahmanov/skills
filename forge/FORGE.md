@@ -45,7 +45,7 @@ git-история и `tasks/`.
 
 ## Архитектура PDLC v3.5
 
-Pipeline = оркестратор + control-plane из 15 хуков + 19 скиллов; общее состояние —
+Pipeline = оркестратор + control-plane из 16 хуков + 20 скиллов; общее состояние —
 `<project>/ground/`, артефакты фаз — `<project>/docs/feature-pipeline/...`. PDLC v3.5 ввёл
 risk ladder, evidence bundle и security-гейты; доставка (commit/push/PR/отчёт) остаётся на
 пользователе — пайплайн её не делает и не гейтит.
@@ -87,7 +87,7 @@ approval-маркером (см. §Approval markers). **R5** — деструк�
 > `git commit`/`push`/PR: доставку делает пользователь сам, пайплайн её не выполняет и не
 > гейтит. Если где-то встретишь «push в main — R4» — это остаток снятого delivery-слоя.
 
-### Phases: full vs fix
+### Phases: full vs fix vs tech
 
 Точка входа — скилл `router` (`skills/router/SKILL.md`); классифицирует задачу и делегирует
 на общий control-plane (один `.gigacode`, одни хуки):
@@ -100,12 +100,21 @@ approval-маркером (см. §Approval markers). **R5** — деструк�
   (`<стори>/fixes/<баг>`). Шаги плоские `fix-*`. Два обязательных вопроса: «к какой стори
   относится баг?» (`sources.story`) и утверждение фикс-плана (approval `fix-plan-<KEY|slug>`
   через `record_approval.py`).
+- **tech** (`forgetech`) — техзадача без изменения поведения (апгрейд библиотек, правка
+  конфигурации): `tech-sdd.md` + `change-plan.json` → утверждение плана → снимок «до» → правка
+  строго в `targets` → точный diff «после» + регресс тестов → `report.md`. Шаги плоские `tech-*`,
+  RED-шага нет: гейт — `check_invariants.py` (snapshot/expect/compare), скоуп записи держит
+  `tech-guard`. Два обязательных решения: архетип (`inputs.archetype`) и утверждение плана
+  (approval `tech-plan-<KEY|slug>`, привязанный к sha256 плана). Дизайн — `tasks/018-tech-path.md`.
 
-Доставка (commit/push/PR/отчёт) — на пользователе. **Multi-vocabulary хуков:** обе
+Доставка (commit/push/PR/отчёт) — на пользователе. **Multi-vocabulary хуков:** все
 ветки делят control-plane; активный skill/feature резолвится по самому свежему манифесту в
-`ground/statements/*/*/` (не по фикс-namespace). Fix-ids намеренно не пересекаются с
-масками `judges-registry` и `PREFIX_PHASE` full-пути → лёгкая ветка не тянет судей.
-Инвариант «каждая subagent-фаза покрыта хуком» пинится `test_phase_enforcement_coverage.py`.
+`ground/statements/*/*/` (не по фикс-namespace). Ids плоских веток намеренно не пересекаются с
+масками `judges-registry` и `PREFIX_PHASE` full-пути → лёгкие ветки не тянут судей.
+**Плоские ветки описаны в одном реестре `hooks/_branches.py`** (шаги, субагентные/гейтовые
+шаги, роли SoD, артефакты, RED/design/final-шаги) — его читают update.py, хуки, archive,
+resolve_phases; копий кортежей `fix-*`/`tech-*` по коду нет. Инвариант «каждая subagent-фаза
+покрыта хуком» пинится `test_phase_enforcement_coverage.py`, реестр — `test_branches_registry.py`.
 
 ### Evidence bundle
 
@@ -136,6 +145,7 @@ approval-маркером (см. §Approval markers). **R5** — деструк�
 |---|---|---|
 | `gate-guard.py` | PreToolUse | permission gateway + risk ladder + deny-first |
 | `tdd-guard.py` | PreToolUse (Write/Edit + Bash) | блок `src/main` пока RED pending |
+| `tech-guard.py` | PreToolUse (Write/Edit + Bash) | tech-ветка: правка проекта только на `tech-apply`, по согласию на текущий план, после снимка «до», в `targets` |
 | `eval-guard.py` | PreToolUse (Write/Edit + Bash) | блок `src/main` пока eval'ы задачи не passed |
 | `sod-enforcer.py` | PreToolUse | separation of duties по id активного шага |
 | `inline-phase-guard.py` | PreToolUse | actor-guard: ГЛАВНЫЙ не производит subagent-фазу inline |
@@ -156,12 +166,13 @@ approval-маркером (см. §Approval markers). **R5** — деструк�
 3. `pii-boundary`
 4. `state-write-guard`
 5. `tdd-guard`
-6. `eval-guard`
-7. `sod-enforcer`
-8. `inline-phase-guard`
-9. `gate-guard`
+6. `tech-guard`
+7. `eval-guard`
+8. `sod-enforcer`
+9. `inline-phase-guard`
+10. `gate-guard`
 
-tdd-guard, eval-guard и sod-enforcer судят в Bash-цепочке ЦЕЛИ записи shell-команды
+tdd-guard, tech-guard, eval-guard и sod-enforcer судят в Bash-цепочке ЦЕЛИ записи shell-команды
 (`hooks/_shell_targets.py`, общий разбор со state-write-guard) так же, как Write: иначе
 `cat > src/main/java/Foo.java <<EOF` на фазе RED проходил все хуки.
 
@@ -169,10 +180,11 @@ tdd-guard, eval-guard и sod-enforcer судят в Bash-цепочке ЦЕЛИ
 1. `pii-boundary`
 2. `state-write-guard`
 3. `tdd-guard`
-4. `eval-guard`
-5. `sod-enforcer`
-6. `inline-phase-guard`
-7. `gate-guard`
+4. `tech-guard`
+5. `eval-guard`
+6. `sod-enforcer`
+7. `inline-phase-guard`
+8. `gate-guard`
 
 ### Approval markers
 
@@ -197,7 +209,8 @@ R4-гейта, копировала оттуда готовую команду �
 
 Поэтому для ключей, которые СНИМАЮТ enforcement — `gate-override-*`, `rollback-*`,
 `skip-judges-*`, `policy-repin-*`, `policy-downgrade-*`, `acceptance-*`, `abandon-*`,
-`archive-force-*`, `git-discard` (`forge_events.CONSENT_PREFIXES`, один список на оба слоя) — обязателен
+`archive-force-*`, `git-discard`, `tech-plan-*` (`forge_events.CONSENT_PREFIXES`, один список на оба
+слоя; `tech-plan` — потому что утверждение плана техзадачи ЗАДАЁТ скоуп записи) — обязателен
 `--evidence "<дословная фраза пользователя>"`, и цитата сверяется с **репликами
 пользователя** в транскрипте сессии (`gate-guard.check_record_approval`; на `PreToolUse`
 рантайм отдаёт `transcript_path`). Именно с репликами, а не со всем файлом: qwen пишет запись

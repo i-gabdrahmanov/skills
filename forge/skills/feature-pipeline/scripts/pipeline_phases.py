@@ -66,6 +66,16 @@ except Exception as _e:  # реестр недоступен (pipeline-state н�
     print(f"[pipeline_phases] WARNING: judges-registry недоступен ({_e}) — "
           f"REQUIRED_JUDGES_MASK пуст, судейские гейты не форсятся.", file=sys.stderr)
 
+# ── Реестр плоских веток (fix, tech) — hooks/_branches.py ───────────────────────────
+# Шаги плоских веток не дублируются здесь кортежами: их состав живёт в одном реестре, который
+# читают и хуки (тот же каталог), и скрипты. Реестр — часть бандла, как risk_ladder: без него
+# бандл собран криво, и тихий фолбэк на «нет плоских веток» снял бы их гейты — поэтому импорт
+# жёсткий.
+_HOOKS_DIR = Path(__file__).resolve().parents[3] / "hooks"
+if str(_HOOKS_DIR) not in sys.path:
+    sys.path.insert(0, str(_HOOKS_DIR))
+import _branches as BR  # noqa: E402
+
 # ── Импорт единого предиката фазы (enabled_by / skip_if) ────────────────────────────
 # Используем тот же модуль, что и resolve_phases.py — DRY. Раньше live-снимок
 # не учитывал enabled_by/skip_if, и current_phase застревал на опорожнённой фазе
@@ -172,24 +182,24 @@ BUILD_STEP_PREFIX = "04-build-"      # 04-build-<taskId> — GREEN-фаза за
 TEST_STEP_PREFIX = "04-test-"        # 04-test-<taskId>  — RED-фаза задачи (пишет src/test)
 
 # Фазы, ОБЯЗАННЫЕ исполняться субагентом (не inline). Совпадает с префиксами шагов.
-# Хвост fix-* — плоские шаги fix-ветки (forgefix, минорный дефект): диагностика/RED/GREEN/
-# verify/дельта спеки. fix-intake (чтение тикета + скоуп-чек) — инлайн.
-SUBAGENT_PHASE_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
-                           "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec")
+# Хвост — шаги плоских веток из реестра _branches (fix-diag…fix-spec, tech-diag…tech-record);
+# их intake-шаги (чтение тикета + скоуп-чек) — инлайн.
+FULL_SUBAGENT_PHASE_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests",
+                                "06-spec")
+SUBAGENT_PHASE_PREFIXES = FULL_SUBAGENT_PHASE_PREFIXES + BR.subagent_steps()
 
 # Фазы, закрытие которых требует gate-result артефакта (gates/<step_id>.json от record_gate.py):
 # «шаг закрыт, потому что детерминированный гейт РЕАЛЬНО прошёл», а не потому что субагент
 # вернул status:"completed". Код/тесты/сборка.
-# fix-* — вся ветка целиком: судей у неё нет по дизайну (дешёвый путь), поэтому evidence
-# детерминированного гейта — единственный пол под закрытием шага, включая инлайн-скоуп-чек
-# fix-intake (иначе «это баг или фича» решалось бы прозой) и дельту спеки fix-spec.
+# Плоские ветки (fix-*, tech-*) — целиком: судей у них нет по дизайну (дешёвый путь), поэтому
+# evidence детерминированного гейта — единственный пол под закрытием шага, включая инлайн-
+# скоуп-чек intake (иначе «это баг/техзадача или фича» решалось бы прозой).
 # 03-jira — единственная фаза с НЕОБРАТИМЫМ внешним эффектом (задачи в трекере создаются
 # насовсем). При этом гейтов у неё не было вообще: ни в SUBAGENT_PHASE_PREFIXES, ни здесь,
 # ни в judges-registry, ни в phase_approvals — а state-recorder закрывает шаг как completed
 # по умолчанию (статус «failed» он выводит только из полей status/result/ok/passed).
 # Пол под закрытием — evidence check_jira.py (сверка созданных ключей с task-plan).
-GATE_RESULT_PREFIXES = ("03-jira", "04-test", "04-build", "05-tests",
-                        "fix-intake", "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec")
+GATE_RESULT_PREFIXES = ("03-jira", "04-test", "04-build", "05-tests") + BR.gate_steps()
 
 
 def requires_gate_result(step_id) -> bool:

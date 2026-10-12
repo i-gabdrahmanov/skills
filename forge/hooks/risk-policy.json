@@ -121,6 +121,9 @@
     ],
     "fix-spec": [
       "inputs.spec_anchor"
+    ],
+    "tech-diag": [
+      "inputs.archetype"
     ]
   },
   "gate_cmd_expect": {
@@ -146,6 +149,21 @@
     ],
     "fix-spec": [
       "check_fix_delta.py"
+    ],
+    "tech-intake": [
+      "check_tech_scope.py"
+    ],
+    "tech-diag": [
+      "check_tech_sdd.py"
+    ],
+    "tech-apply": [
+      "check_invariants.py expect"
+    ],
+    "tech-verify": [
+      "check_invariants.py compare"
+    ],
+    "tech-record": [
+      "tech_report.py check"
     ],
     "04-test": [
       "check_tests_red.py",
@@ -210,13 +228,17 @@
     "_comment": "То же fail-closed решение, но форсится в ТОЧКЕ ВОПРОСА: update.py не закроет шаг, пока ответ не записан в policy.json или manifest.json. required_decisions выше сторожит запись СЛЕДУЮЩЕЙ фазы — этого мало: на прогоне агент спросил «к какой стори относится баг», получил ответ и закрыл fix-intake, не выполнив config.py set (на свежем проекте manifest.json ещё без inputs → set падает exit 3 незамеченным). Решение потерялось молча, папка фикса уехала плоской, find_spec_anchor остался без сильнейшего признака. Ключ шага — префикс id. v2: ключи на inputs.* manifest активной фичи (risk_ladder.config_get делает dual-read fallback в legacy sources.* pipeline.json).",
     "fix-intake": [
       "inputs.story"
+    ],
+    "tech-intake": [
+      "inputs.archetype"
     ]
   },
   "phase_approvals": {
     "_comment": "Гейт ПОДТВЕРЖДЕНИЯ ПЛАНА ЧЕЛОВЕКОМ по фазе: активная фаза (по префиксу id шага) не может делать продуктивную запись, пока нет approval-маркера <key> (журнал ground/approvals.jsonl) с провенансом record_approval. {feature} подставляется слагом активной фичи. Появилось из-за fix-ветки: тех-решение минорного дефекта (мини-план фикса) утверждалось только прозой брифа, и прогон уходил писать RED-тест и код, ничего не спросив. Гейт стоит на фазах ПОСЛЕ плана (fix-red/fix-green), а не на самой fix-diag: план сначала надо написать, чтобы было что показывать. 03-jira добавлена отдельно: создание задач необратимо (из пайплайна их не удалить), поэтому состав задач человек подтверждает ДО фазы, а не постфактум по факту созданного.",
     "fix-red": "fix-plan-{feature}",
     "fix-green": "fix-plan-{feature}",
-    "03-jira": "jira-plan-{feature}"
+    "03-jira": "jira-plan-{feature}",
+    "tech-apply": "tech-plan-{feature}"
   },
   "level_requirements": {
     "_comment": "Что должно быть выполнено, чтобы действие уровня прошло. step = completed-шаг manifest; approval = файл <key> (журнал ground/approvals.jsonl). Доставки (commit/push/PR) в пайплайне нет — её делает пользователь сам, поэтому evidence-требований и commit/push_needs больше нет. SoD форсит sod-enforcer (не ключи политики); audit — лог-агент.",

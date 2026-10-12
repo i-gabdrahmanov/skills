@@ -19,12 +19,13 @@ R0–R5, evidence bundle, security-хуки, информационный учё
 FORGE.md ссылаются на него односторонне. Дрейф «доки ↔ проводка» пинится
 `hooks/test_docs_hooks_consistency.py` (fail на любом расхождении).
 
-## Состав хуков (15 шт.)
+## Состав хуков (16 шт.)
 
 | Скрипт | Событие | Назначение | Блок |
 |---|---|---|---|
 | `gate-guard.py` (+`risk_ladder.py`,`risk-policy.json`) | PreToolUse Bash/Write/Edit/Read | permission gateway, risk ladder R0–R5, **deny-first**; форсит выбор критичности, `required_decisions` (нет решения фазы → нет записи) и `phase_approvals` (нет approval-маркера плана → нет записи фазы) | exit 2 |
 | `tdd-guard.py` | PreToolUse Write/Edit + Bash | форсит TDD (блок `src/main` пока RED pending) + тест-стратегию (блок `@DataJpaTest`/`@SpringBootTest` при `test_layer=service-unit` — только для файлов в `src/test/`) | exit 2 |
+| `tech-guard.py` | PreToolUse Write/Edit + Bash | tech-ветка (`forgetech`): запись в файл проекта (вне `docs/`, `ground/`, выходных каталогов сборки) только на шаге `tech-apply`, при согласии `tech-plan-<F>`, привязанном к sha256 текущего `change-plan.json`, после снимка «до» (`check_invariants.py snapshot`) и только в `targets` плана. Вне прогона forgetech — noop | exit 2 |
 | `eval-guard.py` | PreToolUse Write/Edit + Bash | блок записи в `src/main`, пока pre-write eval задачи (`compile`) не пройден (Eval-Driven). `coverage`/`test_pass` выполнимы только ПОСЛЕ кода — их держат гейты закрытия шага | exit 2 |
 | `destructive-blocker.py` | PreToolUse `run_shell_command` | чёрный список (`rm -rf /`, force-push `-f`/`--force`, DROP, base64→sh, xargs rm, rmtree корня) | exit 2 |
 | `fork-syntax-guard.py` | PreToolUse `run_shell_command` | инструктивный блок синтаксиса, который режет нативный сейфти форка (`$(...)`, backticks, `find -exec`, `ls -R`) — объясняет замену (Glob/Grep/Read) вместо молчаливого deny | exit 2 |
@@ -44,7 +45,9 @@ FORGE.md ссылаются на него односторонне. Дрейф �
 `settings.hooks.json` (эталон блока hooks, плейсхолдеры `${PYTHON}` и `${PROJECT_ROOT}`
 подставляет `resolve_hook_paths.py`), `resolve_hook_paths.py` (in-project фиксер путей,
 его зовёт `deploy-local.sh`), `_shell_targets.py` (общий разбор целей записи/удаления в
-shell-команде для state-write-guard, tdd-guard, eval-guard и sod-enforcer; stdlib-only),
+shell-команде для state-write-guard, tdd-guard, tech-guard, eval-guard и sod-enforcer; stdlib-only),
+`_branches.py` (реестр плоских веток fix/tech: шаги, роли, артефакты — единый источник для
+хуков и скриптов),
 `evals/run-evals.py` (eval-набор), `run-hook-tests.sh`
 (юнит-тесты хуков + evals одной командой). Статическая диагностика (`doctor.py`) и
 валидация скиллов живут в `skills/feature-pipeline/scripts/` — `preflight.py` зовёт их сам.
@@ -52,11 +55,11 @@ shell-команде для state-write-guard, tdd-guard, eval-guard и sod-enfo
 ## Порядок и sequential
 
 PreToolUse `run_shell_command` идёт **sequential**: destructive-blocker → fork-syntax-guard →
-pii-boundary → state-write-guard → tdd-guard → eval-guard → sod-enforcer → inline-phase-guard →
-gate-guard. tdd-guard/eval-guard/sod-enforcer судят в ней цели записи shell-команды (общий
+pii-boundary → state-write-guard → tdd-guard → tech-guard → eval-guard → sod-enforcer →
+inline-phase-guard → gate-guard. tdd-guard/tech-guard/eval-guard/sod-enforcer судят в ней цели записи shell-команды (общий
 разбор `_shell_targets.py`) так же, как Write: `cat > src/main/... <<EOF` — та же запись.
 Write/Edit (`write_file|edit|notebook_edit`): pii-boundary → state-write-guard →
-tdd-guard → eval-guard → sod-enforcer → inline-phase-guard → gate-guard. Любой
+tdd-guard → tech-guard → eval-guard → sod-enforcer → inline-phase-guard → gate-guard. Любой
 блокирующий может остановить (`exit 2`) до действия. Точный блок и порядок — в
 `settings.hooks.json`.
 

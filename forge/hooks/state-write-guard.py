@@ -136,7 +136,9 @@ _CP_PATTERNS = [
     # (Bash→python), тул Write тут не используется: прямая запись подделывает grounding.
     r"(?<![\w-])ground/inventory(?:/|\b)",
     r"(?<![\w-])ground/statements/[^/]+/[^/]+/events\.jsonl\b",
-    r"(?<![\w-])ground/statements/[^/]+/[^/]+/(?:_origins|gates|overrides|judges|journal|rollbacks)(?:/|\b)",
+    # snapshots/ — снимок «до» tech-ветки (check_invariants.py snapshot): по нему судится
+    # точный diff «после». Подменённый снимок = подменённый эталон.
+    r"(?<![\w-])ground/statements/[^/]+/[^/]+/(?:_origins|gates|overrides|judges|journal|rollbacks|snapshots)(?:/|\b)",
     r"(?<![\w-])ground/approvals(?:/|\b)",
     r"(?<![\w-])ground/phases(?:/|\b)",
     # ground/archive/ — стейт ЗАВЕРШЁННЫХ прогонов (archive.py). Данные те же, что в

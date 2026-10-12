@@ -104,6 +104,22 @@
       }
     },
 
+    "forgetech": {
+      "dir": ".gigacode/skills/forgetech",
+      "skill_md": ".gigacode/skills/forgetech/SKILL.md",
+      "references": {
+        "manifest_steps_json": ".gigacode/skills/forgetech/references/manifest-steps.json",
+        "tech_sdd_template_md": ".gigacode/skills/forgetech/references/tech-sdd-template.md"
+      },
+      "scripts": {
+        "check_tech_scope": ".gigacode/skills/forgetech/scripts/check_tech_scope.py",
+        "check_tech_sdd": ".gigacode/skills/forgetech/scripts/check_tech_sdd.py",
+        "check_invariants": ".gigacode/skills/forgetech/scripts/check_invariants.py",
+        "tech_plan": ".gigacode/skills/forgetech/scripts/tech_plan.py",
+        "tech_report": ".gigacode/skills/forgetech/scripts/tech_report.py"
+      }
+    },
+
     "minor-defect-fix": {
       "dir": ".gigacode/skills/minor-defect-fix",
       "skill_md": ".gigacode/skills/minor-defect-fix/SKILL.md",

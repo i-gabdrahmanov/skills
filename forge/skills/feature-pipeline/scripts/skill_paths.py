@@ -235,6 +235,7 @@ from _project import (  # noqa: E402
     statements_dir,
     step_output_path,
     system_analysis_dir,
+    tech_docs_dir,
     test_conventions_path,
     spec_conventions_path,
     spec_map_path,
@@ -305,6 +306,7 @@ _CLI_TARGETS = {
     "docs-base": docs_base,
     "feature-docs": feature_docs_dir,
     "fix-docs": None,          # особый: нужны --feature (баг) и --story
+    "tech-docs": None,         # особый: нужен --feature (ключ/слаг техзадачи)
     "master-base": _master_base,
     "master-specs": master_specs_dir,
     "master-spec": master_spec_path,
@@ -336,6 +338,12 @@ def _cli() -> int:
             print(fix_delta_slug(args.feature, args.story))
         else:
             print(fix_docs_dir(root, args.feature, args.story))
+        return 0
+    if args.target == "tech-docs":
+        if not args.feature:
+            print("tech-docs: нужен --feature <ключ техзадачи>", file=sys.stderr)
+            return 2
+        print(tech_docs_dir(root, args.feature))
         return 0
     if args.target == "master-spec":
         print(master_spec_for(root, args.capability))

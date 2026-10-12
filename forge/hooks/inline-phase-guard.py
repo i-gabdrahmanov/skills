@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # громким отказом, а не тишиной. Инвариант «пол интерпретатора» держит test_python_floor.py.
 try:
     import risk_ladder as _R
+    import _branches as BR
 except Exception as _e:  # pragma: no cover — сломанный бандл/интерпретатор
     # Форточка на команды ВОССТАНОВЛЕНИЯ: сплошной deny запирал и починку бандла
     # (баннер советовал `bash .gigacode/deploy-local.sh`, а матчер ^Bash$ её же и резал).
@@ -58,9 +59,9 @@ except Exception as _e:  # pragma: no cover — сломанный бандл/и
 
 # Единый источник истины «какие фазы обязаны идти субагентом» — pipeline_phases.
 # best-effort импорт + inline-fallback (как в update.py), чтобы переименование префикса
-# в одном месте не отключало enforcement молча.
-_SUBAGENT_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
-                      "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec")
+# в одном месте не отключало enforcement молча. Шаги плоских веток — из реестра _branches.
+_SUBAGENT_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests",
+                      "06-spec") + BR.subagent_steps()
 try:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "feature-pipeline" / "scripts"))
     import pipeline_phases as _pp
@@ -206,22 +207,11 @@ def _phase_artifact(step_id: str, norm: str) -> str | None:
     elif step_id.startswith("06-spec"):
         if (norm.endswith(".md") or norm.endswith(".puml")) and ("docs/" in norm or "ground/system-analysis" in norm):
             return "запись артефактов спецификации"
-    # Fix-ветка (forgefix): минорный дефект.
-    elif step_id.startswith("fix-diag"):
-        if re.search(r"(^|/)(fix-plan\.md|task-plan\.json)$", norm):
-            return "запись fix-plan.md / task-plan.json"
-    elif step_id.startswith("fix-red"):
-        if "src/test/" in norm:
-            return "запись RED-теста в src/test/"
-    elif step_id.startswith("fix-green"):
-        if "src/main/" in norm or norm.endswith(".java"):
-            return "запись кода фикса в src/main/ (*.java)"
-    elif step_id.startswith("fix-verify"):
-        if "src/" in norm:
-            return "правка src/ в фазе прогона тестов"
-    elif step_id.startswith("fix-spec"):
-        if re.search(r"(^|/)sdd\.md$", norm):
-            return "запись дельты спеки (sdd.md)"
+    else:
+        # Плоские ветки (fix: forgefix, tech: forgetech) — артефакты фаз из реестра _branches.
+        for prefix, (pattern, what) in BR.phase_work().items():
+            if step_id.startswith(prefix):
+                return what if re.search(pattern, norm) else None
     return None
 
 
@@ -293,8 +283,7 @@ def _is_phase_work(step_id: str, tool_name: str, tool_input: dict, root: Path) -
             # через явный subprocess-вызов в command).
             if PYTHON_SUBPROCESS_RE.search(norm):
                 return None
-            if step_id.startswith(("04-test", "04-build", "05-tests",
-                                   "fix-red", "fix-green", "fix-verify")):
+            if step_id.startswith(("04-test", "04-build", "05-tests") + BR.build_steps()):
                 return f"запуск сборки/тестов ({BUILD_CMD_RE})"
         return None
 

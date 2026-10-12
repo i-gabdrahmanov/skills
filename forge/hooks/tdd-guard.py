@@ -30,6 +30,7 @@ from pathlib import Path
 try:
     import risk_ladder as R
     import _shell_targets as ST
+    import _branches as BR
 except Exception as _e:  # pragma: no cover — сломанный бандл/интерпретатор
     # Форточка на команды ВОССТАНОВЛЕНИЯ: сплошной deny запирал и починку бандла
     # (баннер советовал `bash .gigacode/deploy-local.sh`, а матчер ^Bash$ её же и резал).
@@ -316,10 +317,11 @@ def _check_write(root: Path, cfg: dict, quality_cfg: dict, target, content: str)
     # ── Проверка RED-теста в manifest ──
     steps = R.manifest_status(root)
 
-    # Плоская ветка forge: fix (forgefix) — один RED-шаг на прогон.
+    # Плоские ветки forge с RED-шагом (fix: forgefix) — один RED-шаг на прогон, из реестра.
     # Есть в манифесте → это её прогон; блок src/main, пока RED-шаг не completed.
     # (Full-манифест его не содержит → пропуск ниже, к per-task логике 04-build-<id>.)
-    for flat_red in ("fix-red",):
+    # Tech-ветка RED-шага не имеет: её запись держит tech-guard (снимок «до» + скоуп).
+    for flat_red in BR.red_steps():
         status = steps.get(flat_red)
         if status is None:
             continue
