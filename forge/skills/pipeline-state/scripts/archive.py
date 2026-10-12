@@ -81,6 +81,7 @@ from _util import (archive_docs_dir, feature_docs_dir, ground_dir, manifest_path
                    task_docs_dir)
 import read as _read  # summarize()  # noqa: E402
 import forge_events as FE  # noqa: E402 — согласия пользователя (ground/approvals.jsonl)
+import _branches as BR  # noqa: E402 — реестр плоских веток (hooks/, положен туда _util)
 # _util при импорте кладёт hooks/ в sys.path — оттуда берём ЕДИНЫЙ предикат живости прогона
 # (тот же, которым резолвят активную фичу хуки и config.py), а не вторую его копию здесь.
 import _config_loader as _CL  # noqa: E402
@@ -96,8 +97,8 @@ def _ensure_path(p: Path) -> None:
         sys.path.insert(0, sp)
 
 # Фолбэк финального шага плоских веток, если реестр шагов не прочитался. Живой источник —
-# skills/<skill>/references/manifest-steps.json (последний элемент).
-_FLAT_FINAL_FALLBACK = {"forgefix": "fix-spec"}
+# skills/<skill>/references/manifest-steps.json (последний элемент); фолбэк — реестр _branches.
+_FLAT_FINAL_FALLBACK = BR.final_steps()
 
 
 class Fail(RuntimeError):

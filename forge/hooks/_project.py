@@ -688,6 +688,17 @@ def feature_docs_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) ->
     return docs_base(root, cfg) / _clean_subdir(docs.get("feature_subdir"), "feature-pipeline")
 
 
+def tech_docs_dir(root: Optional[Path] = None, task: str = "", cfg: Optional[dict] = None) -> Path:
+    """Каталог артефактов ТЕХЗАДАЧИ (tech-ветка): <feature-docs>/tech/<task>.
+
+    Техзадача (апгрейд библиотек, правка конфигурации) не меняет поведение системы и не
+    правит мастер-спеку: стори у неё нет, дельты `sdd.md` тоже (её документ — `tech-sdd.md`,
+    его /forge-spec не подхватывает). Отдельный подкаталог `tech/` держит такие задачи вне
+    ряда фич и фиксов. Одна реализация на хук (tech-guard) и скрипты (skill_paths)."""
+    root = Path(root) if root else find_project_root()
+    return feature_docs_dir(root, cfg) / "tech" / safe_slug(task)
+
+
 def archive_docs_dir(root: Optional[Path] = None, cfg: Optional[dict] = None) -> Path:
     """Доки ЗАВЕРШЁННЫХ строек — СИБЛИНГ каталога доков (при дефолтной раскладке docs/archive).
 

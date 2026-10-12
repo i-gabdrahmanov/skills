@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""_branches.py — реестр ПЛОСКИХ веток forge (fix, tech): единый источник истины.
+
+Зачем. Плоская ветка — это namespace стейта (`ground/statements/<skill>/…`) с фиксированным
+списком шагов `<prefix>*`. Fix-ветка жила кортежами `("fix-diag", "fix-red", …)`, раскиданными
+по ~15 местам: update.py, tdd-guard, eval-guard, inline-phase-guard, sod-enforcer, risk_ladder,
+archive.py, pipeline_phases, resolve_phases, skill_paths, _util… Третья ветка копипастой дала бы
+ещё 15 кортежей, и любой пропущенный — тихо снятый гейт (прецедент: «except в хуках прячет
+NameError»). Поэтому ветки описаны ЗДЕСЬ, а потребители их читают.
+
+Модуль — stdlib-only и без побочных эффектов: его импортируют хуки (тот же каталог, без
+fallback'ов) и скрипты скиллов (через hooks/ в sys.path, как risk_ladder/_project).
+Покрытие «каждый потребитель видит каждую ветку» пинит test_branches_registry.py.
+
+Full-ветка (feature-pipeline) сюда НЕ входит: у неё динамические шаги по задачам
+(04-test-<id>/04-build-<id>) и фазовая машина pipeline_phases — другая модель.
+"""
+from __future__ import annotations
+
+from typing import Optional
+
+# Поля ветки:
+#   mode            — пользовательский словарь router/inputs.mode (fix|tech)
+#   prefix          — префикс id всех шагов ветки
+#   steps           — шаги в порядке (источник истины для манифеста — references/manifest-steps.json
+#                     скилла; совпадение пинит тест)
+#   subagent_steps  — фазы, ОБЯЗАННЫЕ идти субагентом (inline-phase-guard, update._check_subagent_origin)
+#   gate_steps      — шаги, закрытие которых требует evidence record_gate (update._check_gate_result)
+#   build_steps     — фазы, где gradle/mvn — продуктивная работа (inline-запуск оркестратором = deny)
+#   red_step        — шаг RED (tdd-guard держит src/main/java до его закрытия); None — RED нет
+#   design_step     — шаг, играющий роль 02-design (level_requirements.R2 → «план готов»)
+#   final_step      — «стройка готова» (archive.py)
+#   roles           — шаг → роль SoD (sod-enforcer.ROLE_POLICY)
+#   verify_to_impl  — фаза прогона → шаг реализации, который надо переоткрыть (подсказка SoD)
+#   artifacts       — шаг → канонические имена файлов в docs-каталоге задачи (update.py)
+#   phase_work      — шаг → (regex пути, описание): productive-артефакт фазы (inline-phase-guard)
+#   docs_target     — CLI-таргет skill_paths.py, печатающий docs-каталог задачи
+BRANCHES = {
+    "forgefix": {
+        "mode": "fix",
+        "prefix": "fix-",
+        "steps": ("fix-intake", "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec"),
+        "subagent_steps": ("fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec"),
+        "gate_steps": ("fix-intake", "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec"),
+        "build_steps": ("fix-red", "fix-green", "fix-verify"),
+        "red_step": "fix-red",
+        "design_step": "fix-diag",
+        "final_step": "fix-spec",
+        # fix-diag играет роль дизайна (мини-план), fix-spec — роль спецадаптера (правит
+        # только дельту спеки, не код).
+        "roles": {"fix-diag": "design", "fix-red": "test", "fix-green": "dev",
+                  "fix-verify": "test", "fix-spec": "spec"},
+        "verify_to_impl": {"fix-verify": "fix-green"},
+        "artifacts": {"fix-diag": ("fix-plan.md", "task-plan.json"), "fix-spec": ("sdd.md",)},
+        "phase_work": {
+            "fix-diag": (r"(^|/)(fix-plan\.md|task-plan\.json)$", "запись fix-plan.md / task-plan.json"),
+            "fix-red": (r"src/test/", "запись RED-теста в src/test/"),
+            "fix-green": (r"src/main/|\.java$", "запись кода фикса в src/main/ (*.java)"),
+            "fix-verify": (r"src/", "правка src/ в фазе прогона тестов"),
+            "fix-spec": (r"(^|/)sdd\.md$", "запись дельты спеки (sdd.md)"),
+        },
+        "docs_target": "fix-docs",
+    },
+    # Tech-ветка (forgetech): техзадача без бизнес-наполнения — апгрейд библиотек, правка
+    # конфигурации. Поведение системы должно остаться прежним; гейт — снимок «до» и точный
+    # diff «после» (check_invariants.py), а не RED-тест. См. tasks/018-tech-path.md.
+    "forgetech": {
+        "mode": "tech",
+        "prefix": "tech-",
+        "steps": ("tech-intake", "tech-diag", "tech-apply", "tech-verify", "tech-record"),
+        "subagent_steps": ("tech-diag", "tech-apply", "tech-verify", "tech-record"),
+        "gate_steps": ("tech-intake", "tech-diag", "tech-apply", "tech-verify", "tech-record"),
+        "build_steps": ("tech-apply", "tech-verify"),
+        "red_step": None,
+        "design_step": "tech-diag",
+        "final_step": "tech-record",
+        "roles": {"tech-diag": "design", "tech-apply": "dev", "tech-verify": "test",
+                  "tech-record": "spec"},
+        "verify_to_impl": {"tech-verify": "tech-apply"},
+        "artifacts": {"tech-diag": ("tech-sdd.md", "change-plan.json"),
+                      "tech-record": ("report.md",)},
+        "phase_work": {
+            "tech-diag": (r"(^|/)(tech-sdd\.md|change-plan\.json)$",
+                          "запись tech-sdd.md / change-plan.json"),
+            "tech-apply": (r"src/main/|\.java$|(^|/)(pom\.xml|build\.gradle(\.kts)?|"
+                           r"settings\.gradle(\.kts)?|gradle\.properties|libs\.versions\.toml)$|"
+                           r"(^|/)application[^/]*\.(ya?ml|properties)$",
+                           "правка билд-файлов / конфигурации / кода техзадачи"),
+            "tech-verify": (r"src/", "правка src/ в фазе прогона тестов"),
+            "tech-record": (r"(^|/)report\.md$", "запись итоговой сводки (report.md)"),
+        },
+        "docs_target": "tech-docs",
+    },
+}
+
+
+def skills() -> tuple:
+    """Имена namespace плоских веток."""
+    return tuple(BRANCHES)
+
+
+def get(skill: Optional[str]) -> Optional[dict]:
+    return BRANCHES.get(skill or "")
+
+
+def by_mode(mode: Optional[str]) -> Optional[str]:
+    """skill по пользовательскому режиму (fix → forgefix, tech → forgetech)."""
+    for skill, b in BRANCHES.items():
+        if b["mode"] == mode:
+            return skill
+    return None
+
+
+def branch_of_step(step_id) -> Optional[str]:
+    """skill плоской ветки, которой принадлежит шаг (по префиксу id); None — не плоский шаг."""
+    if not isinstance(step_id, str):
+        return None
+    for skill, b in BRANCHES.items():
+        if step_id.startswith(b["prefix"]):
+            return skill
+    return None
+
+
+def is_flat_step(step_id) -> bool:
+    return branch_of_step(step_id) is not None
+
+
+def _collect(field: str) -> tuple:
+    out: list = []
+    for b in BRANCHES.values():
+        out.extend(b[field])
+    return tuple(out)
+
+
+def subagent_steps() -> tuple:
+    return _collect("subagent_steps")
+
+
+def gate_steps() -> tuple:
+    return _collect("gate_steps")
+
+
+def build_steps() -> tuple:
+    return _collect("build_steps")
+
+
+def red_steps() -> tuple:
+    return tuple(b["red_step"] for b in BRANCHES.values() if b["red_step"])
+
+
+def design_steps() -> tuple:
+    return tuple(b["design_step"] for b in BRANCHES.values() if b["design_step"])
+
+
+def roles() -> dict:
+    out: dict = {}
+    for b in BRANCHES.values():
+        out.update(b["roles"])
+    return out
+
+
+def verify_to_impl() -> dict:
+    out: dict = {}
+    for b in BRANCHES.values():
+        out.update(b["verify_to_impl"])
+    return out
+
+
+def artifacts() -> dict:
+    out: dict = {}
+    for b in BRANCHES.values():
+        out.update(b["artifacts"])
+    return out
+
+
+def phase_work() -> dict:
+    out: dict = {}
+    for b in BRANCHES.values():
+        out.update(b["phase_work"])
+    return out
+
+
+def final_steps() -> dict:
+    """skill → финальный шаг (фолбэк архивации, если реестр шагов скилла не прочитался)."""
+    return {s: b["final_step"] for s, b in BRANCHES.items()}
+
+
+def mode_to_skills() -> dict:
+    """mode → {skill} для сверки manifest.inputs.mode ↔ manifest.skill (resolve_phases)."""
+    return {b["mode"]: {s} for s, b in BRANCHES.items()}

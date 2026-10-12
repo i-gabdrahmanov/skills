@@ -44,15 +44,16 @@ from _util import (gate_result_path, judges_dir, load_project_config, origins_di
                    overrides_dir, repo_root, safe_load_json,
                    task_docs_dir as _task_docs_dir)
 import forge_events as FE  # журнал evidence (импорт _util уже положил hooks/ в sys.path)
+import _branches as BR  # реестр плоских веток (fix, tech) — hooks/, как forge_events
 from _project import exclusive_lock, safe_component  # noqa: E402
 
 # Соглашение «какие фазы обязаны идти через субагента» — ЕДИНЫЙ источник pipeline_phases
 # (co-located feature-pipeline). best-effort импорт + inline-fallback, чтобы переименование
-# префикса в одном месте не отключало enforcement молча.
-_SUBAGENT_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
-                      "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec")
-_GATE_RESULT_PREFIXES = ("04-test", "04-build", "05-tests",
-                         "fix-intake", "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec")
+# префикса в одном месте не отключало enforcement молча. Шаги плоских веток фолбэк берёт из
+# реестра _branches, а не из своей копии кортежа.
+_SUBAGENT_PREFIXES = ("02-sdd", "02-design", "04-test", "04-build", "05-tests",
+                      "06-spec") + BR.subagent_steps()
+_GATE_RESULT_PREFIXES = ("04-test", "04-build", "05-tests") + BR.gate_steps()
 _REQUIRED_STEP_PREFIXES = _SUBAGENT_PREFIXES
 try:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1].parent / "feature-pipeline" / "scripts"))
@@ -523,7 +524,7 @@ def _check_failure_limit(step: dict, project: Path, skill: str, feature: str) ->
     return True
 
 
-_RED_STEP_PREFIXES = ("fix-red", "04-test")
+_RED_STEP_PREFIXES = BR.red_steps() + ("04-test",)
 
 
 def _red_step_test_exempt(step_id: str, project: Path, skill: str, feature: str) -> bool:
@@ -699,8 +700,8 @@ _CANONICAL_ARTIFACTS = {
     # документ ветки уезжал под именем слага задачи — гейты фазы этого не замечали (им путь
     # передаёт сама модель), и дельта выпадала из `merge`/`diff`. Full-путь здесь не перечислен:
     # там те же имена держат судьи фаз (sdd-judge/design-judge) и `check_traceability`.
-    "fix-diag": ("fix-plan.md", "task-plan.json"),
-    "fix-spec": ("sdd.md",),
+    # Плоские ветки (fix-diag/fix-spec, tech-diag/tech-record) — из реестра _branches.
+    **BR.artifacts(),
 }
 
 
@@ -711,6 +712,16 @@ def _docs_dir_for(project: Path, skill: str, feature: str):
     (`archive.py`), а вторая копия разошлась бы с этой молча. Имя оставлено — на него завязаны
     `_check_step_artifacts` и тесты."""
     return _task_docs_dir(project, skill, feature)
+
+
+def _docs_cli_hint(skill: str) -> str:
+    """Аргументы skill_paths.py, печатающие docs-каталог задачи этой ветки."""
+    target = (BR.get(skill) or {}).get("docs_target")
+    if target == "fix-docs":
+        return "fix-docs --feature <баг> --story <стори|none>"
+    if target:
+        return f"{target} --feature <слаг>"
+    return "feature-docs --feature <слаг>"
 
 
 def _check_step_artifacts(step: dict, project: Path, skill: str, feature: str):
@@ -748,7 +759,7 @@ def _check_step_artifacts(step: dict, project: Path, skill: str, feature: str):
         f"изменился (стори узнали позже, и папка фикса переехала в <стори>/fixes/<баг>) — "
         f"перенеси туда уже записанные артефакты, а не пиши их заново.\n"
         f"   Каталог задачи резолвится одной командой: skill_paths.py "
-        f"{'fix-docs --feature <баг> --story <стори|none>' if skill == 'forgefix' else 'feature-docs --feature <слаг>'}"
+        f"{_docs_cli_hint(skill)}"
         f" --project {project}\n"
         f"   Если артефакт объективно лежит в другом месте (нестандартная раскладка docs):\n"
         + _override_hint(f"artifacts-{step_id}", feature, step_id, "<где артефакт и почему там>")

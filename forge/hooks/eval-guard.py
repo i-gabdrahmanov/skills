@@ -31,6 +31,7 @@ from pathlib import Path
 try:
     import risk_ladder as R
     import _shell_targets as ST
+    import _branches as BR
 except Exception as _e:  # pragma: no cover — сломанный бандл/интерпретатор
     # Форточка на команды ВОССТАНОВЛЕНИЯ: сплошной deny запирал и починку бандла
     # (баннер советовал `bash .gigacode/deploy-local.sh`, а матчер ^Bash$ её же и резал).
@@ -203,7 +204,7 @@ def main() -> int:
     if mp.parent.parent.name not in ("", "feature-pipeline"):
         return 0
     active_step = R.current_step_id(root) if hasattr(R, "current_step_id") else None
-    if isinstance(active_step, str) and active_step.startswith("fix-"):
+    if BR.is_flat_step(active_step):
         return 0
 
     manifest = json.loads(mp.read_text(encoding="utf-8"))

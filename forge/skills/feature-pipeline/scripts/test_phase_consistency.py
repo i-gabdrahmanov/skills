@@ -192,11 +192,19 @@ class TestStepIdConventions(unittest.TestCase):
         """update._check_subagent_origin (бывший subagent-enforcer, перенесён с PreToolUse на
         закрытие шага): inline-fallback набора фаз совпадает с pp.SUBAGENT_PHASE_PREFIXES."""
         src = _src("skills/pipeline-state/scripts/update.py")
+        # Шаги плоских веток — из реестра hooks/_branches.py: и pp, и fallback update.py
+        # складывают full-префиксы с BR.subagent_steps(), а не держат свою копию кортежа.
         self.assertEqual(PP.SUBAGENT_PHASE_PREFIXES,
-                         ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec",
-                          "fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec"))
-        for ph in PP.SUBAGENT_PHASE_PREFIXES:
+                         PP.FULL_SUBAGENT_PHASE_PREFIXES + PP.BR.subagent_steps())
+        self.assertEqual(PP.FULL_SUBAGENT_PHASE_PREFIXES,
+                         ("02-sdd", "02-design", "04-test", "04-build", "05-tests", "06-spec"))
+        for ph in PP.FULL_SUBAGENT_PHASE_PREFIXES:
             self.assertIn(f'"{ph}"', src, f"{ph} пропал из fallback update._check_subagent_origin")
+        self.assertIn("BR.subagent_steps()", src,
+                      "fallback update._check_subagent_origin обязан брать плоские ветки из реестра")
+        for ph in ("fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec",
+                   "tech-diag", "tech-apply", "tech-verify", "tech-record"):
+            self.assertIn(ph, PP.SUBAGENT_PHASE_PREFIXES)
 
 
 class DepsPredicateFallbacks(unittest.TestCase):

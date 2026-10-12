@@ -324,6 +324,22 @@ def cmd_single(args) -> int:
         record["evidence"] = args.evidence
     if args.feature_ctx:
         record["feature"] = args.feature_ctx
+    bind_file = getattr(args, "bind_file", None)  # программные вызовы собирают args без поля
+    if bind_file:
+        # Согласие на КОНКРЕТНОЕ содержимое: план техзадачи (change-plan.json) задаёт скоуп
+        # записи, и согласие на него не должно переживать правку плана. Хеш сверяет tech-guard.
+        bound = Path(bind_file)
+        if not bound.is_absolute():
+            bound = project / bound
+        try:
+            record["bound_sha256"] = FE.file_sha256(bound)
+        except OSError as e:
+            print(f"ERROR: --bind-file {bind_file} не читается: {e}", file=sys.stderr)
+            return 2
+        try:
+            record["bound_file"] = bound.resolve().relative_to(project).as_posix()
+        except ValueError:
+            record["bound_file"] = bound.as_posix()
 
     # Идемпотентность для одиночного режима — мягкая: если ключ уже активен, не дублируем.
     # Для одиночного скрипта это поведение НОВОЕ (раньше было «всегда пишем»). Сделано
@@ -453,6 +469,9 @@ def main() -> int:
                    help="Ссылка на доказательство (sha256, ticket, отчёт)")
     p.add_argument("--feature-ctx", default=None,
                    help="Jira-key / feature-slug (контекст для аудита, не путь к репо)")
+    p.add_argument("--bind-file", default=None,
+                   help="Привязать согласие к содержимому файла (sha256): правка файла после "
+                        "согласия его аннулирует. Нужен для tech-plan-<F> (change-plan.json)")
     p.add_argument("--batch", help="Batch-режим: путь к YAML/JSON со списком approval'ов "
                                    "(см. саммари в шапке скрипта)")
     p.add_argument("--json", action="store_true")
@@ -460,7 +479,7 @@ def main() -> int:
 
     # Batch имеет приоритет; --batch несовместим с одиночными --key/--reason.
     if args.batch:
-        if args.key or args.reason or args.approved_by or args.approver:
+        if args.key or args.reason or args.approved_by or args.approver or getattr(args, "bind_file", None):
             print("ERROR: --batch несовместим с --key/--reason/--approver "
                   "(они берутся из файла)", file=sys.stderr)
             return 2

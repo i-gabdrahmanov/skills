@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     import risk_ladder as _R
     import _shell_targets as ST
+    import _branches as BR
 except Exception as _e:  # pragma: no cover — сломанный бандл/интерпретатор
     # Форточка на команды ВОССТАНОВЛЕНИЯ: сплошной deny запирал и починку бандла
     # (баннер советовал `bash .gigacode/deploy-local.sh`, а матчер ^Bash$ её же и резал).
@@ -117,13 +118,8 @@ STEP_ROLE = {
     "05-": "test",
     "06-spec": "spec",
     "06-": "spec",
-    # Fix-ветка (forgefix): плоские шаги fix-*. fix-diag играет роль дизайна (мини-план),
-    # fix-spec — роль спецадаптера (правит только дельту спеки, не код).
-    "fix-diag": "design",
-    "fix-red": "test",
-    "fix-green": "dev",
-    "fix-verify": "test",
-    "fix-spec": "spec",
+    # Плоские ветки (fix-*, tech-*) — роли шагов из реестра _branches.
+    **BR.roles(),
 }
 
 
@@ -188,7 +184,7 @@ def _block(reason: str) -> int:
 # Фазы прогона тестов: правка src/main здесь — это «подгонка кода под зелёное» в обход
 # счётчика ре-итераций. Легальный путь — ПЕРЕОТКРЫТЬ шаг реализации (его считает
 # quality.max_step_reopens и на исчерпании даёт exit 3 «стоп-и-спроси»).
-_VERIFY_TO_IMPL = {"05-tests": "04-build-<taskId>", "fix-verify": "fix-green"}
+_VERIFY_TO_IMPL = {"05-tests": "04-build-<taskId>", **BR.verify_to_impl()}
 
 
 def _how_to_proceed(step_id: str, role: str) -> str:

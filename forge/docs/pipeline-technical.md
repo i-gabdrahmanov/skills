@@ -278,6 +278,7 @@ Jira делает пользователь сам (forge-no-delivery). Соот�
 |---|---|---|---|
 | `gate-guard` (+`risk_ladder`, `risk-policy.json`) | PreToolUse Bash/Write/Edit/Read | risk ladder R0–R5, deny-first, форсит выбор критичности; на read-инструментах — только фазовый гейт (блок чтения `src/` до grounding), ladder к чтению неприменим | exit 2 |
 | `tdd-guard` | PreToolUse Write/Edit | блок `src/main` пока RED-тест задачи (`04-test-<id>`) не completed; блок `@DataJpaTest`/`@SpringBootTest` при `test_layer=service-unit` | exit 2 |
+| `tech-guard` | PreToolUse Write/Edit/Bash | tech-ветка: запись в файл проекта только на `tech-apply`, по согласию `tech-plan-<F>` на ТЕКУЩИЙ `change-plan.json` (sha256), после снимка «до», только в `targets` | exit 2 |
 | `eval-guard` | PreToolUse Write/Edit | блок `src/main` пока **pre-write** eval'ы задачи (`compile`) не passed в кэше `evals.json` (read-only; прогон — `run_pending_evals.py`). `coverage`/`test_pass` требуют уже написанного кода и форсятся при закрытии шага | exit 2 |
 | `sod-enforcer` | PreToolUse Write/Edit/Bash | separation of duties: роль из активного шага манифеста (test не пишет src/main, design не коммитит/пушит/билдит) | exit 2 |
 | `inline-phase-guard` | PreToolUse Write/Edit/Bash | actor-guard: ГЛАВНЫЙ агент (пустой `agent_type`) не производит артефакты/код subagent-фазы inline; снимается override `subagent-origin` | exit 2 |
