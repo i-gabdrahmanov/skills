@@ -28,15 +28,21 @@ class YamlError(ValueError):
 
 _INT = re.compile(r"^[-+]?\d+$")
 _FLOAT = re.compile(r"^[-+]?(\d+\.\d*|\.\d+|\d+)([eE][-+]?\d+)?$")
-_KEY = re.compile(r"""^(?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)'|([^\s#'"{}\[\],&*!|>%@`][^:#]*?|[^:#\s][^:#]*?))\s*:(?:\s+(.*)|\s*)$""")
+_KEY = re.compile(r"""^(?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)'|([^\s#'"{}\[\],&*!|>%@`][^:#]*?|[^:#\s'"][^:#]*?))\s*:(?:\s+(.*)|\s*)$""")
 
 
 def strip_comment(line: str) -> str:
-    """Строка без комментария `#` (вне кавычек; # должен идти после пробела или в начале)."""
-    out, q = [], None
+    """Строка без комментария `#` (вне кавычек; # должен идти после пробела или в начале).
+
+    Внутри двойных кавычек `\\"` и `\\\\` — эскейпы: экранированная кавычка строку не закрывает."""
+    out, q, skip = [], None, False
     for i, ch in enumerate(line):
-        if q:
-            if ch == q:
+        if skip:
+            skip = False
+        elif q:
+            if q == '"' and ch == "\\":
+                skip = True
+            elif ch == q:
                 q = None
         elif ch in "'\"":
             q = ch
@@ -44,6 +50,20 @@ def strip_comment(line: str) -> str:
             break
         out.append(ch)
     return "".join(out).rstrip()
+
+
+_DQ_ESC = re.compile(r"\\(u[0-9a-fA-F]{4}|.)", re.DOTALL)
+_DQ_MAP = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "/": "/", "0": "\0", "b": "\b", "f": "\f"}
+
+
+def _unescape_dq(inner: str) -> str:
+    """Один проход по эскейпам двойных кавычек (последовательные replace ломали `\\\\n`)."""
+    def rep(m):
+        g = m.group(1)
+        if g[0] == "u" and len(g) == 5:
+            return chr(int(g[1:], 16))
+        return _DQ_MAP.get(g, "\\" + g)          # неизвестный эскейп остаётся как написан
+    return _DQ_ESC.sub(rep, inner)
 
 
 def scalar(raw: str) -> Any:
@@ -54,8 +74,7 @@ def scalar(raw: str) -> Any:
         inner = v[1:-1]
         if v[0] == "'":
             return inner.replace("''", "'")
-        return (inner.replace('\\"', '"').replace("\\n", "\n").replace("\\t", "\t")
-                .replace("\\\\", "\\"))
+        return _unescape_dq(inner)
     if v in ("true", "True", "TRUE"):
         return True
     if v in ("false", "False", "FALSE"):
@@ -131,9 +150,13 @@ def _flow(text: str, line: int) -> Any:
                     if q == "'" and end + 1 < len(text) and text[end + 1] == "'":
                         end += 2
                         continue
-                    if q == '"' and text[end - 1] == "\\":
-                        end += 1
-                        continue
+                    if q == '"':
+                        back = 0
+                        while end - 1 - back > pos and text[end - 1 - back] == "\\":
+                            back += 1
+                        if back % 2 == 1:                 # нечётное число слэшей — кавычка экранирована
+                            end += 1
+                            continue
                     break
                 end += 1
             if end >= len(text):
@@ -165,7 +188,7 @@ def _split_key(body: str):
     if not m:
         return None
     if m.group(1) is not None:
-        key = m.group(1).replace('\\"', '"')
+        key = _unescape_dq(m.group(1))
     elif m.group(2) is not None:
         key = m.group(2).replace("''", "'")
     else:
@@ -268,7 +291,7 @@ def _seq(lines, pos: int, indent: int):
             else:
                 out.append(None)
             continue
-        pair = None if rest.startswith(("{", "[", "'", '"')) else _split_key(rest)
+        pair = None if rest.startswith(("{", "[")) else _split_key(rest)
         if pair is None:
             out.append(_value(rest, ln))
             continue
@@ -286,3 +309,117 @@ def _seq(lines, pos: int, indent: int):
             raise YamlError("структура элемента списка не сходится", sub[used][0])
         out.append(val)
     return out, pos
+
+
+# ── эмиттер ──────────────────────────────────────────────────────────────────
+
+_PLAIN_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+_RESERVED = re.compile(r"^(true|false|null|~|yes|no|on|off|y|n)$", re.IGNORECASE)
+_NUMERIC = re.compile(r"^[-+]?(\d[\d_]*\.?\d*|\.\d+)([eE][-+]?\d+)?$|^0[xob][0-9a-fA-F]+$")
+_DATEISH = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def _needs_quotes(s: str) -> bool:
+    if s == "" or s != s.strip():
+        return True
+    if _RESERVED.match(s) or _NUMERIC.match(s) or _DATEISH.match(s):
+        return True
+    if s[0] in "{}[]&*!|>'\"%@`#,?-:" and not (s[0] == "-" and len(s) > 1 and s[1] not in " -"):
+        return True
+    if ": " in s or " #" in s or s.endswith(":"):
+        return True
+    return any(ord(c) < 32 or c == "\x7f" for c in s)
+
+
+def dump_scalar(v: Any) -> str:
+    """Скаляр в YAML так, чтобы `loads` вернул то же самое значение."""
+    if v is None:
+        return "null"
+    if v is True:
+        return "true"
+    if v is False:
+        return "false"
+    if isinstance(v, (int, float)):
+        return repr(v)
+    s = str(v)
+    return s if not _needs_quotes(s) else _quote(s)
+
+
+def _quote(s: str) -> str:
+    """Строка в двойных кавычках с эскейпами — читается `loads` обратно без потерь."""
+    out = []
+    for ch in s:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ord(ch) < 32 or ch == "\x7f":
+            out.append("\\u%04x" % ord(ch))
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
+def _dump_key(k: Any) -> str:
+    s = str(k)
+    return s if _PLAIN_KEY.match(s) and not _RESERVED.match(s) else _quote(s)
+
+
+def _inline(v: Any) -> Optional[str]:
+    """Однострочная форма значения или None, если нужен блок."""
+    if isinstance(v, dict):
+        return "{}" if not v else None
+    if isinstance(v, (list, tuple)):
+        return "[]" if not v else None
+    return dump_scalar(v)
+
+
+def _emit(v: Any, level: int, lines: List[str], pad: str = "  ") -> None:
+    ind = pad * level
+    if isinstance(v, dict):
+        for k, x in v.items():
+            inline = _inline(x)
+            if inline is not None:
+                lines.append(f"{ind}{_dump_key(k)}: {inline}")
+            else:
+                lines.append(f"{ind}{_dump_key(k)}:")
+                _emit(x, level + 1, lines, pad)
+    elif isinstance(v, (list, tuple)):
+        for x in v:
+            inline = _inline(x)
+            if inline is not None:
+                lines.append(f"{ind}- {inline}")
+            elif isinstance(x, dict):
+                sub: List[str] = []
+                _emit(x, level + 1, sub, pad)
+                lines.append(f"{ind}- {sub[0].lstrip()}")
+                lines.extend(sub[1:])
+            else:
+                lines.append(f"{ind}-")
+                _emit(x, level + 1, lines, pad)
+
+
+def split_header(text: str) -> Tuple[List[str], str]:
+    """(строки шапки-комментария, остаток): шапка — лидирующие `#`-строки и пустые строки."""
+    lines = text.splitlines()
+    n = 0
+    while n < len(lines) and (lines[n].startswith("#") or not lines[n].strip()):
+        n += 1
+    return lines[:n], "\n".join(lines[n:])
+
+
+def dumps(obj: Any, header: Optional[List[str]] = None) -> str:
+    """YAML-подмножество: то, что читает `loads`. header — строки комментариев в начале файла."""
+    lines: List[str] = list(header or [])
+    inline = _inline(obj)
+    if inline is not None:
+        lines.append(inline)
+    else:
+        _emit(obj, 0, lines)
+    return "\n".join(lines) + "\n"
