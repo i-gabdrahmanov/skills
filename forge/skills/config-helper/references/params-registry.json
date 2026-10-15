@@ -67,19 +67,25 @@
       "type": "enum",
       "enum": [
         "gradle",
-        "maven"
+        "maven",
+        "npm",
+        "pnpm",
+        "yarn"
       ],
       "default": null,
       "category": "project",
       "sensitive": false,
       "title": "Сборочная система",
-      "description": "gradle или maven. Обычно детектится init_pipeline_config.py по build-файлам; ручка нужна, когда детект не смог и поле попало в _incomplete (§0.1)",
+      "description": "gradle | maven (бэк-репо) или npm | pnpm | yarn (фронт-репо forge-ui — по lock-файлу). Обычно детектится init_pipeline_config.py по build-файлам; ручка нужна, когда детект не смог и поле попало в _incomplete (§0.1)",
       "aliases": [
         "build system",
         "сборка",
         "билд-система",
         "gradle",
-        "maven"
+        "maven",
+        "npm",
+        "pnpm",
+        "yarn"
       ]
     },
     {
@@ -482,19 +488,21 @@
       "enum": [
         "fix",
         "full",
-        "tech"
+        "tech",
+        "ui"
       ],
       "default": "",
       "category": "pipeline",
       "sensitive": false,
       "title": "Режим пайплайна (выбранный путь)",
-      "description": "Выбранный путь: fix (минорный дефект, forgefix — спека правится точечно) | full (фича с нуля, feature-pipeline) | tech (техзадача без изменения поведения — апгрейд библиотек, правка конфигурации, forgetech; спека не правится). v2: пишется в manifest.json активной фичи (inputs.mode). Записывает router — для аудита и headless-предзаписи выбора. ДЕЙСТВУЕТ В ПАРЕ С decisions.mode_task: manifest живёт одну фичу, и mode_task пин-щитит от «липкого режима» между прогонами одной и той же feature. legacy: читается через dual-read из pipeline.mode в pipeline.json",
+      "description": "Выбранный путь: fix (минорный дефект, forgefix — спека правится точечно) | full (фича с нуля, feature-pipeline) | tech (техзадача без изменения поведения — апгрейд библиотек, правка конфигурации, forgetech; спека не правится) | ui (фронт-часть стори во фронт-репо: макет → UI-код → проверка против макета, forgeui/forge-ui; спека — ui-spec.md). v2: пишется в manifest.json активной фичи (inputs.mode). Записывает router — для аудита и headless-предзаписи выбора. ДЕЙСТВУЕТ В ПАРЕ С decisions.mode_task: manifest живёт одну фичу, и mode_task пин-щитит от «липкого режима» между прогонами одной и той же feature. legacy: читается через dual-read из pipeline.mode в pipeline.json",
       "aliases": [
         "режим",
         "путь",
         "mode",
         "fix/full",
-        "fix/full/tech"
+        "fix/full/tech",
+        "fix/full/tech/ui"
       ],
       "deprecated_aliases": [
         "pipeline.mode"

@@ -54,6 +54,11 @@ REPRESENTATIVE = {
     "tech-apply":  ("tech-apply",  "Write", {"file_path": "pom.xml"}),
     "tech-verify": ("tech-verify", "Bash",  {"command": "./gradlew test"}),
     "tech-record": ("tech-record", "Write", {"file_path": "docs/feature-pipeline/tech/t/report.md"}),
+    # UI-ветка (forgeui = forge-ui во фронт-репо): фронт-часть стори по макету.
+    "ui-spec":     ("ui-spec",     "Write", {"file_path": "docs/feature-pipeline/f/ui-spec.md"}),
+    "ui-design":   ("ui-design",   "Write", {"file_path": ".daiver/tracks/f/plan.json"}),
+    "ui-build":    ("ui-build",    "Write", {"file_path": "src/modules/storage/ConfirmModal.tsx"}),
+    "ui-verify":   ("ui-verify",   "Write", {"file_path": "src/modules/storage/ConfirmModal.tsx"}),
 }
 
 

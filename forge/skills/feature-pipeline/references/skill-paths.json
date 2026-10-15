@@ -120,6 +120,19 @@
       }
     },
 
+    "forgeui": {
+      "dir": ".gigacode/skills/forgeui",
+      "skill_md": ".gigacode/skills/forgeui/SKILL.md",
+      "references": {
+        "manifest_steps_json": ".gigacode/skills/forgeui/references/manifest-steps.json",
+        "ui_spec_template_md": ".gigacode/skills/forgeui/references/ui-spec-template.md"
+      },
+      "scripts": {
+        "check_ui_spec": ".gigacode/skills/forgeui/scripts/check_ui_spec.py",
+        "ui_gate": ".gigacode/skills/forgeui/scripts/ui_gate.py"
+      }
+    },
+
     "minor-defect-fix": {
       "dir": ".gigacode/skills/minor-defect-fix",
       "skill_md": ".gigacode/skills/minor-defect-fix/SKILL.md",

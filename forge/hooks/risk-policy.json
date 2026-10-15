@@ -165,6 +165,18 @@
     "tech-record": [
       "tech_report.py check"
     ],
+    "ui-spec": [
+      "check_ui_spec.py"
+    ],
+    "ui-design": [
+      "ui_gate.py design"
+    ],
+    "ui-build": [
+      "ui_gate.py build"
+    ],
+    "ui-verify": [
+      "ui_gate.py verify"
+    ],
     "04-test": [
       "check_tests_red.py",
       "gradlew",
@@ -238,7 +250,9 @@
     "fix-red": "fix-plan-{feature}",
     "fix-green": "fix-plan-{feature}",
     "03-jira": "jira-plan-{feature}",
-    "tech-apply": "tech-plan-{feature}"
+    "tech-apply": "tech-plan-{feature}",
+    "ui-build": "ui-plan-{feature}",
+    "ui-verify": "ui-plan-{feature}"
   },
   "level_requirements": {
     "_comment": "Что должно быть выполнено, чтобы действие уровня прошло. step = completed-шаг manifest; approval = файл <key> (журнал ground/approvals.jsonl). Доставки (commit/push/PR) в пайплайне нет — её делает пользователь сам, поэтому evidence-требований и commit/push_needs больше нет. SoD форсит sod-enforcer (не ключи политики); audit — лог-агент.",

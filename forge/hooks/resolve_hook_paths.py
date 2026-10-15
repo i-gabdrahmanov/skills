@@ -33,8 +33,28 @@ PLACEHOLDER = "${PROJECT_ROOT}"
 PYTHON_PLACEHOLDER = "${PYTHON}"
 PYTHON_EXE_PLACEHOLDER = "${PYTHON_EXE}"
 # Имена MCP-серверов, которыми владеет forge. Хардкод, а не чтение эталона: снимать их нужно и
-# тогда, когда .gigacode/hooks уже удалён (повторный/прерванный uninstall).
-FORGE_MCP_SERVERS = ("forge-master",)
+# тогда, когда .gigacode/hooks уже удалён (повторный/прерванный uninstall). Имя отсюда не
+# удаляется никогда — у MCP нет надгробий, и снятое имя осталось бы в settings.json навсегда.
+FORGE_MCP_SERVERS = ("forge-master", "forge-ui")
+# Профиль поставки по умолчанию (нет .gigacode/.forge-profile — установка бэк-репо или старая).
+DEFAULT_PROFILE_MCP = ("forge-master",)
+
+
+def profile_mcp_servers(gigacode_dir: Path) -> "tuple[str, ...]":
+    """MCP-серверы профиля поставки: строки `mcp <имя>` из .gigacode/.forge-profile.
+
+    Файла нет — бэк-профиль (forge-master), как вели себя все установки до профилей."""
+    prof = Path(gigacode_dir) / ".forge-profile"
+    try:
+        lines = prof.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return DEFAULT_PROFILE_MCP
+    out = []
+    for line in lines:
+        parts = line.split("#", 1)[0].split()
+        if len(parts) >= 2 and parts[0] == "mcp" and parts[1] in FORGE_MCP_SERVERS:
+            out.append(parts[1])
+    return tuple(out)
 
 
 def to_command_path(path: str) -> str:
@@ -138,13 +158,21 @@ def resolve_mcp_block(servers: dict, project_root: str) -> dict:
 
 
 def merge_mcp_servers(settings: dict, resolved: dict) -> dict:
-    """Влить свои MCP-серверы: свои имена перезаписываются, чужие остаются как были."""
+    """Влить свои MCP-серверы: свои имена перезаписываются, чужие остаются как были.
+
+    Свой сервер, которого нет в resolved (другой профиль поставки: репо переставили с back на
+    ui или обратно), снимается — иначе во фронт-репо висел бы мёртвый forge-master и наоборот."""
     out = dict(settings)
     cur = out.get("mcpServers")
     cur = dict(cur) if isinstance(cur, dict) else {}
+    for name in FORGE_MCP_SERVERS:
+        if name not in resolved:
+            cur.pop(name, None)
     cur.update(resolved)
     if cur:
         out["mcpServers"] = cur
+    else:
+        out.pop("mcpServers", None)
     return out
 
 
@@ -550,11 +578,13 @@ def main():
     if mcp_template_path.exists():
         try:
             mcp_tmpl = json.loads(mcp_template_path.read_text(encoding="utf-8"))
-            mcp_resolved = resolve_mcp_block(mcp_tmpl.get("mcpServers") or {}, project_root)
+            wanted = profile_mcp_servers(project_gigacode)
+            servers = {n: c for n, c in (mcp_tmpl.get("mcpServers") or {}).items() if n in wanted}
+            mcp_resolved = resolve_mcp_block(servers, project_root)
         except (json.JSONDecodeError, OSError) as e:
             print(json.dumps({"warning": f"эталон MCP не читается ({e}) — mcpServers не тронут"},
                              ensure_ascii=False), file=sys.stderr)
-    if mcp_resolved:
+    if mcp_template_path.exists():
         existing = merge_mcp_servers(existing, mcp_resolved)
 
     # Гарантируем minimal обязательные поля

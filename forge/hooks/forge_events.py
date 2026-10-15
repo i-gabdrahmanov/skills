@@ -372,7 +372,13 @@ CONSENT_PREFIXES = ("gate-override", "rollback", "skip-judges", "policy-repin",
                     # tech-plan-<F>: утверждение плана техзадачи ЗАДАЁТ скоуп записи (targets)
                     # и разрешённый diff (expected_changes). Самовыписанное согласие = сам себе
                     # расширил, что можно менять, — тот же класс, что снятие гейта.
-                    "tech-plan")
+                    "tech-plan",
+                    # forge-ui: ui-plan-<F> — подпись плана секций (задаёт, что строится);
+                    # ui-map-<F> — правило в командную карту компонентов (меняет решения всех
+                    # будущих экранов); ui-accept-<F> — стоп verify-цикла с открытыми дефектами
+                    # (шаг закрывается не по clean). Все три — решения, которые модель не
+                    # вправе выписать себе сама.
+                    "ui-plan", "ui-map", "ui-accept")
 
 
 def consent_required(key: str) -> bool:

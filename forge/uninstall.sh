@@ -272,6 +272,7 @@ if [ -f "$GI" ] && grep -qF "$GI_BEGIN" "$GI"; then
 fi
 
 remove_path "$(forge_manifest_file "$GIG")" "$FORGE_MANIFEST_NAME (реестр установки)"
+remove_path "$GIG/.forge-profile"   ".forge-profile (профиль поставки back|ui)"
 remove_path "$GIG/deploy-local.sh"  "deploy-local.sh"
 remove_path "$GIG/FORGE.md"         "FORGE.md"
 remove_path "$GIG/SKILLS-REGISTRY.md" "SKILLS-REGISTRY.md"

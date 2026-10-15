@@ -58,7 +58,10 @@ risk ladder, evidence bundle и security-гейты; доставка (commit/pu
 | Deploy | `<project>/.gigacode/` | co-located `hooks/` + `skills/` + `commands/` + сгенерированный `settings.json` |
 
 `deploy.sh <project>` раскладывает `hooks/` + `skills/` + `commands/` + `deploy-local.sh`
-в `<project>/.gigacode/`. `deploy-local.sh` подставляет в `settings.json` абсолютные пути
+в `<project>/.gigacode/`. Состав решает **профиль поставки** (`profiles/<имя>.profile`): `back`
+(по умолчанию — бэк-репо, все скиллы кроме `forgeui`) или `ui` (фронт-репо — forge-ui: `forgeui` +
+общий control-plane, без Java-скиллов). Копия профиля — `.gigacode/.forge-profile`: по ней
+регистрируются MCP-серверы и проверяются пути реестра. `deploy-local.sh` подставляет в `settings.json` абсолютные пути
 из `settings.hooks.json` (плейсхолдеры `${PROJECT_ROOT}` и `${PYTHON}`). `preflight.py`
 (advisory) проверяет готовность; exit 1 = ENFORCEMENT OFF. Артефакты фаз — в
 `<project>/docs/feature-pipeline/...`; `state-write-guard` блокирует запись в каталог
@@ -106,6 +109,15 @@ approval-маркером (см. §Approval markers). **R5** — деструк�
   RED-шага нет: гейт — `check_invariants.py` (snapshot/expect/compare), скоуп записи держит
   `tech-guard`. Два обязательных решения: архетип (`inputs.archetype`) и утверждение плана
   (approval `tech-plan-<KEY|slug>`, привязанный к sha256 плана). Дизайн — `tasks/018-tech-path.md`.
+- **ui** (`forgeui` = **forge-ui**, фронт-репо) — фронт-часть стори: `ui-spec.md` → дизайн по
+  макету (канон, компоненты библиотеки, план секций) → сборка по секциям → проверка против макета.
+  Шаги плоские `ui-*`, четыре решения человека: утверждение спеки (`ui-spec-approved-<KEY>`),
+  подпись плана (согласие `ui-plan-<KEY>`), «чинить/стоп» по итерациям (`ui-accept-<KEY>`).
+  Детерминированное ядро — движок по спеке daiver (Python stdlib, MCP `forge-ui`). Ставится в
+  ФРОНТ-репо профилем `deploy.sh --profile ui`; в бэк-репо ветки нет. Стори из двух частей —
+  два прогона с одним ключом, связь — поля `**Фронт-часть:**` (`sdd.md`) / `**Бэк-часть:**`
+  (`ui-spec.md`). Этап 0 (2026-10-15): механика `ui-design/build/verify` строится, их гейт честно
+  отвечает exit 3. Дизайн — `tasks/019-forge-ui.md`.
 
 Доставка (commit/push/PR/отчёт) — на пользователе. **Multi-vocabulary хуков:** все
 ветки делят control-plane; активный skill/feature резолвится по самому свежему манифесту в
@@ -474,6 +486,14 @@ git-история и связанные `tasks/`.
   fail-closed при нерезолвимом корне. tasks/011 расширил «опасную цель» до любого абсолютного
   пути ради `rm -rf /etc/passwd` и заодно накрыл `rm -rf <проект>/build`; eval пинил прежнее
   ожидание и был красным с тех пор. Пины: `TRmInsideProject`, три eval-проверки.
+- [BR-21] Стори = бэк-часть и/или фронт-часть, у каждой своя спека; бэк и фронт — в разных репо
+  (2026-10-15). Отсюда forge-ui — ПОСТАВКА того же источника (профиль `ui`), а не форк и не ветка
+  рядом с full: control-plane общий, фиксы достаются обеим поставкам. Связь частей — ключ Jira и
+  обязательные поля шапок (`**Фронт-часть:**` в `sdd.md` проверяет `check_sdd_doc.py`,
+  `**Бэк-часть:**` в `ui-spec.md` — `check_ui_spec.py`): отсутствие поля не значит «нет».
+  Реестр веток получил поле `doc_approval` — `update.py` больше не держит копию «какие шаги
+  требуют утверждённого документа». Пины: `test_deploy_profiles.py`, `test_branches_registry.py`,
+  `test_check_ui_spec.py`. Дизайн и этапы — `tasks/019-forge-ui.md`.
 
 ### BLOCKER и Thrust (компактно)
 

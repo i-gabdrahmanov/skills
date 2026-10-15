@@ -596,26 +596,56 @@ def _run_doctor(base: Path, project_root, errors: list[str], warnings: list[str]
 MIN_PYTHON = (3, 9)
 
 
-def _check_master_mcp(base: Path, project_root, warnings: list) -> None:
-    """MCP forge-master зарегистрирован и отвечает на initialize.
+# MCP-серверы forge: имя → (файл сервера в hooks/, зачем он — для текста предупреждения).
+_FORGE_MCP = {
+    "forge-master": ("forge_master_mcp.py",
+                     "/forge-merge не сможет писать в мастер-репо вне проекта"),
+    "forge-ui": ("daiver_mcp.py",
+                 "у forge-ui не будет движка (daiver_status/daiver_init/daiver_spec) — конвейер "
+                 "фронт-репо не стартует"),
+}
 
-    Это единственный канал записи в мастер-репо ВНЕ каталога проекта (рантайм режет там и
-    Edit, и shell). Не enforcement — без него перестаёт работать только /forge-merge в
-    отдельный репо мастера, поэтому warning, а не error. Проверка — реальный запуск сервера:
-    запись в settings.json есть, а интерпретатор/путь битые — то же самое, что записи нет."""
-    server = Path(base) / "hooks" / "forge_master_mcp.py"
+
+def _profile_mcp(project_root) -> list:
+    """MCP профиля поставки (.gigacode/.forge-profile, строки `mcp <имя>`); нет файла — back."""
+    prof = Path(project_root) / ".gigacode" / ".forge-profile"
+    try:
+        lines = prof.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ["forge-master"]
+    out = []
+    for line in lines:
+        parts = line.split("#", 1)[0].split()
+        if len(parts) >= 2 and parts[0] == "mcp" and parts[1] in _FORGE_MCP:
+            out.append(parts[1])
+    return out
+
+
+def _check_master_mcp(base: Path, project_root, warnings: list) -> None:
+    """MCP-серверы профиля поставки зарегистрированы и отвечают на initialize.
+
+    forge-master — единственный канал записи в мастер-репо ВНЕ каталога проекта (рантайм режет
+    там и Edit, и shell); forge-ui — движок фронтового конвейера. Не enforcement — warning, а не
+    error. Проверка — реальный запуск сервера: запись в settings.json есть, а интерпретатор/путь
+    битые — то же самое, что записи нет."""
+    for name in _profile_mcp(project_root):
+        _check_one_mcp(base, project_root, warnings, name)
+
+
+def _check_one_mcp(base: Path, project_root, warnings: list, name: str) -> None:
+    script, why = _FORGE_MCP[name]
+    server = Path(base) / "hooks" / script
     if not server.exists():
         return                       # деплоя нет — про это скажет _check_project_layout
     settings = Path(project_root) / ".gigacode" / "settings.json"
     try:
         cfg = (json.loads(settings.read_text(encoding="utf-8")).get("mcpServers") or {}) \
-            .get("forge-master")
+            .get(name)
     except (OSError, json.JSONDecodeError, AttributeError):
         cfg = None
     if not isinstance(cfg, dict) or not cfg.get("command"):
-        warnings.append("MCP forge-master не зарегистрирован в .gigacode/settings.json — "
-                        "/forge-merge не сможет писать в мастер-репо вне проекта. "
-                        "Почини: bash .gigacode/deploy-local.sh")
+        warnings.append(f"MCP {name} не зарегистрирован в .gigacode/settings.json — {why}. "
+                        f"Почини: bash .gigacode/deploy-local.sh")
         return
     import subprocess
     req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -627,11 +657,11 @@ def _check_master_mcp(base: Path, project_root, warnings: list) -> None:
                            cwd=cfg.get("cwd") or str(project_root), encoding="utf-8")
         ok = '"serverInfo"' in (r.stdout or "")
     except (OSError, subprocess.SubprocessError) as e:
-        warnings.append(f"MCP forge-master не стартует: {e}")
+        warnings.append(f"MCP {name} не стартует: {e}")
         return
     if not ok:
         tail = ((r.stderr or r.stdout or "").strip().splitlines() or ["(пусто)"])[-1]
-        warnings.append(f"MCP forge-master не ответил на initialize: {tail[:200]} — "
+        warnings.append(f"MCP {name} не ответил на initialize: {tail[:200]} — "
                         f"почини: bash .gigacode/deploy-local.sh")
 
 

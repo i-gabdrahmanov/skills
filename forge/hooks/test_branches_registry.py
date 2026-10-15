@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """test_branches_registry.py — реестр плоских веток (hooks/_branches.py) и его потребители.
 
-Плоские ветки (fix, tech) раньше жили кортежами в ~15 местах, и любой пропущенный — тихо
+Плоские ветки (fix, tech, ui) раньше жили кортежами в ~15 местах, и любой пропущенный — тихо
 снятый гейт. Теперь источник один, а этот тест пинит две стороны:
   • реестр согласован сам с собой и со скиллом ветки (шаги = references/manifest-steps.json,
     субагентные/гейтовые шаги — подмножество шагов, роли — известные SoD-роли);
   • КАЖДЫЙ потребитель видит КАЖДУЮ ветку: update.py (субагент/гейт/артефакты), tdd-guard (RED),
     inline-phase-guard (артефакты фаз), sod-enforcer (роли), risk_ladder (design-алиас R2),
+    update.py (утверждение документа ветки),
     archive.py (финальный шаг), resolve_phases (mode ↔ skill), params-registry (inputs.mode),
     skill_paths (docs-таргет), risk-policy (gate_cmd_expect на каждый гейтовый шаг).
 Новая ветка, не доведённая до всех потребителей, падает здесь, а не на боевом прогоне.
@@ -61,6 +62,7 @@ class RegistrySelfConsistency(unittest.TestCase):
                 self.assertLessEqual(set(b["roles"].values()), roles)
                 self.assertEqual(set(b["phase_work"]), set(b["subagent_steps"]))
                 self.assertLessEqual(set(b["artifacts"]), steps)
+                self.assertLessEqual(set(b.get("doc_approval") or {}), steps)
 
     def test_prefixes_do_not_overlap(self):
         prefixes = [b["prefix"] for b in BR.BRANCHES.values()]
@@ -84,6 +86,9 @@ class ConsumersSeeEveryBranch(unittest.TestCase):
                     self.assertEqual(upd._CANONICAL_ARTIFACTS.get(step), names)
                 if b["red_step"]:
                     self.assertIn(b["red_step"], upd._RED_STEP_PREFIXES)
+                for step, doc in (b.get("doc_approval") or {}).items():
+                    self.assertIn((step, doc), upd._DOC_APPROVAL_STEPS,
+                                  "утверждение документа ветки не видно update._check_doc_approval")
 
     def test_hooks(self):
         ipg = _load(HOOKS / "inline-phase-guard.py", "ipg_mod")

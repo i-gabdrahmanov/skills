@@ -42,9 +42,39 @@ def collect_path_values(obj, prefix: str = "") -> list[str]:
     return paths
 
 
-def check_paths(project_root: Path, config_path: Path) -> tuple[list[str], list[str]]:
+def profile_filter(config: dict, profile_text: "str | None") -> dict:
+    """Реестр путей под профиль поставки (.gigacode/.forge-profile, см. profiles/*.profile).
+
+    Во фронт-репо (профиль ui) едут не все скиллы: проверять пути неположенных — значит
+    объявлять битой исправную установку. `skills-all` — все, кроме `exclude-skill`; иначе ровно
+    `skill`/`skill-scripts`, причём у `skill-scripts` нет SKILL.md (ключ skill_md не проверяется).
+    Нет профиля — реестр как есть (установки до профилей)."""
+    if not profile_text or not isinstance(config.get("skills"), dict):
+        return config
+    kinds: dict = {}
+    for line in profile_text.splitlines():
+        parts = line.split("#", 1)[0].split()
+        if parts:
+            kinds.setdefault(parts[0], []).append(parts[1] if len(parts) > 1 else "")
+    skills = dict(config["skills"])
+    if "skills-all" in kinds:
+        for x in kinds.get("exclude-skill", []):
+            skills.pop(x, None)
+    else:
+        keep = set(kinds.get("skill", [])) | set(kinds.get("skill-scripts", []))
+        skills = {k: v for k, v in skills.items() if k in keep}
+        for x in kinds.get("skill-scripts", []):
+            if isinstance(skills.get(x), dict):
+                skills[x] = {k: v for k, v in skills[x].items() if k != "skill_md"}
+    out = dict(config)
+    out["skills"] = skills
+    return out
+
+
+def check_paths(project_root: Path, config_path: Path,
+                profile_text: "str | None" = None) -> tuple[list[str], list[str]]:
     """
-    Проверяет все пути из конфига.
+    Проверяет все пути из конфига (под профиль поставки, если он передан).
     Возвращает (valid_paths, invalid_paths).
     """
     try:
@@ -69,7 +99,7 @@ def check_paths(project_root: Path, config_path: Path) -> tuple[list[str], list[
             return {k: filter_excluded(v) for k, v in obj.items() if k not in excluded_keys}
         return obj
 
-    config = filter_excluded(config)
+    config = profile_filter(filter_excluded(config), profile_text)
     raw_paths = collect_path_values(config)
 
     valid = []

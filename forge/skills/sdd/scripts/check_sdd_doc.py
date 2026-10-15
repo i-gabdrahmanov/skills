@@ -74,6 +74,22 @@ _CODE_SIGNS = re.compile(
     r"|GetMapping|PostMapping|PutMapping|DeleteMapping)\b|public\s+(?:class|interface|enum)\s)"
 )
 _LIQUIBASE = re.compile(r"(?i)\b(?:changeSet|databaseChangeLog|liquibase)\b")
+# Шапка: связь с фронт-частью стори (forge-ui во фронт-репо пишет ui-spec.md с полем «Бэк-часть»).
+# Стори бывает только-бэк, только-фронт или обе — отсутствие поля не значит «нет».
+_FRONT_PART = re.compile(r"\*\*\s*Фронт-часть\s*:?\s*\*\*\s*:?\s*([^*\n]*)", re.IGNORECASE)
+
+
+def _front_part_problem(raw: str) -> str | None:
+    head = "\n".join(raw.splitlines()[:20])
+    m = _FRONT_PART.search(head)
+    if not m:
+        return ("в шапке sdd.md нет поля **Фронт-часть:** — у стори есть фронт-часть (её строит "
+                "forge-ui во фронт-репо)? Напиши «нет» или «есть: <KEY>»; отсутствие поля не "
+                "значит «нет». Неясно по стори — спроси пользователя")
+    value = m.group(1).strip().lower()
+    if not (value.startswith("нет") or value.startswith("есть")):
+        return f"**Фронт-часть:** «{m.group(1).strip()}» — ожидается «нет» или «есть: <KEY>»"
+    return None
 
 
 def _parse_sections(raw: str) -> list[tuple[str, str]]:
@@ -275,6 +291,11 @@ def check(sdd_path: Path, policy: str) -> dict:
                      hard=False, allow_na=True, errors=errors, warnings=warnings)
         _check_group(REGULATORY_SECTIONS, text, sections,
                      hard=False, allow_na=True, errors=errors, warnings=warnings)
+
+    # 2б. Связь с фронт-частью стори — явная.
+    front = _front_part_problem(raw)
+    if front:
+        errors.append(front)
 
     # 3. Хотя бы один сценарий Given-When-Then (в теле, не в заголовке).
     if not _has_gwt(raw):

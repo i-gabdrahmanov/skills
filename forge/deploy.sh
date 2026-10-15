@@ -16,7 +16,12 @@
 #   5. Прогоняет preflight.py (advisory).
 #
 # Usage (из корня склонированного Forge):
-#   bash deploy.sh /path/to/target-project
+#   bash deploy.sh /path/to/target-project                 # бэк-репо: полный forge (профиль back)
+#   bash deploy.sh --profile ui /path/to/front-repo        # фронт-репо: forge-ui
+#
+# Профиль (profiles/<имя>.profile) решает, ЧТО едет: скиллы, слэш-команды, MCP-серверы. Хуки
+# (control-plane) едут всегда целиком. Копия профиля ложится в .gigacode/.forge-profile — по ней
+# resolve_hook_paths.py регистрирует MCP, а doctor.py проверяет пути именно этой поставки.
 #
 set -euo pipefail
 
@@ -35,11 +40,32 @@ forge_pick_python || true
 # shellcheck source=_deployed_manifest.sh
 . "$SRC/_deployed_manifest.sh"
 
+# --- аргументы: [--profile back|ui] <целевая папка> ---
+PROFILE="back"
+TARGET=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --profile) PROFILE="${2:-}"; shift 2 || { echo "deploy.sh: --profile без значения" >&2; exit 2; } ;;
+    --profile=*) PROFILE="${1#--profile=}"; shift ;;
+    -*) echo "deploy.sh: неизвестный флаг: $1" >&2; exit 2 ;;
+    *) if [ -z "$TARGET" ]; then TARGET="$1"; else echo "deploy.sh: лишний аргумент: $1" >&2; exit 2; fi; shift ;;
+  esac
+done
+PROFILE_FILE="$SRC/profiles/$PROFILE.profile"
+if [ ! -f "$PROFILE_FILE" ]; then
+  echo "deploy.sh: нет профиля поставки '$PROFILE' ($PROFILE_FILE). Есть: back, ui." >&2
+  exit 2
+fi
+# значения профиля: forge_profile_values <вид> → строки-значения (порядок файла)
+forge_profile_values() {
+  forge_strip_comments "$PROFILE_FILE" | awk -v k="$1" '$1 == k { print $2 }'
+}
+forge_profile_has() { forge_strip_comments "$PROFILE_FILE" | awk '{ print $1 }' | grep -Fxq "$1"; }
+
 # --- целевая папка обязательна ---
-TARGET="${1:-}"
 if [ -z "$TARGET" ]; then
   echo "deploy.sh: не указана целевая папка проекта." >&2
-  echo "Usage: bash deploy.sh /path/to/target-project" >&2
+  echo "Usage: bash deploy.sh [--profile back|ui] /path/to/target-project" >&2
   echo "  Без пути ничего не копируется." >&2
   exit 2
 fi
@@ -57,7 +83,7 @@ if [ "$TARGET" = "$SRC" ]; then
 fi
 
 GIG="$TARGET/.gigacode"
-echo "== deploy Forge → $GIG =="
+echo "== deploy Forge (профиль $PROFILE) → $GIG =="
 mkdir -p "$GIG/hooks" "$GIG/skills"
 
 # Реестр ПРОШЛОЙ установки читаем до всех правок: он же нужен прунингу хуков ниже, а в конце
@@ -112,7 +138,36 @@ if [ -f "$GIG/skills/minor-defect-fix/config.json" ]; then
   cp -p "$GIG/skills/minor-defect-fix/config.json" "$MDF_KEEP"
 fi
 copy_tree "$SRC/hooks" "$GIG/hooks"
-copy_tree "$SRC/skills" "$GIG/skills"
+# Скиллы — по профилю. «skills-all» — весь исходник минус exclude-skill (бэк-репо);
+# «skill X» — ровно X целиком; «skill-scripts X» — X без SKILL.md (скрипты нужны хукам, а сам
+# конвейер в этом репо скиллом светиться не должен).
+DEPLOYED_SKILLS=""
+if forge_profile_has skills-all; then
+  copy_tree "$SRC/skills" "$GIG/skills"
+  for d in "$SRC/skills"/*/; do
+    [ -d "$d" ] || continue
+    DEPLOYED_SKILLS="$DEPLOYED_SKILLS $(basename "$d")"
+  done
+  for x in $(forge_profile_values exclude-skill); do
+    # снимаем только то, что форж кладёт сам; каталог оператора с таким именем — не наш случай
+    rm -rf "$GIG/skills/$x"
+    DEPLOYED_SKILLS="$(printf '%s\n' $DEPLOYED_SKILLS | grep -Fxv "$x" | tr '\n' ' ' || true)"
+  done
+else
+  for x in $(forge_profile_values skill) $(forge_profile_values skill-scripts); do
+    [ -d "$SRC/skills/$x" ] || { echo "deploy.sh: профиль $PROFILE: нет скилла skills/$x" >&2; exit 2; }
+    mkdir -p "$GIG/skills/$x"
+    copy_tree "$SRC/skills/$x" "$GIG/skills/$x"
+    DEPLOYED_SKILLS="$DEPLOYED_SKILLS $x"
+  done
+  for x in $(forge_profile_values skill-scripts); do
+    rm -f "$GIG/skills/$x/SKILL.md"
+  done
+  # реестр скиллов (skills/SKILL-реестр.md и пр. top-level файлы skills/) — для справки
+  for f in "$SRC/skills"/*; do
+    [ -f "$f" ] && cp -p "$f" "$GIG/skills/"
+  done
+fi
 # локальный конфиг исходника в таргет не тащим — ниже (если файла нет) заведётся пустой
 rm -f "$GIG/skills/minor-defect-fix/config.json"
 if [ -n "$MDF_KEEP" ]; then
@@ -121,7 +176,7 @@ fi
 # hooks.json — legacy extension-формат (${CLAUDE_PLUGIN_ROOT}), при project-модели не используется.
 # Используется settings.hooks.json, из которой deploy-local.sh генерирует settings.json.
 rm -f "$GIG/hooks/hooks.json"
-echo "  ✓ скопированы hooks/ и skills/ (co-located, без __pycache__/.DS_Store/локального config.json)"
+echo "  ✓ скопированы hooks/ и skills/ по профилю $PROFILE (co-located, без __pycache__/.DS_Store/локального config.json)"
 
 # 1b. prune: copy_tree — это cp-overlay, он НАКЛАДЫВАЕТ файлы поверх таргета и НЕ удаляет
 # те, что исчезли из исходника. Удалённый хук (напр. log-agent.py/budget-meter.py)
@@ -154,7 +209,7 @@ fi
 # Пустой config.json на месте (skill-paths.json/doctor требуют файл; маппинг проект→спека
 # оператор заполняет на первом запуске). Существующий конфиг таргета НЕ перетираем.
 MDF_CFG="$GIG/skills/minor-defect-fix/config.json"
-if [ ! -f "$MDF_CFG" ]; then
+if [ -d "$GIG/skills/minor-defect-fix" ] && [ ! -f "$MDF_CFG" ]; then
   printf '{\n  "projects": {}\n}\n' > "$MDF_CFG"
   echo "  ✓ заведён пустой minor-defect-fix/config.json (маппинг заполняется на первом запуске)"
 fi
@@ -176,24 +231,36 @@ echo "  ✓ deploy-local.sh и доки на месте"
 # в commands/ показывает окно миграции на КАЖДОМ старте. Прошлые деплои клали forge.toml —
 # снимаем его, иначе нотификация не гаснет даже после перехода на .md.
 # Копируем ВСЕ *.md из исходного commands/ (не хардкодим имена — добавил команду в репо → едет).
-if [ -d "$SRC/commands" ]; then
+DEPLOYED_COMMANDS=""
+for cdir in $(forge_profile_values commands); do
+  [ -d "$SRC/$cdir" ] || continue
   mkdir -p "$GIG/commands"
-  for c in "$SRC/commands/"*.md; do
+  for c in "$SRC/$cdir/"*.md; do
     [ -e "$c" ] || continue
     base="$(basename "$c")"
     cp "$c" "$GIG/commands/$base"
+    DEPLOYED_COMMANDS="$DEPLOYED_COMMANDS $base"
     echo "  ✓ слэш-команда /${base%.md} → $GIG/commands/$base"
   done
   # устаревший commands/forge.toml (окно миграции qwen-code на каждом старте) снимается
   # общим механизмом надгробий — запись в tombstones.txt, хардкод здесь больше не нужен.
-fi
+done
 
 # 3d. реестр установки: перечень того, что этот деплой положил (top-level skills/hooks/commands).
 # По нему СЛЕДУЮЩИЙ апгрейд отличит «форж это удалил» от «оператор это добавил» — без реестра
 # оба выглядят одинаково (записи нет в исходнике), и снятая ветка оставалась в таргете навсегда.
 FORGE_REV="$(git -C "$SRC" describe --tags --match 'forge/v*' --always --dirty 2>/dev/null || echo unknown)"
-forge_manifest_write "$GIG" "$SRC" "$FORGE_REV"
-echo "  ✓ реестр установки записан: .gigacode/$FORGE_MANIFEST_NAME (rev: $FORGE_REV)"
+{
+  for e in "$SRC/hooks"/* "$SRC/hooks"/.[!.]*; do
+    [ -e "$e" ] && printf 'hooks/%s\n' "$(basename "$e")"
+  done
+  for x in $DEPLOYED_SKILLS; do printf 'skills/%s\n' "$x"; done
+  for f in "$SRC/skills"/*; do [ -f "$f" ] && printf 'skills/%s\n' "$(basename "$f")"; done
+  for c in $DEPLOYED_COMMANDS; do printf 'commands/%s\n' "$c"; done
+  true    # статус группы не должен зависеть от последней проверки [ -e ] (pipefail + set -e)
+} | forge_manifest_write_entries "$GIG" "$FORGE_REV"
+cp "$PROFILE_FILE" "$GIG/.forge-profile"
+echo "  ✓ реестр установки записан: .gigacode/$FORGE_MANIFEST_NAME (rev: $FORGE_REV, профиль: $PROFILE)"
 
 # 3c. .gitignore проекта: рабочие данные пайплайна и сам харнес в git не едут.
 # ground/ — это манифесты прогонов, вердикты судей, evidence, журналы файлов: производное от

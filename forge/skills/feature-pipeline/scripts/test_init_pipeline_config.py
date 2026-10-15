@@ -72,6 +72,32 @@ class TestDetectBuildSystem(unittest.TestCase):
         _touch(self.root / "README.md")
         self.assertIsNone(ipc.detect_build_system(str(self.root)))
 
+    def test_front_repo_by_lockfile(self):
+        """Фронт-репо (forge-ui): package.json → менеджер пакетов по lock-файлу, без него npm."""
+        _touch(self.root / "package.json", "{}")
+        self.assertEqual(ipc.detect_build_system(str(self.root)), "npm")
+        _touch(self.root / "yarn.lock")
+        self.assertEqual(ipc.detect_build_system(str(self.root)), "yarn")
+        _touch(self.root / "pnpm-lock.yaml")
+        self.assertEqual(ipc.detect_build_system(str(self.root)), "pnpm")
+
+    def test_java_markers_win_over_package_json(self):
+        """Бэк-репо с фронтовой папкой остаётся gradle/maven."""
+        _touch(self.root / "package.json", "{}")
+        _touch(self.root / "build.gradle")
+        self.assertEqual(ipc.detect_build_system(str(self.root)), "gradle")
+
+    def test_front_config_needs_no_package_root(self):
+        """Фронтовый стек не требует Java-поля package_root и берёт команды менеджера пакетов."""
+        _touch(self.root / "package.json", "{}")
+        _touch(self.root / "pnpm-lock.yaml")
+        cfg = ipc.build_config(str(self.root))
+        self.assertEqual(cfg["project"]["build_system"], "pnpm")
+        self.assertNotIn("conventions.package_root", cfg["_incomplete"])
+        self.assertNotIn("project.build_system", cfg["_incomplete"])
+        self.assertEqual(cfg["quality"]["build_command"], "pnpm run build")
+        self.assertIsNone(cfg["quality"]["coverage_report"])
+
 
 class TestDetectDefaultBranch(unittest.TestCase):
     """Тесты детекта дефолтной ветки."""

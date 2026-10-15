@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""_branches.py — реестр ПЛОСКИХ веток forge (fix, tech): единый источник истины.
+"""_branches.py — реестр ПЛОСКИХ веток forge (fix, tech, ui): единый источник истины.
 
 Зачем. Плоская ветка — это namespace стейта (`ground/statements/<skill>/…`) с фиксированным
 списком шагов `<prefix>*`. Fix-ветка жила кортежами `("fix-diag", "fix-red", …)`, раскиданными
@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Optional
 
 # Поля ветки:
-#   mode            — пользовательский словарь router/inputs.mode (fix|tech)
+#   mode            — пользовательский словарь router/inputs.mode (fix|tech|ui)
 #   prefix          — префикс id всех шагов ветки
 #   steps           — шаги в порядке (источник истины для манифеста — references/manifest-steps.json
 #                     скилла; совпадение пинит тест)
@@ -35,6 +35,8 @@ from typing import Optional
 #   artifacts       — шаг → канонические имена файлов в docs-каталоге задачи (update.py)
 #   phase_work      — шаг → (regex пути, описание): productive-артефакт фазы (inline-phase-guard)
 #   docs_target     — CLI-таргет skill_paths.py, печатающий docs-каталог задачи
+#   doc_approval    — шаг → имя документа: закрыть шаг можно только при маркере
+#                     <doc>-approved-<feature> (update._check_doc_approval, как 00-brd/02-sdd)
 BRANCHES = {
     "forgefix": {
         "mode": "fix",
@@ -60,6 +62,7 @@ BRANCHES = {
             "fix-spec": (r"(^|/)sdd\.md$", "запись дельты спеки (sdd.md)"),
         },
         "docs_target": "fix-docs",
+        "doc_approval": {},
     },
     # Tech-ветка (forgetech): техзадача без бизнес-наполнения — апгрейд библиотек, правка
     # конфигурации. Поведение системы должно остаться прежним; гейт — снимок «до» и точный
@@ -90,6 +93,42 @@ BRANCHES = {
             "tech-record": (r"(^|/)report\.md$", "запись итоговой сводки (report.md)"),
         },
         "docs_target": "tech-docs",
+        "doc_approval": {},
+    },
+    # UI-ветка (forgeui = forge-ui во фронт-репо): макет → UI-код на библиотеке проекта →
+    # verify-цикл против макета. Детерминированное ядро — движок по спеке daiver
+    # (skills/forgeui/scripts/daiver/, MCP forge-ui). Четыре шага = четыре решения человека:
+    # утвердить ui-spec.md, подписать план секций, решать по итерациям проверки.
+    # См. tasks/019-forge-ui.md.
+    "forgeui": {
+        "mode": "ui",
+        "prefix": "ui-",
+        "steps": ("ui-spec", "ui-design", "ui-build", "ui-verify"),
+        "subagent_steps": ("ui-spec", "ui-design", "ui-build", "ui-verify"),
+        "gate_steps": ("ui-spec", "ui-design", "ui-build", "ui-verify"),
+        # npm/npx/tsc/vite — продуктивная работа сборки и прогона проверок
+        "build_steps": ("ui-build", "ui-verify"),
+        "red_step": None,
+        "design_step": "ui-design",
+        "final_step": "ui-verify",
+        # ui-spec пишет только документ (роль spec: src/ закрыт); ui-design — канон, план и
+        # отчёт резолва в .daiver/ (design: сборки нет); ui-build пишет код; ui-verify гоняет
+        # проверки, правка кода — переоткрытием ui-build (verify_to_impl).
+        "roles": {"ui-spec": "spec", "ui-design": "design", "ui-build": "dev",
+                  "ui-verify": "test"},
+        "verify_to_impl": {"ui-verify": "ui-build"},
+        "artifacts": {"ui-spec": ("ui-spec.md",)},
+        "phase_work": {
+            "ui-spec": (r"(^|/)ui-spec\.md$", "запись фронт-спеки (ui-spec.md)"),
+            "ui-design": (r"(^|/)\.daiver/tracks/[^/]+/(.+/)?(plan\.(json|md)|resolution-report\.md|ui-plan\.md)$",
+                          "запись плана секций / отчёта резолва (.daiver/tracks/…)"),
+            "ui-build": (r"\.(tsx|jsx|vue|svelte|ts|js|css|less|scss)$",
+                         "запись фронтового кода модуля"),
+            "ui-verify": (r"\.(tsx|jsx|vue|svelte|ts|js|css|less|scss)$",
+                          "правка фронтового кода в фазе проверки"),
+        },
+        "docs_target": "feature-docs",
+        "doc_approval": {"ui-spec": "ui-spec"},
     },
 }
 
@@ -177,6 +216,14 @@ def phase_work() -> dict:
     out: dict = {}
     for b in BRANCHES.values():
         out.update(b["phase_work"])
+    return out
+
+
+def doc_approvals() -> dict:
+    """шаг → имя документа, утверждение которого человеком нужно для закрытия шага."""
+    out: dict = {}
+    for b in BRANCHES.values():
+        out.update(b.get("doc_approval") or {})
     return out
 
 

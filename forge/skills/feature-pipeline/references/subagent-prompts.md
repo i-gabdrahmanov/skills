@@ -180,7 +180,9 @@ prompt:
   sdd.md — по шаблону `<project>/.gigacode/skills/sdd/references/sdd-template.md`
   (обязательные секции: бизнес-контекст, функциональные требования Given-When-Then, NFR,
    API-контракты, модель данных, критерии приёмки, риски). Если Jira-ключ есть — первой
-   строкой шапки `**Jira:** <KEY-123>`.
+   строкой шапки `**Jira:** <KEY-123>`. В шапке обязательно `**Фронт-часть:** нет | есть: <KEY>` —
+   есть ли у стори фронт-часть (её строит forge-ui во фронт-репо); по стори неясно — это
+   вопрос в `pending_questions`, а не догадка. UI здесь не проектируй: §5 описывает API, нужный фронту.
 
 Gate (только когда написал sdd.md, перед завершением):
   python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py sdd <slug> --project-root <project>

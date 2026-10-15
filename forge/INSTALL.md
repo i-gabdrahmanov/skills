@@ -105,6 +105,29 @@ bash deploy.sh /path/to/target-project
    абсолютный путь проекта).
 10. Прогоняет `preflight.py` (advisory).
 
+### 2.1. Фронт-репо: forge-ui (профиль `ui`)
+
+У стори бывает бэк-часть, фронт-часть или обе; фронт живёт в своём репо. Туда ставится forge-ui —
+та же поставка forge, но с фронтовым составом:
+
+```bash
+bash deploy.sh --profile ui /path/to/front-repo
+```
+
+Отличия от бэкового деплоя: из скиллов едут `forgeui` (ветка фронт-части), `pipeline-state`,
+`config-helper` и скрипты `feature-pipeline` без её SKILL.md (их зовут хуки); Java-скиллов нет.
+Команда одна — `/forge` (запускает `forgeui` напрямую, router не нужен). В `settings.json`
+регистрируется MCP **`forge-ui`** (движок `daiver_*`), а `forge-master` — нет. Профиль ложится в
+`.gigacode/.forge-profile`. `init_pipeline_config.py` распознаёт `npm|pnpm|yarn` по lock-файлу.
+Первый `/forge` в репо один раз спрашивает настройки фронта и пишет `.daiver/config.yaml`.
+
+> **Проба extension-раскладки.** forge-ui задуман как extension внутри проекта
+> (`<repo>/.gigacode/extensions/forge-ui/`), но база рантайма (qwen-code 0.21.14) грузит
+> extensions только из домашнего каталога. Проверь на своём GigaCode: скопируй `forge-ui/probe/`
+> в `<repo>/.gigacode/extensions/forge-ui-probe/`, запусти `gigacode` и набери `/forge-ui-probe`.
+> Есть — сообщи, перейдём на extension; нет — остаёмся на `deploy.sh --profile ui`. Подробно —
+> `tasks/019-forge-ui.md`.
+
 ## 3. Проверка готовности
 
 ```bash

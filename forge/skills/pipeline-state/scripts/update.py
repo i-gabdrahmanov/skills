@@ -282,8 +282,9 @@ def _check_subagent_origin(step: dict, closed_by: str, project: Path, skill: str
 
 
 # Доко-фазы, закрытие которых требует человеческого утверждения дока (Гейт 1 / Гейт SDD).
-# Префикс id шага → имя дока. Ключ маркера: <doc>-approved-<feature>.
-_DOC_APPROVAL_STEPS = (("00-brd", "brd"), ("02-sdd", "sdd"))
+# Префикс id шага → имя дока. Ключ маркера: <doc>-approved-<feature>. Плоские ветки
+# (ui-spec → ui-spec-approved-<feature>) — из реестра _branches, не копией здесь.
+_DOC_APPROVAL_STEPS = (("00-brd", "brd"), ("02-sdd", "sdd")) + tuple(BR.doc_approvals().items())
 
 
 def _approval_marker_valid(project: Path, key: str) -> bool:

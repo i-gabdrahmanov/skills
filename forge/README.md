@@ -37,10 +37,12 @@ forge/
 │   ├── forge-merge.md      # /forge-merge → свести дельту с мастером и убрать доки в архив
 │   └── forge-archive.md    # /forge-archive → архив доков готовых строек: status/put/list/restore
 ├── skills/
-│   ├── 20 скиллов/SKILL.md        # router, feature-pipeline, forgefix, forgetech, sdd, …
+│   ├── 21 скилл/SKILL.md          # router, feature-pipeline, forgefix, forgetech, forgeui, sdd, …
 │   ├── SKILLS-REGISTRY.md         # реестр с owner/validity/evals
 │   └── run_all_tests.py           # единый CI-вход: скиллы + хуки + корень
-├── docs/                   # user-guide, troubleshooting, pipeline-*, v2/ (исторический анализ)
+├── forge-ui/               # поставка фронт-репо: /forge фронта (commands/), проба extension (probe/)
+├── profiles/               # профили поставки: back (бэк-репо, по умолчанию) | ui (фронт-репо, forge-ui)
+├── docs/                   # user-guide, troubleshooting, pipeline-*, v2/; daiver/ — спека daiver + образец Pixso
 ├── tasks/                  # открытые задачи/наблюдения (см. tasks/*.md)
 ├── deploy.sh               # развернуть hooks/ + skills/ + команды в <project>/.gigacode/
 │                           #   + блок ground/* и .gigacode/ в .gitignore (снимает uninstall.sh)
@@ -56,12 +58,16 @@ forge/
 
 ## Состав
 
-- **Скиллы:** 20 (`router`, `feature-pipeline`, `forgefix`, `forgetech`, `sdd`, `tech-design`,
+- **Скиллы:** 21 (`router`, `feature-pipeline`, `forgefix`, `forgetech`, `forgeui`, `sdd`, `tech-design`,
   `jira-task-writer`, `java-spring-dev`, `test-writer`, `system-analyst`, `project-grounder`,
   `pipeline-state`, `brd-grounder`, `brd-interview`, `business-requirements`, `defect-analyzer`,
   `bugfix-developer`, `minor-defect-fix`, `config-helper`, `harness-verifier`).
   Полный реестр с owner/validity/evals — [`SKILLS-REGISTRY.md`](SKILLS-REGISTRY.md).
-- **Команды:** 6 (`/forge`, `/forge-fix`, `/forge-tech`, `/forge-spec`, `/forge-merge`, `/forge-archive`).
+- **Команды:** 6 в бэк-репо (`/forge`, `/forge-fix`, `/forge-tech`, `/forge-spec`, `/forge-merge`,
+  `/forge-archive`); во фронт-репо одна — `/forge` (forge-ui, `forge-ui/commands/`).
+- **forge-ui (фронт-репо):** у стори бывает бэк-часть, фронт-часть или обе. Фронт-часть строит
+  ветка `forgeui` во фронт-репо: `ui-spec.md` → дизайн по макету → сборка → проверка против макета;
+  ставится `bash deploy.sh --profile ui <front-repo>`. Этап 0 — `tasks/019-forge-ui.md`.
 - **Хуки:** 16 (`gate-guard`, `tdd-guard`, `tech-guard`, `eval-guard`, `sod-enforcer`, `inline-phase-guard`,
   `state-write-guard`, `pii-boundary`, `destructive-blocker`, `fork-syntax-guard`,
   `grounding-evidence`, `prompt-guard`, `file-journal`, `state-recorder`, `context-injector`,
@@ -121,7 +127,7 @@ bash hooks/run-hook-tests.sh             # юнит-тесты хуков + eval
 # 1. снять extension-остатки ПРЕЖНЕЙ раскладки (если forge ставился как extension):
 bash cleanup-legacy.sh --apply   # план по умолчанию; --apply переносит в forge-legacy-backup-<TS>/
 
-# 2. развернуть в целевой Java/Spring-проект:
+# 2. развернуть в целевой Java/Spring-проект (фронт-репо — с --profile ui, это forge-ui):
 bash deploy.sh /path/to/target-project
 
 # 3. проверить готовность (ENFORCEMENT ON?):
@@ -163,7 +169,8 @@ hooks из `settings.json`; `--purge-state` дополнительно снос�
 
 ## Проверено
 
-- `python3 skills/run_all_tests.py` — 119/119 (control-plane + skills + корень).
+- `python3 skills/run_all_tests.py` — все зелёные (control-plane + skills + корень; счёт файлов
+  растёт — актуальное число печатает сам раннер).
 - `bash cleanup-legacy.sh --apply` на user-уровне с extension-остатками — успех,
   операторские скиллы (pptx/pdf/skill-creator) не тронуты.
 - `destructive-blocker` блокирует на точном payload qwen (`git push -f origin main` →

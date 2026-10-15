@@ -117,7 +117,12 @@ def run_checks(project_root: Path | None = None) -> dict:
         cp = _load(SCRIPTS / "check_paths.py", "cp_doctor")
         cfg = cp.find_skill_paths_json(project_root)
         if cfg.exists():
-            valid, invalid = cp.check_paths(project_root, cfg)
+            prof = project_root / ".gigacode" / ".forge-profile"
+            try:
+                profile_text = prof.read_text(encoding="utf-8") if prof.is_file() else None
+            except OSError:
+                profile_text = None
+            valid, invalid = cp.check_paths(project_root, cfg, profile_text)
             if invalid:
                 fail("registry-paths-exist", f"битые пути: {invalid[:5]}")
             else:
