@@ -5,7 +5,7 @@
 Нарушения аргументов собираются в одно сообщение: слабой модели легче починить разом.
 
 Сейчас: daiver_status, daiver_init, daiver_spec, daiver_track_manifest, daiver_source_nodes,
-daiver_pixso_pull.
+daiver_pixso_pull, daiver_normalize.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -22,6 +22,7 @@ from . import specs as S
 from . import status as ST
 from . import track as TR
 from . import uispec as U
+from .ingest import normalize as NZ
 from .pixso import pull as PP
 
 HOOKS = Path(__file__).resolve().parents[4] / "hooks"
@@ -200,6 +201,13 @@ def t_pixso_pull(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError(str(e))
 
 
+def t_normalize(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return NZ.normalize_frame(root, args["track"], args.get("frame"))
+    except NZ.NormalizeError as e:
+        raise ToolError(str(e))
+
+
 def t_source_nodes(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         track = TR.check_track_name(args["track"])
@@ -276,6 +284,17 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "frame": {"type": "string", "description": "имя кадра; по умолчанию main"},
             "dslJson": {"type": "string", "description": "НЕ ИСПОЛЬЗОВАТЬ: сырой DSL через контекст запрещён, нужен dslPath"}},
             "required": ["track", "frameUrl"], "additionalProperties": False},
+    },
+    "daiver_normalize": {
+        "fn": t_normalize,
+        "description": ("Требование кадра → каноническая модель (.daiver/tracks/<KEY>/…/visual-requirements."
+                        "canonical.json). Формат определяет код по файлу, адаптер не выбирается, outPath не "
+                        "передаётся. Канон НИКОГДА не читается целиком: дальше только daiver_outline / "
+                        "daiver_section. Файл требования, изменённый мимо pull, отклоняется (хеш)."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"}},
+            "required": ["track"], "additionalProperties": False},
     },
     "daiver_source_nodes": {
         "fn": t_source_nodes,

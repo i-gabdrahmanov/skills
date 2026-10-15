@@ -67,6 +67,18 @@ python3 skills/forgeui/scripts/tools/anonymize_pixso.py docs/daiver/dsl.json \
   в 495 записях из 516; в остальных 21 pathString оканчивается вложенным инстансом, а `componentId`
   — другой guid (семантику уточняет задача 1.4). 32 цели из 516 не найдены в экспорте
   (определение не выгружено) — диагностика `MISSING_COMPONENT_DEFINITION`.
+- **Auto-layout (проверено на геометрии образца, 214 контейнеров).** Контейнер — узел со
+  `autoLayout.stackMode` HORIZONTAL|VERTICAL (`autoLayoutDirection` 1/2 с ним согласован: 1 — row,
+  2 — column). Выравнивание по главной оси — `autoLayoutPrimaryAlign` (`flex-start|center|flex-end|
+  space-between`; 16 наблюдений из 16 совпали с геометрией), по поперечной — `autoLayoutCounterAlign`;
+  `autoLayoutAlignType` выравниванием НЕ является. Размер по оси — коды `autoLayoutWidthResize`/
+  `HeightResize`: 0 фиксированный, 1 по содержимому, 2 на всю доступную (согласие с
+  `stackPrimarySizing/CounterSizing` у контейнеров — 100 %: 0↔FIXED, 1↔RESIZE_TO_FIT); у текста
+  «по содержимому» задаёт `textAutoResize` (`WIDTH_AND_HEIGHT` — обе оси, `HEIGHT` — высота), коды
+  у него 0/2. Ребёнок в потоке — `autoLayoutByParent` у ребёнка контейнера без
+  `autoLayoutItemAbsolutePos`. Числа `width/height` у узлов с кодом 1 и 2 — размер мастера или
+  вычисленный (у шапки в потоке `width 600` при внутренней ширине кадра 560): верить им нельзя.
+  Признака переноса (wrap) в образце нет — адаптер его не выводит.
 - **Растр и SVG** образца в фикстуру не входят: растр 648×293 (JPEG без альфы — поля 24 px под тень
   чёрные) и `Modal.svg` обезличить нельзя без потери смысла; для тестов зрения и диффа (этап 5)
   делаются синтетические картинки.
