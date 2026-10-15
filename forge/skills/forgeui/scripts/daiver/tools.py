@@ -4,7 +4,8 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется (спека QG-S10).
 Нарушения аргументов собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: daiver_status, daiver_init, daiver_spec, daiver_track_manifest, daiver_source_nodes.
+Сейчас: daiver_status, daiver_init, daiver_spec, daiver_track_manifest, daiver_source_nodes,
+daiver_pixso_pull.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -21,6 +22,7 @@ from . import specs as S
 from . import status as ST
 from . import track as TR
 from . import uispec as U
+from .pixso import pull as PP
 
 HOOKS = Path(__file__).resolve().parents[4] / "hooks"
 
@@ -69,6 +71,19 @@ def _rel_inside(root: Path, rel: str) -> Path:
     except ValueError:
         raise ToolError(f"путь «{rel}» выходит за корень репо")
     return full
+
+
+def _path_inside(root: Path, rel: str) -> Path:
+    """Путь внутри репо: относительный либо абсолютный, но лежащий под корнем (без «..»)."""
+    p = Path(rel)
+    if p.is_absolute():
+        try:
+            p.resolve().relative_to(root.resolve())
+        except ValueError:
+            raise ToolError(f"путь «{rel}» вне репозитория: рантайм не пускает за пределы каталога запуска — "
+                            f"сохраните файл внутри репо")
+        return p
+    return _rel_inside(root, rel)
 
 
 def t_status(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -171,6 +186,20 @@ def t_track_manifest(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def t_pixso_pull(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    if "dslJson" in args:
+        raise ToolError("dslJson не принимается: сырой экспорт (сотни КБ — МБ) не должен проходить через "
+                        "контекст модели. Сохраните DSL кадра в файл внутри репо (Pixso MCP или экспорт "
+                        "пользователя) и передайте dslPath")
+    if "dslPath" not in args:
+        raise ToolError("нужен dslPath — путь к файлу с DSL-экспортом кадра (внутри репо)")
+    try:
+        return PP.pull(root, args["track"], _path_inside(root, args["dslPath"]), args.get("frameUrl"),
+                       args.get("frame"))
+    except PP.PullError as e:
+        raise ToolError(str(e))
+
+
 def t_source_nodes(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         track = TR.check_track_name(args["track"])
@@ -232,6 +261,21 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "set": {"type": "object", "description": "что изменить: {поле: значение}; null снимает поле"},
             "rasterPath": {"type": "string", "description": "изображение кадра (PNG/JPEG), путь от корня репо"}},
             "required": ["track"], "additionalProperties": False},
+    },
+    "daiver_pixso_pull": {
+        "fn": t_pixso_pull,
+        "description": ("Принять DSL-экспорт кадра Pixso из ФАЙЛА: проверить формат, похудить (библиотека и "
+                        "служебное прочь, ~100× на реальном экране), сохранить рядом сырой как свидетельство "
+                        "и записать кадр в трек с хешем. Сырой DSL читать нельзя — только этот инструмент. "
+                        "frameUrl обязателен (ссылка на кадр; не выдумывай — спроси). Заводит трек и кадр. "
+                        "Повторный pull того же экспорта ничего не меняет; собранный кадр не перезаписывается."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека), напр. STOR-100"},
+            "dslPath": {"type": "string", "description": "файл с DSL-экспортом кадра, путь внутри репо"},
+            "frameUrl": {"type": "string", "description": "ссылка на кадр в Pixso (https://…)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию main"},
+            "dslJson": {"type": "string", "description": "НЕ ИСПОЛЬЗОВАТЬ: сырой DSL через контекст запрещён, нужен dslPath"}},
+            "required": ["track", "frameUrl"], "additionalProperties": False},
     },
     "daiver_source_nodes": {
         "fn": t_source_nodes,

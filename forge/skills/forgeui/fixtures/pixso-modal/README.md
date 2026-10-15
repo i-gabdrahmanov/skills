@@ -45,9 +45,13 @@ python3 skills/forgeui/scripts/tools/anonymize_pixso.py docs/daiver/dsl.json \
   (`fontFamily, fontSize, fontStyle, lineHeightNumber/Unit, letterSpacingNumber/Unit`), цвета —
   `fillPaints[{type:"SOLID", color:{r,g,b: 0..255, a: 0..1}}]`, токены — `inherit{Fill,Text,Stroke,
   Effect}StyleID` → ключ в `localStyleMap` (163 узла со ссылкой).
-- **Инстанс → определение.** `mainComponent` — guid варианта (узел внутри верхнеуровневого
-  определения), `mainStateGroup` — guid самого определения; `componentKey` инстанса равен
-  `componentKey` определения; все 135 `mainComponent` разрешаются. У `SYMBOL` `publishID` ==
+- **Инстанс → определение.** 135 инстансов (3 на экране, 132 внутри определений), все
+  `mainComponent` разрешаются. Два вида: 77 — варианты набора (`layerType: COMPONENT_SET`):
+  `mainComponent` — guid варианта внутри определения, `mainStateGroup` — guid самого определения-набора;
+  58 — обычные компоненты (`layerType: COMPONENT`): `mainStateGroup` у инстанса НЕТ, а
+  `mainComponent` — guid самого определения. Отсутствие `mainStateGroup` — норма, пропавшей базой
+  считается только указанная и не найденная группа. `componentKey` инстанса равен `componentKey`
+  определения. У `SYMBOL` `publishID` ==
   `overrideKey`, `publishable` везде false.
 - **Свойства компонента.** Типы: `visible` (видимость слоя; на слое `propRefMap.visible →
   {key, name}`, на инстансе значение в `propAssignMap[key].value`, умолчание в
