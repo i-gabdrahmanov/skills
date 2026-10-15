@@ -36,6 +36,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from ..pixso import dsl as D
 from . import paint as PT
+from .style import overlay
 
 TEXT_TYPES = ("PARAGRAPH", "TEXT")
 ART_TYPES = ("VECTOR", "BOOLEAN_OPERATION", "STAR", "POLYGON")
@@ -270,11 +271,11 @@ class Materializer:
         if None not in (w, h, mw, mh):
             out.sized = "own" if abs(w - mw) > 0.5 or abs(h - mh) > 0.5 else "master"
             self.counts["sized:" + out.sized] += 1
-        # поверхность: заливка/обводка мастера с учётом оверрайда корня
-        surface = dict(variant)
-        for k in ("fillPaints", "strokePaints", "strokeWeight"):
-            if k in root:
-                surface[k] = root[k][1]
+        # поверхность: заливка/обводка мастера с учётом оверрайда корня и привязанных стилей
+        surface = overlay(variant, root)
+        st = self.conv.styler
+        surface["fillPaints"] = st.paints(surface, "fill")
+        surface["strokePaints"] = st.paints(surface, "stroke")
         out.paints = PT.has_fill(surface) or PT.has_stroke(surface)
         out.has_art = any(ev.visible and ev.node.get("type") in ART_TYPES for ev in events)
 
@@ -296,8 +297,14 @@ class Materializer:
                 self.counts["slotsHidden"] += 1
                 continue
             if isinstance(text, str) and text:
-                out.content.append({"id": f"{inst['guid']};{'/'.join(ev.chain)}", "name": ev.node.get("name") or "",
-                                    "text": text, "overridden": bool(overridden)})
+                slot = {"id": f"{inst['guid']};{'/'.join(ev.chain)}", "name": ev.node.get("name") or "",
+                        "text": text, "overridden": bool(overridden)}
+                look = st.look(overlay(ev.node, ent), "text")
+                if look.font:
+                    slot["font"] = look.font
+                if look.color:
+                    slot["color"] = look.color
+                out.content.append(slot)
                 self.counts["slots"] += 1
                 self.counts["slotsOverridden"] += bool(overridden)
         for chain, ent in entries.items():
@@ -331,14 +338,8 @@ class Materializer:
         for ev in events:
             if not ev.visible:
                 continue
-            v = {k: val for k, val in ev.node.items() if k != "childNode"}
-            for key, (_, val) in entries.get(ev.chain, {}).items():
-                if key == "visible":
-                    continue
-                if key == "autoLayout" and isinstance(val, dict) and isinstance(v.get("autoLayout"), dict):
-                    v["autoLayout"] = dict(v["autoLayout"], **val)
-                else:
-                    v[key] = val
+            ent = {k: e for k, e in entries.get(ev.chain, {}).items() if k != "visible"}
+            v = overlay({k: val for k, val in ev.node.items() if k != "childNode"}, ent)
             v["guid"] = f"{inst['guid']};{'/'.join(ev.chain)}"
             if ev.node.get("type") == "INSTANCE":
                 rebased = []

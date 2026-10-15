@@ -28,7 +28,9 @@
     узла; полупрозрачный фон (backdrop) ничего не доказывает. Узел остаётся в дереве с `occluded`;
   • размеры инстанса — настоящие (запись корневого пути оверрайдов), а не размер мастера из узла;
   • icon-only инстанс (не local, без видимого текста, с векторной анатомией, без поверхности, ≤ 64×64)
-    становится kind=icon с сохранённым `component`.
+    становится kind=icon с сохранённым `component`;
+  • краски, типографика и токены — `style.py` (цвет `rgba(…)`, радиус/обводка/тень в px и CSS, вес шрифта
+    числом, привязанные стили → `tokens`/`font.token`); image-fill делает узел kind=image.
 """
 from __future__ import annotations
 
@@ -40,6 +42,7 @@ from ..names import is_auto_name, parse_variants
 from ..pixso import dsl as D
 from . import paint as PT
 from .materialize import Materialized, Materializer
+from .style import Styler
 
 STRAY_ROOT_SHARE = 0.05
 ICON_MAX = 64
@@ -71,6 +74,7 @@ class Converter:
         self.stats: Counter = Counter()
         self.warnings: List[str] = []
         self._warned: set = set()
+        self.styler = Styler(body, self.warn)
         self.mat = Materializer(self)
 
     # ── служебное ────────────────────────────────────────────────────────────
@@ -233,6 +237,9 @@ class Converter:
         if kind is None:
             kind = "frame"
             self.warn(f"type:{t}", f"тип узла «{t}» незнаком — принят за frame (дети сохранены)")
+        if kind in ("frame", "rect", "vector") and self.styler.is_image(src):
+            kind = "image"                              # image-fill — картинка, а не background-color
+            self.stats["imageFills"] += 1
         comp: Optional[dict] = None
         mat: Optional[Materialized] = None
         kids_src = src
@@ -269,6 +276,12 @@ class Converter:
             node["layout"] = lay
         if comp is not None:
             node["component"] = comp
+        if kind != "icon":                              # у иконки — только component (вид рисует сама иконка)
+            look = self.styler.look(src, kind)
+            for field, value in (("style", look.style), ("font", look.font), ("color", look.color),
+                                 ("tokens", look.tokens)):
+                if value:
+                    node[field] = value
         self.stats["nodesOut"] += 1
         return node, (lay["direction"] if lay else None), kids_src
 
@@ -398,6 +411,7 @@ def normalize_doc(doc: Any, source_sha256: Optional[str] = None) -> dict:
     root = conv.convert()
     stats: Dict[str, Any] = dict(sorted(conv.stats.items()))
     stats["materialization"] = conv.mat.report()
+    stats["styles"] = conv.styler.report()
     stats["warnings"] = conv.warnings
     if source_sha256:
         stats["sourceSha256"] = source_sha256

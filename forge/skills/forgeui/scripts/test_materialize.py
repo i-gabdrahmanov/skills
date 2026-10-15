@@ -372,9 +372,10 @@ class SizedAndPaints(unittest.TestCase):
         self.assertIsNone(self.paints({"strokePaints": [BLACK], "strokeWeight": 0}))
         self.assertIsNone(self.paints({"strokePaints": [], "strokeWeight": 2}))
 
-    def test_root_override_can_remove_or_add_the_surface(self):
-        self.assertIsNone(self.paints({"fillPaints": [BLACK]}, props=[po("B", fillPaints=[])]))
+    def test_root_override_can_add_a_surface_and_an_empty_list_is_not_an_override(self):
         self.assertTrue(self.paints({}, props=[po("B", fillPaints=[BLACK])]))
+        self.assertTrue(self.paints({"fillPaints": [BLACK]}, props=[po("B", fillPaints=[])]),
+                        "пустой список в записи оверрайда — «не переопределено» (у заголовка шапки образца так)")
 
     def test_vector_paint_of_the_artwork_is_not_a_surface(self):
         env = conv(inst("a", "I"), defs=[comp("I", "Icon", [n("V", "VECTOR", w=10, h=10, fillPaints=[BLACK])],

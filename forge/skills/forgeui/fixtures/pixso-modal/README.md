@@ -80,6 +80,17 @@ python3 skills/forgeui/scripts/tools/anonymize_pixso.py docs/daiver/dsl.json \
   `propDefMap` определения-владельца) → `visible` в записи оверрайда. У первой шапки Description
   выключен присвоением (на картинке описания нет), у второй включён; «Close» у второй выключен записью
   оверрайда `visible:false` (крестик на картинке один).
+- **Краски, шрифты, стили (задача 1.5).** Заливки узлов — только `SOLID` (198 узлов, по одной на узел), у
+  обводок ещё 4 `GRADIENT_ANGULAR` (дуги индикатора); `blendMode` везде `NORMAL`; 35 красок с `visible:false`.
+  Эффекты: 2 `DROP_SHADOW` у корня и `INNER_SHADOW` (spread 3, белая «кайма» фокуса) у вариантов. `cornerRadius` —
+  целое (81 узел), по углам — `rectangle{TopLeft,TopRight,BottomLeft,BottomRight}CornerRadius` при
+  `rectangleCornerToolIndependent` (отсутствующий угол = 0: у шапки заданы верхние, у блока действий нижние).
+  Узел с `border{Top,…}Weight` может нести и `strokeWeight` другого значения (1 против 2) — стороны сильнее.
+  Шрифт — на самом узле (`fontFamily, fontSize, fontStyle` Medium/Regular/Semibold, `lineHeight*`/
+  `letterSpacing*` в PIXELS), выравнивания текста в экспорте нет. `localStyleMap` — 38 `FILL` и 4 `TEXT`; ссылок на
+  стили: fill 29 различных (27 найдены), text 4 (4), stroke 3 (1), effect 1 (0) — не найденные библиотечные. В
+  записи оверрайда `fillPaints: []` встречается 3 раза, всегда у текста с заливкой у мастера, и цвет на картинке
+  при этом есть — пустой список значит «не переопределено».
 - **Auto-layout (проверено на геометрии образца, 214 контейнеров).** Контейнер — узел со
   `autoLayout.stackMode` HORIZONTAL|VERTICAL (`autoLayoutDirection` 1/2 с ним согласован: 1 — row,
   2 — column). Выравнивание по главной оси — `autoLayoutPrimaryAlign` (`flex-start|center|flex-end|

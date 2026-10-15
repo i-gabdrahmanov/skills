@@ -34,7 +34,7 @@ forge. Решения и раскладка — `tasks/019-forge-ui.md`; кар�
 | 1 | [1.2 Pixso pull: slim и регистрация кадра](tasks/1.2-pixso-pull.md) | 1.0, 1.1, 1.9 | done |
 | 1 | [1.3 Pixso → канон: структура и геометрия](tasks/1.3-pixso-structure.md) | 1.1, 1.2 | done |
 | 1 | [1.4 Pixso → канон: материализация инстансов](tasks/1.4-pixso-materialize.md) | 1.3 | done |
-| 1 | [1.5 Pixso → канон: краски, типографика, токены](tasks/1.5-pixso-paints-type.md) | 1.3 | todo |
+| 1 | [1.5 Pixso → канон: краски, типографика, токены](tasks/1.5-pixso-paints-type.md) | 1.3 | done |
 | 1 | [1.6 Векторный арт и svg-ассеты](tasks/1.6-vector-art.md) | 1.3 | todo |
 | 1 | [1.7 Вывод раскладки](tasks/1.7-layout-inference.md) | 1.3 | todo |
 | 1 | [1.8 Outline и section](tasks/1.8-outline-section.md) | 1.1, 1.7 | todo |
@@ -98,3 +98,6 @@ forge. Решения и раскладка — `tasks/019-forge-ui.md`; кар�
 - Проба project-level extension на GigaCode (X.3).
 - Второй образец Pixso — полноэкранный, длинный, без auto-layout (для 1.7/1.8).
 - Образцы Figma json-a / json-b / html, если Figma нужна (X.2).
+- Образец Pixso с градиентной и картинной заливкой, несколькими заливками на узле, процентными единицами
+  шрифта, стилями обводки/эффектов — допущения `ingest/style.py` (порядок слоёв, угол градиента, PERCENT) пока
+  не проверены данными.
