@@ -30,7 +30,9 @@
   • icon-only инстанс (не local, без видимого текста, с векторной анатомией, без поверхности, ≤ 64×64)
     становится kind=icon с сохранённым `component`;
   • краски, типографика и токены — `style.py` (цвет `rgba(…)`, радиус/обводка/тень в px и CSS, вес шрифта
-    числом, привязанные стили → `tokens`/`font.token`); image-fill делает узел kind=image.
+    числом, привязанные стили → `tokens`/`font.token`); image-fill делает узел kind=image;
+  • векторный арт — `art.py`: над готовым деревом (после иконного коллапса инстансов) группа шейпов
+    склеивается в один узел `art:{slug, nodes}`; `stats.nodesOut` считает узлы ПОСЛЕ склейки.
 """
 from __future__ import annotations
 
@@ -41,11 +43,11 @@ from .. import canon as C
 from ..names import is_auto_name, parse_variants
 from ..pixso import dsl as D
 from . import paint as PT
+from .art import ICON_MAX, collapse_vector_art
 from .materialize import Materialized, Materializer
 from .style import Styler
 
 STRAY_ROOT_SHARE = 0.05
-ICON_MAX = 64
 COVER_EPS = 0.5
 OCCLUDER_TYPES = ("FRAME", "RECTANGLE")
 LAYOUT_MODES = {"HORIZONTAL": "row", "VERTICAL": "column"}
@@ -409,7 +411,15 @@ def normalize_doc(doc: Any, source_sha256: Optional[str] = None) -> dict:
     body, _ = D.unwrap(doc)
     conv = Converter(body)
     root = conv.convert()
+    art = collapse_vector_art(root)                  # после иконного коллапса инстансов (1.4), до раскладки (1.7)
+    conv.stats["nodesOut"] -= art.get("collapsedNodes", 0)
+    if art.get("slugFallback"):
+        conv.warnings.append(f"общий slug «art» у рисунков: {art['slugFallback']} — у узла и его предков нет "
+                             f"осмысленного ASCII-имени (не-ASCII не транслитерируется); список с id и именами даёт "
+                             f"daiver_svg_assets, файлы кладутся под эти slug")
     stats: Dict[str, Any] = dict(sorted(conv.stats.items()))
+    if art:
+        stats["art"] = art
     stats["materialization"] = conv.mat.report()
     stats["styles"] = conv.styler.report()
     stats["warnings"] = conv.warnings

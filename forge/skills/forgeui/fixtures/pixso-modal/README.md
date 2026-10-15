@@ -103,6 +103,12 @@ python3 skills/forgeui/scripts/tools/anonymize_pixso.py docs/daiver/dsl.json \
   `autoLayoutItemAbsolutePos`. Числа `width/height` у узлов с кодом 1 и 2 — размер мастера или
   вычисленный (у шапки в потоке `width 600` при внутренней ширине кадра 560): верить им нельзя.
   Признака переноса (wrap) в образце нет — адаптер его не выводит.
+- **Векторы и арт (задача 1.6).** На экране векторных групп нет — канон образца арта не содержит. Векторы живут в определениях:
+  четыре иконки-мастера — SYMBOL 24×24 с ОДНИМ составным VECTOR «Outline» (11–20 px), у «Approve_Circle» ещё скрытая
+  BOOLEAN_OPERATION «Stroke» с [VECTOR, ELLIPSE]; узлов типа GROUP в образце нет вовсе. `test_art.py` делает такое определение
+  local: его вектор (20 px) остаётся иконкой-кандидатом, а он же ×6 склеивается в `art` со slug `outline`. `Modal.svg` (экспорт всего
+  кадра: viewBox 648×293, width/height в 6 знаках, служебные `effect` в `defs`, 69 `rect`, 18 `path`) валидатор
+  `daiver_svg_assets` принимает; в git файла нет.
 - **Растр и SVG** образца в фикстуру не входят: растр 648×293 (JPEG без альфы — поля 24 px под тень
   чёрные) и `Modal.svg` обезличить нельзя без потери смысла; для тестов зрения и диффа (этап 5)
   делаются синтетические картинки.
@@ -113,5 +119,5 @@ python3 skills/forgeui/scripts/tools/anonymize_pixso.py docs/daiver/dsl.json \
 определений на месте, все ссылки разрешаются, все определения достижимы; нет ни `SB Sans`, ни
 исходных текстов; если оригинал лежит локально — ни один исходный идентификатор/текст не остался и
 файл воспроизводится побайтно. Дальше фикстуру используют `test_pixso_pull` (1.2),
-`test_normalize_pixso` (1.3), `test_materialize` (1.4), `test_paints_typography` (1.5) и golden
+`test_normalize_pixso` (1.3), `test_materialize` (1.4), `test_paints_typography` (1.5), `test_art` (1.6) и golden
 `canonical.golden.json` (появится после 1.3–1.5).

@@ -11,8 +11,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .. import canon as C
+from .. import svg_assets as SA
 from .. import track as TR
 from ..pixso import dsl as D
+from . import art as AR
 from . import detect
 from . import pixso as PX
 
@@ -57,7 +59,7 @@ def normalize_frame(root: Path, track: str, frame: Optional[str] = None) -> Dict
     except (D.DslError, ValueError) as e:
         raise NormalizeError(str(e))
     stats = written["stats"]
-    return {
+    out = {
         "track": track, "frame": f["name"], "format": fmt,
         "canonical": paths["canonical"].resolve().relative_to(root.resolve()).as_posix(),
         "bytes": paths["canonical"].stat().st_size,
@@ -66,4 +68,8 @@ def normalize_frame(root: Path, track: str, frame: Optional[str] = None) -> Dict
         "stats": {k: v for k, v in stats.items() if k != "warnings"},
         "warnings": stats.get("warnings", []),
     }
+    art = SA.summary(AR.collect_vector_art(written["root"]), paths["assets"])   # иллюстрации без .svg видны сразу
+    if art:
+        out["art"] = art
+    return out
 

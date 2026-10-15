@@ -5,7 +5,7 @@
 Нарушения аргументов собираются в одно сообщение: слабой модели легче починить разом.
 
 Сейчас: daiver_status, daiver_init, daiver_spec, daiver_track_manifest, daiver_source_nodes,
-daiver_pixso_pull, daiver_normalize.
+daiver_pixso_pull, daiver_normalize, daiver_svg_assets.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -20,6 +20,7 @@ from . import init as I
 from . import source_nodes as SN
 from . import specs as S
 from . import status as ST
+from . import svg_assets as SA
 from . import track as TR
 from . import uispec as U
 from .ingest import normalize as NZ
@@ -208,6 +209,19 @@ def t_normalize(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError(str(e))
 
 
+def t_svg_assets(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        frame = args.get("frame")
+        if frame is not None:
+            TR.check_frame_name(frame)
+        svg = _path_inside(root, args["svgPath"]) if "svgPath" in args else None
+        module = _path_inside(root, args["moduleDir"]) if "moduleDir" in args else None
+        return SA.run(root, track, frame, args.get("slug"), svg, module)
+    except (TR.TrackError, SA.SvgAssetsError) as e:
+        raise ToolError(str(e))
+
+
 def t_source_nodes(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         track = TR.check_track_name(args["track"])
@@ -294,6 +308,26 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "schema": {"type": "object", "properties": {
             "track": {"type": "string", "description": "ключ стори (имя трека)"},
             "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"}},
+            "required": ["track"], "additionalProperties": False},
+    },
+    "daiver_svg_assets": {
+        "fn": t_svg_assets,
+        "description": ("Векторные иллюстрации кадра (узлы `art` канона) ↔ файлы .svg. Без slug/svgPath/moduleDir — "
+                        "арты кадра: что зарегистрировано, missingArt (slug без файла). slug + svgPath — "
+                        "зарегистрировать экспорт Pixso (.svg внутри репо) как assets/<slug>.svg кадра; повтор "
+                        "ничего не меняет; slug берётся из канона, не выдумывается. moduleDir (шаг ui-build; "
+                        "внутри outputDir; slug — арт секции, без slug — все арты кадра) — копия файла в "
+                        "<moduleDir>/<svg.assetsDir>/ и ТОЧНЫЕ import + jsx под svg.render из конфига "
+                        "(component | url | inline; путь импорта — от файла в корне moduleDir). Нет файла — не "
+                        "блокер: вернётся помеченный placeholder правильного размера и названный недостающий "
+                        "файл. Иллюстрацию рисовать руками, подменять div'ом или писать инлайн-<svg> нельзя — "
+                        "только этот файл."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "slug": {"type": "string", "description": "slug арта (узел `art.slug` канона / missingArt)"},
+            "svgPath": {"type": "string", "description": "экспорт узла из Pixso (.svg), путь внутри репо; нужен slug"},
+            "moduleDir": {"type": "string", "description": "каталог модуля внутри outputDir, куда копируется файл"}},
             "required": ["track"], "additionalProperties": False},
     },
     "daiver_source_nodes": {
