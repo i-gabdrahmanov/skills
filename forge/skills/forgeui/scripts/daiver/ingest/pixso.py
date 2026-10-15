@@ -1,8 +1,8 @@
 """ingest/pixso.py — Pixso DSL → каноническая модель: структура и геометрия (спека §7.1–7.2, задача 1.3).
 
 Вход — сырой или слимнутый DSL (формат один). Здесь строится ДЕРЕВО ЭКРАНА; содержимое инстансов
-(тексты слотов, анатомия определений, origin/sized/paints) добавляет материализация (1.4), краски и
-типографику — 1.5, векторный арт — 1.6, вывод раскладки для макетов без auto-layout — 1.7.
+(тексты слотов, анатомия local-композиций, origin/sized/paints) даёт материализация (`materialize.py`,
+1.4), краски и типографику — 1.5, векторный арт — 1.6, вывод раскладки для макетов без auto-layout — 1.7.
 
 Правила, проверенные по образцу «Modal» (docs/daiver/dsl.json), а не угаданные:
   • узел в потоке раскладки — ребёнок контейнера (`autoLayout.stackMode` HORIZONTAL|VERTICAL), у
@@ -22,7 +22,13 @@
     контейнера — после потока;
   • `visible: false` выбрасывается вместе с поддеревом; корни экрана мельче 5 % крупнейшего (иконка
     рядом с кадром) выбрасываются с сообщением, несколько настоящих корней оборачиваются в
-    синтетический фрейм `inferred:roots:<id>`.
+    синтетический фрейм `inferred:roots:<id>`;
+  • окклюзия: узел закрыт, если выше по порядку рисования у того же родителя лежит FRAME/RECTANGLE с
+    СПЛОШНОЙ непрозрачной заливкой (альфа 1, opacity 1, обычный режим), чей бокс целиком накрывает бокс
+    узла; полупрозрачный фон (backdrop) ничего не доказывает. Узел остаётся в дереве с `occluded`;
+  • размеры инстанса — настоящие (запись корневого пути оверрайдов), а не размер мастера из узла;
+  • icon-only инстанс (не local, без видимого текста, с векторной анатомией, без поверхности, ≤ 64×64)
+    становится kind=icon с сохранённым `component`.
 """
 from __future__ import annotations
 
@@ -32,8 +38,13 @@ from typing import Any, Dict, List, Optional, Tuple
 from .. import canon as C
 from ..names import is_auto_name, parse_variants
 from ..pixso import dsl as D
+from . import paint as PT
+from .materialize import Materialized, Materializer
 
 STRAY_ROOT_SHARE = 0.05
+ICON_MAX = 64
+COVER_EPS = 0.5
+OCCLUDER_TYPES = ("FRAME", "RECTANGLE")
 LAYOUT_MODES = {"HORIZONTAL": "row", "VERTICAL": "column"}
 DIRECTION_CODES = {1: "row", 2: "column"}
 ALIGN_MAIN = {"flex-start": "start", "center": "center", "flex-end": "end", "space-between": "space-between"}
@@ -60,6 +71,7 @@ class Converter:
         self.stats: Counter = Counter()
         self.warnings: List[str] = []
         self._warned: set = set()
+        self.mat = Materializer(self)
 
     # ── служебное ────────────────────────────────────────────────────────────
     def warn(self, key: str, msg: str) -> None:
@@ -77,17 +89,24 @@ class Converter:
         return None
 
     # ── раскладка и размеры ──────────────────────────────────────────────────
-    def _layout(self, src: dict) -> Optional[dict]:
+    @staticmethod
+    def _direction(src: dict) -> Optional[str]:
+        """Направление раскладки контейнера: stackMode, а при его отсутствии — код направления."""
         al = src.get("autoLayout")
         if not isinstance(al, dict):
             return None
         direction = LAYOUT_MODES.get(al.get("stackMode"))
         if direction is None and src.get("childNode"):
             direction = DIRECTION_CODES.get(al.get("autoLayoutDirection"))
-            if direction:
-                self.stats["layoutFromDirectionCode"] += 1
+        return direction
+
+    def _layout(self, src: dict) -> Optional[dict]:
+        al = src.get("autoLayout")
+        direction = self._direction(src)
         if direction is None:
             return None
+        if LAYOUT_MODES.get(al.get("stackMode")) is None:
+            self.stats["layoutFromDirectionCode"] += 1
         lay: Dict[str, Any] = {"direction": direction, "stated": True}
         gap = _num(al.get("autoLayoutItemSpacing"))
         if gap is not None:
@@ -142,12 +161,14 @@ class Converter:
         return out
 
     # ── порядок детей ────────────────────────────────────────────────────────
-    def _children(self, src: dict, mode: Optional[str]) -> List[Tuple[dict, bool]]:
+    def _ordered(self, src: dict, mode: Optional[str], drop_hidden: bool = True) -> List[Tuple[dict, bool]]:
+        """Дети узла как (узел, в потоке раскладки), в порядке канона. drop_hidden=False оставляет
+        скрытых (их видимость решает материализатор) и не трогает счётчики."""
         kids = [k for k in src.get("childNode") or [] if isinstance(k, dict)]
         draw = {id(k): len(kids) - 1 - i for i, k in enumerate(kids)}   # последний рисуется первым
         keep: List[dict] = []
         for k in kids:
-            if k.get("visible") is False:
+            if drop_hidden and k.get("visible") is False:
                 self.stats["hiddenDropped"] += 1
                 self.stats["hiddenNodesDropped"] += sum(1 for _ in D.walk(k))
             else:
@@ -172,14 +193,59 @@ class Converter:
         free = sorted(free, key=lambda k: (top(k), left(k), draw[id(k)]))
         return [(k, True) for k in flow] + [(k, False) for k in free]
 
+    @staticmethod
+    def _rect(k: dict) -> Optional[Tuple[float, float, float, float]]:
+        l, t, w, h = (_num(k.get(x)) for x in ("left", "top", "width", "height"))
+        if None in (l, t, w, h) or w <= 0 or h <= 0:
+            return None
+        return l, t, l + w, t + h
+
+    def _occluded(self, src: dict) -> set:
+        """id() детей, закрытых более поздним (рисуемым выше) непрозрачным сиблингом. Дерево Pixso
+        «topmost first»: ребёнок с меньшим индексом в массиве рисуется позже и лежит выше."""
+        arr = [k for k in src.get("childNode") or [] if isinstance(k, dict) and k.get("visible") is not False]
+        covers = []
+        for i, k in enumerate(arr):
+            r = self._rect(k)
+            if r is not None and k.get("type") in OCCLUDER_TYPES and PT.is_opaque_fill(k):
+                covers.append((i, r))
+        out: set = set()
+        if not covers:
+            return out
+        for i, k in enumerate(arr):
+            r = self._rect(k)
+            if r is None:
+                continue
+            for j, c in covers:
+                if j < i and c[0] <= r[0] + COVER_EPS and c[1] <= r[1] + COVER_EPS \
+                        and c[2] >= r[2] - COVER_EPS and c[3] >= r[3] - COVER_EPS:
+                    out.add(id(k))
+                    break
+        return out
+
     # ── узел ─────────────────────────────────────────────────────────────────
     def _node(self, src: dict, in_flow: bool, ax: float, ay: float,
-              as_frame: bool = False) -> Tuple[dict, Optional[str]]:
+              as_frame: bool = False) -> Tuple[dict, Optional[str], dict]:
+        """(узел канона, направление его раскладки, источник детей). Источник детей — сам src, а у
+        local-инстанса без собственных детей — его виртуальная анатомия."""
         t = src.get("type")
         kind = "frame" if as_frame else KIND_BY_TYPE.get(t)
         if kind is None:
             kind = "frame"
             self.warn(f"type:{t}", f"тип узла «{t}» незнаком — принят за frame (дети сохранены)")
+        comp: Optional[dict] = None
+        mat: Optional[Materialized] = None
+        kids_src = src
+        if kind == "instance":
+            comp, mat = self._component(src)
+            if self._is_icon(comp, mat, src):
+                kind = "icon"
+                self.stats["iconsCollapsed"] += 1
+        elif as_frame and t == "INSTANCE":
+            # корень-инстанс с автоименем: фрейм, а анатомию (и тексты) берём из мастера как у local
+            mat = self.mat.materialize(src, force_local=True)
+        if mat is not None and mat.children is not None and not src.get("childNode"):
+            kids_src = dict(src, childNode=mat.children)
         node: Dict[str, Any] = {"id": src["guid"], "kind": kind}
         name = src.get("name")
         if isinstance(name, str):
@@ -188,21 +254,25 @@ class Converter:
                 self.stats["autoNamed"] += 1
         if t in TEXT_TYPES and isinstance(src.get("nodeText"), str) and src["nodeText"]:
             node["text"] = src["nodeText"]
+        geom = mat.geometry if mat is not None else {}
         size = self._sizes(src, in_flow)
+        for axis, dim in (("w", "width"), ("h", "height")):
+            if dim in geom and isinstance(size.get(axis), (int, float)):
+                size[axis] = geom[dim]                 # настоящий размер инстанса, а не размер мастера
         if size:
             node["size"] = size
-        w, h = _num(src.get("width")), _num(src.get("height"))
+        w, h = geom.get("width", _num(src.get("width"))), geom.get("height", _num(src.get("height")))
         if not in_flow and w is not None and h is not None:
             node["box"] = {"x": ax, "y": ay, "w": w, "h": h}
         lay = self._layout(src) if kind in ("frame", "instance") else None
         if lay:
             node["layout"] = lay
-        if kind == "instance":
-            node["component"] = self._component(src)
+        if comp is not None:
+            node["component"] = comp
         self.stats["nodesOut"] += 1
-        return node, (lay["direction"] if lay else None)
+        return node, (lay["direction"] if lay else None), kids_src
 
-    def _component(self, src: dict) -> dict:
+    def _component(self, src: dict) -> Tuple[dict, Optional[Materialized]]:
         top = self._definition(src)
         variants: Optional[Dict[str, str]] = None
         refs = (src.get("propRefMap") or {}).get("variant") if isinstance(src.get("propRefMap"), dict) else None
@@ -212,34 +282,72 @@ class Converter:
             variants = pairs or None
         if variants is None:
             variants = parse_variants(src.get("name"))
+        self.stats["instances"] += 1
         if top is None:
             self.stats["instancesUnresolved"] += 1
             self.warn("instance-unresolved", "инстансы без определения в экспорте идут как fallback-разметка "
                                              "(их внутренности экспорт не донёс)")
+            has_main = isinstance(src.get("mainComponent"), str) and bool(src.get("mainComponent"))
+            self.mat.diag("MISSING_COMPONENT_DEFINITION" if has_main else "MISSING_MAIN_COMPONENT",
+                          {"id": src.get("guid"), "name": src.get("name")})
             comp: Dict[str, Any] = {"figmaName": src.get("name") or "unknown", "childrenRole": "fallback"}
-        else:
-            comp = {"figmaName": top.get("name") or src.get("name") or "unknown"}
+            if variants:
+                comp["variants"] = variants
+            return comp, None
+        sg = src.get("mainStateGroup")
+        if isinstance(sg, str) and sg and sg not in self.owner:
+            # ключ группы состояний есть, а группы в экспорте нет (у обычного компонента ключа нет вовсе)
+            self.mat.diag("MISSING_COMPONENT_BASE", {"id": src.get("guid"), "name": src.get("name")})
+        mat = self.mat.materialize(src)
+        comp = {"figmaName": top.get("name") or src.get("name") or "unknown"}
         if variants:
             comp["variants"] = variants
-        self.stats["instances"] += 1
-        return comp
+        comp["origin"] = mat.origin
+        comp["childrenRole"] = "fallback" if mat.origin == "local" else "content"
+        if mat.content:
+            comp["content"] = mat.content
+        elif mat.text_props:
+            comp["textProps"] = mat.text_props
+        if mat.paints:
+            comp["paints"] = True
+        if mat.sized:
+            comp["sized"] = mat.sized
+        if mat.children:
+            comp["childrenPath"] = [c["guid"].split(";", 1)[1] for c in mat.children]
+        if mat.origin != "local" and not (mat.content or mat.text_props or mat.has_art or mat.paints):
+            self.stats["emptyInstances"] += 1
+        return comp, mat
+
+    def _is_icon(self, comp: Optional[dict], mat: Optional[Materialized], src: dict) -> bool:
+        """Инстанс без подписи, с векторной анатомией и без поверхности, не крупнее ICON_MAX."""
+        if comp is None or mat is None or not mat.resolved or mat.origin == "local":
+            return False
+        if comp.get("content") or comp.get("textProps") or comp.get("paints") or not mat.has_art:
+            return False
+        w = mat.geometry.get("width", _num(src.get("width")))
+        h = mat.geometry.get("height", _num(src.get("height")))
+        return w is not None and h is not None and w <= ICON_MAX and h <= ICON_MAX
 
     def _tree(self, root: dict, ox: float, oy: float, as_frame: bool = False) -> dict:
         out: Optional[dict] = None
-        stack: List[tuple] = [(root, None, False, ox, oy, as_frame)]
+        stack: List[tuple] = [(root, None, False, ox, oy, as_frame, False)]
         while stack:
-            src, sink, in_flow, ax, ay, af = stack.pop()
-            node, mode = self._node(src, in_flow, ax, ay, af)
+            src, sink, in_flow, ax, ay, af, covered = stack.pop()
+            node, mode, kids_src = self._node(src, in_flow, ax, ay, af)
+            if covered:
+                node["occluded"] = True
+                self.stats["occluded"] += 1
             if sink is None:
                 out = node
             else:
                 sink.append(node)
-            kids = self._children(src, mode)
+            kids = self._ordered(kids_src, mode) if node["kind"] != "icon" else []
             if kids:
                 bucket = node.setdefault("children", [])
+                hidden_by = self._occluded(kids_src)
                 for child, flow in reversed(kids):
                     stack.append((child, bucket, flow, ax + (_num(child.get("left")) or 0),
-                                  ay + (_num(child.get("top")) or 0), False))
+                                  ay + (_num(child.get("top")) or 0), False, id(child) in hidden_by))
         assert out is not None
         return out
 
@@ -289,6 +397,7 @@ def normalize_doc(doc: Any, source_sha256: Optional[str] = None) -> dict:
     conv = Converter(body)
     root = conv.convert()
     stats: Dict[str, Any] = dict(sorted(conv.stats.items()))
+    stats["materialization"] = conv.mat.report()
     stats["warnings"] = conv.warnings
     if source_sha256:
         stats["sourceSha256"] = source_sha256

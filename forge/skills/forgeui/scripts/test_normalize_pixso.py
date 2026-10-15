@@ -96,7 +96,8 @@ class OnFixture(unittest.TestCase):
         for k in kids:
             self.assertNotIn("box", k, "внутри потока позицию выражает раскладка")
         self.assertEqual(kids[0]["size"], {"w": "fill", "h": "hug"})
-        self.assertEqual(kids[2]["size"], {"w": 600, "h": "hug"}, "код 0 — фиксированная ширина, как задано в макете")
+        self.assertEqual(kids[2]["size"], {"w": 560, "h": "hug"},
+                         "код 0 — фиксированная ширина, но настоящая (560) — из записи корня оверрайдов, а не 600 узла")
 
     def test_no_hidden_nodes_and_stats(self):
         s = self.env["stats"]
@@ -337,7 +338,8 @@ class Instances(unittest.TestCase):
                  propRefMap={"variant": [{"name": "State", "value": "hover", "type": "variant"},
                                          {"name": "Size", "value": "L", "type": "variant"}]})
         c = by_id(conv(n("r", w=50, h=50, kids=[inst]), defs=self.DEFS))["i"]["component"]
-        self.assertEqual(c, {"figmaName": "Button", "variants": {"State": "hover", "Size": "L"}})
+        self.assertEqual(c, {"figmaName": "Button", "variants": {"State": "hover", "Size": "L"},
+                             "origin": "undecided", "childrenRole": "content"})
 
     def test_variants_fall_back_to_the_name_and_standalone_component(self):
         inst = n("i", "INSTANCE", name="State=hover, Size=L", w=10, h=10, mainComponent="d1v", mainStateGroup="d1")
@@ -345,7 +347,8 @@ class Instances(unittest.TestCase):
         self.assertEqual(c["variants"], {"State": "hover", "Size": "L"})
         solo = n("s", "INSTANCE", name="line", w=10, h=1, mainComponent="d2")
         c = by_id(conv(n("r", w=50, h=50, kids=[solo]), defs=self.DEFS))["s"]["component"]
-        self.assertEqual(c, {"figmaName": "Divider"}, "обычный компонент: без mainStateGroup, без вариантов")
+        self.assertEqual(c, {"figmaName": "Divider", "origin": "undecided", "childrenRole": "content"},
+                         "обычный компонент: без mainStateGroup, без вариантов")
 
     def test_unresolved_instance_is_fallback_with_warning(self):
         ghost = n("g", "INSTANCE", name="Ghost", w=10, h=10, mainComponent="nope",

@@ -33,7 +33,7 @@ forge. Решения и раскладка — `tasks/019-forge-ui.md`; кар�
 | 1 | [1.9 Трек: track.yaml, кадры, goal image, source_nodes](tasks/1.9-track-manifest.md) | 1.1 | done |
 | 1 | [1.2 Pixso pull: slim и регистрация кадра](tasks/1.2-pixso-pull.md) | 1.0, 1.1, 1.9 | done |
 | 1 | [1.3 Pixso → канон: структура и геометрия](tasks/1.3-pixso-structure.md) | 1.1, 1.2 | done |
-| 1 | [1.4 Pixso → канон: материализация инстансов](tasks/1.4-pixso-materialize.md) | 1.3 | todo |
+| 1 | [1.4 Pixso → канон: материализация инстансов](tasks/1.4-pixso-materialize.md) | 1.3 | done |
 | 1 | [1.5 Pixso → канон: краски, типографика, токены](tasks/1.5-pixso-paints-type.md) | 1.3 | todo |
 | 1 | [1.6 Векторный арт и svg-ассеты](tasks/1.6-vector-art.md) | 1.3 | todo |
 | 1 | [1.7 Вывод раскладки](tasks/1.7-layout-inference.md) | 1.3 | todo |
@@ -90,6 +90,8 @@ forge. Решения и раскладка — `tasks/019-forge-ui.md`; кар�
 | Vue/Svelte в код-гейте | `skipped` с причиной | так и в спеке — shippable только React |
 | Новые инструменты: `daiver_plan_write` (2.6), `daiver_color_tokens` (3.2), `daiver_e2e_plan` (5.5), `daiver_propose_sources` (6.4) | добавлены к 39 инструментам спеки | план и карта цветов — валидацией и арифметикой в коде, а не файлом модели (INV-A1, A11) |
 | Pixso DSL инлайн (`dslJson`) | только `dslPath` | payload через контекст модели запрещён (INV-B3) |
+| §7.3 «overridden:true для definition-дефолтов» | дефолты библиотеки — `overridden:false` | противоречие внутри спеки; §6.4: false = плейсхолдер библиотеки, не копировать |
+| INFERRED_NESTED_INSTANCE_SWAP, VIRTUAL_HIERARCHY_CYCLE | не реализованы | в образце нет признаков — правила не из чего выводить; вернуться при втором образце |
 
 ## Нужно от пользователя
 
