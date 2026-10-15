@@ -29,7 +29,7 @@ forge. Решения и раскладка — `tasks/019-forge-ui.md`; кар�
 |---|---|---|---|
 | 0 | каркас: ветка, ui-spec, конфиг, MCP, поставка (`forge/v0.5`) | — | done |
 | 1 | [1.0 Фикстура образца Pixso](tasks/1.0-pixso-fixture.md) | — | done |
-| 1 | [1.1 Каноническая модель](tasks/1.1-canonical-model.md) | — | todo |
+| 1 | [1.1 Каноническая модель](tasks/1.1-canonical-model.md) | — | done |
 | 1 | [1.9 Трек: track.yaml, кадры, goal image, source_nodes](tasks/1.9-track-manifest.md) | 1.1 | todo |
 | 1 | [1.2 Pixso pull: slim и регистрация кадра](tasks/1.2-pixso-pull.md) | 1.0, 1.1, 1.9 | todo |
 | 1 | [1.3 Pixso → канон: структура и геометрия](tasks/1.3-pixso-structure.md) | 1.1, 1.2 | todo |
