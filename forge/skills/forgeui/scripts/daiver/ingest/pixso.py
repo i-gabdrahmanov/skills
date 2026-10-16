@@ -32,7 +32,10 @@
   • краски, типографика и токены — `style.py` (цвет `rgba(…)`, радиус/обводка/тень в px и CSS, вес шрифта
     числом, привязанные стили → `tokens`/`font.token`); image-fill делает узел kind=image;
   • векторный арт — `art.py`: над готовым деревом (после иконного коллапса инстансов) группа шейпов
-    склеивается в один узел `art:{slug, nodes}`; `stats.nodesOut` считает узлы ПОСЛЕ склейки.
+    склеивается в один узел `art:{slug, nodes}`; `stats.nodesOut` считает узлы ПОСЛЕ склейки;
+  • вывод раскладки — `layout.py`, последним проходом над готовым деревом и только по `infer_layout=True`
+    (`normalize_frame` берёт его из `layout.infer` конфига); адаптер отдаёт ему экранные прямоугольники узлов в
+    потоке (`Converter.rects`: у них `box` нет), `stats.nodesOut` включает синтетические группы.
 """
 from __future__ import annotations
 
@@ -42,6 +45,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .. import canon as C
 from ..names import is_auto_name, parse_variants
 from ..pixso import dsl as D
+from . import layout as LY
 from . import paint as PT
 from .art import ICON_MAX, collapse_vector_art
 from .materialize import Materialized, Materializer
@@ -75,6 +79,7 @@ class Converter:
         self.tops = {t.get("guid"): t for t in body.get(D.DEFS_KEY) or [] if isinstance(t, dict)}
         self.stats: Counter = Counter()
         self.warnings: List[str] = []
+        self.rects: Dict[str, Tuple[float, float, float, float]] = {}   # узлы в потоке: у них `box` нет (для 1.7)
         self._warned: set = set()
         self.styler = Styler(body, self.warn)
         self.mat = Materializer(self)
@@ -273,6 +278,8 @@ class Converter:
         w, h = geom.get("width", _num(src.get("width"))), geom.get("height", _num(src.get("height")))
         if not in_flow and w is not None and h is not None:
             node["box"] = {"x": ax, "y": ay, "w": w, "h": h}
+        elif in_flow and w is not None and h is not None:
+            self.rects[src["guid"]] = (ax, ay, w, h)    # позицию в канон не пишем, но вывод раскладки её знает
         lay = self._layout(src) if kind in ("frame", "instance") else None
         if lay:
             node["layout"] = lay
@@ -406,13 +413,18 @@ class Converter:
                 "box": {"x": 0, "y": 0, "w": max_x - min_x, "h": max_y - min_y}, "children": children}
 
 
-def normalize_doc(doc: Any, source_sha256: Optional[str] = None) -> dict:
-    """Канон (конверт) по Pixso-документу. D.DslError — не Pixso DSL; ValueError — пустой экран."""
+def normalize_doc(doc: Any, source_sha256: Optional[str] = None, infer_layout: bool = False) -> dict:
+    """Канон (конверт) по Pixso-документу. D.DslError — не Pixso DSL; ValueError — пустой экран.
+
+    infer_layout — вывод раскладки для макета без auto-layout (1.7). По умолчанию выключен: включает вызывающий,
+    `normalize_frame` — по ключу `layout.infer` конфига (там он on по умолчанию)."""
     body, _ = D.unwrap(doc)
     conv = Converter(body)
     root = conv.convert()
     art = collapse_vector_art(root)                  # после иконного коллапса инстансов (1.4), до раскладки (1.7)
     conv.stats["nodesOut"] -= art.get("collapsedNodes", 0)
+    layout = LY.infer_layout(root, conv.rects) if infer_layout else {}      # последним: над готовым деревом
+    conv.stats["nodesOut"] += layout.get("groups", 0)
     if art.get("slugFallback"):
         conv.warnings.append(f"общий slug «art» у рисунков: {art['slugFallback']} — у узла и его предков нет "
                              f"осмысленного ASCII-имени (не-ASCII не транслитерируется); список с id и именами даёт "
@@ -420,6 +432,8 @@ def normalize_doc(doc: Any, source_sha256: Optional[str] = None) -> dict:
     stats: Dict[str, Any] = dict(sorted(conv.stats.items()))
     if art:
         stats["art"] = art
+    if layout:
+        stats["layout"] = layout
     stats["materialization"] = conv.mat.report()
     stats["styles"] = conv.styler.report()
     stats["warnings"] = conv.warnings

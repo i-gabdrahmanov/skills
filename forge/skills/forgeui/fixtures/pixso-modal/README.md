@@ -109,6 +109,7 @@ python3 skills/forgeui/scripts/tools/anonymize_pixso.py docs/daiver/dsl.json \
   local: его вектор (20 px) остаётся иконкой-кандидатом, а он же ×6 склеивается в `art` со slug `outline`. `Modal.svg` (экспорт всего
   кадра: viewBox 648×293, width/height в 6 знаках, служебные `effect` в `defs`, 69 `rect`, 18 `path`) валидатор
   `daiver_svg_assets` принимает; в git файла нет.
+- **Раскладка без auto-layout (задача 1.7).** Контейнеров без `autoLayout` с детьми на экране образца нет (корень и три инстанса объявлены, у инстансов нет детей), поэтому вывод раскладки ничего не меняет: канон побайтно тот же с `layout.infer` on и off, `stats.layout` и `layoutHints` в нём нет (пин в `test_layout_inference.py`). Правила §8 образцом не проверены — только синтетика.
 - **Растр и SVG** образца в фикстуру не входят: растр 648×293 (JPEG без альфы — поля 24 px под тень
   чёрные) и `Modal.svg` обезличить нельзя без потери смысла; для тестов зрения и диффа (этап 5)
   делаются синтетические картинки.
@@ -119,5 +120,5 @@ python3 skills/forgeui/scripts/tools/anonymize_pixso.py docs/daiver/dsl.json \
 определений на месте, все ссылки разрешаются, все определения достижимы; нет ни `SB Sans`, ни
 исходных текстов; если оригинал лежит локально — ни один исходный идентификатор/текст не остался и
 файл воспроизводится побайтно. Дальше фикстуру используют `test_pixso_pull` (1.2),
-`test_normalize_pixso` (1.3), `test_materialize` (1.4), `test_paints_typography` (1.5), `test_art` (1.6) и golden
+`test_normalize_pixso` (1.3), `test_materialize` (1.4), `test_paints_typography` (1.5), `test_art` (1.6), `test_layout_inference` (1.7) и golden
 `canonical.golden.json` (появится после 1.3–1.5).

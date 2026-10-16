@@ -11,11 +11,13 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .. import canon as C
+from .. import config as CFG
 from .. import svg_assets as SA
 from .. import track as TR
 from ..pixso import dsl as D
 from . import art as AR
 from . import detect
+from . import layout as LY
 from . import pixso as PX
 
 FIGMA_PENDING = ("формат {fmt} распознан, но адаптера пока нет (задача X.2: нужны обезличенные образцы "
@@ -53,8 +55,9 @@ def normalize_frame(root: Path, track: str, frame: Optional[str] = None) -> Dict
         raise NormalizeError(f"формат требования не распознан ({why}): угадывать макет нельзя")
     if fmt != "pixso":
         raise NormalizeError(FIGMA_PENDING.format(fmt=fmt))
+    infer = bool(CFG.load(root)["config"]["layout"]["infer"])      # off/false — модуль раскладки не вызывается
     try:
-        env = PX.normalize_doc(doc, source_sha256=f["requirement"]["sha256"])
+        env = PX.normalize_doc(doc, source_sha256=f["requirement"]["sha256"], infer_layout=infer)
         written = C.write_canonical(paths["canonical"], env)
     except (D.DslError, ValueError) as e:
         raise NormalizeError(str(e))
@@ -65,11 +68,14 @@ def normalize_frame(root: Path, track: str, frame: Optional[str] = None) -> Dict
         "bytes": paths["canonical"].stat().st_size,
         "rootId": written["root"]["id"], "rootHash": C.subtree_hash(written["root"]),
         "weight": C.weight(written["root"]),
-        "stats": {k: v for k, v in stats.items() if k != "warnings"},
+        "stats": {k: v for k, v in stats.items() if k not in ("warnings", "layout")},
         "warnings": stats.get("warnings", []),
     }
     art = SA.summary(AR.collect_vector_art(written["root"]), paths["assets"])   # иллюстрации без .svg видны сразу
     if art:
         out["art"] = art
+    lay = LY.summary(stats.get("layout") or {})        # подробности (список unproven) — в каноне, не в контексте модели
+    if lay:
+        out["layout"] = lay
     return out
 
