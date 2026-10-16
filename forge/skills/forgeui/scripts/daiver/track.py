@@ -381,6 +381,31 @@ def requirement_status(root: Path, manifest: dict, frame: Optional[str] = None) 
     return "ok" if sha256_file(path) == req["sha256"] else "stale"
 
 
+def implementation_url(manifest: dict, frame: Optional[str] = None) -> Optional[str]:
+    """Адрес страницы реализации, по которому проверяется кадр (спека §14.2); None — адреса нет.
+
+    `frames[].url`; первичный кадр падает на `implementation.url` трека; состояние — на адрес своего
+    экрана (свой url экрана, а у первичного экрана — url трека); диалог не наследует НИКОГДА (его
+    открывает рецепт поверх страницы, адрес диалогу не принадлежит). Роль breakpoint в спеке не
+    названа: адреса не наследует (не проверено данными)."""
+    frames = manifest.get("frames") or []
+    f = get_frame(manifest, frame)
+    if f.get("url"):
+        return f["url"]
+    track_url = (manifest.get("implementation") or {}).get("url")
+    primary = frames[0]["name"] if frames else None
+    if f.get("role") == "dialog":
+        return None
+    if f.get("role") == "state" and f.get("stateOf"):
+        screen = next((x for x in frames if x.get("name") == f["stateOf"]), None)
+        if screen is None:
+            return None
+        if screen.get("url"):
+            return screen["url"]
+        return track_url if screen["name"] == primary and screen.get("role") != "dialog" else None
+    return track_url if f["name"] == primary else None
+
+
 def raster_info(root: Path, manifest: dict, frame: Optional[str] = None) -> Optional[dict]:
     f = get_frame(manifest, frame)
     if not f.get("raster"):

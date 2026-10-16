@@ -111,6 +111,7 @@ python3 skills/forgeui/scripts/tools/anonymize_pixso.py docs/daiver/dsl.json \
   `daiver_svg_assets` принимает; в git файла нет.
 - **Раскладка без auto-layout (задача 1.7).** Контейнеров без `autoLayout` с детьми на экране образца нет (корень и три инстанса объявлены, у инстансов нет детей), поэтому вывод раскладки ничего не меняет: канон побайтно тот же с `layout.infer` on и off, `stats.layout` и `layoutHints` в нём нет (пин в `test_layout_inference.py`). Правила §8 образцом не проверены — только синтетика.
 - **Outline и секции (задача 1.8).** Канон образца — 4 узла, 3101 байт: целиком влезает в бюджет 24000, секция одна (корень, `hash` `0ccf768ee9d7` равен `rootHash` normalize), unproven пуст (экран полностью объявлен), подсказок раскладки нет. При бюджете 1500 корень режется на три инстанса (659 / 1063 / 886 Б), при 500 — три oversize-листа. Большого экрана в образце нет: границы секций, вес дайджеста и правила unproven доказаны синтетикой из копий его инстансов (`test_outline.py`).
+- **Статус и лестница (задача 1.10).** Образец после `daiver_pixso_pull` — ступень `requirement`, после `daiver_normalize` — `normalized`; единственное предупреждение до приложения картинки — `goal-image-missing` (арта в каноне нет — `art-svg-missing` молчит; `canonical-stale` тоже: `stats.sourceSha256` канона равен `requirement.sha256` манифеста). Ступени выше строятся синтетическими state-файлами (`test_status_ladder.py`, класс `SampleFlow`): писателей `plan.json`/`build-state.json`/`verify-state.json` ещё нет.
 - **Растр и SVG** образца в фикстуру не входят: растр 648×293 (JPEG без альфы — поля 24 px под тень
   чёрные) и `Modal.svg` обезличить нельзя без потери смысла; для тестов зрения и диффа (этап 5)
   делаются синтетические картинки.
@@ -121,5 +122,5 @@ python3 skills/forgeui/scripts/tools/anonymize_pixso.py docs/daiver/dsl.json \
 определений на месте, все ссылки разрешаются, все определения достижимы; нет ни `SB Sans`, ни
 исходных текстов; если оригинал лежит локально — ни один исходный идентификатор/текст не остался и
 файл воспроизводится побайтно. Дальше фикстуру используют `test_pixso_pull` (1.2),
-`test_normalize_pixso` (1.3), `test_materialize` (1.4), `test_paints_typography` (1.5), `test_art` (1.6), `test_layout_inference` (1.7), `test_outline` (1.8) и golden
+`test_normalize_pixso` (1.3), `test_materialize` (1.4), `test_paints_typography` (1.5), `test_art` (1.6), `test_layout_inference` (1.7), `test_outline` (1.8), `test_status_ladder` (1.10) и golden
 `canonical.golden.json` (появится после 1.3–1.5).

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from . import init as I
 from . import outline as OL
@@ -90,15 +90,33 @@ def _path_inside(root: Path, rel: str) -> Path:
     return _rel_inside(root, rel)
 
 
+def _story_spec_path(root: Path, feature: str) -> Path:
+    """Где лежит ui-spec.md стори: каталог фич проекта (его знает хост, не движок) / <ключ> / ui-spec.md.
+    ValueError — ключ небезопасен как имя каталога."""
+    P = _project_mod()
+    return P.feature_docs_dir(root) / P.safe_slug(feature) / U.SPEC_NAME
+
+
+def _story_specs(root: Path) -> Callable[[str], Optional[Path]]:
+    """Резолвер для статуса: ключ трека → ui-spec.md стори; None — путь определить нельзя (спеки трека
+    проверяются без него: статус — первый ход и не должен падать из-за раскладки docs)."""
+    def resolve(track: str) -> Optional[Path]:
+        try:
+            return _story_spec_path(root, track)
+        except (ValueError, ImportError):
+            return None
+    return resolve
+
+
 def t_status(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
-    return ST.status(root)
+    return ST.status(root, story_spec=_story_specs(root))
 
 
 def t_init(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     answers = args.get("answers")
     if answers is None:
         out = I.detect(root)
-        out["status"] = ST.status(root)
+        out["status"] = ST.status(root, story_spec=_story_specs(root))
         out["next"] = ("задай вопросы пользователю (кандидаты — с доказательствами, решение за ним), "
                        "затем вызови daiver_init с answers")
         return out
@@ -109,12 +127,10 @@ def t_spec(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     paths: List[Path] = [_rel_inside(root, p) for p in args.get("paths") or []]
     feature = args.get("feature")
     if feature:
-        P = _project_mod()
         try:
-            story_dir = P.feature_docs_dir(root) / P.safe_slug(feature)
+            ui = _story_spec_path(root, feature)
         except ValueError as e:
             raise ToolError(str(e))
-        ui = story_dir / U.SPEC_NAME
         if ui not in paths:
             paths.insert(0, ui)
     registered: List[Path] = []
@@ -262,8 +278,12 @@ TOOLS: Dict[str, Dict[str, Any]] = {
     "daiver_status": {
         "fn": t_status,
         "description": ("ПЕРВЫЙ ход forge-ui: состояние с диска — инициализирован ли проект "
-                        "(.daiver/config.yaml), проблемы конфига, треки, следующий шаг. "
-                        "Каталог .daiver/ руками не листай — ступень трека решает код."),
+                        "(.daiver/config.yaml), проблемы конфига, требования дизайн-системы, треки: ступень "
+                        "каждого кадра по лестнице empty → requirement → normalized → planned → building → "
+                        "built → verifying → clean, фронтирный кадр, итог (outcome); nextStep — шаг forge-ui "
+                        "(ui-design | ui-build | ui-verify) с именем кадра; warnings — пересказывай "
+                        "пользователю вслух. Каталог .daiver/ руками не листай и ступень «на глаз» не "
+                        "выводи — её решает код."),
         "schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     "daiver_init": {
