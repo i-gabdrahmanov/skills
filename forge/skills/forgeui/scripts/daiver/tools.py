@@ -5,7 +5,7 @@
 Нарушения аргументов собираются в одно сообщение: слабой модели легче починить разом.
 
 Сейчас: daiver_status, daiver_init, daiver_spec, daiver_track_manifest, daiver_source_nodes,
-daiver_pixso_pull, daiver_normalize, daiver_svg_assets.
+daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_section.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List
 
 from . import init as I
+from . import outline as OL
 from . import source_nodes as SN
 from . import specs as S
 from . import status as ST
@@ -56,6 +57,7 @@ def _check_args(args: Dict[str, Any], schema: Dict[str, Any]) -> None:
         t = spec.get("type")
         ok = {"string": isinstance(v, str), "object": isinstance(v, dict),
               "boolean": isinstance(v, bool),
+              "number": isinstance(v, (int, float)) and not isinstance(v, bool),
               "array": isinstance(v, list) and all(isinstance(x, str) for x in v)}.get(t, True)
         if not ok:
             errors.append(f"«{k}»: ожидается {t}")
@@ -222,6 +224,28 @@ def t_svg_assets(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError(str(e))
 
 
+def t_outline(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        frame = args.get("frame")
+        if frame is not None:
+            TR.check_frame_name(frame)
+        return OL.outline_frame(root, track, frame, args.get("weightBudget"))
+    except (TR.TrackError, OL.OutlineError) as e:
+        raise ToolError(str(e))
+
+
+def t_section(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        frame = args.get("frame")
+        if frame is not None:
+            TR.check_frame_name(frame)
+        return OL.section_frame(root, track, frame, args["sectionId"], args.get("weightBudget"))
+    except (TR.TrackError, OL.OutlineError) as e:
+        raise ToolError(str(e))
+
+
 def t_source_nodes(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         track = TR.check_track_name(args["track"])
@@ -329,6 +353,36 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "svgPath": {"type": "string", "description": "экспорт узла из Pixso (.svg), путь внутри репо; нужен slug"},
             "moduleDir": {"type": "string", "description": "каталог модуля внутри outputDir, куда копируется файл"}},
             "required": ["track"], "additionalProperties": False},
+    },
+    "daiver_outline": {
+        "fn": t_outline,
+        "description": ("Карта макета ВМЕСТО канона (канон целиком читать нельзя). Секции sections[] — границы выбирает код "
+                        "по весу (минифицированные байты поддерева, не больше weightBudget; лист тяжелее бюджета — oversize, "
+                        "не режется); outline — дерево строками «id kind \"name\" вес …» (одна строка = узел, отступ = "
+                        "глубина; свёрнуто, если не влезает в бюджет); unproven — контейнеры с абсолютными детьми (children "
+                        "через запятую) и кандидаты layoutHints: решает план, не сборка; goalImage + подсказка; "
+                        "nodeUrlTemplate для ссылок [id](url) (нет URL — голый id, адрес не выдумывается). weightBudget: "
+                        "аргумент > workflow.weightBudget конфига > 24000. Тело секции — daiver_section."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "weightBudget": {"type": "number", "exclusiveMinimum": 0,
+                             "description": "бюджет секции в байтах; меньше — мельче секции (надёжнее на слабой модели)"}},
+            "required": ["track"], "additionalProperties": False},
+    },
+    "daiver_section": {
+        "fn": t_section,
+        "description": ("Тело ОДНОЙ секции канона: section (мета с hash), ancestors (раскладка и поверхность предков "
+                        "root→parent — контекст, куда положить построенное), node (полное поддерево ≤ бюджета, строится "
+                        "только оно). Понимает ровно sections[].id из daiver_outline при том же weightBudget; любой другой "
+                        "id — отказ с подсказкой, какой брать. Корень, тяжелее бюджета, целиком не отдаётся."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "sectionId": {"type": "string", "description": "id секции из sections[] daiver_outline"},
+            "weightBudget": {"type": "number", "exclusiveMinimum": 0,
+                             "description": "тот же бюджет, что был в daiver_outline (без него — конфиг/24000)"}},
+            "required": ["track", "sectionId"], "additionalProperties": False},
     },
     "daiver_source_nodes": {
         "fn": t_source_nodes,

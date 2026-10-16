@@ -18,8 +18,9 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent
 SERVER = HOOKS / "daiver_mcp.py"
 
-EXPECTED_TOOLS = ["daiver_init", "daiver_normalize", "daiver_pixso_pull", "daiver_source_nodes",
-                  "daiver_spec", "daiver_status", "daiver_svg_assets", "daiver_track_manifest"]
+EXPECTED_TOOLS = ["daiver_init", "daiver_normalize", "daiver_outline", "daiver_pixso_pull", "daiver_section",
+                  "daiver_source_nodes", "daiver_spec", "daiver_status", "daiver_svg_assets",
+                  "daiver_track_manifest"]
 
 
 def _session(root: Path, messages: list) -> list:
