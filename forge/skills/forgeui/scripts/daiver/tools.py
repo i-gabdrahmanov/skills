@@ -5,7 +5,8 @@
 Нарушения аргументов собираются в одно сообщение: слабой модели легче починить разом.
 
 Сейчас: daiver_status, daiver_init, daiver_spec, daiver_track_manifest, daiver_source_nodes,
-daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_section.
+daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_section,
+daiver_map_lookup, daiver_map_append.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -16,6 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from . import component_map as CM
 from . import init as I
 from . import outline as OL
 from . import source_nodes as SN
@@ -274,6 +276,20 @@ def t_source_nodes(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError(str(e))
 
 
+def t_map_lookup(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return CM.lookup(root, args["figmaName"], args.get("variants"))
+    except CM.MapError as e:
+        raise ToolError(str(e))
+
+
+def t_map_append(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return CM.append(root, args["track"], args["rule"], bool(args.get("dryRun")))
+    except CM.MapError as e:
+        raise ToolError(str(e))
+
+
 TOOLS: Dict[str, Dict[str, Any]] = {
     "daiver_status": {
         "fn": t_status,
@@ -403,6 +419,42 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "weightBudget": {"type": "number", "exclusiveMinimum": 0,
                              "description": "тот же бюджет, что был в daiver_outline (без него — конфиг/24000)"}},
             "required": ["track", "sectionId"], "additionalProperties": False},
+    },
+    "daiver_map_lookup": {
+        "fn": t_map_lookup,
+        "description": ("Карта компонентов проекта (.daiver/component-map.yaml): имя узла макета → компонент библиотеки. "
+                        "figmaName — имя компонента из канона (component.figmaName; регистр и разделители не важны). "
+                        "hit:true — вердикт high БЕЗ чтения библиотеки: outcome (component | local | ignore | icon), "
+                        "component, props, import.statement — вставляй в код ДОСЛОВНО, не сочиняй (null — пути нет ни "
+                        "в правиле, ни в library.import: основной пакет не угадывается, спроси пользователя), rule — "
+                        "какое правило сработало. Иконки идут из своего пакета (icons.import), не из основного. "
+                        "hit:false — правила нет: решай по библиотеке (ds_lookup / storybook-mcp). variants в "
+                        "сопоставлении не участвуют (props задаёт правило). Карта некорректна — отказ с перечнем проблем: "
+                        "файл правит человек. Файл карты руками не читай и не правь."),
+        "schema": {"type": "object", "properties": {
+            "figmaName": {"type": "string",
+                          "description": "имя компонента из канона (component.figmaName) или имя узла"},
+            "variants": {"type": "object",
+                         "description": "варианты узла {ключ: значение} из канона; в сопоставлении не участвуют"}},
+            "required": ["figmaName"], "additionalProperties": False},
+    },
+    "daiver_map_append": {
+        "fn": t_map_append,
+        "description": ("Дописать ОДНО правило в карту компонентов — единственный способ её изменить. Только по явному "
+                        "«да» пользователя на ЭТО правило: (1) вызови с dryRun:true — правило проверяется и печатается "
+                        "YAML-ом, ничего не пишется; (2) покажи YAML пользователю и спроси прямо; (3) ТОЛЬКО после «да» "
+                        "запиши согласие record_approval.py --key ui-map-<track> с его ответом в --evidence; (4) вызови "
+                        "без dryRun. Согласие одноразовое: одно «да» — одно правило. rule: {match: имя | [имена] | "
+                        "\"/regex/\" (захваты $1…$9; флаг i), outcome: component | local | ignore | icon, component "
+                        "(нужен при component), icon (нужен при icon), props?: {проп: значение}, import?: {path?, "
+                        "named?, default?}}. Дубликат или конфликт с имеющимся правилом, кривое правило, нет согласия — "
+                        "отказ одним сообщением, файл не тронут. Комментарии и порядок файла сохраняются, файл целиком "
+                        "не заменяется. В автономном прогоне согласия нет — карту он не пишет."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека): по нему согласие ui-map-<track>"},
+            "rule": {"type": "object", "description": "правило карты: match, outcome, component | icon, props, import"},
+            "dryRun": {"type": "boolean", "description": "только проверить и показать YAML; согласие не нужно"}},
+            "required": ["track", "rule"], "additionalProperties": False},
     },
     "daiver_source_nodes": {
         "fn": t_source_nodes,
