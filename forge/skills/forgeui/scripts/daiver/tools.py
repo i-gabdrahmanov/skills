@@ -6,7 +6,7 @@
 
 Сейчас: daiver_status, daiver_init, daiver_spec, daiver_track_manifest, daiver_source_nodes,
 daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_section,
-daiver_map_lookup, daiver_map_append.
+daiver_map_lookup, daiver_map_append, daiver_ds_requirements.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from . import component_map as CM
+from . import ds_requirements as DR
 from . import init as I
 from . import outline as OL
 from . import source_nodes as SN
@@ -264,6 +265,15 @@ def t_section(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError(str(e))
 
 
+def t_ds_requirements(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        if args.get("check"):
+            return DR.check(root)
+        return DR.build(root, args.get("engine") or "python")
+    except DR.DsError as e:
+        raise ToolError(str(e))
+
+
 def t_source_nodes(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         track = TR.check_track_name(args["track"])
@@ -455,6 +465,23 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "rule": {"type": "object", "description": "правило карты: match, outcome, component | icon, props, import"},
             "dryRun": {"type": "boolean", "description": "только проверить и показать YAML; согласие не нужно"}},
             "required": ["track", "rule"], "additionalProperties": False},
+    },
+    "daiver_ds_requirements": {
+        "fn": t_ds_requirements,
+        "description": ("Требования дизайн-системы из stories/исходников библиотеки (library.scanPaths) → два файла в "
+                        ".daiver/: design-system-requirements.json (КОНТРАКТ: компонент → пропсы и допустимые значения, "
+                        "usedValues, import, число историй) и …details.json (описания, дефолты, deprecations, примеры). "
+                        "Только при library.source: stories | sources; при storybook-mcp — отказ (сервер сторибука и есть "
+                        "требования). Строится один раз после daiver_init и коммитится; после обновления библиотеки "
+                        "перезапускается вручную. Ноль компонентов — ошибка: поправь scanPaths, пустой контракт не "
+                        "пишется. check:true — только проверить пару (валидна ли, не устарела ли по хешу источников), "
+                        "ничего не пишет. engine: python (по умолчанию, без node) | node (TypeScript репо — если "
+                        "разбор python ошибся). Файлы библиотеки и эти документы руками не читай и не правь."),
+        "schema": {"type": "object", "properties": {
+            "check": {"type": "boolean", "description": "только проверить уже построенную пару, ничего не писать"},
+            "engine": {"type": "string", "enum": ["python", "node"],
+                       "description": "движок разбора: python (по умолчанию) | node (нужны node и typescript репо)"}},
+            "additionalProperties": False},
     },
     "daiver_source_nodes": {
         "fn": t_source_nodes,

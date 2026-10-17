@@ -40,7 +40,7 @@ forge. Решения и раскладка — `tasks/019-forge-ui.md`; кар�
 | 1 | [1.8 Outline и section](tasks/1.8-outline-section.md) | 1.1, 1.7 | done |
 | 1 | [1.10 daiver_status: лестница трека](tasks/1.10-status-ladder.md) | 1.9, 1.8 | done |
 | 2 | [2.1 Карта компонентов](tasks/2.1-component-map.md) | — | done |
-| 2 | [2.2 Требования ДС из сторей/исходников](tasks/2.2-ds-requirements.md) | — | todo |
+| 2 | [2.2 Требования ДС из сторей/исходников](tasks/2.2-ds-requirements.md) | — | done |
 | 2 | [2.3 ds_inventory / ds_lookup / ds_details](tasks/2.3-ds-lookup.md) | 2.2 | todo |
 | 2 | [2.4 Firewall резолва](tasks/2.4-resolve-firewall.md) | 1.8, 2.1 | todo |
 | 2 | [2.5 Шаг ui-design: бриф и отчёт резолва](tasks/2.5-ui-design-step.md) | 2.3, 2.4 | todo |
@@ -102,6 +102,11 @@ forge. Решения и раскладка — `tasks/019-forge-ui.md`; кар�
 | §3.2 `built`: «все секции done (или записаны `sources` — страница уже в коде)» | записанные `sources` ступень не повышают; `built` — только по `build-state.json` | поля `sources` в схеме track.yaml ещё нет (заведёт 6.4), а `sources` пишутся на ui-design, до плана и сборки (§12.2): повышение «по факту записи» отправило бы кадр правки существующей страницы сразу в ui-verify, минуя ui-build. Как кадр-страница без build-state попадает в built — решает 6.4 на реальном потоке; не проверено данными |
 | §15.7 `tracks[]` несёт requirement kind, goal image, build progress, verify iterations, outcome | kind / goal image / build / iterations — у кадра в `frames[]`; у трека `stage`, `frame` (фронтир), `outcome`, `nextStep`; `tracks` — список объектов (Этап 0 отдавал имена) | один кадр — одна запись без повтора на двух уровнях: MCP печатает `indent=1`, каждое вложенное поле — строка в контексте слабой модели; потребителей списка имён в коде не было |
 | §5.2/§10.5 `daiver_map_append(track, rule)` | + необязательный `dryRun`; согласие `ui-map-<KEY>` одноразовое — тратится записью правила (`revoke_approval`) | правило показывается человеку ровно в том виде, в каком ляжет в файл, и одно «да» не открывает запись произвольного числа правил (INV-F9); как rollback и override; не проверено боевым прогоном |
+| §5.3 / план 2.2: разбор stories и деклараций — node + `typescript` репо | основной разбор — чистый Python (`daiver/ds/`), node-движок (`assets/ds-scan.mjs`) необязателен и выбирается явным `engine: node`; нет node/typescript — названный отказ, откатов нет; документ пишет `source.scanner` | путь не должен зависеть от node на машине разработчика и CI; паритет двух независимых разборов доказан на фикстуре (`FORGEUI_TEST_TYPESCRIPT`); не проверено на боевой ДС |
+| §5.3 «после апгрейда библиотеки — перезапуск вручную, протухание определить нельзя» | + `source.sha256` (путь + sha256 каждого просканированного файла) и `daiver_ds_requirements(check:true)` → `ok / stale / invalid / missing`; пересборка по-прежнему только ручным вызовом | «устарело» определяется кодом, а не памятью; `status` по-прежнему смотрит только наличие файлов (хеш требует чтения библиотеки) |
+| §20.4 DS-скан MAX_FILES 5000, MAX_FILE_BYTES 512 КБ | MAX_FILES — отказ «сузьте scanPaths», а не обрезка; файлы крупнее MAX_FILE_BYTES и не-UTF-8 пропускаются с причиной в `source.skipped`; + `MAX_TOTAL_BYTES` 32 МБ на весь скан | неполный контракт хуже остановки; вызов синхронный и не должен зависать; в спеке поведение на потолке не названо |
+| §14.4.5 «deprecated из прозы details-документа» | `details.deprecations` — структурный список (`target: component\|prop`, `name`, `message`, `replacement`), берётся из JSDoc `@deprecated` | гейт 4.5 не разбирает прозу эвристиками; «чужой deprecation в прозе компонента» невозможен по построению |
+| §5.3 `daiver_ds_requirements` без аргументов | + необязательные `check` (только проверить пару) и `engine` (`python` \| `node`) | проверка устаревания и запасной движок без отдельных инструментов |
 
 ## Нужно от пользователя
 
@@ -117,3 +122,7 @@ forge. Решения и раскладка — `tasks/019-forge-ui.md`; кар�
   opacity верхушки в .svg) пока выведены из текста спеки, а не из данных (1.6).
 - Сборщик и загрузчик SVG целевого фронт-репо (Vite + vite-plugin-svgr, react-scripts, webpack): форма import для
   `svg.render` component и inline в `daiver_svg_assets` определяется по package.json и на реальном репо не прогонялась (1.6).
+- Образец настоящей ДС для 2.2: хотя бы 2–3 файла stories (CSF-версия, как заданы `options`/`control`/`description`), одна MDX-документация, фрагмент `.d.ts` или
+  исходника компонента с `@deprecated`, а также как библиотека подключается (`@corp/ui` — корень или подпути) и лежат ли `.d.ts` в `dist/`. Форматы разобраны
+  по знанию Storybook/TypeScript на синтетической `fixtures/fake-ds` (2.2). Если разбор Python на боевой ДС даст мало компонентов — прогнать `engine: node`
+  и сверить; паритет двух движков гонять с `FORGEUI_TEST_TYPESCRIPT=<каталог пакета typescript>`.

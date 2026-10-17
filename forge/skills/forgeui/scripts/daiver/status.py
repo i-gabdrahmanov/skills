@@ -429,7 +429,8 @@ def _design_system(root: Path, cfg: Dict[str, Any]) -> Tuple[Optional[Dict[str, 
             [("ds-requirements-missing", f"требования дизайн-системы не строились (library.source: {source}): нет "
                                          f"{_names([C.CONFIG_REL.parent.as_posix() + '/' + d for d in missing])} — "
                                          f"без них контракт компонентов библиотеки нечем проверять, а читать "
-                                         f"библиотеку напрямую нельзя")])
+                                         f"библиотеку напрямую нельзя; построй их инструментом "
+                                         f"daiver_ds_requirements")])
 
 
 def status(root: Path, story_spec: Optional[StoryResolver] = None) -> Dict[str, Any]:
