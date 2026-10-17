@@ -19,3 +19,7 @@
 Ожидаемый результат зафиксирован тестами `FixtureTests` (10 компонентов; режим `stories` читает 8 файлов, `sources` — 9).
 Что нужно от пользователя: образец настоящих stories / исходников / `.d.ts` корпоративной ДС (см. README плана,
 раздел «Нужно от пользователя»).
+
+Для 2.3 (`test_ds_lookup.py`) фикстура собирается той же сборкой 2.2 и читается инструментами `daiver_ds_inventory/lookup/details`: «Primary Button» с вариантами
+→ `Button` (уровень word), «Tab» → `Tabs` (part), «Toast» → пусто (настоящий ответ «такого нет»), `Legacy` помечен deprecated (замена `Button`); у `Divider` и `Icon` нет записи
+в details (`hasDetails: false`), у пяти компонентов (`Avatar`, `Card`, `Divider`, `Legacy`, `Tag`) нет пути импорта в сторях (`import: null`, `withoutImport: 5`).

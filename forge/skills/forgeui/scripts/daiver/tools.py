@@ -6,7 +6,8 @@
 
 Сейчас: daiver_status, daiver_init, daiver_spec, daiver_track_manifest, daiver_source_nodes,
 daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_section,
-daiver_map_lookup, daiver_map_append, daiver_ds_requirements.
+daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
+daiver_ds_details.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from . import component_map as CM
+from . import ds_lookup as DL
 from . import ds_requirements as DR
 from . import init as I
 from . import outline as OL
@@ -274,6 +276,27 @@ def t_ds_requirements(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError(str(e))
 
 
+def t_ds_inventory(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return DL.inventory(root)
+    except DL.DsLookupError as e:
+        raise ToolError(str(e))
+
+
+def t_ds_lookup(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return DL.lookup(root, args["figmaName"], args.get("variants"), args.get("textSlotKeys"), args.get("limit"))
+    except DL.DsLookupError as e:
+        raise ToolError(str(e))
+
+
+def t_ds_details(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return DL.details(root, args["components"])
+    except DL.DsLookupError as e:
+        raise ToolError(str(e))
+
+
 def t_source_nodes(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         track = TR.check_track_name(args["track"])
@@ -482,6 +505,64 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "engine": {"type": "string", "enum": ["python", "node"],
                        "description": "движок разбора: python (по умолчанию) | node (нужны node и typescript репо)"}},
             "additionalProperties": False},
+    },
+    "daiver_ds_inventory": {
+        "fn": t_ds_inventory,
+        "description": ("Список компонентов дизайн-системы из ГОТОВЫХ требований (.daiver/design-system-requirements*.json; "
+                        "библиотеку не сканирует и не читает) — для library.source stories | sources; при storybook-mcp "
+                        "имена даёт MCP-сервер сторибука. Вызывай ОДИН раз на трек, до резолва кандидатов; субагентам "
+                        "список передаёт оркестратор, сами они его не запрашивают. Строка: «Имя [DEPRECATED → замена] "
+                        "(группа) — описание»; DEPRECATED — не использовать. В шапке счётчики (count, stories, "
+                        "withDetails, withoutImport — у стольких компонентов путь импорта неизвестен). Ответ «blocked: "
+                        "library-source-unreachable» — требований нет, они битые или построены для другой библиотеки: "
+                        "резолв не начинать, построй их daiver_ds_requirements. Файлы библиотеки и эти документы руками не "
+                        "читай."),
+        "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "daiver_ds_lookup": {
+        "fn": t_ds_lookup,
+        "description": ("Шортлист компонентов ДС для узла макета (когда daiver_map_lookup дал hit:false). Ранжирует КОД, не "
+                        "модель, и объясняет баллы. Кандидат — только компонент со связью по имени; уровень match: exact "
+                        "(имя совпало; регистр и разделители не важны; score 900–1099) > word (одно имя входит в другое "
+                        "целым словом: Button в PrimaryButton, 600–798) > part (внутри слова: Tab в Tabs, 300–498) > "
+                        "shared (только общие слова, 100–299). Внутри уровня порядок задают принимаемые варианты узла "
+                        "(variants), текстовые слоты (textSlotKeys — только КЛЮЧИ, без значений) и число историй; равные "
+                        "баллы — по имени. Синонимов и опечаток нет: «Notification» не найдёт «Alert». candidates:[] — "
+                        "настоящий ответ «в библиотеке такого нет» → local, подходящее на глаз не подбирай. limit по "
+                        f"умолчанию {DL.DEFAULT_LIMIT}, допустимо {DL.MIN_LIMIT}..{DL.MAX_LIMIT} (вне диапазона приводится к "
+                        f"границе, limitNote скажет), total — сколько всего нашлось. import — готовый statement, вставляй "
+                        "ДОСЛОВНО; null — путь неизвестен (не угадывай: library.import карты или вопрос пользователю). "
+                        "deprecated — не бери без причины. "
+                        "Финалистов (1–2) проверь daiver_ds_details. Файлы библиотеки руками не читай."),
+        "schema": {"type": "object", "properties": {
+            "figmaName": {"type": "string",
+                          "description": "имя компонента из канона (component.figmaName) или имя узла"},
+            "variants": {"type": "object",
+                         "description": "варианты узла {ключ: значение} из канона (component.variants)"},
+            "textSlotKeys": {"type": "array", "items": {"type": "string"},
+                             "description": "КЛЮЧИ текстовых слотов узла (component.textProps), без значений"},
+            "limit": {"type": "number", "minimum": DL.MIN_LIMIT, "maximum": DL.MAX_LIMIT,
+                      "description": f"сколько кандидатов вернуть; по умолчанию {DL.DEFAULT_LIMIT}, допустимо "
+                                     f"{DL.MIN_LIMIT}..{DL.MAX_LIMIT}"}},
+            "required": ["figmaName"], "additionalProperties": False},
+    },
+    "daiver_ds_details": {
+        "fn": t_ds_details,
+        "description": (f"Факты о названных компонентах ДС (не больше {DL.MAX_DETAILS} за вызов; обычно — 1–2 финалиста "
+                        f"daiver_ds_lookup): "
+                        "import (statement, вставляй ДОСЛОВНО), propsClosed, props (тип и допустимые значения, required, "
+                        "default, used — значения, которые реально передавали истории, описание), description, deprecations "
+                        "(под размер не сокращаются), examples — JSX из историй (имя истории → код). propsClosed:true — набор пропов "
+                        "полный, пропа вне списка нет; false — список неполный, отсутствие пропа в нём ничего не доказывает. "
+                        "enum: значение вне списка — нарушение; used — подтверждённый словарь, не запрет. Дефолт повторно не "
+                        "передавай, набор пропов сам не расширяй. Длинное (docs, примеры, описания, хвост пропов) "
+                        "сокращается кодом под размер ответа — в cut сказано, что убрано. Имя берёшь из lookup/inventory; "
+                        "неизвестное имя — отказ (регистр и разделители не важны)."),
+        "schema": {"type": "object", "properties": {
+            "components": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": DL.MAX_DETAILS,
+                           "description": f"имена компонентов из daiver_ds_lookup / daiver_ds_inventory, от 1 до "
+                                          f"{DL.MAX_DETAILS}"}},
+            "required": ["components"], "additionalProperties": False},
     },
     "daiver_source_nodes": {
         "fn": t_source_nodes,
