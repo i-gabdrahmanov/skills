@@ -33,9 +33,10 @@ component, §7.2; иконки резолвятся по карте/`icons.fallb
 Запись узла проверяется при каждом чтении: она годится, только если узел всё ещё кандидат с тем же ключом, а у узла с hit
 в карте её содержимое равно правилу (карту могли дополнить после вердикта).
 
-Что НЕ делает эта задача (граница с 2.5/7.2): политика подтверждений `workflow.confirmResolutions` («low — ВСЕГДА
-спрашивается, в автономии → local», INV-C6), `resolution-report.md`, `icons.fallback`, state-кадры (§10.1 п.4–5). Вердикт хранит
-`confidence` как есть; поле подтверждения человеком в записи не заведено — его форму решает 2.5.
+Что НЕ делает этот модуль (граница с 2.5/7.2): политика подтверждений `workflow.confirmResolutions` («low — ВСЕГДА
+спрашивается», INV-C6), `resolution-report.md` и согласие `ui-resolve-<KEY>` — `resolution_report.py` (2.5); `icons.fallback` здесь только
+отдаётся в ответе query для иконки без правила; автономия (в ней low → local) — 7.2; state-кадры (§10.1 п.4–5) — 6.2/6.3. Вердикт хранит
+`confidence` как есть; поля подтверждения человеком в записи нет: подтверждение привязано к тексту отчёта (контракт вердикта INV-A7 не меняется).
 """
 from __future__ import annotations
 
@@ -655,6 +656,7 @@ class MapView:
         except CM.MapError as e:
             raise ResolveError(str(e))
         self.wrapper = bool(self.parsed is not None and self.parsed.wrapper)
+        self.icons_fallback: str = self.parsed.icons_fallback if self.parsed is not None else "ask"
 
     def hit(self, name: str) -> Optional[Dict[str, Any]]:
         if self.parsed is None or not CM.name_key(name):
@@ -1033,7 +1035,8 @@ def candidates_frame(root: Any, track: str, frame: Optional[str] = None) -> Dict
     if not total:
         out["next"] = "кандидатов в кадре нет (ни инстансов, ни фреймов с осмысленными именами) — резолвить нечего"
     elif not st.todo:
-        out["next"] = "все кандидаты кадра решены — резолв закончен; вердикты ушли в хранилище кадра (resolutions.json)"
+        out["next"] = ("все кандидаты кадра решены — резолв закончен; вердикты ушли в хранилище кадра (resolutions.json); "
+                       "дальше daiver_resolve_report (в треке из нескольких кадров — когда решены все)")
     else:
         out["next"] = ("строка → daiver_resolve_query(nodeId), затем daiver_resolve_finalize. «×N» — N узлов с тем же figmaName "
                        "и вариантами: решай один, остальные получат вердикт сами. «[stale]» — прежний вердикт не годится "
@@ -1044,7 +1047,18 @@ def candidates_frame(root: Any, track: str, frame: Optional[str] = None) -> Dict
 
 # ── daiver_resolve_query ─────────────────────────────────────────────────────
 
-def _next_for(ctx: Ctx, hit: Optional[Dict[str, Any]], rec: Optional[Dict[str, Any]], has_reuse: bool) -> str:
+def _icon_next(fallback: str) -> str:
+    """Иконка без правила карты (§10.5, §13.5 п.5): угаданная библиотечная иконка и рукописный `<svg>` запрещены, поэтому
+    библиотеку по ней не листают; применяется `icons.fallback` карты."""
+    how = ("плейсхолдер с именем иконки без вопроса" if fallback == "placeholder"
+           else "плейсхолдер с именем иконки, человек увидит его в списке подтверждений (daiver_resolve_report)")
+    return (f"иконка без правила в карте: библиотеку не угадывай. icons.fallback={fallback}: decision=local ({how}); в rationale "
+            f"назови иконку. Компонент иконки из набора называет только пользователь (правка к списку подтверждений): это правило "
+            f"карты (outcome icon), а не вердикт. Затем daiver_resolve_finalize")
+
+
+def _next_for(ctx: Ctx, hit: Optional[Dict[str, Any]], rec: Optional[Dict[str, Any]], has_reuse: bool,
+              icon: bool = False) -> str:
     if rec is not None:
         if rec["source"] == "reuse":
             return (f"вердикт этого узла взят у узла «{rec['from']}» (recorded, INV-B23); новый резолв не нужен — менять "
@@ -1057,6 +1071,8 @@ def _next_for(ctx: Ctx, hit: Optional[Dict[str, Any]], rec: Optional[Dict[str, A
     if hit is not None:
         return ("правило карты сработало (map): вердикт high по нему, библиотеку не читай — decision/component/props как в map; "
                 "затем daiver_resolve_finalize (расхождение с картой код отклонит)")
+    if icon:
+        return _icon_next(ctx.mv.icons_fallback)
     lib = CFG.load(ctx.root)["config"]["library"]
     if lib.get("source") == "storybook-mcp":
         how = f"решай по MCP-серверу сторибука «{lib.get('storybookMcp')}»"
@@ -1100,9 +1116,12 @@ def query_frame(root: Any, track: str, frame: Optional[str], node_id: Any) -> Di
                 if auth[1]:
                     reuse["fromFrame"] = auth[1]
                 out["reuse"] = reuse
+    icon = cand.kind == "icon" and st.hits[cand.id] is None
+    if icon and rec is None and reuse is None:
+        out["iconFallback"] = ctx.mv.icons_fallback
     if ctx.warnings:
         out["warnings"] = ctx.warnings
-    out["next"] = _next_for(ctx, st.hits[cand.id], rec, reuse is not None)
+    out["next"] = _next_for(ctx, st.hits[cand.id], rec, reuse is not None, icon)
     return out
 
 
@@ -1249,7 +1268,8 @@ def finalize_frame(root: Any, track: str, frame: Optional[str], raw: Any) -> Dic
     out["remaining"] = len(st3.todo)
     if ctx.warnings:
         out["warnings"] = ctx.warnings
-    out["next"] = ("все кандидаты кадра решены" if not st3.todo else
+    out["next"] = ("все кандидаты кадра решены — дальше daiver_resolve_report (в треке из нескольких кадров — когда решены все)"
+                   if not st3.todo else
                    f"осталось нерешённых кандидатов: {len(st3.todo)} — daiver_resolve_candidates покажет их")
     return out
 

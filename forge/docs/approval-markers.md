@@ -72,7 +72,7 @@ Approval-маркер — это «человек сказал да» на ри�
 сам по себе его не доказывает.
 
 Поэтому для ключей **`gate-override-*`, `rollback-*`, `skip-judges-*`, `policy-repin-*`,
-`policy-downgrade-*`, `acceptance-*`, `abandon-*`, `archive-force-*`, `git-discard`, `tech-plan-*`** (список
+`policy-downgrade-*`, `acceptance-*`, `abandon-*`, `archive-force-*`, `git-discard`, `tech-plan-*`, `ui-plan-*`, `ui-map-*`, `ui-resolve-*`, `ui-accept-*`** (список
 один на оба слоя — `forge_events.CONSENT_PREFIXES`) обязателен `--evidence "<дословная фраза пользователя>"`:
 
 * `gate-guard.check_record_approval` сверяет цитату с **репликами пользователя** в транскрипте

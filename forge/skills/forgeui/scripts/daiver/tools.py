@@ -7,7 +7,7 @@
 Сейчас: daiver_status, daiver_init, daiver_spec, daiver_track_manifest, daiver_source_nodes,
 daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_section,
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
-daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize.
+daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -23,6 +23,7 @@ from . import ds_lookup as DL
 from . import ds_requirements as DR
 from . import init as I
 from . import outline as OL
+from . import resolution_report as RR
 from . import resolve as RS
 from . import source_nodes as SN
 from . import specs as S
@@ -357,6 +358,13 @@ def t_resolve_finalize(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError(str(e))
 
 
+def t_resolve_report(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return RR.write(root, TR.check_track_name(args["track"]))
+    except (TR.TrackError, RR.ReportError, RS.ResolveError) as e:
+        raise ToolError(str(e))
+
+
 # Схема вердикта (INV-A7, §10.2): поля берутся из резолва — одно место правды; клиент видит их в tools/list.
 VERDICT_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -590,6 +598,22 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
             "verdict": VERDICT_SCHEMA},
             "required": ["track", "verdict"], "additionalProperties": False},
+    },
+    "daiver_resolve_report": {
+        "fn": t_resolve_report,
+        "description": ("Конец резолва трека: перегенерирует resolution-report.md (ОДИН файл на трек, секция «## frame: имя» на кадр, "
+                        "таблица ЭВРИСТИЧЕСКИХ вердиктов со ссылками [id](url) на узлы; попадания в карту не входят) и говорит, что "
+                        "спросить человека. Вызывай, когда daiver_resolve_candidates пуст во всех кадрах; после правки вердикта — "
+                        "снова. toConfirm — вердикты, которые обязан увидеть человек: уверенность не выше "
+                        "workflow.confirmResolutions, low — ВСЕГДА, иконка без маппинга при icons.fallback: ask; строки готовы к "
+                        "вставке в вопрос. proposals — предложенные правила карты (rule + yaml; отдельный вопрос на каждое, "
+                        "сначала они). confirmed: true — согласие ui-resolve-<track> записано и привязано к ТЕКУЩЕМУ отчёту; "
+                        "отчёт изменился — прежнее согласие снято (consentRevoked). unresolved > 0 — резолв не закончен, "
+                        "человека не спрашивай. Пишет только отчёт (и раздаёт готовые вердикты между кадрами): вердикты не "
+                        "меняет, согласие не записывает — его выписывает пользователь словами, оркестратор фиксирует."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"}},
+            "required": ["track"], "additionalProperties": False},
     },
     "daiver_ds_requirements": {
         "fn": t_ds_requirements,

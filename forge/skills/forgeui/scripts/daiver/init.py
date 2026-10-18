@@ -189,7 +189,7 @@ workflow:
     maxVerifyIterations: 3   # жёсткий потолок итераций verify без человека
   autoRoute: signal          # signal | ask | off
   confirmPlan: true
-  confirmResolutions: medium # high | medium | low — ниже порога вердикт спрашивается
+  confirmResolutions: medium # high | medium | low — вердикт с такой уверенностью и ниже спрашивается; low — всегда
   warnAfterVerifyIterations: 3
   weightBudget: 24000        # максимум секции, минифицированные байты канона
 
