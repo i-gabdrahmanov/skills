@@ -20,8 +20,9 @@ SERVER = HOOKS / "daiver_mcp.py"
 
 EXPECTED_TOOLS = ["daiver_ds_details", "daiver_ds_inventory", "daiver_ds_lookup", "daiver_ds_requirements",
                   "daiver_init", "daiver_map_append", "daiver_map_lookup", "daiver_normalize", "daiver_outline",
-                  "daiver_pixso_pull", "daiver_section", "daiver_source_nodes", "daiver_spec", "daiver_status",
-                  "daiver_svg_assets", "daiver_track_manifest"]
+                  "daiver_pixso_pull", "daiver_resolve_candidates", "daiver_resolve_finalize", "daiver_resolve_query",
+                  "daiver_section", "daiver_source_nodes", "daiver_spec", "daiver_status", "daiver_svg_assets",
+                  "daiver_track_manifest"]
 
 
 def _session(root: Path, messages: list) -> list:

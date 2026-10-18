@@ -7,7 +7,7 @@
 Сейчас: daiver_status, daiver_init, daiver_spec, daiver_track_manifest, daiver_source_nodes,
 daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_section,
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
-daiver_ds_details.
+daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -23,6 +23,7 @@ from . import ds_lookup as DL
 from . import ds_requirements as DR
 from . import init as I
 from . import outline as OL
+from . import resolve as RS
 from . import source_nodes as SN
 from . import specs as S
 from . import status as ST
@@ -323,6 +324,57 @@ def t_map_append(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError(str(e))
 
 
+def t_resolve_candidates(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        frame = args.get("frame")
+        if frame is not None:
+            TR.check_frame_name(frame)
+        return RS.candidates_frame(root, track, frame)
+    except (TR.TrackError, RS.ResolveError) as e:
+        raise ToolError(str(e))
+
+
+def t_resolve_query(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        frame = args.get("frame")
+        if frame is not None:
+            TR.check_frame_name(frame)
+        return RS.query_frame(root, track, frame, args["nodeId"])
+    except (TR.TrackError, RS.ResolveError) as e:
+        raise ToolError(str(e))
+
+
+def t_resolve_finalize(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        frame = args.get("frame")
+        if frame is not None:
+            TR.check_frame_name(frame)
+        return RS.finalize_frame(root, track, frame, args["verdict"])
+    except (TR.TrackError, RS.ResolveError) as e:
+        raise ToolError(str(e))
+
+
+# Схема вердикта (INV-A7, §10.2): поля берутся из резолва — одно место правды; клиент видит их в tools/list.
+VERDICT_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "nodeId": {"type": "string", "description": "id кандидата из daiver_resolve_candidates"},
+        "decision": {"type": "string", "enum": list(RS.DECISIONS),
+                     "description": "component — компонент библиотеки; local — своя разметка; ignore — не строить"},
+        "component": {"type": "string", "description": "имя компонента; ТОЛЬКО при decision=component"},
+        "props": {"type": "object", "description": "{проп: строка | число | true/false}; ТОЛЬКО при decision=component"},
+        "confidence": {"type": "string", "enum": list(RS.CONFIDENCE),
+                       "description": "честная уверенность; не повышай её ради прохода"},
+        "rationale": {"type": "string", "maxLength": RS.MAX_RATIONALE,
+                      "description": f"одна-две фразы, до {RS.MAX_RATIONALE} знаков"},
+        "mapRuleProposal": {"type": "object",
+                            "description": "необязательно: правило карты {match, outcome, component | icon, props?, import?}"}},
+    "required": list(RS.VERDICT_REQUIRED), "additionalProperties": False}
+
+
 TOOLS: Dict[str, Dict[str, Any]] = {
     "daiver_status": {
         "fn": t_status,
@@ -488,6 +540,56 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "rule": {"type": "object", "description": "правило карты: match, outcome, component | icon, props, import"},
             "dryRun": {"type": "boolean", "description": "только проверить и показать YAML; согласие не нужно"}},
             "required": ["track", "rule"], "additionalProperties": False},
+    },
+    "daiver_resolve_candidates": {
+        "fn": t_resolve_candidates,
+        "description": ("Кандидаты резолва кадра, которые ЕЩЁ надо решить (§10.1): инстансы, иконки-инстансы и фреймы с осмысленными "
+                        "именами (header_bf_01 — да; «Frame 12», «Group 5», TEXT, Rectangle — нет). Арт (это файл .svg), закрытое "
+                        "слоем (occluded) и внутренности библиотечного инстанса — не кандидаты, их id резолв отклонит. Строка: "
+                        "«id kind \"имя\" <figmaName> {варианты}»; «×N» — N узлов с тем же figmaName и вариантами решаются ОДИН "
+                        "раз, остальные получат вердикт сами (INV-B23; так же вердикты, уже принятые в раннем кадре трека); "
+                        "«[stale]» — прежний вердикт не годится (причина в stale). Пустой список и todo 0 — резолв кадра закончен. "
+                        "id придумывать нельзя — только отсюда. Вызывай в начале и после пачки вердиктов."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"}},
+            "required": ["track"], "additionalProperties": False},
+    },
+    "daiver_resolve_query": {
+        "fn": t_resolve_query,
+        "description": ("Что резолвер видит об ОДНОМ кандидате — и больше у него нет ничего. candidate: id, kind, name, figmaName, "
+                        "variants, textSlotKeys (КЛЮЧИ текстовых слотов, значений нет), origin — готовые аргументы для "
+                        "daiver_ds_lookup; tree — потомки строками (глубина "
+                        f"{RS.MAX_DEPTH}, не больше {RS.MAX_NODES} узлов с кандидатом, текст до {RS.MAX_TEXT_LEN} знаков; у вложенных "
+                        "инстансов <figmaName>, {варианты}, slots= — сигнал композиции); fingerprint — число узлов по kind во "
+                        "ВСЁМ поддереве, даже если дерево обрезано (truncated, hidden, «… +N»); map — результат daiver_map_lookup "
+                        "(hit:true — вердикт high по правилу, библиотеку не читать). Геометрии, стилей, шрифтов, цветов, значений "
+                        "слотов, предков и соседей в ответе нет, и достать их нельзя. recorded — вердикт узла уже записан; reuse — "
+                        "для того же figmaName и вариантов вердикт уже записан, заново не решай. Не кандидат или неизвестный id — "
+                        "отказ с причиной. Карта некорректна — отказ с перечнем: файл правит человек. Только читает."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "nodeId": {"type": "string", "description": "id кандидата из daiver_resolve_candidates"}},
+            "required": ["track", "nodeId"], "additionalProperties": False},
+    },
+    "daiver_resolve_finalize": {
+        "fn": t_resolve_finalize,
+        "description": ("Принять вердикт по ОДНОМУ кандидату и записать его — единственный путь вердикта в план. verdict: {nodeId, "
+                        "decision: component | local | ignore, component (только при component), props? ({проп: строка | число | "
+                        f"true/false}}, только при component), confidence: high | medium | low (честная, не ради прохода), "
+                        f"rationale (одна-две фразы, до {RS.MAX_RATIONALE} знаков), mapRuleProposal? (правило карты: проходит ту же "
+                        "проверку, что daiver_map_append dryRun, и должно покрывать этот узел)}. Отказ перечисляет ВСЕ нарушения "
+                        "разом, ничего не записано — исправь и вызови снова. Сверх формы код сверяет: узел — кандидат кадра; при hit "
+                        "в карте вердикт обязан совпасть с правилом (карта сильнее вывода; confidence high); для того же figmaName и "
+                        "вариантов вердикт уже записан — принимается только он (INV-B23); компонент без правила карты обязан быть "
+                        "в библиотеке (по требованиям ДС), иначе decision=local. Ответ тонкий: recorded, reused (узлы кадра, "
+                        "получившие тот же вердикт), remaining — сколько кандидатов осталось."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "verdict": VERDICT_SCHEMA},
+            "required": ["track", "verdict"], "additionalProperties": False},
     },
     "daiver_ds_requirements": {
         "fn": t_ds_requirements,
