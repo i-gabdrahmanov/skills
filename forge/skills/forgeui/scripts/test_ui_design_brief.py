@@ -6,7 +6,8 @@
   • каждое `daiver_*` в брифе — зарегистрированный инструмент; в записях вызова `daiver_x(a, b)` каждый аргумент есть в схеме
     инструмента и названы все обязательные (модель копирует вызов как есть; опечатка в имени — отказ в бою);
   • бриф ui-design называет все инструменты шага (обрубок брифа не проходит) и не называет инструменты, которых ещё нет
-    (build_state, verify — следующие задачи; инструмента подписи плана не будет никогда: подпись — согласие человека);
+    (verify — следующие задачи; инструмента подписи плана не будет никогда: подпись — согласие человека). Бриф ui-build (§4) живёт в
+    test_ui_build_brief.py; здесь его команды и имена инструментов проверяются как часть всего живого текста;
   • команды оболочки в брифе исполнимы: однострочные, без `$(...)` и обратных кавычек (рантайм режет), парсятся POSIX-shlex;
     `record_approval.py` и `ui_gate.py` из брифа ЗАПУСКАЮТСЯ как написаны (плейсхолдеры подставлены) и принимаются скриптами;
   • у согласий из брифа есть цитата пользователя (--evidence) там, где ключ — класс согласий с цитатой, и привязка к тому, что
@@ -50,7 +51,7 @@ STEP_TOOLS = ("daiver_status", "daiver_pixso_pull", "daiver_track_manifest", "da
               "daiver_outline", "daiver_ds_inventory", "daiver_ds_requirements", "daiver_ds_lookup", "daiver_ds_details",
               "daiver_resolve_candidates", "daiver_resolve_query", "daiver_resolve_finalize", "daiver_resolve_report",
               "daiver_source_nodes", "daiver_map_append", "daiver_plan_write", "daiver_plan_contract")
-MAX_FILE_LINES = 320
+MAX_FILE_LINES = 345                            # 320 → 345: в файл вошёл шаг ui-build (3.2, §4 — до 52 строк); рост дальше — выноси в код
 MAX_STEP_LINES = 110                            # шаг вырос на план, контракт и подпись (2.6): 8 → 10 пунктов
 
 
@@ -60,7 +61,7 @@ def section(start: str, end: str) -> str:
 
 
 STEP = section("## 3. Дизайн по макету", "## 4. Сборка")
-LIVE = TEXT[:TEXT.index("## 4. Сборка")]       # §4–§5 описывают то, что ещё строится («Будет: …»): их инструменты пока не существуют
+LIVE = TEXT[:TEXT.index("## 5. Проверка")]     # §5 описывает то, что ещё строится («Будет: …»): его инструментов пока не существует
 
 
 def shell_commands(text: str) -> List[str]:
@@ -86,7 +87,7 @@ class Tools(unittest.TestCase):
         names = set(re.findall(r"\bdaiver_[a-z_]+\b", LIVE))
         self.assertTrue(names)
         self.assertEqual(sorted(n for n in names if n not in T.TOOLS), [],
-                         "бриф называет инструменты, которых нет (build_state и verify — следующие задачи)")
+                         "бриф называет инструменты, которых нет (verify — следующие задачи)")
 
     def test_call_records_use_schema_arguments_and_name_the_required_ones(self):
         calls = re.findall(r"`(daiver_[a-z_]+)\(([^`()]*)\)`", STEP)
@@ -105,7 +106,7 @@ class Tools(unittest.TestCase):
     def test_the_step_names_every_tool_it_needs_and_no_future_ones(self):
         for tool in STEP_TOOLS:
             self.assertTrue(tool in STEP, f"бриф ui-design не называет {tool}")
-        for future in ("daiver_build_state", "daiver_verify_compare", "daiver_plan_sign", "daiver_color_tokens"):
+        for future in ("daiver_verify_compare", "daiver_screenshot", "daiver_plan_sign"):
             self.assertTrue(future not in LIVE, f"{future}: инструмента нет, бриф шага не должен его обещать")
 
     def test_one_place_per_rule_no_duplicated_paragraphs(self):

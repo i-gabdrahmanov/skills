@@ -916,10 +916,12 @@ class Gate(Base):
         self.assertIn("daiver_plan_write", r.stderr)
 
     def test_other_steps_are_untouched_and_arguments_are_checked(self):
-        for step in ("build", "verify"):
-            r = self.gate(step)
-            self.assertEqual(r.returncode, 3, step)
-            self.assertIn("не реализована", r.stderr)
+        r = self.gate("verify")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("не реализована", r.stderr)
+        r = self.gate("build")                          # ui-build реализован (3.2): сборки здесь не было — «не готово», а не «не реализовано»
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("не реализована", r.stderr)
         r = subprocess.run([sys.executable, "-X", "utf8", str(UI_GATE), "design", "--project", str(self.root)],
                            capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual(r.returncode, 2)

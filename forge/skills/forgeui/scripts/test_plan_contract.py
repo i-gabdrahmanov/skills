@@ -1217,10 +1217,12 @@ class Gate(Base):
         self.assertIn("daiver_resolve_finalize", r.stderr)
 
     def test_other_steps_are_untouched_and_arguments_are_checked(self):
-        for step in ("build", "verify"):
-            r = self.gate(step)
-            self.assertEqual(r.returncode, 3, step)
-            self.assertIn("не реализована", r.stderr)
+        r = self.gate("verify")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("не реализована", r.stderr)
+        r = self.gate("build")                          # ui-build реализован (3.2): сборки здесь не было — «не готово», а не «не реализовано»
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("не реализована", r.stderr)
         r = subprocess.run([sys.executable, "-X", "utf8", str(UI_GATE), "design", "--project", str(self.root)],
                            capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual(r.returncode, 2)
@@ -2103,6 +2105,8 @@ class PlanCorners(Base):
         self.write_plan({"layout": GOOD_LAYOUT})
         md = self.paths()["planMd"].read_text(encoding="utf-8")
         self.assertIn("row: [b1, b2, b3] gap=10", md)
+        box = next(d for d in self.read()["layout"]["decisions"] if d["decision"] == "group")["groups"][0]["box"]
+        self.assertIn(f"gap=10 box={box['x']},{box['y']},{box['w']},{box['h']}", md, "сборка берёт бокс группы из plan.md (3.2)")
         self.assertIn("main=space-between w=fill", md)
         self.assertIn("| absolute-children | group | goal-image |", md)
 

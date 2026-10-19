@@ -8,7 +8,7 @@
 daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_section,
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
 daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report,
-daiver_plan_write, daiver_plan_contract, daiver_build_state, daiver_build_state_set.
+daiver_plan_write, daiver_plan_contract, daiver_build_state, daiver_build_state_set, daiver_color_tokens.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from . import build_state as BS
+from . import color_tokens as CT
 from . import component_map as CM
 from . import ds_lookup as DL
 from . import ds_requirements as DR
@@ -413,6 +414,19 @@ def t_build_state_set(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError(str(e))
 
 
+def t_color_tokens(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"]) if "track" in args else None
+        frame = args.get("frame")
+        if frame is not None:
+            if track is None:
+                raise ToolError("frame называется вместе с track (цвета кадра); без track ответ — карта всего файла цветов")
+            TR.check_frame_name(frame)
+        return CT.run(root, track, frame)
+    except (TR.TrackError, CT.ColorTokensError) as e:
+        raise ToolError(str(e))
+
+
 # Схема вердикта (INV-A7, §10.2): поля берутся из резолва — одно место правды; клиент видит их в tools/list.
 VERDICT_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -711,9 +725,12 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                         "(первая секция не done по порядку плана) — и progress: прогон, остановленный на секции 3 из 6, "
                         "продолжается с next, а не с нуля. Сверку считает КОД: хеш секции в плане не изменился — done остаётся; "
                         "изменился — done → stale (перестроить ТОЛЬКО её, файлы прежней сборки — next.outputs); новые id — pending; "
-                        "удалённые выпадают; порядок и имена — по плану. План, не соответствующий нынешнему макету (хеши buildOrder "
+                        "удалённые выпадают; порядок и имена — по плану. Секции, чей корень в плане решён ignore (узел не строится вовсе), "
+                        "движок закрывает САМ (noCode: готовы, без outputs): next их не называет, строить и закрывать их не нужно. "
+                        "План, не соответствующий нынешнему макету (хеши buildOrder "
                         "≠ секциям канона), — отказ: сначала пересобери план (daiver_plan_write). weightBudget в ответе — тот, с "
-                        "которым вызывается daiver_section. warnings — outputs, которых нет на диске: разбери сразу. Файл пишет "
+                        "которым вызывается daiver_section; planMd — путь плана кадра (plan.md): решения по узлам берутся из него. warnings — outputs, "
+                        "которых нет на диске: разбери сразу. Файл пишет "
                         "только этот инструмент и daiver_build_state_set; руками его не читай и не правь."),
         "schema": {"type": "object", "properties": {
             "track": {"type": "string", "description": "ключ стори (имя трека)"},
@@ -741,6 +758,21 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                                        "(src/modules/x/Screen.tsx) или абсолютные внутри репо"},
             "hash": {"type": "string", "description": "только при done: section.hash из ответа daiver_section для этой секции"}},
             "required": ["track", "sectionId", "status"], "additionalProperties": False},
+    },
+    "daiver_color_tokens": {
+        "fn": t_color_tokens,
+        "description": ("Карта цветов проекта (project.styling.colorsFile: .less / .scss / .css) для шага ui-build — ОДИН вызов в "
+                        "прологе. С track — цвета ЭТОГО кадра (канон читает код, не ты): matched — «цвет → переменная проекта», raw — "
+                        "цвета без переменной. Правило одно: переменная ТОЛЬКО при точном совпадении значения (регистр и короткая "
+                        "форма hex не мешают, rgba в виде, как в макете), иначе сырое значение макета; ближний цвет не "
+                        "подбирай и переменную не угадывай. Без track — карта всего файла (map, первые строки). conflicts — "
+                        "переменные с разными значениями (в карту не входят), skipped — не литералы цвета (функции, карты), "
+                        "ambiguous — значения с несколькими переменными (взята первая по файлу). colorsFile не задан или формат "
+                        "не разбирается — все цвета сырые (nextStep говорит). Файла нет — отказ с лечением (путь правит человек)."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека): с ним — цвета кадра; без него — карта всего файла"},
+            "frame": {"type": "string", "description": "имя кадра (только вместе с track); по умолчанию первичный"}},
+            "additionalProperties": False},
     },
     "daiver_ds_requirements": {
         "fn": t_ds_requirements,

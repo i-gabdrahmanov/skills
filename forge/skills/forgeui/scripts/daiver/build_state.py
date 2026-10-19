@@ -8,14 +8,24 @@ INV-C10, G1, G2, A11; QG U13).
 путь даёт `track.frame_paths`, секции код читает из плана сам.
 
 Формат (schema 1; «версия state = 1» спеки — это `schema`):
-    {schema, track, frame, weightBudget, sections: [{id, name, hash, status, outputs?}]}
+    {schema, track, frame, weightBudget, sections: [{id, name, hash, status, outputs?, noCode?}]}
 `weightBudget` — бюджет плана, при котором существуют эти id секций (`daiver_section` берётся с ним, а не с конфигом, который мог
-измениться); тут он затем, чтобы ответ `daiver_build_state_set` называл его без чтения плана. Секции — в порядке `buildOrder`
+измениться); тут он затем, чтобы ответ `daiver_build_state_set` называл его без чтения плана. Ответ `daiver_build_state` называет и путь
+`planMd` — человекочитаемого плана кадра, из которого сборка берёт решения по узлам (путь даёт код: модель его не выводит). Секции — в порядке `buildOrder`
 плана; `status` — pending | in_progress | done | stale (тот же перечень читает лестница `daiver_status`: `building` ⇔ есть секция
 не `done`; остальные поля она не читает — контракт 1.10 расширен только совместимо).
 `outputs` — файлы секции, пути ОТ КОРНЯ ПРОЕКТА (абсолютный путь внутри репо приводится к такому), отсортированы, без повторов;
-обязательны у `done`, у `stale` остаются от прежней сборки (секция перестраивается на месте). Времени, путей машины и случайности
+обязательны у `done` (кроме секций без кода), у `stale` остаются от прежней сборки (секция перестраивается на месте). Времени, путей машины и случайности
 в файле нет, ключи отсортированы: один вход — побайтно один файл (запись — приёмом plan.py: tmp + replace байтами).
+
+Секция без кода (3.2). Если в плане КОРЕНЬ секции решён `ignore` (узел не строится вовсе, §5.2), строить в ней нечего, а `outputs` у `done`
+обязателен — без особого случая это тупик: выхода «пропустить секцию» нет, и прогон не дошёл бы до конца. Поэтому такую секцию закрывает сама
+сверка: статус `done`, `noCode: true`, без `outputs` и без вызова модели (признак читает `plan.no_code_sections`, из состояния он
+не выводится). Следы: `next` её не называет, `progress` считает её готовой, ответ `daiver_build_state` перечисляет такие секции в `noCode`,
+`daiver_build_state_set` их не двигает (отказ), гейт сборки видит `done`. Перешло решение (был `ignore`, стал компонент/local) — секция
+снова `pending` (хеш секции от вердиктов не зависит, сверка по хешу этого не заметила бы); стала `ignore` после сборки — её прежние
+файлы остаются на диске (движок код не удаляет), и об этом говорит `warnings` того же вызова. Все секции кадра без кода — отказ:
+собирать нечего, как и при пустом `buildOrder`.
 
 Сверка (`daiver_build_state`). Источник секций — `buildOrder` плана кадра (`[{id, name, hash}]` в порядке сборки; из plan.json
 читаются ТОЛЬКО он и `weightBudget`, остальное — дело плана). Хеш секции в плане не изменился → статус сохраняется; изменился:
@@ -34,19 +44,18 @@ pull сюда не попасть (правило 1.2: кадр с `build-state.
 сверка). Нельзя перескочить: `done` — только из `in_progress` (повторный `done` секции обновляет её outputs: так чинится путь после
 предупреждения; тот же вызов — без изменений); `in_progress` — только для `next` (секции идут по порядку плана: создатель общего
 local-компонента раньше потребителей, прогон не рестартует с первой секции); `done` → `in_progress` нет («уже собрана»). `done`
-без `outputs` и без `hash` не бывает; `hash` — `section.hash` из ответа `daiver_section` ЭТОЙ секции, сверяется с записанным в
+ВЫЗОВОМ без `outputs` и без `hash` не бывает (секцию без кода закрывает сверка, не вызов); `hash` — `section.hash` из ответа `daiver_section` ЭТОЙ секции, сверяется с записанным в
 состоянии и в ответах инструментов не называется (иначе его списали бы из отказа, не вызвав `daiver_section`). Неизвестный id —
 отказ с перечнем настоящих. Несуществующий путь в outputs — НЕ отказ, а `warnings` (спека: «разбирается немедленно»); они
 повторяются в каждом ответе `daiver_build_state`, пока файла нет, а гейт сборки (3.2) считает их ошибкой. Каталог вместо файла и
 голое имя файла (`Screen.tsx`: код-гейт откроет именно эту строку от корня проекта) — отказ.
 
-Границы. Бриф и пролог `ui-build`, `ui_gate.py build`, правила сборки — 3.2 (здесь для гейта готов читатель `gate_problems`,
-в `ui_gate.py` он не подключён); хук `ui-guard` — 3.3; `state-write-guard` / `phase_tools` — 3.4; несколько кадров — 6.1; регионы
+Границы. Бриф и пролог `ui-build`, `ui_gate.py build` (он зовёт читатель `gate_problems`), правила сборки — 3.2; хук `ui-guard` — 3.3; `state-write-guard` / `phase_tools` — 3.4; несколько кадров — 6.1; регионы
 состояния и ревизии — 6.2 / 6.3.
 
-Допущения, не проверенные данными (боевых экранов и прогонов сборки нет): секция, чей корень решён `ignore`, ничего не строит, а
-outputs у `done` обязателен — на боевом плане это тупик (модель назовёт файл модуля); число файлов секции и длина пути
-(`MAX_OUTPUTS`, `MAX_PATH`) — наши константы; тексты отказов слабая модель не читалась (X.4).
+Допущения, не проверенные данными (боевых экранов и прогонов сборки нет): «секция без кода» — только корень, решённый `ignore` (ignore
+у вложенного узла оставляет секцию с разметкой вокруг, ignore у оболочки над секциями спека не определяет); число файлов секции и
+длина пути (`MAX_OUTPUTS`, `MAX_PATH`) — наши константы; тексты отказов слабая модель не читалась (X.4).
 """
 from __future__ import annotations
 
@@ -64,7 +73,7 @@ SCHEMA = 1
 STATUSES = ST.BUILD_STATUSES                                # один перечень с лестницей, которая читает файл (пин в тестах)
 SETTABLE = ("in_progress", "done")                          # pending и stale выставляет только сверка с планом
 STATE_KEYS = ("schema", "track", "frame", "weightBudget", "sections")
-SECTION_KEYS = ("id", "name", "hash", "status", "outputs")
+SECTION_KEYS = ("id", "name", "hash", "status", "outputs", "noCode")
 MAX_OUTPUTS = 50                    # файлов одной секции: в спеке не названо; больше — модель перечисляет каталог, а не файлы
 MAX_PATH = 300                      # знаков в одном пути outputs
 SHOWN = 10                          # сколько id / путей называет ответ
@@ -246,6 +255,11 @@ def check_state(data: Any, track: str, frame: str) -> List[str]:
         if s.get("status") not in STATUSES:
             problems.append(f"{where}.status: {_clip(s.get('status'), 40)!r} — ожидается {'|'.join(STATUSES)}")
         outs = s.get("outputs")
+        no_code = s.get("noCode")
+        if no_code is not None and no_code is not True:
+            problems.append(f"{where}.noCode: только true (у секций с кодом ключа нет)")
+        if no_code is True and (s.get("status") != "done" or outs is not None):
+            problems.append(f"{where}: секция без кода — всегда done и без outputs")
         if outs is not None:
             if not isinstance(outs, list):
                 problems.append(f"{where}.outputs: список путей")
@@ -255,7 +269,7 @@ def check_state(data: Any, track: str, frame: str) -> List[str]:
                     if why:
                         problems.append(f"{where}.outputs: {_clip(o, 60)!r} — {why}")
                         break
-        if s.get("status") == "done" and not (isinstance(outs, list) and outs):
+        if s.get("status") == "done" and no_code is not True and not (isinstance(outs, list) and outs):
             problems.append(f"{where}: статус done без outputs")
     return problems
 
@@ -290,8 +304,9 @@ def new_state(track: str, frame: str, budget: Any, sections: List[Dict[str, Any]
 
 # ── сверка с планом ──────────────────────────────────────────────────────────
 
-def read_seeds(root: Path, paths: Dict[str, Path]) -> Tuple[List[Dict[str, str]], Any]:
-    """(buildOrder плана как [{id, name, hash}], weightBudget). Из plan.json читаются только они; всё, что не годится, — отказ."""
+def read_seeds(root: Path, paths: Dict[str, Path]) -> Tuple[List[Dict[str, Any]], Any]:
+    """(buildOrder плана как [{id, name, hash}] + `noCode: True` у секций без кода, weightBudget). Из plan.json читаются только они и
+    признак «корень секции решён ignore» (`plan.no_code_sections`); всё, что не годится, — отказ."""
     rel = _rel(root, paths["plan"])
     data, _raw, why = PL.read_plan(paths["plan"])
     fix = "пересобери план: daiver_plan_write(track, frame)"
@@ -307,7 +322,7 @@ def read_seeds(root: Path, paths: Dict[str, Path]) -> Tuple[List[Dict[str, str]]
     if not isinstance(order, list):
         raise BuildStateError(f"{rel}: нет buildOrder (список секций в порядке сборки) — файл не от движка; {fix}")
     problems: List[str] = []
-    seeds: List[Dict[str, str]] = []
+    seeds: List[Dict[str, Any]] = []
     seen = set()
     for i, e in enumerate(order):
         ok = (isinstance(e, dict) and isinstance(e.get("id"), str) and e["id"] and isinstance(e.get("hash"), str)
@@ -323,6 +338,13 @@ def read_seeds(root: Path, paths: Dict[str, Path]) -> Tuple[List[Dict[str, str]]
         raise refusal(f"{rel}: buildOrder не годится", problems, fix[0].upper() + fix[1:])
     if not seeds:
         raise BuildStateError(f"{rel}: buildOrder пуст — строить нечего (все секции закрыты непрозрачным слоем?)")
+    codeless = set(PL.no_code_sections(data))
+    for seed in seeds:
+        if seed["id"] in codeless:
+            seed["noCode"] = True
+    if all(seed.get("noCode") for seed in seeds):
+        raise BuildStateError(f"{rel}: корни всех секций кадра решены ignore (узел не строится вовсе) — строить нечего. Проверь "
+                              f"вердикты резолва (daiver_resolve_finalize) и пересобери план: daiver_plan_write(track, frame)")
     return seeds, budget
 
 
@@ -344,21 +366,27 @@ def check_plan_against_canon(env: dict, seeds: List[Dict[str, str]], budget: Any
                           "daiver_build_state")
 
 
-def reconcile(old: Optional[List[Dict[str, Any]]], seeds: List[Dict[str, str]]
+def reconcile(old: Optional[List[Dict[str, Any]]], seeds: List[Dict[str, Any]]
               ) -> Tuple[List[Dict[str, Any]], Dict[str, List[str]]]:
     """Секции после сверки с buildOrder (§13.4) и что изменилось. Чистая функция: файлов и времени нет.
 
     Порядок и имена — по плану. Хеш прежний → статус и outputs сохраняются; хеш другой → done становится stale (outputs
     остаются: секция перестраивается на месте), остальные статусы не трогаются, хеш обновляется; id, которого не было, →
     pending; id, которого в плане нет, выпадает вместе с outputs. `added` называется только у уже существовавшего состояния
-    (при создании «новыми» были бы все секции)."""
+    (при создании «новыми» были бы все секции).
+
+    Секция без кода (seed `noCode`, 3.2) всегда `done` без outputs и в `added` не попадает; секция, которая была без кода, а в плане
+    стала строиться, начинается заново (`pending`, в `added`): её хеш от вердикта не зависит и по хешу перемена не видна."""
     prev = {s["id"]: s for s in old or []}
     out: List[Dict[str, Any]] = []
     stale: List[str] = []
     added: List[str] = []
     for seed in seeds:
         had = prev.get(seed["id"])
-        if had is None:
+        if seed.get("noCode"):
+            out.append({"id": seed["id"], "name": seed["name"], "hash": seed["hash"], "status": "done", "noCode": True})
+            continue
+        if had is None or had.get("noCode"):
             out.append({"id": seed["id"], "name": seed["name"], "hash": seed["hash"], "status": "pending"})
             added.append(seed["id"])
             continue
@@ -425,6 +453,17 @@ def output_warnings(root: Path, sections: List[Dict[str, Any]]) -> List[str]:
             f"daiver_build_state_set(status=done, outputs=[…], hash=…) — код-гейт открывает именно эти пути"]
 
 
+def orphan_warnings(old: Optional[Dict[str, Any]], codeless: List[str]) -> List[str]:
+    """Секции, собранные раньше и ставшие секциями без кода (в плане корень теперь ignore): их файлы движок не удаляет — вызов,
+    записавший перемену, называет их один раз (после записи в состоянии `outputs` уже нет)."""
+    prev = {s["id"]: s for s in (old or {}).get("sections", [])}
+    left = [f"{sid}: {', '.join(prev[sid]['outputs'])}" for sid in codeless if prev.get(sid, {}).get("outputs")]
+    if not left:
+        return []
+    return [f"секции были собраны, а в плане их корень теперь ignore (кода нет): файлы прежней сборки остаются на диске — удали их, "
+            f"если они больше не нужны: {_listed(left)}"]
+
+
 def _write(root: Path, path: Path, state: Dict[str, Any]) -> None:
     try:
         PL.write_atomic(root, path, PL.dumps(state).encode("utf-8"), "build-state.json")
@@ -461,13 +500,19 @@ def run(root: Any, track: str, frame: Optional[str] = None) -> Dict[str, Any]:
     done, total = progress(sections)
     nxt = next_section(sections)
     out: Dict[str, Any] = {"track": track, "frame": fname, "created": old is None, "written": written,
-                           "progress": f"{done}/{total}", "weightBudget": budget, "next": next_view(nxt)}
+                           "progress": f"{done}/{total}", "weightBudget": budget, "planMd": _rel(root, paths["planMd"]),
+                           "next": next_view(nxt)}
+    codeless = [s["id"] for s in sections if s.get("noCode")]
+    if codeless:                                            # закрыты движком: корень решён ignore, их строить не нужно (docstring)
+        out["noCode"] = codeless[:SHOWN]
+        if len(codeless) > SHOWN:
+            out["noCodeMore"] = len(codeless) - SHOWN
     for key in ("stale", "added", "removed"):
         if rep[key]:
             out[key] = rep[key][:SHOWN]
             if len(rep[key]) > SHOWN:
                 out[key + "More"] = len(rep[key]) - SHOWN
-    warnings = list(canon_warnings) + output_warnings(root, sections)
+    warnings = list(canon_warnings) + output_warnings(root, sections) + orphan_warnings(old, codeless)
     if warnings:
         out["warnings"] = warnings
     out["nextStep"] = step_text(nxt, budget, total)
@@ -491,6 +536,9 @@ def transition_problems(sec: Dict[str, Any], nxt: Optional[Dict[str, Any]], stat
     """Что мешает перевести секцию в статус: нельзя перескочить (done только из in_progress, in_progress только для next),
     done не воскресает, хеш секции — тот, что записан в состоянии. Хеш в тексте отказа НЕ называется."""
     sid, cur = sec["id"], sec["status"]
+    if sec.get("noCode"):
+        return [f"секция «{sid}» без кода: в плане её корень решён ignore (узел не строится вовсе), движок закрыл её сам — файлов "
+                f"у неё нет, строить и закрывать нечего; твоя секция — next из daiver_build_state"]
     if status == "in_progress":
         if cur == "done":
             return [f"секция «{sid}» уже done — перестраивать нечего (если макет изменится, сверка сама пометит её stale). "
@@ -582,8 +630,8 @@ def set_section(root: Any, track: str, frame: Optional[str], section_id: Any, st
 
 def gate_problems(root: Any, track: str, frame: Optional[str] = None) -> List[str]:
     """Что мешает считать сборку кадра законченной: нет состояния / оно не сверено с планом / есть секции не done / outputs
-    done-секций нет на диске. Пусто — все секции плана собраны, файлы на месте. Только читает диск. Подключает его `ui_gate.py
-    build` задачи 3.2; сборка проекта (buildCommand) — тоже там."""
+    done-секций нет на диске. Пусто — все секции плана собраны (секции без кода закрыты сверкой), файлы на месте. Только читает диск.
+    Его зовёт `ui_gate.py build` (3.2); сборка проекта (buildCommand) — тоже там."""
     root = Path(root)
     try:
         _manifest, f, paths, env, _warn = OL._load(root, track, frame)

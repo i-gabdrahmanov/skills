@@ -17,12 +17,16 @@ QG U13).
   • запись: атомарная (tmp + replace, сбой не оставляет мусора и не портит файл), под замком со свежим чтением внутри него, без
     времени и случайности — побайтно один файл на один вход; повреждённый файл — отказ с причиной, а не молчаливый сброс;
   • контракт лестницы 1.10: файл движка читается `daiver_status` (sections[].status ∈ перечня), stale возвращает проверенный кадр в сборку;
-  • реестр: оба инструмента на месте, схемы закрыты, произвольных путей (statePath, outPath) нет.
+  • реестр: оба инструмента на месте, схемы закрыты, произвольных путей (statePath, outPath) нет;
+  • секция без кода (3.2): корень секции в плане решён ignore → её закрывает сама сверка (`done`, `noCode: true`, без outputs), `next` её не
+    называет, set её не двигает, гейт сборки доволен, ступень лестницы считает её готовой; перемена вердикта в любую сторону видна
+    (ignore → строить: pending; собранная → ignore: файлы остаются, предупреждение один раз); все секции без кода — отказ; ручная правка
+    файла проверяется по новому ключу.
 
 Данные. «Modal» — настоящий образец Pixso (одна секция); экраны на несколько секций — СИНТЕТИКА из маленьких построителей ниже
 (панели-секции под корнем-оболочкой, бюджет подобран так, чтобы панель была секцией, а корень — оболочкой). Что НЕ проверено данными:
-боевых экранов и прогонов сборки нет — поведение на большом числе секций, тупик «секция, чей корень решён ignore, ничего не строит, а
-outputs обязателен», то, как слабая модель читает отказы и `nextStep` (X.4).
+боевых экранов и прогонов сборки нет — поведение на большом числе секций, встречается ли секция с корнем ignore на боевом экране (признак
+«нет кода» выведен из текста спеки), то, как слабая модель читает отказы и `nextStep` (X.4).
 """
 from __future__ import annotations
 
@@ -46,6 +50,7 @@ from daiver import build_state as BS  # noqa: E402
 from daiver import canon as C  # noqa: E402
 from daiver import ds_requirements as DR  # noqa: E402
 from daiver import init as I  # noqa: E402
+from daiver import plan as PL  # noqa: E402
 from daiver import status as ST  # noqa: E402
 from daiver import tools as T  # noqa: E402
 from daiver import track as TR  # noqa: E402
@@ -88,6 +93,37 @@ def screen(ids=("p1", "p2", "p3"), edited=()):
     """Корень-оболочка с панелями-секциями; `edited` — панели, у которых изменён лист (другой хеш секции, то же имя и id)."""
     return frame("Page", [panel(i, [leaf("t" + i[1:], name="t" + i[1:] + ("-edited" if i in edited else ""))]) for i in ids],
                  name=autoname("Page"), layout={"direction": "column", "gap": 8})
+
+
+def decor(i, edited=False):
+    """Панель с осмысленным именем — кандидат резолва (обычные панели автоимённые и кандидатами не бывают). Её корень решат ignore."""
+    return frame(i, [leaf("t" + i[1:], name="t" + i[1:] + ("-edited" if edited else ""))], name="Decoration " + i,
+                 layout={"direction": "column", "gap": 8}, size={"w": "fill", "h": "hug"})
+
+
+def decor_screen(named=("p1", "p2", "p3"), ids=("p1", "p2", "p3"), edited=()):
+    """Экран из панелей-секций: `named` — панели-кандидаты (Decoration …), остальные — обычные автоимённые."""
+    return frame("Page", [decor(i, i in edited) if i in named else panel(i, [leaf("t" + i[1:])]) for i in ids],
+                 name=autoname("Page"), layout={"direction": "column", "gap": 8})
+
+
+def decide(root: Path, verdicts: Dict[str, str]) -> None:
+    for sid, decision in verdicts.items():
+        T.call("daiver_resolve_finalize", root, {"track": TRACK, "verdict": {"nodeId": sid, "decision": decision, "confidence": "high",
+                                                                              "rationale": "в тесте"}})
+
+
+def replan_now(root: Path) -> Dict[str, Any]:
+    T.call("daiver_resolve_report", root, {"track": TRACK})
+    return T.call("daiver_plan_write", root, {"track": TRACK, "weightBudget": BUDGET})
+
+
+def make_decor_world(root: Path, verdicts: Dict[str, str], ids) -> None:
+    """Панели из `verdicts` (id → решение) — кандидаты резолва, остальные — обычные; план строится по настоящему резолву."""
+    init_repo(root)
+    build_repo(root, decor_screen(tuple(verdicts), tuple(ids)))
+    decide(root, verdicts)
+    replan_now(root)
 
 
 def init_repo(root: Path) -> None:
@@ -273,6 +309,13 @@ class Init(World):
         self.assertEqual(out["next"], {"sectionId": "p1", "name": want[0]["name"], "status": "pending"})
         for part in ("p1", "status=in_progress", "daiver_section", f"weightBudget={BUDGET}", "status=done", "section.hash"):
             self.assertIn(part, out["nextStep"])
+
+    def test_the_answer_names_the_readable_plan_of_the_frame_so_the_model_does_not_derive_the_path(self):
+        self.world()
+        out = self.bs()
+        self.assertEqual(out["planMd"], f"{TRACK_DIR}/plan.md")
+        self.assertTrue((self.root / out["planMd"]).is_file(), "план.md пишет daiver_plan_write: на месте")
+        self.assertEqual(self.bs()["planMd"], out["planMd"], "путь называется и при повторном (читающем) вызове")
 
     def test_the_state_file_is_the_engines_alone_and_ends_with_a_newline_without_time(self):
         self.world()
@@ -1254,6 +1297,197 @@ class GateReader(World):
         self.assertIn("плана кадра нет", BS.gate_problems(self.root, TRACK)[0])
 
 
+# ── секция без кода: корень решён ignore ─────────────────────────────────────
+
+class NoCodeSections(World):
+    """Секция, чей корень в плане решён ignore, ничего не строит, а `outputs` у `done` обязателен — без особого случая тупик (3.1 →
+    README). Решение 3.2: такую секцию закрывает сама сверка; модели нечего пропускать, а гейту — требовать."""
+
+    def decide(self, verdicts):
+        decide(self.root, verdicts)
+
+    def replan_now(self):
+        return replan_now(self.root)
+
+    def decor_world(self, verdicts=None, ids=("p1", "p2", "p3")):
+        make_decor_world(self.root, {"p2": "ignore"} if verdicts is None else verdicts, ids)
+
+    def test_the_plan_names_the_section_whose_root_is_ignored_and_no_other(self):
+        self.decor_world({"p1": "local", "p2": "ignore", "p3": "local"})
+        self.assertEqual(PL.no_code_sections(self.plan_json()), ["p2"])
+
+    def test_the_engine_closes_such_a_section_at_once_and_the_run_walks_around_it(self):
+        self.decor_world()
+        out = self.bs()
+        self.assertEqual((out["progress"], out["noCode"], out["next"]["sectionId"]), ("1/3", ["p2"], "p1"))
+        self.assertEqual(self.section("p2"), {"id": "p2", "name": "Decoration p2", "hash": self.hash_of("p2"), "status": "done",
+                                              "noCode": True})
+        self.assertEqual(self.stage(), "building")
+        self.assertEqual(self.build("p1")["next"]["sectionId"], "p3", "после p1 — p3: закрытая секция в очередь не попадает")
+        out = self.build("p3")
+        self.assertEqual((out["progress"], out["next"]), ("3/3", None))
+        self.assertEqual(self.stage(), "built")
+        self.assertEqual(BS.gate_problems(self.root, TRACK), [], "гейту нечего возразить: у секции без кода файлов нет и не требуется")
+        self.assertNotIn("outputs", self.section("p2"))
+        self.assertEqual(self.bs()["next"], None)
+        self.assertEqual(self.stage(), "built", "повторный вызов ничего не перезапускает")
+
+    def test_the_gate_reader_does_not_list_the_closed_section_among_the_unfinished_ones(self):
+        self.decor_world()
+        self.bs()
+        msg = BS.gate_problems(self.root, TRACK)
+        self.assertEqual(len(msg), 1)
+        self.assertIn("секций не готово 2 из 3: p1 (pending), p3 (pending)", msg[0])
+
+    def test_the_model_cannot_move_a_closed_section_and_the_state_stays(self):
+        self.decor_world()
+        self.bs()
+        before = self.raw()
+        for status, extra in (("in_progress", {}), ("done", {"outputs": ["src/modules/orders/P2.tsx"], "hash": self.hash_of("p2")})):
+            msg = self.set_refused("p2", status, **extra)
+            self.assertIn("без кода", msg)
+            self.assertIn("ignore", msg)
+            self.assertIn("next из daiver_build_state", msg)
+        self.assertEqual(self.raw(), before)
+
+    def test_every_section_without_code_is_a_refusal_like_an_empty_build_order(self):
+        self.decor_world({"p1": "ignore", "p2": "ignore", "p3": "ignore"})
+        msg = self.bs_refused()
+        self.assertIn("корни всех секций кадра решены ignore", msg)
+        self.assertIn("daiver_plan_write", msg)
+        self.assertIsNone(self.raw(), "состояние не создаётся")
+        self.assertIn("корни всех секций", BS.gate_problems(self.root, TRACK)[0])
+
+    def test_the_file_of_a_closed_section_is_deterministic_and_the_ladder_reads_it(self):
+        self.decor_world()
+        self.bs()
+        self.assertIn(b'"noCode": true', self.raw())
+        self.assertEqual(self.statuses(), {"p1": "pending", "p2": "done", "p3": "pending"})
+        t = next(t for t in self.call("daiver_status")["tracks"] if t["name"] == TRACK)
+        self.assertEqual((t["stage"], t["frames"][0]["build"]), ("building", "1/3"), "лестница считает секцию без кода готовой")
+        other = Path(self.tmp.name) / "other"
+        other.mkdir()
+        make_decor_world(other, {"p2": "ignore"}, ("p1", "p2", "p3"))
+        T.call("daiver_build_state", other, {"track": TRACK})
+        self.assertEqual((other / STATE_REL).read_bytes(), self.raw(), "один вход — побайтно один файл в любом репо")
+
+    def test_a_changed_hash_updates_a_closed_section_but_never_makes_it_stale(self):
+        self.decor_world()
+        self.bs()
+        old = self.section("p2")["hash"]
+        set_canon(self.root, decor_screen(named=("p2",), edited=("p2",)))
+        self.replan_now()
+        out = self.bs()
+        self.assertNotIn("stale", out)
+        self.assertNotEqual(self.section("p2")["hash"], old)
+        self.assertEqual((self.section("p2")["status"], self.section("p2")["noCode"]), ("done", True))
+
+    def test_a_verdict_that_stops_being_ignore_reopens_the_section_from_scratch(self):
+        self.decor_world()
+        self.bs()
+        self.build("p1")
+        self.decide({"p2": "local"})
+        self.replan_now()
+        out = self.bs()
+        self.assertEqual((out["progress"], out["added"], out["next"]["sectionId"], "noCode" in out), ("1/3", ["p2"], "p2", False))
+        self.assertEqual(self.section("p2")["status"], "pending")
+        self.assertNotIn("noCode", self.section("p2"))
+        self.build("p2")
+        self.build("p3")
+        self.assertEqual(BS.gate_problems(self.root, TRACK), [])
+
+    def test_a_built_section_that_becomes_ignore_keeps_its_files_and_the_warning_is_given_once(self):
+        self.decor_world({"p2": "local"})
+        self.bs()
+        self.build_all()
+        files = self.files("p2")
+        self.decide({"p2": "ignore"})
+        self.replan_now()
+        out = self.bs()
+        self.assertEqual((out["progress"], out["noCode"], out["next"]), ("3/3", ["p2"], None))
+        self.assertEqual(len(out["warnings"]), 1)
+        self.assertIn(files[0], out["warnings"][0])
+        self.assertIn("остаются на диске", out["warnings"][0])
+        self.assertTrue((self.root / files[0]).is_file(), "движок код не удаляет")
+        self.assertNotIn("outputs", self.section("p2"))
+        self.assertNotIn("warnings", self.bs(), "предупреждение — в вызове, который записал перемену")
+
+    def test_the_list_of_closed_sections_is_capped(self):
+        ids = tuple(f"p{i}" for i in range(1, 13))
+        self.decor_world({sid: "ignore" for sid in ids[:11]}, ids=ids)
+        out = self.bs()
+        self.assertEqual((len(out["noCode"]), out["noCodeMore"], out["progress"]), (BS.SHOWN, 1, "11/12"))
+        self.assertEqual(out["next"]["sectionId"], "p12")
+
+    def test_a_hand_edited_file_is_checked_against_the_new_key(self):
+        self.decor_world()
+        self.bs()
+        good = self.state()
+        cases = {
+            "noCode, отличный от true": lambda s: s["sections"][1].update(noCode=False),
+            "секция без кода не done": lambda s: s["sections"][1].update(status="pending"),
+            "секция без кода с outputs": lambda s: s["sections"][1].update(outputs=["src/modules/orders/P2.tsx"]),
+            "done без outputs у обычной секции": lambda s: s["sections"][0].update(status="done"),
+        }
+        for label, edit in cases.items():
+            with self.subTest(label):
+                data = json.loads(json.dumps(good))
+                edit(data)
+                self.write_state(data)
+                msg = self.bs_refused()
+                self.assertIn("не проходит проверку", msg)
+                self.assertTrue("noCode" in msg or "без кода" in msg or "done без outputs" in msg, msg)
+                self.assertIn("sections[", msg)
+        self.write_state(good)
+        self.bs()
+
+
+class NoCodeUnits(unittest.TestCase):
+    def test_only_the_root_of_a_section_decided_ignore_counts(self):
+        plan = {"sections": [
+            {"id": "a", "nodes": [{"id": "a", "resolution": "ignore"}]},
+            {"id": "b", "nodes": [{"id": "b", "resolution": "local"}]},
+            {"id": "c", "nodes": [{"id": "inner", "resolution": "ignore"}]},
+            {"id": "d", "nodes": [{"id": "d", "component": "Button"}]},
+            {"id": "e", "nodes": []},
+            {"id": "f", "nodes": [{"id": "x", "resolution": "ignore"}, {"id": "f", "resolution": "ignore"}]},
+        ]}
+        self.assertEqual(PL.no_code_sections(plan), ["a", "f"], "корень секции, а не любой ignore внутри; порядок — плана")
+
+    def test_unreadable_shapes_are_not_codeless_and_do_not_raise(self):
+        for bad in (None, [], "x", {}, {"sections": None}, {"sections": "a"}, {"sections": [None, 5, "s", {}]},
+                    {"sections": [{"id": 5, "nodes": [{"id": 5, "resolution": "ignore"}]}]},
+                    {"sections": [{"id": "a", "nodes": "ignore"}]}, {"sections": [{"id": "a", "nodes": [None, "ignore", 3]}]}):
+            self.assertEqual(PL.no_code_sections(bad), [], repr(bad))
+
+    def test_reconcile_closes_reopens_and_drops_by_the_seeds_alone(self):
+        s = lambda i, **kw: dict({"id": i, "name": i.upper(), "hash": "h-" + i}, **kw)               # noqa: E731
+        out, rep = BS.reconcile(None, [s("a"), s("b", noCode=True)])
+        self.assertEqual(out, [{"id": "a", "name": "A", "hash": "h-a", "status": "pending"},
+                               {"id": "b", "name": "B", "hash": "h-b", "status": "done", "noCode": True}])
+        self.assertEqual(rep, {"stale": [], "added": [], "removed": []}, "закрытая секция «новой» не называется")
+        again, rep = BS.reconcile(out, [s("a"), s("b", noCode=True)])
+        self.assertEqual((again, rep), (out, {"stale": [], "added": [], "removed": []}), "идемпотентно")
+        moved, rep = BS.reconcile(out, [s("a"), dict(s("b", noCode=True), hash="h2")])
+        self.assertEqual((moved[1]["status"], moved[1]["hash"], rep["stale"]), ("done", "h2", []), "хеш не делает её stale")
+        reopened, rep = BS.reconcile(out, [s("a"), s("b")])
+        self.assertEqual(reopened[1], {"id": "b", "name": "B", "hash": "h-b", "status": "pending"})
+        self.assertEqual(rep["added"], ["b"])
+        built = [{"id": "b", "name": "B", "hash": "h-b", "status": "done", "outputs": ["src/m/B.tsx"]}]
+        closed, rep = BS.reconcile(built, [s("b", noCode=True)])
+        self.assertEqual(closed, [{"id": "b", "name": "B", "hash": "h-b", "status": "done", "noCode": True}], "outputs прежней сборки сняты")
+
+    def test_the_state_check_knows_the_new_key(self):
+        sec = {"id": "a", "name": "A", "hash": "h", "status": "done", "noCode": True}
+        plain = {"id": "b", "name": "B", "hash": "h2", "status": "pending"}
+        data = {"schema": 1, "track": TRACK, "frame": "main", "weightBudget": 200, "sections": [sec, plain]}
+        self.assertEqual(BS.check_state(data, TRACK, "main"), [])
+        self.assertIn("noCode", BS.SECTION_KEYS)
+        for edit in ({"noCode": "yes"}, {"noCode": False}, {"status": "stale"}, {"status": "pending"}, {"outputs": ["src/m/A.tsx"]}):
+            bad = dict(data, sections=[dict(sec, **edit), plain])
+            self.assertTrue(BS.check_state(bad, TRACK, "main"), edit)
+
+
 # ── настоящий образец ────────────────────────────────────────────────────────
 
 class ModalSample(World):
@@ -1330,7 +1564,7 @@ class Registry(unittest.TestCase):
 
     def test_descriptions_carry_the_rules_the_model_must_follow(self):
         a, b = T.TOOLS["daiver_build_state"]["description"], T.TOOLS["daiver_build_state_set"]["description"]
-        for part in ("next", "done → stale", "weightBudget", "сначала пересобери план"):
+        for part in ("next", "done → stale", "weightBudget", "сначала пересобери план", "noCode", "ignore"):
             self.assertIn(part, a)
         for part in ("ОТ КОРНЯ ПРОЕКТА", "голое имя файла", "section.hash", "Перескочить нельзя", "warnings"):
             self.assertIn(part, b)

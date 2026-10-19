@@ -788,6 +788,7 @@ def render_md(plan: Dict[str, Any]) -> str:
             elif d["decision"] == "group":
                 what = d["direction"] + ": " + "; ".join(
                     "[" + ", ".join(g["ids"]) + "] " + (f"gap={g['gap']}" if "gap" in g else f"gaps={g['gaps']}")
+                    + " box=" + ",".join(str(g["box"][k]) for k in ("x", "y", "w", "h"))         # сборке нужен и бокс группы (3.2)
                     for g in d["groups"])
             elif d.get("rest"):
                 what = "не решено (layoutRest)"
@@ -849,6 +850,20 @@ def read_plan(path: Path) -> Tuple[Optional[Dict[str, Any]], Optional[bytes], Op
     if not isinstance(data, dict):
         return None, None, "ожидается JSON-объект"
     return data, raw, None
+
+
+def no_code_sections(data: Any) -> List[str]:
+    """id секций плана, чей КОРЕНЬ решён `ignore` (§5.2: «узел не строится вовсе»): строить в такой секции нечего, и сборка закрывает
+    её сама (build_state, 3.2). Признак — запись `sections[].nodes[]` с id самой секции и `resolution: ignore`; читаются только
+    они. Неразобранное — не «без кода»: целостность плана проверяет `check_frame`, а не этот читатель."""
+    secs = data.get("sections") if isinstance(data, dict) else None
+    out: List[str] = []
+    for s in secs if isinstance(secs, list) else []:
+        sid, nodes = (s.get("id"), s.get("nodes")) if isinstance(s, dict) else (None, None)
+        if isinstance(sid, str) and isinstance(nodes, list) and any(
+                isinstance(e, dict) and e.get("id") == sid and e.get("resolution") == "ignore" for e in nodes):
+            out.append(sid)
+    return out
 
 
 def _prepare(root: Path, track: str, frame: Optional[str]) -> Tuple["RS.Ctx", "RS.State"]:

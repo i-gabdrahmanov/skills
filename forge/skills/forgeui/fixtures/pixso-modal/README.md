@@ -129,3 +129,8 @@ python3 skills/forgeui/scripts/tools/anonymize_pixso.py docs/daiver/dsl.json \
 файл воспроизводится побайтно. Дальше фикстуру используют `test_pixso_pull` (1.2),
 `test_normalize_pixso` (1.3), `test_materialize` (1.4), `test_paints_typography` (1.5), `test_art` (1.6), `test_layout_inference` (1.7), `test_outline` (1.8), `test_status_ladder` (1.10), `test_component_map` (2.1), `test_resolve` (2.4), `test_resolution_report` (2.5), `test_plan_contract` (2.6), `test_build_state` (3.1) и golden
 `canonical.golden.json` (появится после 1.3–1.5).
+
+- **Сборка (задача 3.2).** Цвета, которые пишет сборка «Modal», — четыре: фон корня `rgba(255, 255, 255, 1)`, обводка корня `rgba(31, 20, 51, 0.12)` и ДВА слоя тени одной CSS-строкой `box-shadow`
+  (`rgba(11, 11, 30, 0.161)` и `rgba(11, 11, 30, 0.039)`); цвета в `component.content[].color` трёх инстансов (`rgba(31, 20, 51, 1)`, `rgba(31, 20, 51, 0.55)`, `rgba(255, 255, 255, 1)`) — цвета слотов библиотечных
+  компонентов, в список экрана `daiver_color_tokens` не входят. Единственная секция (`2:153702`, корень решён `local`) собирается за один цикл: `daiver_build_state` — 15 строк ответа, `daiver_color_tokens(track)` — 17;
+  с заглушкой вместо `buildCommand` гейт сборки зелёный, пока секция `done` с `outputs` на диске.
