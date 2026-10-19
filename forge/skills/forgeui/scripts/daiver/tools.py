@@ -8,7 +8,7 @@
 daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_section,
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
 daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report,
-daiver_plan_write, daiver_plan_contract.
+daiver_plan_write, daiver_plan_contract, daiver_build_state, daiver_build_state_set.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from . import build_state as BS
 from . import component_map as CM
 from . import ds_lookup as DL
 from . import ds_requirements as DR
@@ -390,6 +391,28 @@ def t_plan_contract(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError(str(e))
 
 
+def t_build_state(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        frame = args.get("frame")
+        if frame is not None:
+            TR.check_frame_name(frame)
+        return BS.run(root, track, frame)
+    except (TR.TrackError, BS.BuildStateError) as e:
+        raise ToolError(str(e))
+
+
+def t_build_state_set(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        frame = args.get("frame")
+        if frame is not None:
+            TR.check_frame_name(frame)
+        return BS.set_section(root, track, frame, args["sectionId"], args["status"], args.get("outputs"), args.get("hash"))
+    except (TR.TrackError, BS.BuildStateError) as e:
+        raise ToolError(str(e))
+
+
 # Схема вердикта (INV-A7, §10.2): поля берутся из резолва — одно место правды; клиент видит их в tools/list.
 VERDICT_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -680,6 +703,44 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "schema": {"type": "object", "properties": {
             "track": {"type": "string", "description": "ключ стори (имя трека)"}},
             "required": ["track"], "additionalProperties": False},
+    },
+    "daiver_build_state": {
+        "fn": t_build_state,
+        "description": ("Состояние сборки кадра (build-state.json) — первый ход шага ui-build и каждого его возобновления. Создаёт "
+                        "его из buildOrder плана (все секции pending) или сверяет с планом и возвращает next — точку возобновления "
+                        "(первая секция не done по порядку плана) — и progress: прогон, остановленный на секции 3 из 6, "
+                        "продолжается с next, а не с нуля. Сверку считает КОД: хеш секции в плане не изменился — done остаётся; "
+                        "изменился — done → stale (перестроить ТОЛЬКО её, файлы прежней сборки — next.outputs); новые id — pending; "
+                        "удалённые выпадают; порядок и имена — по плану. План, не соответствующий нынешнему макету (хеши buildOrder "
+                        "≠ секциям канона), — отказ: сначала пересобери план (daiver_plan_write). weightBudget в ответе — тот, с "
+                        "которым вызывается daiver_section. warnings — outputs, которых нет на диске: разбери сразу. Файл пишет "
+                        "только этот инструмент и daiver_build_state_set; руками его не читай и не правь."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"}},
+            "required": ["track"], "additionalProperties": False},
+    },
+    "daiver_build_state_set": {
+        "fn": t_build_state_set,
+        "description": ("Перевод ОДНОЙ секции в in_progress (начал; секция обязана быть next) или done (закончил). На done "
+                        "обязательны outputs — файлы секции, пути ОТ КОРНЯ ПРОЕКТА (src/modules/x/Screen.tsx) или абсолютные внутри "
+                        "репо; голое имя файла (Screen.tsx), каталог и путь вне репо — отказ: код-гейт открывает именно эти строки, — и "
+                        "hash — section.hash из ответа daiver_section для ЭТОЙ секции (чужой hash — отказ, он в ответах не "
+                        "называется). Перескочить нельзя: done — только из in_progress (повторный done обновляет outputs), "
+                        "in_progress — только для next. pending и stale выставляет сверка (daiver_build_state), не ты. Неизвестный "
+                        "sectionId — отказ с перечнем настоящих. Путь из outputs, которого нет на диске, — не отказ, а warnings: "
+                        "создай файл или поправь путь повторным done."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "sectionId": {"type": "string", "description": "id секции — next.sectionId из ответа daiver_build_state"},
+            "status": {"type": "string", "enum": list(BS.SETTABLE),
+                       "description": "in_progress — начал секцию; done — закончил (нужны outputs и hash)"},
+            "outputs": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": BS.MAX_OUTPUTS,
+                        "description": "только при done: файлы, которые записала секция, — пути от корня проекта "
+                                       "(src/modules/x/Screen.tsx) или абсолютные внутри репо"},
+            "hash": {"type": "string", "description": "только при done: section.hash из ответа daiver_section для этой секции"}},
+            "required": ["track", "sectionId", "status"], "additionalProperties": False},
     },
     "daiver_ds_requirements": {
         "fn": t_ds_requirements,

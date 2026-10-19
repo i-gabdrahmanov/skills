@@ -25,8 +25,8 @@
 clean ⇔ все кадры clean. `outcome` трека — агрегат: clean (все кадры clean) | defects-remaining (есть
 кадр в verifying) | never-run (иначе: часть кадров не проверялась); `blocked:<причина>` — задача 7.1.
 
-Минимальный контракт артефактов, которых ещё нет как кода (их пишут 2.6, 3.1, 4.8 — лестница читает
-ровно эти поля и ничего шире; имена файлов — из `track.frame_paths`):
+Минимальный контракт артефактов (пишут 2.6, 3.1, 4.8 — лестница читает ровно эти поля и ничего шире; имена файлов — из
+`track.frame_paths`; писатель build-state.json — `build_state.py`, он добавляет свои поля совместимо):
   plan.json          JSON-объект; содержимое не читается — важны наличие и разбираемость;
   build-state.json   {"sections": [{"status": pending|in_progress|done|stale, …}, …]}, список не пуст
                      (пустой «все готово» ничего не собрал — читается как повреждённый);
@@ -319,10 +319,11 @@ def _frame_next(track: str, view: Dict[str, Any], facts: Dict[str, Any]) -> str:
         text = (f"{who} — канон есть, плана нет: карта секций (daiver_outline), резолв компонентов, план секций; "
                 f"подпись плана — решение человека")
     elif stage == "planned":
-        text = f"{who} — план есть, сборки нет: после подписи плана собрать секции по buildOrder"
+        text = (f"{who} — план есть, сборки нет: после подписи плана daiver_build_state создаст состояние сборки из "
+                f"buildOrder и вернёт next — первую секцию")
     elif stage == "building":
         done, total = facts["build"]
-        text = (f"{who} — секций готово {done} из {total}: продолжить с первой pending/stale "
+        text = (f"{who} — секций готово {done} из {total}: продолжить с первой секции не done "
                 f"(daiver_build_state → next)")
     elif stage == "built":
         text = f"{who} — собран, проверок не было: начать первую итерацию проверки"
