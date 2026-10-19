@@ -18,7 +18,8 @@ INV C6, C7, F7; QG N5, R4).
     нет согласия / привязано к другому тексту / записано без привязки / дописано мимо писателя — не подтверждено; перегенерация
     отчёта снимает устаревшее согласие сама (иначе `record_approval` не записал бы новое по активному ключу);
   • инструмент `daiver_resolve_report` и гейт `ui_gate.py design`: нерешённое, отсутствующий и устаревший отчёт, неподтверждённые
-    вердикты — exit 1 с причинами; всё в порядке — exit 3 (план секций — задача 2.6); гейт только читает диск;
+    вердикты — exit 1 с причинами; резолв в порядке — причин резолва в выводе нет, но exit остаётся 1, пока нет плана и подписи
+    (задача 2.6: гейт растёт вместе с шагом); гейт только читает диск;
   • `icons.fallback` в ответе `daiver_resolve_query` для иконки без правила карты.
 
 Данные. «Modal» — настоящий образец (корень-фрейм и три инстанса, «Modal Header» ×2 с одинаковыми вариантами); большие кадры,
@@ -229,6 +230,11 @@ class Base(unittest.TestCase):
         if bind:
             cmd += ["--bind-file", bind]
         return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=60)
+
+    def assertResolveClean(self, r: "subprocess.CompletedProcess[str]") -> None:
+        """В выводе гейта нет ни одной причины резолва (дальше его останавливают план и подпись — задача 2.6)."""
+        for phrase in ("не решено кандидатов", "отчёта резолва нет", "отчёт резолва устарел", "не подтверждены"):
+            self.assertNotIn(phrase, r.stderr)
 
     def gate(self, step="design", feature=TRACK) -> "subprocess.CompletedProcess[str]":
         return subprocess.run([sys.executable, "-X", "utf8", str(UI_GATE), step, "--project", str(self.root),
@@ -889,21 +895,25 @@ class Gate(Base):
         self.assertIn("не подтверждены", r.stderr)
         self.assertIn("record_approval.py --key ui-resolve-STOR-100", r.stderr)
         self.record("да, все вердикты верны")
-        self.assertEqual(self.gate().returncode, 3)
+        r = self.gate()
+        self.assertEqual(r.returncode, 1, "резолв подтверждён, но плана секций ещё нет")
+        self.assertResolveClean(r)
+        self.assertIn("плана кадра нет", r.stderr)
         self.fin(comp_verdict("a", "ModalAction", "medium", rationale="пересмотрено"))
         r = self.gate()
         self.assertEqual(r.returncode, 1, "вердикт изменён после отчёта и согласия")
         self.assertIn("устарел", r.stderr)
 
-    def test_everything_resolved_and_confirmed_still_stops_at_the_plan_with_exit_3(self):
+    def test_everything_resolved_and_confirmed_still_stops_at_the_plan(self):
         self.repo()
         self.resolve_screen(low_action=True)
         self.report()
         self.record("да, все вердикты верны")
         r = self.gate()
-        self.assertEqual(r.returncode, 3, "exit 0 невозможен: плана секций и подписи (задача 2.6) нет")
-        self.assertIn("2.6", r.stderr)
-        self.assertIn("резолв компонентов закончен и подтверждён", r.stderr)
+        self.assertEqual(r.returncode, 1, "exit 0 невозможен без плана секций и подписи плана (задача 2.6)")
+        self.assertResolveClean(r)
+        self.assertIn("plan: плана кадра нет", r.stderr)
+        self.assertIn("daiver_plan_write", r.stderr)
 
     def test_other_steps_are_untouched_and_arguments_are_checked(self):
         for step in ("build", "verify"):
@@ -919,7 +929,7 @@ class Gate(Base):
         self.resolve_screen(low_action=True)
         self.report()
         self.record("да, все вердикты верны")
-        self.assertEqual(self.gate().returncode, 3)
+        self.assertResolveClean(self.gate())
         path = self.root / REPORT_REL
         path.write_text(path.read_text(encoding="utf-8").replace("| да |", "| — |"), encoding="utf-8")
         r = self.gate()
@@ -928,7 +938,7 @@ class Gate(Base):
         out = self.report()                                   # писатель возвращает файл к тому, что вытекает из вердиктов
         self.assertTrue(out["written"])
         self.assertTrue(out["confirmed"], "согласие было привязано к настоящему тексту, он вернулся — подтверждение снова верно")
-        self.assertEqual(self.gate().returncode, 3)
+        self.assertResolveClean(self.gate())
 
     def test_the_gate_only_reads(self):
         self.repo()
@@ -950,7 +960,7 @@ class Gate(Base):
         self.assertEqual(r.returncode, 1)
         self.assertIn("кадр «detail»: не решено кандидатов 1", r.stderr)
         self.report()
-        self.assertEqual(self.gate().returncode, 3)
+        self.assertResolveClean(self.gate())
 
 
 # ── иконка без правила карты: icons.fallback в ответе резолва ─────────────────

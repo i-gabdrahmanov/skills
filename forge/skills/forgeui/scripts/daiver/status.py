@@ -45,8 +45,8 @@ goal-image-missing, art-svg-missing, implementation-url-missing, specs-missing, 
 `track.raster_info`, адрес страницы — `track.implementation_url`; логика здесь не дублируется.
 
 Допущение, не проверенное данными: «записаны sources — страница уже в коде» (§3.2) ступень НЕ повышает.
-Поля `sources` в track.yaml ещё нет (его заведёт 6.4), а `sources` пишутся на ui-design, до плана и сборки
-(§12.2): повышение «по факту записи» отправило бы кадр правки существующей страницы сразу в ui-verify,
+Поле `sources` в track.yaml заведено задачей 2.6 (для пунктов `sources` и `baseline` контракта плана), а `sources` пишутся на
+ui-design, до плана и сборки (§12.2): повышение «по факту записи» отправило бы кадр правки существующей страницы сразу в ui-verify,
 минуя ui-build. Как кадр-страница без build-state попадает в built — решает 6.4, когда появится поток.
 """
 from __future__ import annotations

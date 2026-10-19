@@ -103,6 +103,32 @@ class Validation(unittest.TestCase):
         m["frames"][0].update(role="state", stateOf="err")
         self.assertIn("первичный кадр", "\n".join(TR.validate(m)))
 
+    def test_page_base_sources_and_scope(self):
+        """Кадр, правящий существующую страницу (задача 2.6): sources — файлы от корня репо, scope — change | page и только с sources."""
+        m = manifest()
+        m["frames"][0].update(sources=["src/pages/Orders.tsx", "src/pages/Orders.less"], scope="change")
+        self.assertEqual(TR.validate(m), [])
+        for bad in ("/etc/passwd", "../x.tsx", "a\\b", "~/x.tsx"):
+            self.assertIn("относительный путь", self.problems(lambda m: m["frames"][0].update(sources=[bad])), bad)
+        self.assertIn("список файлов", self.problems(lambda m: m["frames"][0].update(sources="src/a.tsx")))
+        self.assertIn("повторяется", self.problems(lambda m: m["frames"][0].update(sources=["a.tsx", "a.tsx"])))
+        self.assertIn("scope", self.problems(lambda m: m["frames"][0].update(sources=["a.tsx"], scope="all")))
+        self.assertIn("только вместе с sources", self.problems(lambda m: m["frames"][0].update(scope="page")))
+        self.assertIn("только вместе с sources", self.problems(lambda m: m["frames"][0].update(sources=[], scope="page")))
+        self.assertEqual(TR.validate(manifest()), [], "нет sources — кадр строится с нуля, это не ошибка")
+
+    def test_sources_and_scope_keep_their_place_in_the_file(self):
+        m = manifest()
+        m["frames"][0].update(url="http://x.y/a", sources=["src/a.tsx"], scope="page", notes="n")
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        TR.save(Path(tmp.name), m)
+        body = (Path(tmp.name) / ".daiver/tracks/STOR-100/track.yaml").read_text(encoding="utf-8")
+        self.assertLess(body.index("url: http://x.y/a"), body.index("sources:"))
+        self.assertLess(body.index("sources:"), body.index("scope: page"))
+        self.assertLess(body.index("scope: page"), body.index("notes"))
+        self.assertEqual(TR.load(Path(tmp.name), "STOR-100"), m)
+
 
 class Files(unittest.TestCase):
     def setUp(self):
@@ -225,6 +251,18 @@ class SetFields(unittest.TestCase):
         self.assertIn("frameUrl", text)
         self.assertIn("rasterPath", text, "про растр подсказано, как прикрепить")
         self.assertIn("colour", text)
+
+    def test_sources_and_scope_are_settable_together_and_cleared_together(self):
+        m = manifest()
+        new, changed, problems = TR.apply_set(m, "main", {"sources": ["src/pages/Orders.tsx"], "scope": "change"})
+        self.assertEqual((problems, sorted(changed)), ([], ["scope", "sources"]))
+        _, _, p = TR.apply_set(new, "main", {"sources": None})
+        self.assertIn("только вместе с sources", "\n".join(p), "sources без scope не снять: scope осиротеет")
+        cleared, changed2, p2 = TR.apply_set(new, "main", {"sources": None, "scope": None})
+        self.assertEqual((p2, sorted(changed2)), ([], ["scope", "sources"]))
+        self.assertNotIn("sources", cleared["frames"][0])
+        _, _, p3 = TR.apply_set(m, None, {"sources": ["a.tsx"]})
+        self.assertIn("поле кадра — укажите frame", p3[0])
 
     def test_state_of_sets_role_and_is_validated(self):
         m = manifest(("main", "err"))

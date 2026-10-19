@@ -10,6 +10,10 @@
 (`frame_paths`), а не склеиваются инструментами — иначе переезд сломал бы каждый из них.
 Пути в манифесте — от папки трека (`specs` — от корня репо: спеки лежат рядом со стори, вне трека).
 Подписи плана в манифесте нет: подпись — согласие человека `ui-plan-<KEY>` в журнале forge.
+
+Кадр, который правит СУЩЕСТВУЮЩУЮ страницу (а не строит новый модуль), несёт `sources` (файлы страницы, пути от корня репо) и
+`scope` (change | page); нет `sources` — кадр строится с нуля. Поля нужны контракту плана (задача 2.6: `sources` и `baseline`),
+остальной поток правки страницы — 6.3/6.4.
 """
 from __future__ import annotations
 
@@ -37,6 +41,7 @@ HEADER = [
 ]
 
 ROLES = ("screen", "dialog", "state", "breakpoint")
+SCOPES = ("change", "page")             # кадр правит существующую страницу: точечно или целиком (§12.2, §14.4.6)
 REQUIREMENT_KINDS = ("pixso", "figma-json-a", "figma-json-b", "figma-html")
 REQUIREMENT_FILE = {"pixso": "visual-requirements.pixso.json", "figma-json-a": "visual-requirements.json",
                     "figma-json-b": "visual-requirements.json", "figma-html": "visual-requirements.html"}
@@ -44,8 +49,8 @@ RAW_FILE = "visual-requirements.pixso.raw.json"
 CANONICAL_FILE = "visual-requirements.canonical.json"
 
 FRAME_ORDER = ("name", "role", "dir", "frameUrl", "requirement", "raster", "frameBox", "url", "open",
-               "stateOf", "notes")
-FRAME_SETTABLE = ("role", "url", "open", "stateOf", "frameBox", "notes")      # daiver_track_manifest
+               "stateOf", "sources", "scope", "notes")
+FRAME_SETTABLE = ("role", "url", "open", "stateOf", "frameBox", "sources", "scope", "notes")      # daiver_track_manifest
 TRACK_SETTABLE = ("implementation", "specs")
 PULL_OWNED = ("name", "dir", "frameUrl", "requirement", "raster")             # пишут pull и rasterPath
 
@@ -210,6 +215,22 @@ def _validate_frame(f: Any, i: int) -> List[str]:
         problems += R.validate_recipe(f["open"], f"{where}.open")
     if "stateOf" in f and not isinstance(f["stateOf"], str):
         problems.append(f"{where}.stateOf: имя кадра-экрана")
+    if "sources" in f:
+        src = f["sources"]
+        if not isinstance(src, list):
+            problems.append(f"{where}.sources: список файлов существующей страницы, пути от корня репо")
+        else:
+            for j, p in enumerate(src):
+                pr = rel_problem(p, f"{where}.sources[{j}]")
+                if pr:
+                    problems.append(pr)
+            if len(set(x for x in src if isinstance(x, str))) != len([x for x in src if isinstance(x, str)]):
+                problems.append(f"{where}.sources: путь повторяется")
+    if "scope" in f:
+        if f["scope"] not in SCOPES:
+            problems.append(f"{where}.scope: {f['scope']!r} — допустимы {', '.join(SCOPES)}")
+        elif not (isinstance(f.get("sources"), list) and f["sources"]):
+            problems.append(f"{where}.scope: задаётся только вместе с sources (страницы в коде нет — менять нечего)")
     if "notes" in f and not (isinstance(f["notes"], str) and "\n" not in f["notes"]):
         problems.append(f"{where}.notes: строка в одну линию")
     return problems

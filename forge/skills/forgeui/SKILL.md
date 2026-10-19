@@ -77,10 +77,9 @@ description: >
 > делай — заблокирует `inline-phase-guard`, а без `SubagentStop` шаг не закроется. Субагент
 > ПОСЛЕДНИМ действием гоняет свой гейт через раннер и возвращает JSON с `step_id` и `status`.
 
-> **Этап реализации.** Сейчас forge-ui исполняет `ui-spec` полностью, а `ui-design` — до подтверждённого резолва
-> компонентов (§3). План секций и подпись плана, `ui-build`, `ui-verify` ещё строятся (tasks/019-forge-ui.md): их гейт
-> отвечает exit 3 «не реализовано». Дойдя до него, честно остановись и скажи пользователю, докуда конвейер дошёл.
-> Код вручную «вместо движка» не пиши.
+> **Этап реализации.** Сейчас forge-ui исполняет `ui-spec` и `ui-design` полностью — до подписи плана секций (§3). Сборка `ui-build` и
+> проверка `ui-verify` ещё строятся (tasks/019-forge-ui.md): их гейт отвечает exit 3 «не реализовано». Дойдя до него, честно остановись и
+> скажи пользователю, докуда конвейер дошёл. Код вручную «вместо движка» не пиши.
 
 ### 1.1. Инициализация прогона
 ```
@@ -159,7 +158,7 @@ prompt:
    «Правки» — верни субагенту с правками; утверждение не выписывай.
 4. Вопрос не отрендерился (headless) — не выписывай утверждение сам: остановись и попроси ответ.
 
-## 3. Дизайн по макету → `ui-design` (макет → канон → компоненты; план секций — следующий этап)
+## 3. Дизайн по макету → `ui-design` (макет → канон → компоненты → план секций → подпись)
 
 Шаг ведёт субагент, резолв компонентов — в нём же. Вопросы человеку и согласия — дело оркестратора (§3.1). Кадры — ТОЛЬКО из таблицы
 «Кадры» `<storydir>/ui-spec.md`: имя и ссылку на макет берут оттуда или у пользователя; нет ссылки — вопрос, а не правдоподобный URL.
@@ -221,21 +220,28 @@ prompt:
 7. layoutHints — для узлов из `unproven`, лестница сверху вниз: (а) `daiver_source_nodes(track, frame, nodeIds)` по id из `children`
    (у layout-hints — сам `id`): что дизайнер объявил (constraints, auto-layout), то сильнее впечатления, и вопросов не нужно;
    (б) не объявлено, а `goalImageNext` велит открыть картинку — открой `goalImage` ТОЛЬКО чтобы сгруппировать контейнер, числа
-   (px, цвета, шрифты) с неё не брать; (в) осталось неясным — вопрос пользователю, не догадка. Раскладку px → flex меняет только
-   план секций; код на этом шаге не пишется.
-8. Конец. Гейт напрямую (раннер `record_gate` причин не печатает):
-   `python3 <forge>/skills/forgeui/scripts/ui_gate.py design --project <toplevel> --feature <KEY>`. exit 1 — причины в выводе,
-   исправь и повтори. exit 3 — резолв закончен и подтверждён, плана секций и подписи в движке пока нет: `status:"stopped"`.
-   Шаг не закрывай и не обходи.
-Верни JSON: {"step_id":"ui-design","status":"needs_input|blocked|stopped|failed","frames":["<кадр> (<stage>)"],"warnings":["…"],
-"blocked":"<причина>|null","pending_questions":[{"id":"…","kind":"map-rule|confirm-resolutions|other","question":"…","rule":{…}}]}
+   (px, цвета, шрифты) с неё не брать; (в) осталось неясным — вопрос пользователю, не догадка. Решение запишет план (п. 8).
+8. План, по каждому кадру: `daiver_plan_write(track, frame, plan)`. В `plan.layout` — решение по КАЖДОЙ записи `unproven` (`{id, reason, decision,
+   evidence}` из записи; decision: apply | keep-px у layout-hints, keep-px | group у absolute-children, при group ещё `direction` и `groups`; evidence:
+   declaration | goal-image | user | none; apply и group без свидетельства код не примет). Не решаешь — `plan.layoutRest: "keep-px"` (px остаётся, узел
+   попадёт в planUncertainty). Секции, хеши, решения по узлам и порядок сборки считает код — в plan их не пиши. Отказ перечисляет ВСЕ нарушения: исправь и повтори.
+9. `daiver_plan_contract(track)` — что автономная сборка ещё спросила бы. Пункт из `open[]` с `ask` и владельцем human — вопрос
+   пользователю ДОСЛОВНО (`id:"plan-<id>"`, у пункта с кадром `plan-<id>-<кадр>`, `kind:"plan-question"`) → `needs_input`; ответ запиши по
+   `record` и вызови контракт снова. Пункты владельца plan чини сам по `detail` и `record`. Неблокирующий пункт без ответа (в том числе
+   владельца host) — принятая деградация: она попадёт в ui-plan.md с ценой. `ready:true` и `signed:false` — ОДИН вопрос `id:"sign-plan"`, `kind:"sign-plan"`:
+   строки `toSign` дословно и путь ui-plan.md → `needs_input`. Подпись не выписывай: согласие запишет оркестратор.
+10. Конец. `signed:true` — гейт через раннер, затем `status:"completed"`:
+   `python3 <forge>/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgeui --feature <KEY> --step-id ui-design --cmd "python3 <forge>/skills/forgeui/scripts/ui_gate.py design --project <toplevel> --feature <KEY>"`
+   Раннер причин не печатает: упал — запусти `ui_gate.py design` напрямую, исправь и повтори. Шаг не обходи.
+Верни JSON: {"step_id":"ui-design","status":"needs_input|blocked|completed|failed","frames":["<кадр> (<stage>)"],"warnings":["…"],
+"blocked":"<причина>|null","pending_questions":[{"id":"…","kind":"map-rule|confirm-resolutions|plan-question|sign-plan|other","question":"…","rule":{…}}]}
 ```
 
 ### 3.1. Вопросы субагента и согласия (оркестратор)
 
 `needs_input` — задай каждый вопрос из `pending_questions` через `ask_user_question` дословно и перезапусти субагента, передав ответы как
-`<id>: <ответ дословно>`. Два вида вопросов несут согласие; его пишешь ты, сразу после явного «да» (цитата — ответ пользователя
-дословно; вопрос не отрендерился — согласия нет):
+`<id>: <ответ дословно>`. Три вида вопросов несут согласие (`confirm-resolutions`, `map-rule`, `sign-plan`); его пишешь ты, сразу после
+явного «да» (цитата — ответ пользователя дословно; вопрос не отрендерился — согласия нет):
 - `confirm-resolutions` (варианты «Да, всё верно» / «Правки»). На «Да, всё верно»:
   `python3 <forge>/skills/pipeline-state/scripts/record_approval.py --project <toplevel> --key ui-resolve-<KEY> --bind-file .daiver/tracks/<KEY>/resolution-report.md --approved-by user --reason "вердикты резолва подтверждены" --evidence "<ответ дословно>"`
   Согласие привязано к ТЕКУЩЕМУ тексту отчёта: вердикт поправили — отчёт другой, подтверждение слетит и спросят снова. На «Правки»
@@ -244,10 +250,17 @@ prompt:
   `python3 <forge>/skills/pipeline-state/scripts/record_approval.py --project <toplevel> --key ui-map-<KEY> --approved-by user --reason "правило карты: <match>" --evidence "<ответ дословно>"`
   затем `daiver_map_append(track, rule)` с этим `rule`, без `dryRun`. Согласие тратится на одно правило: следующему нужно своё «да».
   На «Нет» просто передай ответ субагенту.
+- `sign-plan` (варианты «Да, подписываю» / «Правки»). На «Да, подписываю» сразу:
+  `python3 <forge>/skills/pipeline-state/scripts/record_approval.py --project <toplevel> --key ui-plan-<KEY> --bind-file .daiver/tracks/<KEY>/plan.lock.json --approved-by user --reason "план секций подписан" --evidence "<ответ дословно>"`
+  Подпись привязана к ТЕКУЩЕМУ plan.lock.json: правка плана, перетяжка макета, новый вердикт или спека её снимут, и спросят заново. Затем
+  перезапусти субагента с `sign-plan: <ответ>`. На «Правки» перезапусти его с их текстом, согласия не пиши.
+
+`plan-question` (адрес страницы, команда запуска, иллюстрации… из контракта плана) согласия не несёт: задай `question` дословно, ничего
+не записывай, ответ верни субагенту как `<id>: <ответ>`.
 
 `blocked` — скажи пользователю причину дословно: `library-source-unreachable` значит, что у резолва нет списка библиотеки (требования ДС не
-построены или устарели, `library.scanPaths` пуст, сервер сторибука не отвечает); после исправления перезапусти шаг. `stopped` — скажи:
-«резолв компонентов закончен и подтверждён; план секций и подпись плана — следующий этап, forge-ui его пока не умеет». Шаг не закрывай.
+построены или устарели, `library.scanPaths` пуст, сервер сторибука не отвечает); после исправления перезапусти шаг. `completed` — гейт
+пройден через раннер, шаг закрыт (подпись плана записана): дальше `ui-build`, которого в движке пока нет — честно остановись.
 
 ## 4. Сборка → `ui-build` (строится: этап 3)
 

@@ -6,12 +6,14 @@
   • каждое `daiver_*` в брифе — зарегистрированный инструмент; в записях вызова `daiver_x(a, b)` каждый аргумент есть в схеме
     инструмента и названы все обязательные (модель копирует вызов как есть; опечатка в имени — отказ в бою);
   • бриф ui-design называет все инструменты шага (обрубок брифа не проходит) и не называет инструменты, которых ещё нет
-    (план секций, build_state — следующие задачи);
+    (build_state, verify — следующие задачи; инструмента подписи плана не будет никогда: подпись — согласие человека);
   • команды оболочки в брифе исполнимы: однострочные, без `$(...)` и обратных кавычек (рантайм режет), парсятся POSIX-shlex;
     `record_approval.py` и `ui_gate.py` из брифа ЗАПУСКАЮТСЯ как написаны (плейсхолдеры подставлены) и принимаются скриптами;
-  • у согласий из брифа есть цитата пользователя (--evidence) там, где ключ — класс согласий с цитатой, и привязка к отчёту
-    (--bind-file на resolution-report.md) у `ui-resolve`; классы согласий — те, что зарегистрированы в forge_events;
+  • у согласий из брифа есть цитата пользователя (--evidence) там, где ключ — класс согласий с цитатой, и привязка к тому, что
+    человек прочёл (--bind-file: `resolution-report.md` у `ui-resolve`, `plan.lock.json` у `ui-plan`); классы согласий — те, что
+    зарегистрированы в forge_events;
   • причина останова `blocked` — константа движка; статусы JSON, которые бриф разрешает субагенту, разобраны оркестратором (§3.1);
+    виды вопросов (`kind`) — те, что оркестратор умеет задать и обработать (в том числе подпись плана, 2.6);
   • путь, который бриф предлагает для выгрузки DSL (`.daiver/inbox/…`), принимает `daiver_pixso_pull`;
   • длина: бриф читает слабая модель, поэтому файл и раздел §3 ограничены (растёт — выноси проверки в код, а не в текст).
 Что НЕ проверяется: понимает ли слабая модель формулировки — это боевой прогон (X.4, чек-лист шага).
@@ -35,6 +37,7 @@ sys.path.insert(0, str(FORGE / "hooks"))
 
 import forge_events as FE  # noqa: E402
 from daiver import ds_lookup as DL  # noqa: E402
+from daiver import plan_contract as PC  # noqa: E402
 from daiver import resolution_report as RR  # noqa: E402
 from daiver import tools as T  # noqa: E402
 
@@ -46,9 +49,9 @@ TEXT = SKILL.read_text(encoding="utf-8")
 STEP_TOOLS = ("daiver_status", "daiver_pixso_pull", "daiver_track_manifest", "daiver_normalize", "daiver_svg_assets",
               "daiver_outline", "daiver_ds_inventory", "daiver_ds_requirements", "daiver_ds_lookup", "daiver_ds_details",
               "daiver_resolve_candidates", "daiver_resolve_query", "daiver_resolve_finalize", "daiver_resolve_report",
-              "daiver_source_nodes", "daiver_map_append")
+              "daiver_source_nodes", "daiver_map_append", "daiver_plan_write", "daiver_plan_contract")
 MAX_FILE_LINES = 320
-MAX_STEP_LINES = 95
+MAX_STEP_LINES = 110                            # шаг вырос на план, контракт и подпись (2.6): 8 → 10 пунктов
 
 
 def section(start: str, end: str) -> str:
@@ -83,7 +86,7 @@ class Tools(unittest.TestCase):
         names = set(re.findall(r"\bdaiver_[a-z_]+\b", LIVE))
         self.assertTrue(names)
         self.assertEqual(sorted(n for n in names if n not in T.TOOLS), [],
-                         "бриф называет инструменты, которых нет (план секций и build_state — следующие задачи)")
+                         "бриф называет инструменты, которых нет (build_state и verify — следующие задачи)")
 
     def test_call_records_use_schema_arguments_and_name_the_required_ones(self):
         calls = re.findall(r"`(daiver_[a-z_]+)\(([^`()]*)\)`", STEP)
@@ -102,14 +105,14 @@ class Tools(unittest.TestCase):
     def test_the_step_names_every_tool_it_needs_and_no_future_ones(self):
         for tool in STEP_TOOLS:
             self.assertTrue(tool in STEP, f"бриф ui-design не называет {tool}")
-        for future in ("daiver_plan_write", "daiver_plan_contract", "daiver_build_state", "daiver_verify_compare",
-                       "daiver_plan_sign", "daiver_color_tokens"):
+        for future in ("daiver_build_state", "daiver_verify_compare", "daiver_plan_sign", "daiver_color_tokens"):
             self.assertTrue(future not in LIVE, f"{future}: инструмента нет, бриф шага не должен его обещать")
 
     def test_one_place_per_rule_no_duplicated_paragraphs(self):
         # согласия описаны один раз (§3.1), прежние абзацы про карту/библиотеку/резолв влиты в процедуру шага
         self.assertEqual(TEXT.count("--key ui-resolve-<KEY>"), 1)
         self.assertEqual(TEXT.count("--key ui-map-<KEY>"), 1)
+        self.assertEqual(TEXT.count("--key ui-plan-<KEY>"), 1)
         for old in ("**Карта компонентов**", "**Требования дизайн-системы**", "**Библиотека, когда в карте нет правила**",
                     "**Резолв кандидатов**", "отдельная часть этого шага, в брифе её пока нет"):
             self.assertTrue(old not in TEXT, f"абзац вернулся: {old}")
@@ -142,9 +145,12 @@ class Commands(unittest.TestCase):
                 self.assertIn("--evidence", c, f"{key}: класс согласий с цитатой пользователя")
         self.assertIn("ui-resolve-<KEY>", keys)
         self.assertIn("ui-map-<KEY>", keys)
+        self.assertIn("ui-plan-<KEY>", keys)
         bound = keys["ui-resolve-<KEY>"]
         self.assertIn(f"--bind-file .daiver/tracks/<KEY>/{RR.REPORT_NAME}", bound,
                       "подтверждение привязано к отчёту, который строит движок")
+        self.assertIn(f"--bind-file .daiver/tracks/<KEY>/{PC.LOCK_NAME}", keys["ui-plan-<KEY>"],
+                      "подпись привязана к lock плана, который строит движок: без привязки она пережила бы любую правку плана")
 
     def test_consent_classes_named_in_the_brief_are_registered(self):
         classes = set(re.findall(r"`(ui-[a-z]+)-<KEY>`", TEXT)) | set(re.findall(r"`(ui-[a-z]+)-\*`", TEXT))
@@ -161,10 +167,13 @@ class Commands(unittest.TestCase):
         report = root / ".daiver" / "tracks" / "STOR-1" / RR.REPORT_NAME
         report.parent.mkdir(parents=True)
         report.write_text("# отчёт\n", encoding="utf-8")
+        (report.parent / PC.LOCK_NAME).write_text("{}\n", encoding="utf-8")
         ran = 0
         for c in shell_commands(TEXT):
             if "record_approval.py" not in c and "ui_gate.py" not in c:
                 continue
+            if "record_gate.py" in c:
+                continue                                         # раннер гейта — отдельный тест ниже
             argv = shlex.split(substitute(c, root))
             r = subprocess.run([sys.executable, "-X", "utf8"] + argv[1:], capture_output=True, text=True,
                                encoding="utf-8", timeout=60)
@@ -174,7 +183,22 @@ class Commands(unittest.TestCase):
             else:
                 self.assertEqual(r.returncode, 0, f"{c}\n{r.stderr}")
             ran += 1
-        self.assertGreaterEqual(ran, 4, "согласия ui-spec, ui-resolve, ui-map и гейт design")
+        self.assertGreaterEqual(ran, 4, "согласия ui-spec, ui-resolve, ui-map и ui-plan")
+
+    def test_the_gate_runner_command_runs_as_written_and_is_accepted_by_the_substance_check(self):
+        """record_gate.py не откажет команде из брифа (в ней есть сам гейт фазы) и честно запишет FAILED на пустом проекте."""
+        cmds = [c for c in shell_commands(TEXT) if "record_gate.py" in c and "--step-id ui-design" in c]
+        self.assertEqual(len(cmds), 1)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        argv = shlex.split(substitute(cmds[0], root))
+        inner = argv.index("--cmd") + 1
+        self.assertTrue(argv[inner].startswith("python3 "), argv[inner])
+        argv[inner] = f"{sys.executable} -X utf8 " + argv[inner][len("python3 "):]       # тот же интерпретатор, что у теста
+        r = subprocess.run([sys.executable, "-X", "utf8"] + argv[1:], capture_output=True, text=True, encoding="utf-8", timeout=120)
+        self.assertEqual(r.returncode, 1, f"{r.stdout}\n{r.stderr}")                  # 2 — раннер отказал команде
+        self.assertIn("ui-design: FAILED", r.stdout)
 
     def test_the_design_gate_command_names_both_required_flags(self):
         gate = [c for c in shell_commands(STEP) if "ui_gate.py design" in c]
@@ -188,9 +212,9 @@ class Statuses(unittest.TestCase):
         m = re.search(r'"status":"([a-z_|]+)"', STEP)
         self.assertTrue(m)
         statuses = set(m.group(1).split("|"))
-        self.assertEqual(statuses, {"needs_input", "blocked", "stopped", "failed"})
+        self.assertEqual(statuses, {"needs_input", "blocked", "completed", "failed"})
         orchestrator = section("### 3.1", "## 4. Сборка")
-        for st in ("needs_input", "blocked", "stopped"):
+        for st in ("needs_input", "blocked", "completed"):
             self.assertIn(st, orchestrator, f"{st}: оркестратор не знает, что с этим делать")
 
     def test_the_blocked_reason_is_the_engines_constant(self):
@@ -200,9 +224,12 @@ class Statuses(unittest.TestCase):
         self.assertEqual(set(re.findall(r"blocked:\s?\"?([a-z-]+)", STEP)) - {""}, {DL.BLOCKED})
 
     def test_pending_question_kinds_match_what_the_report_tool_speaks_of(self):
-        for kind in ("map-rule", "confirm-resolutions"):
+        for kind in ("map-rule", "confirm-resolutions", "plan-question", "sign-plan"):
             self.assertIn(f'kind:"{kind}"', STEP)
             self.assertIn(f"`{kind}`", section("### 3.1", "## 4. Сборка"))
+        desc = T.TOOLS["daiver_plan_contract"]["description"]
+        for word in ("ask", "record", "toSign", "planUncertainty"):
+            self.assertIn(word, desc, f"инструмент контракта не говорит про {word}, а бриф на него ссылается")
         desc = T.TOOLS["daiver_resolve_report"]["description"]
         self.assertIn("toConfirm", desc)
         self.assertIn("proposals", desc)
@@ -232,9 +259,9 @@ class Length(unittest.TestCase):
         self.assertTrue(TEXT.startswith("---\nname: forgeui\n"))
 
     def test_the_step_is_numbered_and_every_number_is_there(self):
-        for n in range(1, 9):
+        for n in range(1, 11):
             self.assertRegex(STEP, rf"(?m)^{n}\. ", f"нет пункта {n}")
-        self.assertNotRegex(STEP, r"(?m)^9\. ")
+        self.assertNotRegex(STEP, r"(?m)^11\. ")
 
 
 if __name__ == "__main__":

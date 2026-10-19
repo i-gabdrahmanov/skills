@@ -7,7 +7,8 @@
 Сейчас: daiver_status, daiver_init, daiver_spec, daiver_track_manifest, daiver_source_nodes,
 daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_section,
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
-daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report.
+daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report,
+daiver_plan_write, daiver_plan_contract.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -23,6 +24,8 @@ from . import ds_lookup as DL
 from . import ds_requirements as DR
 from . import init as I
 from . import outline as OL
+from . import plan as PL
+from . import plan_contract as PC
 from . import resolution_report as RR
 from . import resolve as RS
 from . import source_nodes as SN
@@ -166,6 +169,9 @@ def _track_summary(root: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
             "canonical": paths["canonical"].is_file(), "plan": paths["plan"].is_file(),
             "buildState": paths["buildState"].is_file(), "verifyState": paths["verifyState"].is_file(),
         })
+        for key in ("sources", "scope"):                   # только у кадра, правящего существующую страницу
+            if f.get(key):
+                frames[-1][key] = f[key]
     return {"track": manifest["track"], "implementation": manifest.get("implementation"),
             "specs": manifest.get("specs") or [], "frames": frames}
 
@@ -365,6 +371,25 @@ def t_resolve_report(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError(str(e))
 
 
+def t_plan_write(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        frame = args.get("frame")
+        if frame is not None:
+            TR.check_frame_name(frame)
+        return PL.write_frame(root, track, frame, args.get("plan"), args.get("weightBudget"), _story_specs(root),
+                              lambda: RR.check(root, track))
+    except (TR.TrackError, PL.PlanError) as e:
+        raise ToolError(str(e))
+
+
+def t_plan_contract(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return PC.run(root, TR.check_track_name(args["track"]), _story_specs(root))
+    except (TR.TrackError, PC.ContractError, PL.PlanError) as e:
+        raise ToolError(str(e))
+
+
 # Схема вердикта (INV-A7, §10.2): поля берутся из резолва — одно место правды; клиент видит их в tools/list.
 VERDICT_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -426,9 +451,10 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "description": ("Манифест трека (.daiver/tracks/<KEY>/track.yaml) — единственный способ его "
                         "править. Без set/rasterPath — чтение: кадры, статус требования (ok|stale|missing), "
                         "растр, что уже готово. set — поля кадра (role screen|dialog|state|breakpoint, url, "
-                        "open-рецепт {actions[], clipSelector}, stateOf, frameBox, notes) при указанном "
-                        "frame либо поля трека (implementation{url,devCommand}, specs[]) без него; null "
-                        "снимает поле. rasterPath — прикрепить goal image кадра (PNG/JPEG, путь от корня "
+                        "open-рецепт {actions[], clipSelector}, stateOf, frameBox, notes; sources — файлы СУЩЕСТВУЮЩЕЙ "
+                        "страницы, которую правит кадр, пути от корня репо; scope change|page — только вместе с "
+                        "sources) при указанном frame либо поля трека (implementation{url,devCommand} — целиком, "
+                        "specs[]) без него; null снимает поле. rasterPath — прикрепить goal image кадра (PNG/JPEG, путь от корня "
                         "репо). Кадры и требования заводит daiver_pixso_pull, не этот инструмент."),
         "schema": {"type": "object", "properties": {
             "track": {"type": "string", "description": "ключ стори (имя трека), напр. STOR-100"},
@@ -611,6 +637,46 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                         "отчёт изменился — прежнее согласие снято (consentRevoked). unresolved > 0 — резолв не закончен, "
                         "человека не спрашивай. Пишет только отчёт (и раздаёт готовые вердикты между кадрами): вердикты не "
                         "меняет, согласие не записывает — его выписывает пользователь словами, оркестратор фиксирует."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"}},
+            "required": ["track"], "additionalProperties": False},
+    },
+    "daiver_plan_write": {
+        "fn": t_plan_write,
+        "description": ("План кадра — единственный способ его записать (plan.json и plan.md в папке кадра). Дерево секций, решение по "
+                        "каждому узлу (из ПОДТВЕРЖДЁННОГО резолва: component | local | ignore), хеши секций и порядок сборки считает КОД "
+                        "— в plan названо только то, чего в данных нет. plan.layout — решение по КАЖДОЙ записи unproven из daiver_outline "
+                        "(§11.4): {id, reason: absolute-children | layout-hints, decision: keep-px | group (для absolute-children), "
+                        "apply | keep-px (для layout-hints), evidence: declaration (daiver_source_nodes) | goal-image | user | none, "
+                        "direction: row | column и groups: [[id детей]…] при group, note?}; apply и group без свидетельства не принимаются, "
+                        "px → flex меняет только план. plan.layoutRest: \"keep-px\" — остальные записи остаются px без свидетельства "
+                        "(они попадут в planUncertainty). plan.buildOrder необязателен: если назван ([{id, hash}] из sections[] "
+                        "daiver_outline), код сверяет id, хеши и порядок с настоящими — чужой id, придуманный шаг или неверный хеш отказ. "
+                        "Резолв должен быть закончен и подтверждён, иначе отказ. weightBudget — тот же, что у daiver_outline (по умолчанию "
+                        "конфиг/24000), записывается в план: сборка берёт секции при нём. Отказ перечисляет ВСЕ нарушения, ничего не "
+                        "записано. Запись идемпотентна: те же данные — те же байты."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "plan": {"type": "object", "description": "{layout?: [решения по unproven], layoutRest?: \"keep-px\", buildOrder?: [{id, hash}]}; "
+                                                        "без unproven — можно {} или не передавать"},
+            "weightBudget": {"type": "number", "exclusiveMinimum": 0,
+                             "description": "бюджет секции в байтах, как у daiver_outline; без него — конфиг/24000"}},
+            "required": ["track"], "additionalProperties": False},
+    },
+    "daiver_plan_contract": {
+        "fn": t_plan_contract,
+        "description": ("Контракт готовности плана трека — ИЗ ДИСКА: что автономный прогон ещё спросил бы. 16 проверок: initialized, "
+                        "library-source, browser, requirement, canonical, plan, resolutions, assets, goal-image, specs, state, baseline, "
+                        "sources, implementation, dev-command, signature. checks — сводка по всем; open[] — каждый нарушенный пункт: "
+                        "{id, frame?, state: open | stale | unknown, blocking, blockedReason, owner: human | plan | host, detail, ask — "
+                        "ДОСЛОВНЫЙ вопрос человеку, record — чем записать ответ, degradesTo — во что деградирует, если не отвечать}. "
+                        "ready — нет блокирующих (подпись в них не входит); complete — нет и деградаций; signed — подпись валидна "
+                        "(согласие ui-plan-<track>, привязанное к plan.lock.json: правка плана, требования, резолва или перетяжка макета "
+                        "её снимают; от ready она не зависит). Когда ready, инструмент сам пересобирает ui-plan.md (дайджест для человека) и plan.lock.json и "
+                        "снимает устаревшее согласие; toSign — строки вопроса «Подписываем план?». planUncertainty — узлы, в которых "
+                        "план не уверен, каждый один раз. Подпись — НЕ инструмент: согласие выписывает человек, запись делает "
+                        "оркестратор. Вопросы к человеку задавай дословно по ask, ответы пиши по record, затем вызывай снова."),
         "schema": {"type": "object", "properties": {
             "track": {"type": "string", "description": "ключ стори (имя трека)"}},
             "required": ["track"], "additionalProperties": False},
