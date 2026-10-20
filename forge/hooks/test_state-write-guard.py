@@ -31,6 +31,19 @@ class TWriteVector(unittest.TestCase):
         r = _write("ground/statements/feature-pipeline/f1/manifest.json")
         self.assertEqual(r.returncode, 2, r.stderr)
 
+    def test_block_ui_guard_cache(self):
+        # кеш подписи плана ui-guard: подложенный ok снял бы проверку подписи (тот же класс, что подложенное согласие)
+        rel = "ground/statements/forgeui/STOR-1/ui-guard-cache.json"
+        self.assertEqual(_write(rel).returncode, 2)
+        self.assertEqual(_run("Write", {"file_path": "/tmp/any/" + rel}).returncode, 2)
+        self.assertEqual(_bash(f"echo '{{}}' > {rel}").returncode, 2)
+        self.assertEqual(_bash(f"cp /tmp/x.json {rel}").returncode, 2)
+        self.assertEqual(_bash(f"python3 -c \"open('{rel}','w').write('{{}}')\"").returncode, 2)
+        self.assertEqual(_write("ground/statements/forgeui/STOR-1/ui-guard-cache.json.123.tmp").returncode, 2)
+        # соседние файлы прогона и чужие каталоги — не затронуты
+        self.assertEqual(_write("ground/statements/forgeui/STOR-1/notes.md").returncode, 0)
+        self.assertEqual(_write("docs/ui-guard-cache.json").returncode, 0)
+
     def test_block_approvals(self):
         r = _write("ground/approvals/human-approval.json")
         self.assertEqual(r.returncode, 2, r.stderr)

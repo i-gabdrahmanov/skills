@@ -68,7 +68,7 @@ forge/
 - **forge-ui (фронт-репо):** у стори бывает бэк-часть, фронт-часть или обе. Фронт-часть строит
   ветка `forgeui` во фронт-репо: `ui-spec.md` → дизайн по макету → сборка → проверка против макета;
   ставится `bash deploy.sh --profile ui <front-repo>`. Этап 0 — `tasks/019-forge-ui.md`.
-- **Хуки:** 16 (`gate-guard`, `tdd-guard`, `tech-guard`, `eval-guard`, `sod-enforcer`, `inline-phase-guard`,
+- **Хуки:** 17 (`gate-guard`, `tdd-guard`, `tech-guard`, `ui-guard`, `eval-guard`, `sod-enforcer`, `inline-phase-guard`,
   `state-write-guard`, `pii-boundary`, `destructive-blocker`, `fork-syntax-guard`,
   `grounding-evidence`, `prompt-guard`, `file-journal`, `state-recorder`, `context-injector`,
   `phase-gate`) + `preflight.py` для самопроверки.

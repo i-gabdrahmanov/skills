@@ -139,6 +139,10 @@ _CP_PATTERNS = [
     # snapshots/ — снимок «до» tech-ветки (check_invariants.py snapshot): по нему судится
     # точный diff «после». Подменённый снимок = подменённый эталон.
     r"(?<![\w-])ground/statements/[^/]+/[^/]+/(?:_origins|gates|overrides|judges|journal|rollbacks|snapshots)(?:/|\b)",
+    # ui-guard-cache.json — кеш вердикта подписи плана forge-ui (hooks/ui-guard.py): по нему хук решает
+    # «подпись действительна, код модуля писать можно». Подложенный `ok` снял бы проверку подписи так же,
+    # как подложенное согласие, поэтому файл пишет только сам хук (Python, не тул Write).
+    r"(?<![\w-])ground/statements/[^/]+/[^/]+/ui-guard-cache\.json\b",
     r"(?<![\w-])ground/approvals(?:/|\b)",
     r"(?<![\w-])ground/phases(?:/|\b)",
     # ground/archive/ — стейт ЗАВЕРШЁННЫХ прогонов (archive.py). Данные те же, что в

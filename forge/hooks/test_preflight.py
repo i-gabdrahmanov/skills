@@ -21,7 +21,7 @@ preflight = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(preflight)
 
 ESSENTIAL = ["gate-guard.py", "phase-gate.py", "state-recorder.py", "eval-guard.py",
-             "state-write-guard.py", "grounding-evidence.py"]
+             "state-write-guard.py", "grounding-evidence.py", "ui-guard.py"]
 
 
 def _hooks_block(root: Path, names: list[str]) -> dict:
@@ -92,6 +92,15 @@ class TestPreflight(unittest.TestCase):
             res = preflight.preflight(str(tmp), self_base=tmp / ".gigacode")
             self.assertFalse(res["passed"])
             self.assertTrue(any("eval-guard.py" in e for e in res["errors"]), res["errors"])
+
+    def test_ui_guard_not_wired_fails(self):
+        # ui-guard держит запреты daiver кодом (фронт-ветка): лежит файлом, но не вызывается — enforcement выключен молча
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _make(tmp, wired=[n for n in ESSENTIAL if n != "ui-guard.py"])
+            res = preflight.preflight(str(tmp), self_base=tmp / ".gigacode")
+            self.assertFalse(res["passed"])
+            self.assertTrue(any("ui-guard.py" in e for e in res["errors"]), res["errors"])
 
     def test_corrupt_risk_policy_fails(self):
         with tempfile.TemporaryDirectory() as d:

@@ -51,6 +51,7 @@ ESSENTIAL_HOOKS = [
     "eval-guard.py",
     "state-write-guard.py",
     "grounding-evidence.py",
+    "ui-guard.py",
 ]
 
 

@@ -43,6 +43,7 @@
 | destructive-blocker | @team | 2026-12 | блок деструктивных команд | run-evals.py |
 | tdd-guard / eval-guard | @team | 2026-12 | блок src/main без RED-теста / без пройденных eval'ов задачи | run-evals.py |
 | tech-guard | @team | 2026-12 | скоуп записи tech-ветки: только tech-apply, согласие на текущий план (sha256), снимок «до», targets | test_tech-guard.py |
+| ui-guard | @team | 2026-12 | запреты daiver (слой F) кодом во фронт-ветке forgeui: канон и сырые экспорты макета не читаются, код модуля (outputDir) — только на ui-build при действительной подписи плана (signature_state), инлайн-svg запрещён | test_ui-guard.py, run-evals.py (N1, N3, N6, N9, N12) |
 | sod-enforcer / inline-phase-guard | @team | 2026-12 | separation of duties / блок inline-работы в subagent-фазах | run-evals.py |
 | pii-boundary | @team | 2026-12 | граница PII при записи | run-evals.py |
 | prompt-guard | @team | 2026-12 | детект prompt-injection | run-evals.py |

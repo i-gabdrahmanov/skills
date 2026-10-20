@@ -19,18 +19,19 @@ R0–R5, evidence bundle, security-хуки, информационный учё
 FORGE.md ссылаются на него односторонне. Дрейф «доки ↔ проводка» пинится
 `hooks/test_docs_hooks_consistency.py` (fail на любом расхождении).
 
-## Состав хуков (16 шт.)
+## Состав хуков (17 шт.)
 
 | Скрипт | Событие | Назначение | Блок |
 |---|---|---|---|
 | `gate-guard.py` (+`risk_ladder.py`,`risk-policy.json`) | PreToolUse Bash/Write/Edit/Read | permission gateway, risk ladder R0–R5, **deny-first**; форсит выбор критичности, `required_decisions` (нет решения фазы → нет записи) и `phase_approvals` (нет approval-маркера плана → нет записи фазы) | exit 2 |
 | `tdd-guard.py` | PreToolUse Write/Edit + Bash | форсит TDD (блок `src/main` пока RED pending) + тест-стратегию (блок `@DataJpaTest`/`@SpringBootTest` при `test_layer=service-unit` — только для файлов в `src/test/`) | exit 2 |
 | `tech-guard.py` | PreToolUse Write/Edit + Bash | tech-ветка (`forgetech`): запись в файл проекта (вне `docs/`, `ground/`, выходных каталогов сборки) только на шаге `tech-apply`, при согласии `tech-plan-<F>`, привязанном к sha256 текущего `change-plan.json`, после снимка «до» (`check_invariants.py snapshot`) и только в `targets` плана. Вне прогона forgetech — noop | exit 2 |
+| `ui-guard.py` | PreToolUse Write/Edit + Bash + Read/Grep | ui-ветка (`forgeui`, forge-ui во фронт-репо): запреты daiver слоя F кодом. (1) `read_file`/`grep_search`/`read_many_files` и shell-читатели не пускаются к канону и сырым экспортам макета (`*.canonical.json`, `visual-requirements.pixso*.json`, `visual-requirements.json\|html` и любой файл с головой Pixso DSL `{"dsl":{"converterVersion"`); в shell разрешены только перечисление и измерение (ls, stat, wc, file, shasum); отказ называет `daiver_outline`/`daiver_section`/`daiver_source_nodes`. (2) Запись в `project.outputDir` (из `.daiver/config.yaml`) — только на шаге `ui-build`; на `ui-verify` правка = переоткрытие `ui-build` (подсказка как у sod-enforcer). (3) Запись на `ui-build` — только при действительной подписи плана: `plan_contract.signature_state` (согласие `ui-plan-<KEY>`, привязанное к lock'у, собранному из текущих артефактов); вердикт кешируется в `ground/statements/forgeui/<KEY>/ui-guard-cache.json` по снимку stat'ов входов. (4) Инлайн-`<svg` (и data-URI svg) в кодовых файлах outputDir — отказ, кроме помеченного плейсхолдера арта. Вне прогона forgeui — noop; внутри — fail-closed | exit 2 |
 | `eval-guard.py` | PreToolUse Write/Edit + Bash | блок записи в `src/main`, пока pre-write eval задачи (`compile`) не пройден (Eval-Driven). `coverage`/`test_pass` выполнимы только ПОСЛЕ кода — их держат гейты закрытия шага | exit 2 |
 | `destructive-blocker.py` | PreToolUse `run_shell_command` | чёрный список (`rm -rf /`, force-push `-f`/`--force`, DROP, base64→sh, xargs rm, rmtree корня) | exit 2 |
 | `fork-syntax-guard.py` | PreToolUse `run_shell_command` | инструктивный блок синтаксиса, который режет нативный сейфти форка (`$(...)`, backticks, `find -exec`, `ls -R`) — объясняет замену (Glob/Grep/Read) вместо молчаливого deny | exit 2 |
 | `pii-boundary.py` | PreToolUse Write/Edit/Bash | блок записи PII/секретов вне scope (вкл. inline-python `open()`/`write_text`) | exit 2 |
-| `state-write-guard.py` | PreToolUse Write/Edit/Bash | запрет прямой записи моделью в control-plane state (`manifest.json`, `policy.json`, `approvals.jsonl`, `events.jsonl`, `evals.json`, `feature-gates.json`, `task-plan.json`, `ground/inventory/**`, `ground/archive/**`) — только через санкц. скрипты; сравнение регистронезависимое; отдельно ловится УДАЛЕНИЕ живого control-plane (`rm`/`mv`/`touch`/`shred`) — без манифеста все хуки становятся noop; + запрет писать артефакты фазы в каталог харнеса (skills/hooks/commands), пока идёт прогон | exit 2 |
+| `state-write-guard.py` | PreToolUse Write/Edit/Bash | запрет прямой записи моделью в control-plane state (`manifest.json`, `policy.json`, `approvals.jsonl`, `events.jsonl`, `evals.json`, `feature-gates.json`, `task-plan.json`, `ui-guard-cache.json`, `ground/inventory/**`, `ground/archive/**`) — только через санкц. скрипты; сравнение регистронезависимое; отдельно ловится УДАЛЕНИЕ живого control-plane (`rm`/`mv`/`touch`/`shred`) — без манифеста все хуки становятся noop; + запрет писать артефакты фазы в каталог харнеса (skills/hooks/commands), пока идёт прогон | exit 2 |
 | `sod-enforcer.py` | PreToolUse Write/Edit/Bash | separation of duties: роль из активного шага (test не пишет src/main; design/spec/jira не билдят). git commit/push не гейтится — доставка на пользователе | exit 2 |
 | `inline-phase-guard.py` | PreToolUse Write/Edit/Bash | actor-guard: ГЛАВНЫЙ агент (пустой `agent_type`) не производит артефакты/код subagent-фазы inline | exit 2 |
 | `grounding-evidence.py` | PreToolUse Read | пишет запись `grounding` в журнал прогона при чтении grounding-excerpt — `gate-guard` снимает по нему блок фазы `01-grounding` | нет |
@@ -45,8 +46,8 @@ FORGE.md ссылаются на него односторонне. Дрейф �
 `settings.hooks.json` (эталон блока hooks, плейсхолдеры `${PYTHON}` и `${PROJECT_ROOT}`
 подставляет `resolve_hook_paths.py`), `resolve_hook_paths.py` (in-project фиксер путей,
 его зовёт `deploy-local.sh`), `_shell_targets.py` (общий разбор целей записи/удаления в
-shell-команде для state-write-guard, tdd-guard, tech-guard, eval-guard и sod-enforcer; stdlib-only),
-`_branches.py` (реестр плоских веток fix/tech: шаги, роли, артефакты — единый источник для
+shell-команде для state-write-guard, tdd-guard, tech-guard, ui-guard, eval-guard и sod-enforcer; stdlib-only),
+`_branches.py` (реестр плоских веток fix/tech/ui: шаги, роли, артефакты — единый источник для
 хуков и скриптов),
 `evals/run-evals.py` (eval-набор), `run-hook-tests.sh`
 (юнит-тесты хуков + evals одной командой). Статическая диагностика (`doctor.py`) и
@@ -55,16 +56,17 @@ shell-команде для state-write-guard, tdd-guard, tech-guard, eval-guard
 ## Порядок и sequential
 
 PreToolUse `run_shell_command` идёт **sequential**: destructive-blocker → fork-syntax-guard →
-pii-boundary → state-write-guard → tdd-guard → tech-guard → eval-guard → sod-enforcer →
-inline-phase-guard → gate-guard. tdd-guard/tech-guard/eval-guard/sod-enforcer судят в ней цели записи shell-команды (общий
+pii-boundary → state-write-guard → tdd-guard → tech-guard → ui-guard → eval-guard → sod-enforcer →
+inline-phase-guard → gate-guard. tdd-guard/tech-guard/ui-guard/eval-guard/sod-enforcer судят в ней цели записи shell-команды (общий
 разбор `_shell_targets.py`) так же, как Write: `cat > src/main/... <<EOF` — та же запись.
 Write/Edit (`write_file|edit|notebook_edit`): pii-boundary → state-write-guard →
-tdd-guard → tech-guard → eval-guard → sod-enforcer → inline-phase-guard → gate-guard. Любой
+tdd-guard → tech-guard → ui-guard → eval-guard → sod-enforcer → inline-phase-guard → gate-guard. Любой
 блокирующий может остановить (`exit 2`) до действия. Точный блок и порядок — в
 `settings.hooks.json`.
 
 PreToolUse на читающих инструментах (`read_file|grep_search|search_file_content|glob`) — тоже sequential:
-grounding-evidence → gate-guard. Там у gate-guard работает ровно одна проверка — фазовая
+ui-guard → grounding-evidence → gate-guard (ui-guard отказывает на канон и сырые экспорты макета во фронтовом
+прогоне; вне forgeui — noop). `read_many_files` — отдельная группа, в ней один ui-guard. Там у gate-guard работает ровно одна проверка — фазовая
 (блок чтения `src/` до завершения `01-grounding`); ladder к чтению неприменим.
 
 ## Матчеры — канон-имена рантайма

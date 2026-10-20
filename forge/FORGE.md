@@ -45,7 +45,7 @@ git-история и `tasks/`.
 
 ## Архитектура PDLC v3.5
 
-Pipeline = оркестратор + control-plane из 16 хуков + 20 скиллов; общее состояние —
+Pipeline = оркестратор + control-plane из 17 хуков + 20 скиллов; общее состояние —
 `<project>/ground/`, артефакты фаз — `<project>/docs/feature-pipeline/...`. PDLC v3.5 ввёл
 risk ladder, evidence bundle и security-гейты; доставка (commit/push/PR/отчёт) остаётся на
 пользователе — пайплайн её не делает и не гейтит.
@@ -119,7 +119,9 @@ approval-маркером (см. §Approval markers). **R5** — деструк�
   (`ui-spec.md`). Состояние (2026-10-19): `ui-design` исполняется целиком — до подписи плана (гейт
   `ui_gate.py design`: exit 0 только при готовом контракте плана и валидной подписи); `ui-build` —
   сборка по секциям плана и `project.buildCommand` (гейт `ui_gate.py build`: секции готовы И проект
-  собирается); проверка строится, её гейт честно отвечает exit 3. Дизайн — `tasks/019-forge-ui.md`.
+  собирается); запреты daiver держит хук `ui-guard`: канон и сырые экспорты макета не читаются, код
+  модуля пишется только на `ui-build` при действительной подписи плана (`signature_state`), инлайн-`<svg`
+  в модуле запрещён; проверка строится, её гейт честно отвечает exit 3. Дизайн — `tasks/019-forge-ui.md`.
 
 Доставка (commit/push/PR/отчёт) — на пользователе. **Multi-vocabulary хуков:** все
 ветки делят control-plane; активный skill/feature резолвится по самому свежему манифесту в
@@ -160,6 +162,7 @@ resolve_phases; копий кортежей `fix-*`/`tech-*` по коду не�
 | `gate-guard.py` | PreToolUse | permission gateway + risk ladder + deny-first |
 | `tdd-guard.py` | PreToolUse (Write/Edit + Bash) | блок `src/main` пока RED pending |
 | `tech-guard.py` | PreToolUse (Write/Edit + Bash) | tech-ветка: правка проекта только на `tech-apply`, по согласию на текущий план, после снимка «до», в `targets` |
+| `ui-guard.py` | PreToolUse (Write/Edit + Bash + read) | ui-ветка (forge-ui): запреты daiver кодом — канон и сырые экспорты макета не читаются (read_file/grep_search/shell), код модуля (`project.outputDir`) пишется только на `ui-build` при действительной подписи плана, инлайн-`<svg` в модуле запрещён; правка на `ui-verify` = переоткрытие `ui-build` |
 | `eval-guard.py` | PreToolUse (Write/Edit + Bash) | блок `src/main` пока eval'ы задачи не passed |
 | `sod-enforcer.py` | PreToolUse | separation of duties по id активного шага |
 | `inline-phase-guard.py` | PreToolUse | actor-guard: ГЛАВНЫЙ не производит subagent-фазу inline |
@@ -181,12 +184,13 @@ resolve_phases; копий кортежей `fix-*`/`tech-*` по коду не�
 4. `state-write-guard`
 5. `tdd-guard`
 6. `tech-guard`
-7. `eval-guard`
-8. `sod-enforcer`
-9. `inline-phase-guard`
-10. `gate-guard`
+7. `ui-guard`
+8. `eval-guard`
+9. `sod-enforcer`
+10. `inline-phase-guard`
+11. `gate-guard`
 
-tdd-guard, tech-guard, eval-guard и sod-enforcer судят в Bash-цепочке ЦЕЛИ записи shell-команды
+tdd-guard, tech-guard, ui-guard, eval-guard и sod-enforcer судят в Bash-цепочке ЦЕЛИ записи shell-команды
 (`hooks/_shell_targets.py`, общий разбор со state-write-guard) так же, как Write: иначе
 `cat > src/main/java/Foo.java <<EOF` на фазе RED проходил все хуки.
 
@@ -195,10 +199,14 @@ tdd-guard, tech-guard, eval-guard и sod-enforcer судят в Bash-цепоч�
 2. `state-write-guard`
 3. `tdd-guard`
 4. `tech-guard`
-5. `eval-guard`
-6. `sod-enforcer`
-7. `inline-phase-guard`
-8. `gate-guard`
+5. `ui-guard`
+6. `eval-guard`
+7. `sod-enforcer`
+8. `inline-phase-guard`
+9. `gate-guard`
+
+Читающие инструменты (`read_file`, `grep_search`, …) — тоже sequential: `ui-guard` → `grounding-evidence` → `gate-guard`;
+`read_many_files` — отдельная группа из одного `ui-guard` (канон и сырые экспорты макета не читаются).
 
 ### Approval markers
 
