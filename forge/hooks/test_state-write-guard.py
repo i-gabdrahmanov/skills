@@ -640,5 +640,280 @@ class TWriterFamily(unittest.TestCase):
             self.assertEqual(r.returncode, 2, r.stderr)
 
 
+# ── `.daiver/` — состояние движка forge-ui (фронт-репо; задача 3.4) ──────────────────────────────
+D_TRACK = ".daiver/tracks/STOR-100"
+D_FRAME = ".daiver/tracks/STOR-100/frames/main"
+
+# Охраняемое: пути из задачи 3.4 + пополнения из её заметок (plan.md, ui-plan.md, resolution-report.md).
+DAIVER_GUARDED = [
+    ".daiver/config.yaml", ".daiver/component-map.yaml", ".daiver/maps/component-map.yaml",
+    ".daiver/ui-mapping.yml",                       # library.mapFile может называть карту как угодно
+    ".daiver/design-system-requirements.json", ".daiver/design-system-requirements.details.json",
+    f"{D_TRACK}/track.yaml",
+    f"{D_TRACK}/build-state.json", f"{D_FRAME}/build-state.json", f"{D_TRACK}/verify-state.json",
+    f"{D_FRAME}/verify-state.json", f"{D_TRACK}/run.json", f"{D_TRACK}/plan.json", f"{D_FRAME}/plan.json",
+    f"{D_TRACK}/plan.lock.json", f"{D_TRACK}/resolutions.json", f"{D_FRAME}/resolutions.json",
+    f"{D_TRACK}/visual-requirements.canonical.json", f"{D_FRAME}/visual-requirements.canonical.json",
+    f"{D_TRACK}/visual-requirements.pixso.json", f"{D_TRACK}/visual-requirements.pixso.raw.json",
+    f"{D_TRACK}/visual-requirements.json", f"{D_TRACK}/visual-requirements.html", f"{D_TRACK}/visual-requirements.png",
+    f"{D_TRACK}/verify/iter-1/diff.png", f"{D_FRAME}/verify/iter-2/state.json", f"{D_TRACK}/versions/v1/x.json",
+    f"{D_TRACK}/baseline/page.png", f"{D_TRACK}/verify", f"{D_FRAME}/versions", f"{D_TRACK}/baseline",
+    f"{D_TRACK}/plan.md", f"{D_FRAME}/plan.md", f"{D_TRACK}/ui-plan.md", f"{D_TRACK}/resolution-report.md",
+    f"{D_FRAME}/dom.canonical.json", f"{D_TRACK}/reference.canonical.json",       # канон — по имени, не только visual-requirements.*
+]
+# Не состояние: вход (выгрузки макета), арт, документы и обычные исходники с теми же именами, замки control-plane.
+DAIVER_FREE = [
+    ".daiver/inbox/main.dsl.json", ".daiver/inbox/hero.svg", f"{D_FRAME}/assets/hero.svg", ".daiver/notes.md",
+    "docs/plan.md", "docs/feature-pipeline/STOR-100/ui-spec.md", "src/verify/index.ts", "src/versions/list.tsx",
+    "src/baseline/Base.ts", "src/modules/Modal/plan.json", "src/modules/Modal/mocks.ts", "src/modules/Modal/Modal.tsx",
+    "config.yaml", "src/config.yaml", "application.yml", "x.daiver/config.yaml", "my-.daiver/config.yaml",
+    "ground/build-state.lock", "ground/resolve.lock",
+    f"{D_TRACK}/verify.notes.txt", f"{D_TRACK}/versions-draft.md", f"{D_TRACK}/baseline_notes.txt",   # каталоги verify/versions/baseline, а не любое имя на их букву
+]
+
+
+class TDaiverWrite(unittest.TestCase):
+    def test_every_guarded_file_is_closed_to_write_tools(self):
+        for path in DAIVER_GUARDED:
+            with self.subTest(path=path):
+                r = _write(path)
+                self.assertEqual(r.returncode, 2, f"пропущено: {path}")
+                self.assertIn(".daiver/", r.stderr)
+                self.assertIn("forge-ui", r.stderr)
+
+    def test_every_write_tool_name(self):
+        for tool in ("Write", "WriteFile", "write_file", "Edit", "edit", "NotebookEdit", "notebook_edit"):
+            with self.subTest(tool=tool):
+                self.assertEqual(_run(tool, {"file_path": ".daiver/config.yaml"}).returncode, 2)
+                self.assertEqual(_run(tool, {"file_path": f"{D_TRACK}/plan.json"}).returncode, 2)
+
+    def test_path_argument_aliases(self):
+        for key in ("file_path", "path", "filename"):
+            with self.subTest(key=key):
+                self.assertEqual(_run("write_file", {key: ".daiver/config.yaml"}).returncode, 2)
+
+    def test_absolute_case_and_spelling_tricks(self):
+        for path in ("/home/dev/app/.daiver/config.yaml", "C:/work/app/.daiver/config.yaml",
+                     "C:\\work\\app\\.daiver\\config.yaml", ".DAIVER/Config.YAML", ".daiver//config.yaml",
+                     ".daiver/./config.yaml", ".daiver/tracks/../config.yaml", "src/../.daiver/config.yaml",
+                     "./.daiver/component-map.yaml", f"{D_TRACK}//plan.json", f"{D_TRACK}/frames/../plan.json",
+                     ".daiver/config.yaml.tmp", f"{D_TRACK}/plan.json.12345.tmp", f"{D_TRACK}/PLAN.JSON"):
+            with self.subTest(path=path):
+                self.assertEqual(_write(path).returncode, 2, f"пропущено: {path}")
+
+    def test_files_that_are_not_engine_state_stay_free(self):
+        for path in DAIVER_FREE:
+            with self.subTest(path=path):
+                r = _write(path)
+                self.assertEqual(r.returncode, 0, f"ложный блок: {path}: {r.stderr}")
+
+    def test_guarded_with_and_without_a_running_pipeline(self):
+        """Первый запуск (daiver_init пишет конфиг) идёт ДО манифеста — охрана не зависит от прогона."""
+        import tempfile
+        for with_manifest in (False, True):
+            with self.subTest(with_manifest=with_manifest), tempfile.TemporaryDirectory() as td:
+                proj = _project(td, with_manifest=with_manifest)
+                for path in (".daiver/config.yaml", f"{D_TRACK}/build-state.json"):
+                    self.assertEqual(_run_in(proj, "write_file", {"file_path": str(proj / path)}).returncode, 2, path)
+                self.assertEqual(_run_in(proj, "write_file",
+                                         {"file_path": str(proj / ".daiver/inbox/main.dsl.json")}).returncode, 0)
+
+    def test_the_way_out_is_named_per_file(self):
+        cases = {".daiver/config.yaml": "daiver_init", ".daiver/component-map.yaml": "daiver_map_append",
+                 f"{D_TRACK}/track.yaml": "daiver_track_manifest", f"{D_TRACK}/plan.json": "daiver_plan_write",
+                 f"{D_TRACK}/build-state.json": "daiver_build_state_set", f"{D_TRACK}/visual-requirements.canonical.json": "daiver_normalize"}
+        for path, tool in cases.items():
+            with self.subTest(path=path):
+                r = _write(path)
+                self.assertEqual(r.returncode, 2)
+                self.assertIn(tool, r.stderr)
+                self.assertNotIn("update.py", r.stderr, "это не control-plane ground/ — ссылка на update.py ввела бы в заблуждение")
+        self.assertIn(".daiver/inbox", _write(".daiver/config.yaml").stderr, "куда класть выгрузки — сказано")
+
+    def test_the_ground_hint_is_unchanged_for_ground(self):
+        r = _write("ground/pipeline.json")
+        self.assertIn("update.py", r.stderr)
+        self.assertNotIn("forge-ui", r.stderr)
+
+
+class TDaiverShell(unittest.TestCase):
+    TARGETS = (".daiver/config.yaml", ".daiver/component-map.yaml", f"{D_TRACK}/plan.json", f"{D_FRAME}/build-state.json",
+               f"{D_TRACK}/ui-plan.md", f"{D_TRACK}/verify/iter-1/diff.png")
+
+    def test_shell_writers(self):
+        for t in self.TARGETS:
+            for tpl in ("echo x > {t}", "echo x >> {t}", "printf '{{}}' 1> {t}", "cat > {t} <<'EOF'\nx\nEOF", "echo x | tee {t}",
+                        "echo x | tee -a {t}", "cp /tmp/x {t}", "mv /tmp/x {t}", "install /tmp/x {t}", "sed -i 's/a/b/' {t}",
+                        "dd if=/tmp/x of={t}", "truncate -s 0 {t}", "ln -sf /dev/null {t}", "curl -s -o {t} http://example.invalid/x",
+                        "sudo tee {t}", "sh -c \"echo x > {t}\"", "bash -c 'echo x >> {t}'", "echo x &> {t}",
+                        "python3 -c \"open('{t}','w').write('{{}}')\"",
+                        "python3 -c \"import pathlib; pathlib.Path('{t}').write_text('x')\"",
+                        "python3 -c \"import shutil; shutil.copyfile('/tmp/x', '{t}')\""):
+                cmd = tpl.format(t=t)
+                with self.subTest(cmd=cmd):
+                    self.assertEqual(_bash(cmd).returncode, 2, f"пропущено: {cmd}")
+
+    def test_shell_removers_and_movers(self):
+        for t in self.TARGETS:
+            for tpl in ("rm {t}", "rm -f {t}", "unlink {t}", "shred -u {t}", "mv {t} /tmp/away", "touch {t}", "sudo rm -f {t}",
+                        "python3 -c \"import os; os.remove('{t}')\"",
+                        "python3 -c \"import pathlib; pathlib.Path('{t}').unlink()\""):
+                cmd = tpl.format(t=t)
+                with self.subTest(cmd=cmd):
+                    r = _bash(cmd)
+                    self.assertEqual(r.returncode, 2, f"пропущено: {cmd}")
+                    self.assertIn(".daiver", r.stderr)
+                    if not cmd.startswith("python3"):
+                        self.assertIn("удаление/перенос", r.stderr, "отказ на удаление говорит об удалении, а не о записи")
+
+    def test_whole_directories_are_not_removable_or_movable(self):
+        for cmd in ("rm -rf .daiver", "rm -rf .daiver/", "rm -rf ./.daiver", "rm -rf .daiver/*", "rm -rf .daiver/tracks",
+                    "rm -rf .daiver/tracks/*", f"rm -rf {D_TRACK}", f"rm -rf {D_TRACK}/", f"rm -rf {D_TRACK}/*",
+                    f"rm -rf {D_TRACK}/frames", f"rm -rf {D_FRAME}", f"rm -rf {D_TRACK}/verify", f"rm -rf {D_FRAME}/baseline",
+                    f"mv {D_TRACK} /tmp/x", "mv .daiver /tmp/x", "rm -rf /home/dev/app/.daiver",
+                    "python3 -c \"import shutil; shutil.rmtree('.daiver')\"", f"sudo rm -rf {D_TRACK}"):
+            with self.subTest(cmd=cmd):
+                r = _bash(cmd)
+                self.assertEqual(r.returncode, 2, f"пропущено: {cmd}")
+                self.assertIn(".daiver", r.stderr)
+                if not cmd.startswith("python3"):
+                    self.assertIn("удаление/перенос", r.stderr)
+
+    def test_directories_that_only_look_like_daiver_are_free(self):
+        for cmd in ("rm -rf x.daiver", "rm -rf my-.daiver/tracks", "mv x.daiver /tmp/x", "rm -rf docs/.daiverx", "rm -rf src/daiver",
+                    "rm -rf .daiver-backup", "rm -rf ground2/.daiver2/tracks"):
+            with self.subTest(cmd=cmd):
+                r = _bash(cmd)
+                self.assertEqual(r.returncode, 0, f"ложный блок: {cmd}: {r.stderr}")
+
+    def test_reading_copying_out_and_the_inbox_stay_free(self):
+        for cmd in ("cat .daiver/config.yaml", "ls -la .daiver/tracks", f"grep -n build {D_TRACK}/plan.md", f"head -5 {D_TRACK}/ui-plan.md",
+                    "cp .daiver/config.yaml /tmp/config.bak", f"cp {D_TRACK}/plan.md /tmp/plan.md", f"wc -c {D_TRACK}/plan.json",
+                    f"diff {D_TRACK}/plan.md /tmp/plan.md", f"sha256sum {D_TRACK}/plan.lock.json",
+                    "cp /tmp/export.json .daiver/inbox/main.dsl.json", "echo '<svg/>' > .daiver/inbox/hero.svg",
+                    "mv /tmp/hero.svg .daiver/inbox/hero.svg", "rm .daiver/inbox/main.dsl.json", "rm -rf .daiver/inbox",
+                    "rm -rf .daiver/inbox/*", f"rm {D_FRAME}/assets/old.svg", "touch .daiver/inbox/.keep",
+                    "echo hi > src/modules/Modal/mocks.ts", "rm -rf node_modules", "rm -rf build", "rm src/verify/old.ts",
+                    "cat > docs/plan.md <<'EOF'\nx\nEOF"):
+            with self.subTest(cmd=cmd):
+                r = _bash(cmd)
+                self.assertEqual(r.returncode, 0, f"ложный блок: {cmd}: {r.stderr}")
+
+    def test_the_sanctioned_scripts_that_name_daiver_files_are_not_writes(self):
+        """Подпись плана привязывает согласие к lock'у (`--bind-file`): это ЧТЕНИЕ, не запись в .daiver."""
+        for cmd in (f"python3 .gigacode/skills/pipeline-state/scripts/record_approval.py --project . --key ui-plan-STOR-100 "
+                    f"--bind-file {D_TRACK}/plan.lock.json --approved-by user --reason 'план секций подписан' --evidence 'да'",
+                    f"python3 .gigacode/skills/pipeline-state/scripts/record_approval.py --project . --key ui-resolve-STOR-100 "
+                    f"--bind-file {D_TRACK}/resolution-report.md --approved-by user --reason r --evidence e",
+                    "python3 .gigacode/skills/forgeui/scripts/ui_gate.py design --project . --feature STOR-100 2>&1 | tail -5",
+                    "python3 .gigacode/skills/forgeui/scripts/ui_gate.py build --project . --feature STOR-100",
+                    "python3 .gigacode/skills/pipeline-state/scripts/record_gate.py --project . --skill forgeui --feature STOR-100 "
+                    "--step-id ui-design --cmd \"python3 .gigacode/skills/forgeui/scripts/ui_gate.py design --project . --feature STOR-100\"",
+                    "python3 .gigacode/skills/pipeline-state/scripts/update.py --project . --skill forgeui --feature STOR-100 "
+                    "--step-id ui-design --status completed"):
+            with self.subTest(cmd=cmd[:90]):
+                r = _bash(cmd)
+                self.assertEqual(r.returncode, 0, f"ложный блок: {cmd}: {r.stderr}")
+
+    def test_write_through_a_symlink_to_daiver(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / ".daiver").mkdir()
+            (Path(d) / "d").symlink_to(Path(d) / ".daiver", target_is_directory=True)
+            r = _run_in(Path(d), "run_shell_command", {"command": "echo x > d/config.yaml"})
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn(".daiver", r.stderr, "отказ по движку, а не по тексту ground/")
+
+    def test_removal_through_a_symlink_to_daiver(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / ".daiver").mkdir()
+            (Path(d) / "d").symlink_to(Path(d) / ".daiver", target_is_directory=True)
+            for cmd in ("rm d/config.yaml", "mv d/component-map.yaml /tmp/x", "touch d/tracks"):
+                with self.subTest(cmd=cmd):
+                    r = _run_in(Path(d), "run_shell_command", {"command": cmd})
+                    self.assertEqual(r.returncode, 2, r.stderr)
+                    self.assertIn(".daiver", r.stderr, "отказ по движку, а не по тексту ground/")
+                    self.assertIn("удаление/перенос", r.stderr)
+
+    def test_build_lock_of_control_plane_is_not_touched(self):
+        """Замки `ground/build-state.lock` и `ground/resolve.lock` — файлы control-plane движка (заметка 3.1)."""
+        for cmd in ("touch ground/build-state.lock", "rm -f ground/resolve.lock", "echo 1 > ground/build-state.lock"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(_bash(cmd).returncode, 0, f"ложный блок: {cmd}")
+
+
+class TDaiverFind(unittest.TestCase):
+    """`find … -delete` / `-exec rm`: проект с `.daiver/` (иначе искать негде — бэк-репо не затронут)."""
+
+    def _in(self, cmd, with_daiver=True, with_ground=True):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            if with_ground:
+                (root / "ground" / "statements").mkdir(parents=True)
+            (root / "package.json").write_text("{}", encoding="utf-8")
+            if with_daiver:
+                (root / ".daiver" / "inbox").mkdir(parents=True)
+                (root / ".daiver" / "tracks" / "STOR-100").mkdir(parents=True)
+            return _run_in(root, "run_shell_command", {"command": cmd})
+
+    def test_find_deleting_engine_state(self):
+        for cmd in ("find . -name build-state.json -delete", "find . -name plan.json -exec rm {} \;",
+                    "find .daiver -name '*.json' -delete", "find .daiver/tracks -type f -delete",
+                    "find .daiver -delete", "find . -name '*.json' -print0 | xargs -0 rm -f",
+                    "find .daiver/tracks/STOR-100 -name 'verify-state.json' -delete", "find . -name 'component-map.yaml' -delete",
+                    "find . -name 'visual-requirements.*' -delete", "find . -type f -delete", "find .. -name config.yaml -delete",
+                    f"find {D_TRACK}/verify -delete"):
+            with self.subTest(cmd=cmd):
+                r = self._in(cmd)
+                self.assertEqual(r.returncode, 2, f"пропущено: {cmd}")
+
+    def test_find_without_filters_in_a_project_that_has_only_daiver(self):
+        """Без ground/ и .gigacode/ накрыть `.daiver/` поиск без фильтров может только своей веткой — она и держит отказ."""
+        for cmd in ("find . -type f -delete", "find . -delete", "find . -exec rm {} \\;"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._in(cmd, with_ground=False).returncode, 2, f"пропущено: {cmd}")
+        for cmd in ("find . -name '*.class' -delete", "find .daiver/inbox -type f -delete"):
+            with self.subTest(cmd=cmd):
+                r = self._in(cmd, with_ground=False)
+                self.assertEqual(r.returncode, 0, f"ложный блок: {cmd}: {r.stderr}")
+
+    def test_find_ordinary_cleanup_and_the_inbox_stay_free(self):
+        for cmd in ("find . -name '*.class' -delete", "find build -delete", "find .daiver/inbox -name '*.json' -delete",
+                    "find .daiver/inbox -type f -delete", "find src -name plan.json -delete", "find . -name '*.log' -delete",
+                    "find .daiver -name '*.json'", "find . -name '*.tmp' -print0 | xargs -0 rm -f"):
+            with self.subTest(cmd=cmd):
+                r = self._in(cmd)
+                self.assertEqual(r.returncode, 0, f"ложный блок: {cmd}: {r.stderr}")
+
+    def test_without_daiver_in_the_project_nothing_of_it_is_looked_for(self):
+        """Бэк-репо: `.daiver/` нет, `find . -name '*.png' -delete` и `-name plan.json` — как раньше, свободно."""
+        for cmd in ("find . -name '*.png' -delete", "find . -name plan.json -delete", "find . -name build-state.json -delete",
+                    "find . -name 'config.yaml' -delete"):
+            with self.subTest(cmd=cmd):
+                r = self._in(cmd, with_daiver=False)
+                self.assertEqual(r.returncode, 0, f"бэковый сценарий изменился: {cmd}: {r.stderr}")
+
+
+class TDaiverBackEndUnchanged(unittest.TestCase):
+    """Бэковые сценарии: те же пути и команды, что раньше, проходят — `.daiver/` их не задевает."""
+
+    def test_java_repo_commands_stay_free(self):
+        for cmd in ("echo x > src/main/resources/application.yml", "cp /tmp/a.yaml src/test/resources/plan.yaml",
+                    "echo x > docs/plan.md", "rm -rf build", "rm -f target/classes/plan.json", "cat pom.xml > /tmp/pom.copy",
+                    "echo '{}' > src/test/resources/build-state.json", "touch config.yaml", "mv old.yaml config.yaml",
+                    "./gradlew test", "mvn -q verify"):
+            with self.subTest(cmd=cmd):
+                r = _bash(cmd)
+                self.assertEqual(r.returncode, 0, f"бэковый сценарий изменился: {cmd}: {r.stderr}")
+
+    def test_java_repo_files_stay_free(self):
+        for path in ("src/main/resources/application.yml", "src/test/resources/fixtures/plan.json", "pom.xml", "docs/plan.md",
+                     "config/config.yaml", "docker-compose.yml", ".github/workflows/ci.yml"):
+            with self.subTest(path=path):
+                self.assertEqual(_write(path).returncode, 0, f"ложный блок: {path}")
+
+
 if __name__ == "__main__":
     unittest.main()

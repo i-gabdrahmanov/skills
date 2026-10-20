@@ -10,6 +10,15 @@ NB: при внутренней ошибке хук fail-OPEN (не может �
 
 «Scope»: разрешено писать PII только под `**/test*/`, `**/fixtures/`, `ground/` (рабочие данные).
 Запись PII в `src/main`, конфиги, docs — блок (утечка персональных данных в код/спеку).
+
+Мок-данные макета (forge-ui, фронт-репо; задача 3.4). Макет несёт реалистичные тексты (имена, телефоны, почты), а
+бриф `ui-build` велит класть их в `mocks.ts` модуля. Без исключения хук резал бы ровно ту запись, которую требует
+пайплайн. Исключение узкое: запись только в `<project.outputDir>/**/mocks.ts` и `<project.outputDir>/**/__mocks__/`,
+активный прогон — `forgeui` (трек = ключ стори), `.daiver/config.yaml` на месте и проходит проверку, и КАЖДАЯ PII-подобная строка записи
+дословно есть в текстах канона трека (`daiver.texts.mockup_texts`). Любое «нет» — движка нет (бэк-профиль), трека, конфига
+или канона, мок-файл с чужой строкой, цель не мок-файл — хук ведёт себя ровно как раньше. FAIL-CLOSED на самом исключении:
+сбой сверки (ошибка движка, нечитаемый канон) исключения не даёт — запись блокируется, а не пропускается молча
+(общий `except` хука fail-OPEN, поэтому вся сверка спрятана в `_mockup_verdict`, который сбой превращает в отказ).
 """
 from __future__ import annotations
 
@@ -17,6 +26,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
 # Импорт форж-модулей — fail-CLOSED. Крэш на импорте отдаёт exit 1, а блокировка —
 # exit 2; рантайм читает exit 1 как «хук не возражает» и ВЫПОЛНЯЕТ вызов. Так уже молча
@@ -130,6 +140,99 @@ def _luhn_ok(digits: str) -> bool:
     return total % 10 == 0
 
 
+# ── мок-данные макета (forge-ui; задача 3.4) ──────────────────────────────────────────────────────
+# Исключение для записи в мок-файлы модуля — см. докстринг модуля. Всё, что может упасть (движок, конфиг, канон), живёт
+# внутри `_mockup_verdict`; вызывающий код дополнительно ловит и сам вызов: потерянное имя функции — тоже отказ.
+_ENGINE_DIR = Path(__file__).resolve().parents[1] / "skills" / "forgeui" / "scripts"
+_UI_SKILL = "forgeui"
+_MOCK_FILE = "mocks.ts"
+_MOCK_DIR = "__mocks__"
+_MOCK_ONLY_HINT = ("Тексты макета (в том числе похожие на ПДн) в прогоне forge-ui допустимы ТОЛЬКО в mocks.ts или __mocks__/ "
+                   "модуля и только дословно из макета: перенеси их туда и импортируй.")
+
+
+def _pii_hits(content: str, policy: dict) -> list:
+    """ВСЕ PII-подобные строки текста — а не первое совпавшее правило, как в проверке `main`: исключению для мок-данных нужен
+    весь список. Паттерны секретов и контактов; номера карт — только с сошедшейся суммой Луна."""
+    hits = []
+    for pat in policy.get("pii_patterns", []):
+        hits.extend(m.group(0) for m in re.finditer(pat, content))
+    for pat in policy.get("pii_luhn_patterns", []):
+        hits.extend(m.group(0) for m in re.finditer(pat, content) if _luhn_ok(re.sub(r"\D", "", m.group(0))))
+    return hits
+
+
+def _out_dirs(root: Path, out_dir: str) -> list:
+    """outputDir конфига и его раскрытый вид (каталог может быть ссылкой): posix от корня репо, без регистра (macOS и Windows
+    регистр не различают). outputDir «.» (весь репо) не совпадёт ни с одним путём — исключению там делать нечего."""
+    names = {out_dir.replace("\\", "/").strip("/")}
+    try:
+        names.add((root / out_dir).resolve().relative_to(root.resolve()).as_posix())
+    except (ValueError, OSError, RuntimeError):
+        pass
+    return sorted(n.casefold() for n in names if n)
+
+
+def _under_out(root: Path, cwd: str, target: str, outs: list):
+    """Сегменты пути цели (без регистра) относительно корня репо, если цель внутри outputDir; иначе None."""
+    p = Path(target).expanduser()
+    if not p.is_absolute():
+        p = Path(cwd or root) / p
+    try:
+        rel = p.resolve().relative_to(root.resolve()).as_posix()
+    except (ValueError, OSError, RuntimeError):
+        return None
+    low = rel.casefold()
+    return low.split("/") if any(low.startswith(o + "/") for o in outs) else None
+
+
+def _mockup_verdict(data: dict, guarded: list, content: str, policy: dict):
+    """Исключение для мок-данных макета. True — действует (запись пропускается); False — не применимо (хук ведёт себя как
+    раньше, без пояснений); строка — применимо, но не действует (отказ с этой причиной в тексте).
+
+    Действует только если: есть движок forge-ui; активный прогон — `forgeui` (трек = ключ стори); `.daiver/config.yaml` на
+    месте; КАЖДАЯ охраняемая цель — `mocks.ts` или файл в `__mocks__/` под `project.outputDir`; КАЖДАЯ PII-подобная строка
+    записи дословно есть в текстах канона трека. Любой сбой (движок, конфиг, нечитаемый канон) — не пропуск: False или
+    причина, и запись блокируется."""
+    try:
+        if not guarded or not _ENGINE_DIR.is_dir():
+            return False
+        cwd = str(data.get("cwd") or "")
+        root = Path(R.project_root(cwd))
+        manifest = R.active_manifest(root)
+        if not manifest or manifest.parent.parent.name != _UI_SKILL:
+            return False
+        track = manifest.parent.name
+        if str(_ENGINE_DIR) not in sys.path:
+            sys.path.insert(0, str(_ENGINE_DIR))
+        import importlib
+        CFG = importlib.import_module("daiver.config")
+        TX = importlib.import_module("daiver.texts")
+        cfg = CFG.load(root)
+        if not cfg.get("initialized"):
+            return False                      # конфига нет или он не проходит проверку: outputDir в нём — дефолт, а не слово команды
+        outs = _out_dirs(root, str(cfg["config"]["project"]["outputDir"]))
+        parts = [_under_out(root, cwd, t, outs) for t in guarded]
+        if any(p is None for p in parts):
+            return False                      # цель вне модуля: исключения нет, хук как раньше
+        if not all(p[-1] == _MOCK_FILE or _MOCK_DIR in p[:-1] for p in parts):
+            return _MOCK_ONLY_HINT            # код модуля с ПДн-подобным текстом: подсказка, куда его положить
+        hits = _pii_hits(content, policy)
+        if not hits:
+            return False
+        try:
+            texts = TX.mockup_texts(root, track)
+        except TX.TextsError as e:
+            return f"тексты макета не получены ({str(e)[:160]})"
+        missing = TX.unmatched(texts, hits)
+        if missing:
+            return (f"{len(missing)} из {len(set(hits))} PII-подобных строк нет дословно в текстах макета "
+                    f"(мок-данные берутся из макета как есть, не выдумываются)")
+        return True
+    except Exception:  # noqa: BLE001 — сбой сверки = исключения нет (fail-closed), а не молчаливый пропуск
+        return False
+
+
 def main() -> int:
     try:
         raw = sys.stdin.read()
@@ -163,11 +266,20 @@ def main() -> int:
                            if any(_luhn_ok(re.sub(r"\D", "", m.group(0)))
                                   for m in re.finditer(pat, content))), None)
         if hit:
+            verdict = False
+            if guarded:
+                try:
+                    verdict = _mockup_verdict(data, guarded, content, policy)
+                except Exception:  # noqa: BLE001 — и потерянное имя функции: исключения нет, запись блокируется
+                    verdict = False
+                if verdict is True:
+                    return 0  # мок-данные макета: каждая строка дословно из канона трека
+            note = f" {verdict}" if isinstance(verdict, str) else ""
             print(f"[pii-boundary] DENY: запись PII/секрета (паттерн /{hit[:32]}…/) в "
                   f"'{guarded[0] if guarded else '?'}' вне разрешённого scope. "
                   f"Убери ПДн или пиши в test/fixtures. Пример в спеке/доке — на "
                   f"зарезервированном домене (user@example.com), телефон — маской "
-                  f"(+7 (XXX) XXX-XX-XX), секрет — плейсхолдером (${{DB_PASSWORD}}).",
+                  f"(+7 (XXX) XXX-XX-XX), секрет — плейсхолдером (${{DB_PASSWORD}}).{note}",
                   file=sys.stderr)
             return 2
     except Exception:

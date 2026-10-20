@@ -48,7 +48,7 @@
     "(?i)reveal (your )?(system prompt|instructions)"
   ],
   "path_risk": {
-    "_comment": "blast-radius по пути-цели действия. Первое совпадение по порядку выигрывает.",
+    "_comment": "blast-radius по пути-цели действия. Первое совпадение по порядку выигрывает. Фронт (forge-ui, задача 3.4): прод-код .tsx/.jsx/.vue/.svelte — R2 (нужен закрытый design-шаг), его тесты (*.test.*, *.spec.*, в т.ч. *.e2e.spec.ts) — R1; граница с тестами та же, что у _project.is_test_path (имя файла .test./.spec. или CamelCase-суффикс Test/Tests/IT/ITCase, каталоги test/tests/__tests__/spec/specs/fixtures/testfixtures) — пин в test_risk_ladder. Шаблон R2 разбирает цель по токенам: цель Bash — склейка путей через пробел, и тест-файл рядом в той же команде не должен понижать прод-файл до R1.",
     "R5": [
       "(?i).*(risk[-_]?model|scoring[-_]?model|regulat).*"
     ],
@@ -63,11 +63,13 @@
       "(?i).*(secret|credential|keystore|truststore).*"
     ],
     "R2": [
-      "(?i)(?:^|/)src/main/.*\\.(java|kt)$"
+      "(?i)(?:^|/)src/main/.*\\.(java|kt)$",
+      "(?i)(?:^|\\s)(?!(?:[^\\s]*[\\\\/])?(?:tests?|__tests__|fixtures?|testfixtures|specs?)[\\\\/])(?![^\\s]*\\.(?:test|spec)\\.[a-z0-9]+(?=\\s|$))(?![^\\s]*(?-i:(?:[a-z0-9]Tests?|[a-z0-9]IT|ITCase)\\.[a-z]+)(?=\\s|$))[^\\s]*\\.(?:tsx|jsx|vue|svelte)(?=\\s|$)"
     ],
     "R1": [
       "(?i)(?:^|/)src/test/.*",
-      "(?i).*(test|spec).*\\.(java|kt|py)$"
+      "(?i).*(test|spec).*\\.(java|kt|py)$",
+      "(?i)\\.(?:test|spec)\\.(?:[cm]?[jt]sx?|vue|svelte)(?=\\s|$)"
     ],
     "R0": [
       "(?i).*\\.(md|txt|adoc|rst)$",

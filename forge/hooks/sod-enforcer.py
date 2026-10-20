@@ -54,7 +54,26 @@ except Exception as _e:  # pragma: no cover — сломанный бандл/и
 # Maven-wrapper `./mvnw` — штатный запуск в Spring-проектах — не совпадал с `\bmvn\b` (за «mvn»
 # идёт буква), и сборка шла мимо роли (боевой прогон v0.4.6, track C F-2). Копия константы
 # живёт в inline-phase-guard; совпадение пинит test_sod-enforcer.
-BUILD_CMD_RE = r"(?:\./gradlew\s+|\bmvnw?\b|\b(?:checkstyle|ktlint|detekt|spotless)\b)"
+# Фронт (forge-ui; задача 3.4): npm/pnpm/yarn/npx с подкомандой run|build|test|exec (или с tsc|vite|playwright среди первых
+# аргументов) и сами tsc|vite|playwright. Фронтовая часть матчит КОМАНДУ, а не слово: имя должно стоять в начале сегмента
+# (после `;`, `&&`, `|`, `(`, `$(`, `sh -c '`, окружения `FOO=1`, `sudo`/`env`/`time`/`timeout N`/`xvfb-run`, пути к бинарнику).
+# Иначе путь проекта вроде `/home/me/vite-app` в `--project …` каждого скрипта делал бы любую команду дизайн-фазы «сборкой»,
+# а `grep playwright package.json` или `cat vite.config.ts` — отказом. `npm install|ci|ls|view` сборкой не считаются.
+# Роль dev (ui-build) и test (ui-verify) в sod-enforcer этот шаблон не блокируют — `npm run build`/`npx tsc` самоисправления
+# красного билда ей доступны; inline-phase-guard останавливает ГЛАВНОГО агента на build-шагах, субагента — нет.
+BUILD_CMD_RE = (
+    r"(?:\./gradlew\s+|\bmvnw?\b|\b(?:checkstyle|ktlint|detekt|spotless)\b"
+    r"|(?:^|[;&|\n(`]|\b(?:sh|bash|zsh|dash|ksh)\s+-\w*c\s+[\"'])\s*"
+    r"(?:(?:[A-Za-z_]\w*=\S*|(?:sudo|doas|env|time|nohup|exec|command|xvfb-run)(?:\s+-\S+)*"
+    r"|timeout(?:\s+-\S+)*\s+\d+\w*)\s+)*"
+    r"(?:[\w.~-]*/)*"
+    r"(?:(?:npm|pnpm|yarn|npx)(?:\.cmd)?(?:\s+\S+){0,3}?\s+(?:run(?:-script)?|build|test|exec|tsc|vite|playwright)"
+    r"|(?:tsc|vite|playwright))(?=[\s;&|)\"'`:]|$))"
+)
+
+# Как называть BUILD_CMD_RE в отказе: само выражение — стена знаков, а модели нужно понять, что именно запрещено.
+BUILD_CMD_LABEL = ("сборка/тесты/линт: gradle, mvn, npm|pnpm|yarn|npx run|build|test|exec, tsc, vite, playwright, "
+                   "checkstyle, ktlint, detekt, spotless")
 
 # Роли и их разрешённые действия
 # role → { allowed_path_prefixes, blocked_commands, blocked_path_patterns }
@@ -237,7 +256,7 @@ def main() -> int:
                 if re.search(pattern, cmd):
                     return _block(
                         f"роль '{role}' (фаза активного шага) не может выполнять '{detected_cmd}' "
-                        f"(blocked_commands: {pattern})"
+                        f"(blocked_commands: {BUILD_CMD_LABEL if pattern == BUILD_CMD_RE else pattern})"
                     )
         # Shell-запись — та же запись: пути роли сверялись только у Write/Edit, и
         # `echo … > src/main/Foo.java` на тестовой фазе проходил SoD (боевой прогон v0.4.6,

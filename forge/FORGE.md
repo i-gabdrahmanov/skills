@@ -37,8 +37,9 @@ git-история и `tasks/`.
    `approvals.jsonl`, `events.jsonl`, `evals.json`, `task-plan.json`, `ground/inventory/`,
    `_origins`, `gates`, `overrides`, `judges/`) пишется только
    санкционированным скриптом с `produced_by:<script>`. Прямая запись моделью (Write/Edit,
-   shell-редирект, `python -c open()`) запрещена (`state-write-guard.py`). Approval-маркеры
-   пишет только `record_approval.py`.
+   shell-редирект, `python -c open()`) запрещена (`state-write-guard.py`); во фронт-репо то же для `.daiver/`
+   (конфиг, карта компонентов, трек, канон, резолв, план, прогресс сборки и проверки — их пишет только движок
+   forge-ui). Approval-маркеры пишет только `record_approval.py`.
 6. **Совместное размещение `hooks/` и `skills/` обязательно.** Гейты вызываются по
    `../skills/`. `deploy.sh` копирует оба каталога одним пакетом (исключает класс ошибок
    «0 hook entries»).
@@ -72,8 +73,9 @@ risk ladder, evidence bundle и security-гейты; доставка (commit/pu
 Политика-as-code в `hooks/risk-policy.json` (`risk_ladder.py` — потребитель). Deny-first:
 **R0** — чтение, навигация, ground. **R1** — авто-мутация state через санкц. скрипты
 (`update.py`, `record_gate.py`, `record_approval.py`) и запись тестов (`path_risk.R1`:
-`src/test/**`, `*Test.java`). **R2** — запись прод-кода (`src/main/**.java|kt`), RED/GREEN-
-закрытия. **R3** — создание задач во внешнем трекере (`command_risk.R3`: `jira … create`,
+`src/test/**`, `*Test.java`, во фронте — `*.test.*`/`*.spec.*` и каталоги `test(s)`/`__tests__`/`spec(s)`/`fixtures`).
+**R2** — запись прод-кода (`src/main/**.java|kt`, во фронте — `.tsx/.jsx/.vue/.svelte`; граница с тестами та же, что у
+`_project.is_test_path`), RED/GREEN-закрытия. **R3** — создание задач во внешнем трекере (`command_risk.R3`: `jira … create`,
 `acli … create`, `rest/api/N/issue`) и security-sensitive пути (`path_risk.R3`).
 **R4** — действия, СНИМАЮЩИЕ enforcement: `override_judge`, `rollback`, `update --skip-judges`,
 `config.py repin`, `config.py set` по переключателю enforcement, `config.py risk
@@ -121,14 +123,17 @@ approval-маркером (см. §Approval markers). **R5** — деструк�
   сборка по секциям плана и `project.buildCommand` (гейт `ui_gate.py build`: секции готовы И проект
   собирается); запреты daiver держит хук `ui-guard`: канон и сырые экспорты макета не читаются, код
   модуля пишется только на `ui-build` при действительной подписи плана (`signature_state`), инлайн-`<svg`
-  в модуле запрещён; проверка строится, её гейт честно отвечает exit 3. Дизайн — `tasks/019-forge-ui.md`.
+  в модуле запрещён; общий control-plane обобщён под фронт (3.4): `.daiver/` охраняет `state-write-guard`, мок-данные макета
+  проходят `pii-boundary` только дословно из канона, фронтовый прод-код — R2, `npm`/`tsc`/`vite`/`playwright` — сборка для SoD,
+  продуктивные инструменты шага `forge-ui` главный агент не вызывает (`phase_tools`); проверка строится, её гейт честно
+  отвечает exit 3. Дизайн — `tasks/019-forge-ui.md`.
 
 Доставка (commit/push/PR/отчёт) — на пользователе. **Multi-vocabulary хуков:** все
 ветки делят control-plane; активный skill/feature резолвится по самому свежему манифесту в
 `ground/statements/*/*/` (не по фикс-namespace). Ids плоских веток намеренно не пересекаются с
 масками `judges-registry` и `PREFIX_PHASE` full-пути → лёгкие ветки не тянут судей.
 **Плоские ветки описаны в одном реестре `hooks/_branches.py`** (шаги, субагентные/гейтовые
-шаги, роли SoD, артефакты, RED/design/final-шаги) — его читают update.py, хуки, archive,
+шаги, роли SoD, артефакты, RED/design/final-шаги, продуктивные MCP-инструменты шага `phase_tools`) — его читают update.py, хуки, archive,
 resolve_phases; копий кортежей `fix-*`/`tech-*` по коду нет. Инвариант «каждая subagent-фаза
 покрыта хуком» пинится `test_phase_enforcement_coverage.py`, реестр — `test_branches_registry.py`.
 
@@ -164,12 +169,12 @@ resolve_phases; копий кортежей `fix-*`/`tech-*` по коду не�
 | `tech-guard.py` | PreToolUse (Write/Edit + Bash) | tech-ветка: правка проекта только на `tech-apply`, по согласию на текущий план, после снимка «до», в `targets` |
 | `ui-guard.py` | PreToolUse (Write/Edit + Bash + read) | ui-ветка (forge-ui): запреты daiver кодом — канон и сырые экспорты макета не читаются (read_file/grep_search/shell), код модуля (`project.outputDir`) пишется только на `ui-build` при действительной подписи плана, инлайн-`<svg` в модуле запрещён; правка на `ui-verify` = переоткрытие `ui-build` |
 | `eval-guard.py` | PreToolUse (Write/Edit + Bash) | блок `src/main` пока eval'ы задачи не passed |
-| `sod-enforcer.py` | PreToolUse | separation of duties по id активного шага |
-| `inline-phase-guard.py` | PreToolUse | actor-guard: ГЛАВНЫЙ не производит subagent-фазу inline |
-| `state-write-guard.py` | PreToolUse | deny прямой записи в control-plane + каталог харнеса |
+| `sod-enforcer.py` | PreToolUse | separation of duties по id активного шага (сборка/тесты: gradle, mvn, npm/pnpm/yarn/npx, tsc, vite, playwright) |
+| `inline-phase-guard.py` | PreToolUse | actor-guard: ГЛАВНЫЙ не производит subagent-фазу inline (артефакты, сборка и продуктивные MCP-инструменты шага — `phase_tools`) |
+| `state-write-guard.py` | PreToolUse | deny прямой записи в control-plane + каталог харнеса + `.daiver/` (состояние движка forge-ui) |
 | `destructive-blocker.py` | PreToolUse | чёрный список деструктивных команд |
 | `fork-syntax-guard.py` | PreToolUse | блок синтаксиса, который режет нативный сейфти |
-| `pii-boundary.py` | PreToolUse | блок записи PII/секретов вне scope |
+| `pii-boundary.py` | PreToolUse | блок записи PII/секретов вне scope (мок-данные макета в `mocks.ts` модуля — только дословно из канона трека) |
 | `grounding-evidence.py` | PreToolUse (read) | evidence `kind:"grounding"` при чтении excerpt |
 | `prompt-guard.py` | UserPromptSubmit + PostToolUse | детект prompt-injection → additionalContext |
 | `file-journal.py` | PostToolUse | журнал изменённых файлов активной фичи |
@@ -516,7 +521,8 @@ git-история и связанные `tasks/`.
 - [Thrust-3] `check_brd_doc.py` (детерминированный: бизнес-секции, отсутствие кода/SQL) —
   хард-гейт `00-brd`; brd-judge понижен до advisory; `--from-output` AND-ит LLM с полом.
 - [Thrust-4] `checkstyle/ktlint/detekt/spotless` в `BUILD_CMD_RE`
-  (inline-phase-guard + sod).
+  (inline-phase-guard + sod). [forge-ui 3.4] + `npm|pnpm|yarn|npx … run|build|test|exec`, `tsc`, `vite`,
+  `playwright` — как КОМАНДА в начале сегмента, а не слово в пути или аргументе.
 - [Thrust-5 / 2026-07-04] Скоуп-чек и дизайн-шаг ветки в `GATE_RESULT_PREFIXES`;
   `INGEST_FLOOR_PHASES` расширен (brd/eval standalone AND, build/delivery гибрид);
   тавтология-floor вшит; `evidence-enforcer` запрещал `Co-Authored-By`

@@ -9,7 +9,8 @@
     inline-phase-guard (артефакты фаз), sod-enforcer (роли), risk_ladder (design-алиас R2),
     update.py (утверждение документа ветки),
     archive.py (финальный шаг), resolve_phases (mode ↔ skill), params-registry (inputs.mode),
-    skill_paths (docs-таргет), risk-policy (gate_cmd_expect на каждый гейтовый шаг).
+    skill_paths (docs-таргет), risk-policy (gate_cmd_expect на каждый гейтовый шаг),
+    inline-phase-guard (phase_tools: продуктивные MCP-инструменты шага — главный агент их не вызывает).
 Новая ветка, не доведённая до всех потребителей, падает здесь, а не на боевом прогоне.
 """
 from __future__ import annotations
@@ -61,6 +62,9 @@ class RegistrySelfConsistency(unittest.TestCase):
                                  "у каждой субагентной фазы — роль SoD")
                 self.assertLessEqual(set(b["roles"].values()), roles)
                 self.assertEqual(set(b["phase_work"]), set(b["subagent_steps"]))
+                self.assertIsInstance(b["phase_tools"], dict, "поле phase_tools обязательно (у веток без MCP-движка — пустое)")
+                self.assertLessEqual(set(b["phase_tools"]), set(b["subagent_steps"]),
+                                     "продуктивные MCP-инструменты — у субагентных шагов")
                 self.assertLessEqual(set(b["artifacts"]), steps)
                 self.assertLessEqual(set(b.get("doc_approval") or {}), steps)
 
@@ -103,6 +107,11 @@ class ConsumersSeeEveryBranch(unittest.TestCase):
                 self.assertIn(b["design_step"], R._STEP_PHASE_ALIASES["02-design"])
                 for step in b["subagent_steps"]:
                     self.assertTrue(ipg._requires_subagent(step), step)
+                for step, patterns in b["phase_tools"].items():
+                    for pattern in patterns:
+                        tool = pattern.replace("*", "probe")      # представитель шаблона
+                        self.assertTrue(ipg._is_phase_work(step, f"mcp__forge-ui__{tool}", {}, REPO),
+                                        f"inline-phase-guard не видит phase_tools {step}: {pattern}")
 
     def test_archive_resolve_phases_registry(self):
         arc = _load(SKILLS / "pipeline-state" / "scripts" / "archive.py", "archive_mod")
@@ -130,6 +139,114 @@ class ConsumersSeeEveryBranch(unittest.TestCase):
                 self.assertIn(skill, paths, "скилл ветки не прописан в skill-paths.json")
                 self.assertIn(b["docs_target"], SP._CLI_TARGETS)
                 self.assertTrue((SKILLS / skill / "SKILL.md").exists())
+
+
+class PhaseToolsRegistry(unittest.TestCase):
+    """Поле реестра `phase_tools` (задача 3.4): продуктивные MCP-инструменты шага, которые главный агент не вызывает."""
+
+    # инструментов ещё нет — шаблоны ждут задач 4.x (после них эти имена обязаны найтись в движке)
+    PLANNED = {"daiver_screenshot", "daiver_verify_*"}
+    # читающие и «оркестраторские» инструменты: в phase_tools не входят (иначе оркестратор заблокировал бы собственную работу)
+    FREE = {"daiver_status", "daiver_init", "daiver_map_append", "daiver_map_lookup", "daiver_outline", "daiver_section",
+            "daiver_source_nodes", "daiver_ds_inventory", "daiver_ds_lookup", "daiver_ds_details", "daiver_ds_requirements",
+            "daiver_color_tokens", "daiver_spec", "daiver_track_manifest"}
+    EXPECTED_UI = {
+        "ui-design": ("daiver_pixso_pull", "daiver_normalize", "daiver_resolve_*", "daiver_plan_write", "daiver_plan_contract"),
+        "ui-build": ("daiver_build_state", "daiver_build_state_set", "daiver_svg_assets"),
+        "ui-verify": ("daiver_screenshot", "daiver_verify_*"),
+    }
+
+    @staticmethod
+    def engine_tools():
+        scripts = str(SKILLS / "forgeui" / "scripts")
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        from daiver import tools as T
+        return sorted(T.TOOLS)
+
+    def test_the_field_is_in_every_branch(self):
+        for skill, b in BR.BRANCHES.items():
+            with self.subTest(skill=skill):
+                self.assertIn("phase_tools", b)
+        self.assertEqual(BR.BRANCHES["forgefix"]["phase_tools"], {})
+        self.assertEqual(BR.BRANCHES["forgetech"]["phase_tools"], {})
+
+    def test_the_ui_branch_by_step(self):
+        self.assertEqual(BR.BRANCHES["forgeui"]["phase_tools"], self.EXPECTED_UI)
+        self.assertEqual(BR.phase_tools(), self.EXPECTED_UI)
+
+    def test_patterns_are_names_of_the_engine(self):
+        import re
+        for step, patterns in BR.phase_tools().items():
+            for pattern in patterns:
+                with self.subTest(step=step, pattern=pattern):
+                    self.assertRegex(pattern, r"^daiver_[a-z0-9_]+\*?$")
+        tools = self.engine_tools()
+        for step, patterns in BR.phase_tools().items():
+            for pattern in patterns:
+                with self.subTest(step=step, pattern=pattern):
+                    matched = [t for t in tools if re.fullmatch(pattern.replace("*", ".*"), t)]
+                    self.assertTrue(matched or pattern in self.PLANNED,
+                                    f"{pattern}: такого инструмента нет в движке (опечатка молча снимает enforcement шага)")
+
+    def test_what_the_patterns_cover_in_the_engine_today(self):
+        import fnmatch
+        tools = self.engine_tools()
+        cover = {step: [t for t in tools if any(fnmatch.fnmatchcase(t, p) for p in patterns)]
+                 for step, patterns in BR.phase_tools().items()}
+        self.assertEqual(cover, {
+            "ui-design": ["daiver_normalize", "daiver_pixso_pull", "daiver_plan_contract", "daiver_plan_write",
+                          "daiver_resolve_candidates", "daiver_resolve_finalize", "daiver_resolve_query", "daiver_resolve_report"],
+            "ui-build": ["daiver_build_state", "daiver_build_state_set", "daiver_svg_assets"],
+            "ui-verify": [],
+        })
+
+    def test_every_engine_tool_has_an_owner(self):
+        """Новый инструмент движка обязан получить решение: продуктивный на каком-то шаге (phase_tools) или свободный (FREE).
+        Иначе его вызов главным агентом пройдёт мимо enforcement молча."""
+        productive = {t for t in self.engine_tools() if BR.tool_steps(t)}
+        for tool in self.engine_tools():
+            with self.subTest(tool=tool):
+                self.assertTrue(tool in productive or tool in self.FREE,
+                                f"{tool}: решить, чей он — phase_tools реестра веток или FREE этого теста")
+                self.assertFalse(tool in productive and tool in self.FREE, f"{tool}: и продуктивный, и свободный")
+        self.assertEqual(set(self.engine_tools()) & self.FREE, self.FREE, "в FREE остался инструмент, которого в движке нет")
+
+    def test_orchestrator_tools_never_become_productive(self):
+        """Оркестратор сам вызывает daiver_init (первый запуск) и daiver_map_append (после «да» пользователя, согласие ui-map-<KEY>)."""
+        for tool in ("daiver_init", "daiver_map_append", "daiver_status"):
+            for variant in (tool, f"mcp__forge-ui__{tool}"):
+                with self.subTest(tool=variant):
+                    self.assertEqual(BR.tool_steps(variant), ())
+
+    def test_lookup_by_step_and_tool(self):
+        self.assertEqual(BR.phase_tool("ui-design", "mcp__forge-ui__daiver_resolve_finalize"), "daiver_resolve_*")
+        self.assertEqual(BR.phase_tool("ui-design", "daiver_plan_contract"), "daiver_plan_contract")
+        self.assertIsNone(BR.phase_tool("ui-build", "mcp__forge-ui__daiver_plan_write"), "чужой шаг")
+        self.assertIsNone(BR.phase_tool("ui-design", "mcp__forge-ui__daiver_status"))
+        self.assertIsNone(BR.phase_tool("fix-diag", "mcp__forge-ui__daiver_plan_write"), "у fix-ветки инструментов нет")
+        self.assertIsNone(BR.phase_tool("04-build-T1", "daiver_build_state_set"), "full-путь реестру не принадлежит")
+        self.assertIsNone(BR.phase_tool(None, "daiver_plan_write"))
+        self.assertIsNone(BR.phase_tool(["ui-design"], "daiver_plan_write"), "id шага — строка; нехэшируемое не роняет хук")
+        self.assertIsNone(BR.phase_tool({"id": "ui-design"}, "daiver_plan_write"))
+        self.assertIsNone(BR.phase_tool("ui-design", None))
+        self.assertIsNone(BR.phase_tool("ui-design", ""))
+        self.assertEqual(BR.tool_steps("mcp__forge-ui__daiver_build_state_set"), ("ui-build",))
+        self.assertEqual(BR.tool_steps("mcp__forge-ui__daiver_verify_anything"), ("ui-verify",))
+        self.assertEqual(BR.tool_steps("mcp__atlassian__create_issue"), ())
+
+    def test_the_server_prefix_does_not_matter_and_the_case_does(self):
+        self.assertEqual(BR.tool_basename("mcp__forge-ui__daiver_plan_write"), "daiver_plan_write")
+        self.assertEqual(BR.tool_basename("mcp__some__server__daiver_plan_write"), "daiver_plan_write")
+        self.assertEqual(BR.tool_basename("daiver_plan_write"), "daiver_plan_write")
+        self.assertEqual(BR.tool_basename(None), "")
+        self.assertEqual(BR.tool_steps("mcp__forge-ui__DAIVER_PLAN_WRITE"), ())
+
+    def test_the_brief_leaves_orchestrator_tools_to_the_orchestrator(self):
+        brief = (SKILLS / "forgeui" / "SKILL.md").read_text(encoding="utf-8")
+        for tool in ("daiver_map_append", "daiver_init"):
+            self.assertIn(tool, brief)
+            self.assertEqual(BR.tool_steps(tool), (), f"бриф велит оркестратору вызывать {tool} — в phase_tools ему не место")
 
 
 if __name__ == "__main__":

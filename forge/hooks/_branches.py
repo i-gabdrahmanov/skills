@@ -17,6 +17,7 @@ Full-ветка (feature-pipeline) сюда НЕ входит: у неё дин�
 """
 from __future__ import annotations
 
+import fnmatch
 from typing import Optional
 
 # Поля ветки:
@@ -34,6 +35,10 @@ from typing import Optional
 #   verify_to_impl  — фаза прогона → шаг реализации, который надо переоткрыть (подсказка SoD)
 #   artifacts       — шаг → канонические имена файлов в docs-каталоге задачи (update.py)
 #   phase_work      — шаг → (regex пути, описание): productive-артефакт фазы (inline-phase-guard)
+#   phase_tools     — шаг → имена/шаблоны (fnmatch) продуктивных MCP-инструментов шага: ГЛАВНЫЙ агент их не вызывает,
+#                     фазу исполняет субагент (inline-phase-guard; у веток без MCP-движка — пусто). Читающие
+#                     инструменты и те, что вызывает сам оркестратор после решения человека (daiver_init, daiver_map_append),
+#                     сюда не входят — иначе оркестратор заблокировал бы собственную работу
 #   docs_target     — CLI-таргет skill_paths.py, печатающий docs-каталог задачи
 #   doc_approval    — шаг → имя документа: закрыть шаг можно только при маркере
 #                     <doc>-approved-<feature> (update._check_doc_approval, как 00-brd/02-sdd)
@@ -61,6 +66,7 @@ BRANCHES = {
             "fix-verify": (r"src/", "правка src/ в фазе прогона тестов"),
             "fix-spec": (r"(^|/)sdd\.md$", "запись дельты спеки (sdd.md)"),
         },
+        "phase_tools": {},
         "docs_target": "fix-docs",
         "doc_approval": {},
     },
@@ -92,6 +98,7 @@ BRANCHES = {
             "tech-verify": (r"src/", "правка src/ в фазе прогона тестов"),
             "tech-record": (r"(^|/)report\.md$", "запись итоговой сводки (report.md)"),
         },
+        "phase_tools": {},
         "docs_target": "tech-docs",
         "doc_approval": {},
     },
@@ -126,6 +133,19 @@ BRANCHES = {
                          "запись фронтового кода модуля"),
             "ui-verify": (r"\.(tsx|jsx|vue|svelte|ts|js|css|less|scss)$",
                           "правка фронтового кода в фазе проверки"),
+        },
+        # Продуктивные инструменты движка forge-ui (MCP `forge-ui`, имена без префикса mcp__forge-ui__). ui-design: заведение
+        # кадра и канон, резолв (кандидаты, вердикты, отчёт), план и контракт готовности (пишет ui-plan.md/lock, снимает
+        # устаревшее согласие); ui-build: состояние сборки (создаёт и двигает) и svg-арты (с moduleDir копирует в модуль);
+        # ui-verify: снимок страницы и инструменты итерации (инструментов пока нет — шаблоны ждут задач 4.x).
+        # НЕ входят: daiver_status/outline/section/source_nodes/color_tokens/ds_*/map_lookup/spec/resolve-чтение — читают;
+        # daiver_init и daiver_map_append вызывает ОРКЕСТРАТОР после ответа пользователя (согласие ui-map-<KEY>);
+        # daiver_track_manifest и daiver_svg_assets на ui-design — вне списка задачи 3.4.
+        "phase_tools": {
+            "ui-design": ("daiver_pixso_pull", "daiver_normalize", "daiver_resolve_*", "daiver_plan_write",
+                          "daiver_plan_contract"),
+            "ui-build": ("daiver_build_state", "daiver_build_state_set", "daiver_svg_assets"),
+            "ui-verify": ("daiver_screenshot", "daiver_verify_*"),
         },
         "docs_target": "feature-docs",
         "doc_approval": {"ui-spec": "ui-spec"},
@@ -217,6 +237,37 @@ def phase_work() -> dict:
     for b in BRANCHES.values():
         out.update(b["phase_work"])
     return out
+
+
+def phase_tools() -> dict:
+    """шаг → шаблоны имён продуктивных MCP-инструментов шага (fnmatch, регистр важен)."""
+    out: dict = {}
+    for b in BRANCHES.values():
+        for step, patterns in (b.get("phase_tools") or {}).items():
+            out[step] = tuple(patterns)
+    return out
+
+
+def tool_basename(tool_name) -> str:
+    """Имя инструмента без префикса MCP-сервера: `mcp__forge-ui__daiver_plan_write` → `daiver_plan_write`.
+    Имя без префикса возвращается как есть; не строка — пустая строка."""
+    return tool_name.rsplit("__", 1)[-1] if isinstance(tool_name, str) else ""
+
+
+def phase_tool(step_id, tool_name) -> Optional[str]:
+    """Шаблон из `phase_tools` шага, под который подходит инструмент; None — это не продуктивный инструмент шага."""
+    if not isinstance(step_id, str):
+        return None                               # id шага из манифеста — строка; нехэшируемое в .get() упало бы
+    base = tool_basename(tool_name)
+    for pattern in phase_tools().get(step_id, ()):
+        if fnmatch.fnmatchcase(base, pattern):
+            return pattern
+    return None
+
+
+def tool_steps(tool_name) -> tuple:
+    """Шаги, чьим продуктивным инструментом является `tool_name` (пусто — ничьим)."""
+    return tuple(step for step in phase_tools() if phase_tool(step, tool_name))
 
 
 def doc_approvals() -> dict:

@@ -388,5 +388,205 @@ class TestSubagentDetection(unittest.TestCase):
                 "tool_input": {"file_path": str(tmp / "src/main/java/X.java")}}), 2)
 
 
+# ── фронт: продуктивные MCP-инструменты шага (`phase_tools`) и сборка npm/tsc (forge-ui; задача 3.4) ───────────
+UI_STEPS = ["ui-spec", "ui-design", "ui-build", "ui-verify"]
+UI_KEY = "STOR-100"
+
+
+def _make_ui(tmp: Path, current: str | None, feature: str = UI_KEY, skill: str = "forgeui") -> None:
+    """Манифест прогона forgeui КАК НА ЖИВОМ: шаги до `current` закрыты, `current` и дальше — pending; None — закрыты все."""
+    d = tmp / "ground" / "statements" / skill / feature
+    d.mkdir(parents=True, exist_ok=True)
+    steps, done, prev = [], True, None
+    for sid in UI_STEPS:
+        if sid == current:
+            done = False
+        steps.append({"id": sid, "status": "completed" if done else "pending", "depends_on": [prev] if prev else []})
+        prev = sid
+    (d / "manifest.json").write_text(json.dumps({"context": {"feature": feature}, "steps": steps}), encoding="utf-8")
+
+
+def _mcp(tool: str, server: str = "forge-ui") -> str:
+    return f"mcp__{server}__{tool}"
+
+
+# что главный агент НЕ вызывает на шаге (продуктивное) — по задаче 3.4 и её заметкам (2.6, 3.1, 3.2)
+PRODUCTIVE = {
+    "ui-design": ("daiver_pixso_pull", "daiver_normalize", "daiver_resolve_candidates", "daiver_resolve_query",
+                  "daiver_resolve_finalize", "daiver_resolve_report", "daiver_plan_write", "daiver_plan_contract"),
+    "ui-build": ("daiver_build_state", "daiver_build_state_set", "daiver_svg_assets"),
+    "ui-verify": ("daiver_screenshot", "daiver_verify_state", "daiver_verify_compare"),
+}
+# читающие и «оркестраторские» инструменты — свободны на любом шаге: иначе оркестратор заблокировал бы собственную работу
+FREE_TOOLS = ("daiver_status", "daiver_init", "daiver_map_append", "daiver_map_lookup", "daiver_outline", "daiver_section",
+              "daiver_source_nodes", "daiver_ds_inventory", "daiver_ds_lookup", "daiver_ds_details", "daiver_ds_requirements",
+              "daiver_color_tokens", "daiver_spec", "daiver_track_manifest")
+
+
+class TPhaseTools(unittest.TestCase):
+    """Главный агент не вызывает продуктивные MCP-инструменты шага: фазу исполняет субагент (как с записью артефактов)."""
+
+    def test_main_agent_is_blocked_on_every_productive_tool_of_the_active_step(self):
+        for step, tools in PRODUCTIVE.items():
+            for tool in tools:
+                for name in (_mcp(tool), tool, _mcp(tool, "forge_ui")):
+                    with self.subTest(step=step, tool=name), tempfile.TemporaryDirectory() as d:
+                        tmp = Path(d); _make_ui(tmp, step)
+                        rc, err = _run_full(tmp, {"tool_name": name, "tool_input": {"track": UI_KEY}})
+                        self.assertEqual(rc, 2, f"главный агент вызвал {name} на {step}: {err}")
+                        self.assertIn(f"фаза '{step}'", err)
+                        self.assertIn(tool, err)
+                        self.assertIn("agent(subagent_type", err)
+
+    def test_the_subagent_does_the_work(self):
+        for step, tools in PRODUCTIVE.items():
+            with tempfile.TemporaryDirectory() as d:
+                tmp = Path(d); _make_ui(tmp, step)
+                for tool in tools:
+                    with self.subTest(step=step, tool=tool):
+                        self.assertEqual(_run(tmp, {"tool_name": _mcp(tool), "agent_type": "general-purpose",
+                                                    "tool_input": {}}), 0)
+                        self.assertEqual(_run(tmp, {"tool_name": _mcp(tool), "agent_id": "sub-1", "tool_input": {}}), 0)
+
+    def test_the_subagent_scope_marker_counts_as_subagent_for_tools_too(self):
+        import subagent_scope
+        sid = "e2e-" + uuid.uuid4().hex
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_ui(tmp, "ui-design")
+            payload = {"tool_name": _mcp("daiver_plan_write"), "session_id": sid, "tool_input": {}}
+            self.assertEqual(_run(tmp, payload), 2, "без отметки — это оркестратор inline")
+            subagent_scope.enter(sid, "general-purpose-1", "general-purpose")
+            try:
+                self.assertEqual(_run(tmp, payload), 0, "субагент работает — пропускаем")
+            finally:
+                subagent_scope.leave(sid, "general-purpose-1", "general-purpose")
+            self.assertEqual(_run(tmp, payload), 2)
+
+    def test_reading_and_orchestrator_owned_tools_are_free_on_every_step(self):
+        for step in UI_STEPS:
+            with tempfile.TemporaryDirectory() as d:
+                tmp = Path(d); _make_ui(tmp, step)
+                for tool in FREE_TOOLS:
+                    with self.subTest(step=step, tool=tool):
+                        self.assertEqual(_run(tmp, {"tool_name": _mcp(tool), "tool_input": {}}), 0)
+
+    def test_a_tool_of_another_step_does_not_block(self):
+        """Инструмент шага блокируется только пока шаг идёт: после закрытия ui-design оркестратору можно, например, перетянуть макет."""
+        for step, tools in PRODUCTIVE.items():
+            for other, other_tools in PRODUCTIVE.items():
+                if other == step:
+                    continue
+                with tempfile.TemporaryDirectory() as d:
+                    tmp = Path(d); _make_ui(tmp, step)
+                    for tool in other_tools:
+                        if tool in tools:
+                            continue
+                        with self.subTest(step=step, tool=tool):
+                            self.assertEqual(_run(tmp, {"tool_name": _mcp(tool), "tool_input": {}}), 0)
+
+    def test_nothing_is_blocked_when_the_run_is_over_or_absent(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_ui(tmp, None)
+            self.assertEqual(_run(tmp, {"tool_name": _mcp("daiver_plan_write"), "tool_input": {}}), 0)
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(_run(Path(d), {"tool_name": _mcp("daiver_plan_write"), "tool_input": {}}), 0)
+
+    def test_the_back_end_runs_are_untouched(self):
+        """Другая ветка: те же имена инструментов ничего не значат; чужие MCP (Jira) не судятся вовсе."""
+        for skill_step in ("04-build-T1", "02-design", "03-jira", "02-sdd"):
+            with tempfile.TemporaryDirectory() as d:
+                tmp = Path(d); _make(tmp, skill_step)
+                for name in (_mcp("daiver_plan_write"), _mcp("daiver_build_state_set"), "mcp__atlassian__create_issue",
+                             "mcp__jira__jira_create_issue", "mcp__confluence__search"):
+                    with self.subTest(step=skill_step, tool=name):
+                        self.assertEqual(_run(tmp, {"tool_name": name, "tool_input": {"summary": "x"}}), 0)
+
+    def test_override_of_the_subagent_origin_lifts_the_block_with_a_warning(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_ui(tmp, "ui-design")
+            ov = tmp / "ground" / "statements" / "forgeui" / UI_KEY / "overrides"
+            ov.mkdir()
+            (ov / "subagent-origin.json").write_text(json.dumps({"reason": "agent недоступен", "step_id": "ui-design"}),
+                                                     encoding="utf-8")
+            rc, err = _run_full(tmp, {"tool_name": _mcp("daiver_plan_write"), "tool_input": {}})
+            self.assertEqual(rc, 0, err)
+            self.assertIn("WARN", err)
+
+    def test_other_non_write_tools_are_still_ignored(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_ui(tmp, "ui-design")
+            for name in ("read_file", "grep_search", "agent", "ask_user_question", "web_fetch", "mcp__forge-ui__"):
+                with self.subTest(tool=name):
+                    self.assertEqual(_run(tmp, {"tool_name": name, "tool_input": {"file_path": "x"}}), 0)
+
+
+class TFrontBuildInline(unittest.TestCase):
+    """На build-шагах ui (ui-build, ui-verify) главный агент не гоняет npm/tsc/vite/playwright — это работа субагента; субагент ИХ гоняет
+    свободно (красный билд чинит он). Слова в путях и аргументах сборкой не считаются: control-plane с `--project /home/me/vite-app` жив."""
+
+    CMDS = ("npm run build", "npm test", "pnpm build", "yarn test", "npx tsc --noEmit", "npx vite build", "npx playwright test",
+            "tsc -p .", "vite build", "playwright test", "cd web && npm run build", "CI=1 npm test")
+
+    def test_main_agent_is_blocked_on_build_steps(self):
+        for step in ("ui-build", "ui-verify"):
+            for cmd in self.CMDS:
+                with self.subTest(step=step, cmd=cmd), tempfile.TemporaryDirectory() as d:
+                    tmp = Path(d); _make_ui(tmp, step)
+                    rc, err = _run_full(tmp, {"tool_name": "run_shell_command", "tool_input": {"command": cmd}})
+                    self.assertEqual(rc, 2, f"оркестратор собрал фронт inline на {step}: {cmd}")
+                    self.assertIn("запуск сборки/тестов", err)
+                    self.assertIn("npm|pnpm|yarn|npx", err)
+                    self.assertNotIn("(?:", err, "отказ называет запрещённое словами, а не регулярным выражением")
+
+    def test_the_subagent_builds_and_fixes_a_red_build(self):
+        for step in ("ui-build", "ui-verify"):
+            for cmd in self.CMDS:
+                with self.subTest(step=step, cmd=cmd), tempfile.TemporaryDirectory() as d:
+                    tmp = Path(d); _make_ui(tmp, step)
+                    self.assertEqual(_run(tmp, {"tool_name": "run_shell_command", "agent_type": "general-purpose",
+                                                "tool_input": {"command": cmd}}), 0)
+
+    def test_it_is_not_the_job_of_this_hook_on_design_and_spec_steps(self):
+        """На ui-spec/ui-design сборку фронта запрещает роль (sod-enforcer); это хук про build-шаги."""
+        for step in ("ui-spec", "ui-design"):
+            with tempfile.TemporaryDirectory() as d:
+                tmp = Path(d); _make_ui(tmp, step)
+                self.assertEqual(_run(tmp, {"tool_name": "run_shell_command", "tool_input": {"command": "npm run build"}}), 0)
+
+    def test_control_plane_with_a_project_path_that_looks_like_a_tool_is_alive(self):
+        proj = "/home/me/vite-app"
+        for cmd in (f"python3 .gigacode/skills/pipeline-state/scripts/record_gate.py --project {proj} --skill forgeui --feature {UI_KEY} "
+                    f"--step-id ui-build --cmd \"python3 .gigacode/skills/forgeui/scripts/ui_gate.py build --project {proj} --feature {UI_KEY}\"",
+                    f"python3 .gigacode/skills/forgeui/scripts/ui_gate.py build --project {proj} --feature {UI_KEY}",
+                    f"python3 .gigacode/skills/pipeline-state/scripts/update.py --project /work/playwright-tests --skill forgeui "
+                    f"--feature {UI_KEY} --step-id ui-build --status completed",
+                    "cat vite.config.ts", "grep playwright package.json", "npm install", "git status"):
+            with self.subTest(cmd=cmd[:80]), tempfile.TemporaryDirectory() as d:
+                tmp = Path(d); _make_ui(tmp, "ui-build")
+                rc, err = _run_full(tmp, {"tool_name": "run_shell_command", "tool_input": {"command": cmd}})
+                self.assertEqual(rc, 0, f"{cmd}\n{err}")
+
+    def test_the_inline_build_flag_lifts_it_for_npm_too(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_ui(tmp, "ui-build")
+            payload = {"tool_name": "run_shell_command", "tool_input": {"command": "npm run build"}}
+            self.assertEqual(_run(tmp, payload), 2)
+            (tmp / "ground" / "pipeline.json").write_text(json.dumps({"autonomy": {"allow_inline_build": True}}), encoding="utf-8")
+            self.assertEqual(_run(tmp, payload), 0)
+
+    def test_back_end_builds_are_blocked_as_before(self):
+        for step, cmd in (("04-build-T1", "./gradlew test"), ("05-tests", "./mvnw verify"), ("04-test-T1", "mvn -q test")):
+            with self.subTest(step=step), tempfile.TemporaryDirectory() as d:
+                tmp = Path(d); _make(tmp, step)
+                self.assertEqual(_run(tmp, {"tool_name": "Bash", "tool_input": {"command": cmd}}), 2)
+                self.assertEqual(_run(tmp, {"tool_name": "Bash", "agent_type": "general-purpose",
+                                            "tool_input": {"command": cmd}}), 0)
+
+    def test_back_end_step_does_not_stop_the_front_tools_by_name(self):
+        """`npm run build` на бэковой build-фазе тоже сборка (в Java-репо бывает фронт-часть): оркестратору inline нельзя."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make(tmp, "04-build-T1")
+            self.assertEqual(_run(tmp, {"tool_name": "Bash", "tool_input": {"command": "npm run build"}}), 2)
+
 if __name__ == "__main__":
     unittest.main()

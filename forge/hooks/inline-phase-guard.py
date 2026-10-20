@@ -21,6 +21,10 @@ enforcement.
   И действие — productive-работа этой фазы (см. _is_phase_work)
   → BLOCK (exit 2 + stderr).
 
+Продуктивные MCP-инструменты шага (поле реестра веток `phase_tools`, задача 3.4): вызов такого инструмента главным агентом на
+этом шаге — тоже inline-работа фазы (`daiver_pixso_pull`, `daiver_plan_write`, `daiver_build_state_set` …). Читающие инструменты и
+те, что вызывает сам оркестратор после ответа человека (`daiver_map_append`), в реестр не входят.
+
 Escape-hatch (деградация, когда agent() реально недоступен): overrides/subagent-origin.json
 активной фичи — снимает блок с предупреждением (как у судей).
 
@@ -74,7 +78,22 @@ except Exception:
 # Команда сборки/тестов/линта — Gradle ИЛИ Maven ИЛИ standalone-линтер (checkstyle/ktlint/…).
 # Gradle/Maven-таск (напр. `./gradlew checkstyleMain`) уже покрыт `./gradlew`; standalone-инструмент
 # добавлен явно, чтобы «checkstyle inline» ловился независимо от способа запуска.
-BUILD_CMD_RE = r"(?:\./gradlew\s+|\bmvnw?\b|\b(?:checkstyle|ktlint|detekt|spotless)\b)"
+# Фронт (forge-ui; задача 3.4): npm/pnpm/yarn/npx с подкомандой run|build|test|exec (или с tsc|vite|playwright среди первых
+# аргументов) и сами tsc|vite|playwright. Фронтовая часть матчит КОМАНДУ, а не слово: имя должно стоять в начале сегмента
+# (после `;`, `&&`, `|`, `(`, `$(`, `sh -c '`, окружения `FOO=1`, `sudo`/`env`/`time`/`timeout N`/`xvfb-run`, пути к бинарнику).
+# Иначе путь проекта вроде `/home/me/vite-app` в `--project …` каждого скрипта делал бы любую команду дизайн-фазы «сборкой»,
+# а `grep playwright package.json` или `cat vite.config.ts` — отказом. `npm install|ci|ls|view` сборкой не считаются.
+# Роль dev (ui-build) и test (ui-verify) в sod-enforcer этот шаблон не блокируют — `npm run build`/`npx tsc` самоисправления
+# красного билда ей доступны; inline-phase-guard останавливает ГЛАВНОГО агента на build-шагах, субагента — нет.
+BUILD_CMD_RE = (
+    r"(?:\./gradlew\s+|\bmvnw?\b|\b(?:checkstyle|ktlint|detekt|spotless)\b"
+    r"|(?:^|[;&|\n(`]|\b(?:sh|bash|zsh|dash|ksh)\s+-\w*c\s+[\"'])\s*"
+    r"(?:(?:[A-Za-z_]\w*=\S*|(?:sudo|doas|env|time|nohup|exec|command|xvfb-run)(?:\s+-\S+)*"
+    r"|timeout(?:\s+-\S+)*\s+\d+\w*)\s+)*"
+    r"(?:[\w.~-]*/)*"
+    r"(?:(?:npm|pnpm|yarn|npx)(?:\.cmd)?(?:\s+\S+){0,3}?\s+(?:run(?:-script)?|build|test|exec|tsc|vite|playwright)"
+    r"|(?:tsc|vite|playwright))(?=[\s;&|)\"'`:]|$))"
+)
 
 # Python-subprocess обёртка над build-командой. Escape-hatch для двух путей:
 #   1. orchestrator (main agent) → Bash(`python3 -c "import subprocess; subprocess.run('./gradlew test', ...)"`).
@@ -252,6 +271,12 @@ def _shell_write_targets(cmd: str) -> list[str]:
 def _is_phase_work(step_id: str, tool_name: str, tool_input: dict, root: Path) -> str | None:
     """Возвращает человекочитаемое описание productive-работы фазы, если действие ею является.
     Иначе None (действие не относится к productive-работе данной subagent-фазы)."""
+    # MCP-инструмент движка (forge-ui): продуктивные инструменты шага — поле реестра `phase_tools`. Вызов такого инструмента
+    # главным агентом — та же inline-работа фазы, что и запись её артефакта: пишет движок, но по команде НЕ того, кто обязан.
+    if tool_name not in WRITE_TOOLS + BASH_TOOLS:
+        if BR.phase_tool(step_id, tool_name):
+            return f"вызов инструмента фазы {BR.tool_basename(tool_name)}"
+        return None
     target = _target_path(tool_name, tool_input)
     if not target:
         return None
@@ -284,7 +309,8 @@ def _is_phase_work(step_id: str, tool_name: str, tool_input: dict, root: Path) -
             if PYTHON_SUBPROCESS_RE.search(norm):
                 return None
             if step_id.startswith(("04-test", "04-build", "05-tests") + BR.build_steps()):
-                return f"запуск сборки/тестов ({BUILD_CMD_RE})"
+                return ("запуск сборки/тестов (gradle, mvn, npm|pnpm|yarn|npx run|build|test|exec, tsc, vite, playwright, "
+                        "checkstyle, ktlint, detekt, spotless)")
         return None
 
     return _phase_artifact(step_id, norm)
@@ -409,8 +435,8 @@ def main() -> int:
         return 0
 
     tool_name = data.get("tool_name", "")
-    if tool_name not in WRITE_TOOLS + BASH_TOOLS:
-        return 0
+    if tool_name not in WRITE_TOOLS + BASH_TOOLS and not BR.tool_steps(tool_name):
+        return 0  # не запись/shell и не продуктивный MCP-инструмент какого-либо шага: хуку тут нечего судить
 
     root = Path(_R.project_root(data.get("cwd", ""))) if _R else Path(data.get("cwd") or ".")
     tool_input = data.get("tool_input") or {}

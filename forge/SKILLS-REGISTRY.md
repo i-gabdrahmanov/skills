@@ -44,10 +44,10 @@
 | tdd-guard / eval-guard | @team | 2026-12 | блок src/main без RED-теста / без пройденных eval'ов задачи | run-evals.py |
 | tech-guard | @team | 2026-12 | скоуп записи tech-ветки: только tech-apply, согласие на текущий план (sha256), снимок «до», targets | test_tech-guard.py |
 | ui-guard | @team | 2026-12 | запреты daiver (слой F) кодом во фронт-ветке forgeui: канон и сырые экспорты макета не читаются, код модуля (outputDir) — только на ui-build при действительной подписи плана (signature_state), инлайн-svg запрещён | test_ui-guard.py, run-evals.py (N1, N3, N6, N9, N12) |
-| sod-enforcer / inline-phase-guard | @team | 2026-12 | separation of duties / блок inline-работы в subagent-фазах | run-evals.py |
-| pii-boundary | @team | 2026-12 | граница PII при записи | run-evals.py |
+| sod-enforcer / inline-phase-guard | @team | 2026-12 | separation of duties (сборка фронта npm/tsc/vite/playwright — как gradle/mvn) / блок inline-работы в subagent-фазах, включая продуктивные MCP-инструменты шага (`phase_tools`) | run-evals.py, test_sod-enforcer.py, test_inline-phase-guard.py |
+| pii-boundary | @team | 2026-12 | граница PII при записи; мок-данные макета в `mocks.ts` модуля forge-ui — только дословно из канона трека | run-evals.py, test_pii-boundary.py |
 | prompt-guard | @team | 2026-12 | детект prompt-injection | run-evals.py |
-| state-write-guard | @team | 2026-12 | единственный легальный писатель control-plane: блок прямой записи И удаления (`rm`/`mv`/`touch`) манифеста, approvals, evals, inventory, task-plan | run-evals.py, test_state-write-guard.py |
+| state-write-guard | @team | 2026-12 | единственный легальный писатель control-plane: блок прямой записи И удаления (`rm`/`mv`/`touch`) манифеста, approvals, evals, inventory, task-plan, а во фронт-репо — состояния движка `.daiver/` (конфиг, карта, трек, канон, план, прогресс сборки) | run-evals.py, test_state-write-guard.py |
 | fork-syntax-guard | @team | 2026-12 | читаемый отказ вместо молчаливого deny нативного сейфти форка (`$(...)`, backticks, `find -exec`) | run-evals.py |
 | grounding-evidence | @team | 2026-12 | пишет evidence чтения grounding-excerpt — по нему gate-guard снимает блок фазы `01-grounding` | test_grounding-evidence.py |
 | file-journal | @team | 2026-12 | журнал изменённых файлов фичи — скоуп восстановления кода для `rollback.py` | test_file-journal.py |

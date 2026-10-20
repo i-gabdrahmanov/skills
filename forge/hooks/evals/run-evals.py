@@ -15,8 +15,10 @@ NOTE: этот скрипт намеренно создаёт фикстуры �
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -30,6 +32,52 @@ def run_hook(name: str, payload: dict) -> tuple[int, str]:
     p = subprocess.run([PY, str(HOOKS / name)], input=json.dumps(payload),
                        capture_output=True, text=True, timeout=40)
     return p.returncode, (p.stdout or "").strip() + ("\n" + p.stderr.strip() if p.stderr.strip() else "")
+
+
+def chain_hooks(tool_name: str) -> list:
+    """Хуки PreToolUse для инструмента — как их выбирает рантайм по matcher'ам settings.hooks.json, в порядке цепочки."""
+    cfg = json.loads((HOOKS / "settings.hooks.json").read_text(encoding="utf-8"))
+    names = []
+    for group in cfg["hooks"]["PreToolUse"]:
+        if re.search(group.get("matcher", ""), tool_name):
+            for h in group["hooks"]:
+                m = re.search(r"([\w-]+)\.py\b", h["command"])
+                if m:
+                    names.append(m.group(1))
+    return names
+
+
+def run_chain(tool_name: str, tool_input: dict, cwd, **extra) -> tuple:
+    """Вся цепочка PreToolUse инструмента, как её гонит рантайм: первый exit 2 останавливает. (rc, хук-остановивший, вывод)."""
+    payload = {"hook_event_name": "PreToolUse", "cwd": str(cwd), "tool_name": tool_name, "tool_input": tool_input, **extra}
+    for name in chain_hooks(tool_name):
+        rc, out = run_hook(name + ".py", payload)
+        if rc == 2:
+            return 2, name, out
+    return 0, "", ""
+
+
+def perform(tool_name: str, tool_input: dict, cwd) -> None:
+    """То, что сделал бы рантайм с РАЗРЕШЁННЫМ вызовом: записать файл или выполнить shell-команду в cwd."""
+    if tool_name in ("write_file", "Write"):
+        path = Path(tool_input["file_path"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(tool_input.get("content", ""), encoding="utf-8")
+    elif tool_name in ("run_shell_command", "Bash"):
+        subprocess.run(["sh", "-c", tool_input["command"]], cwd=str(cwd), capture_output=True, text=True, timeout=60)
+
+
+def engine_tools():
+    """Модуль инструментов движка forge-ui (daiver.tools)."""
+    scripts = str(HOOKS.parent / "skills" / "forgeui" / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    from daiver import tools as T
+    return T
+
+
+def sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else "<нет файла>"
 
 
 def make_project(tmp: Path, *, tests_status="completed", spec_status="completed",
@@ -492,8 +540,130 @@ def main() -> int:
                 c, _ = run_hook("ui-guard.py", {"cwd": str(rb), "tool_name": "Read",
                                                  "tool_input": {"file_path": str(rb / canon)}})
                 check("ui-guard: вне прогона forgeui чтение по имени канона → noop", c == 0)
+
+                # ── N7 (F9, INV-F9): правило в карту компонентов — только по «да» пользователя; без него component-map.yaml не меняется ──
+                # Три слоя: движок (согласие ui-map-<KEY>, одноразовое), state-write-guard (карту руками не пишут) и gate-guard
+                # (согласие не выписать с цитатой, которой пользователь не говорил). Исход проверяется по хешу файла карты.
+                T = engine_tools()
+                cmap = ur / ".daiver" / "component-map.yaml"
+                rule = {"match": "Modal Header", "outcome": "component", "component": "ModalHeader"}
+                rule_yaml = "  - match: Modal Header\n    outcome: component\n    component: ModalHeader\n"
+                ui_manifest(ur, "ui-design")
+                h0 = sha(cmap)
+                try:
+                    T.call("daiver_map_append", ur, {"track": "STOR-100", "rule": rule})
+                    refused = ""
+                except T.ToolError as e:
+                    refused = str(e)
+                check("N7: daiver_map_append без согласия ui-map-<KEY> → отказ движка, карта не изменена",
+                      "нет согласия" in refused and sha(cmap) == h0)
+                dry = T.call("daiver_map_append", ur, {"track": "STOR-100", "rule": rule, "dryRun": True})
+                check("N7: dryRun показывает правило как ляжет в файл и ничего не пишет",
+                      dry.get("dryRun") is True and "match: Modal Header" in dry.get("yaml", "") and sha(cmap) == h0)
+                map_rel = ".daiver/component-map.yaml"
+                for what, tool, ti in (
+                        ("Write карты целиком", "write_file", {"file_path": str(cmap), "content": cmap.read_text(encoding="utf-8") + rule_yaml}),
+                        ("Edit карты", "edit", {"file_path": str(cmap), "old_string": "fallback: ask", "new_string": "fallback: ask\n" + rule_yaml}),
+                        ("дозапись в карту shell-ом (>>)", "run_shell_command", {"command": f"cat >> {map_rel} <<'EOF'\n{rule_yaml}EOF"}),
+                        ("tee -a", "run_shell_command", {"command": f"printf '%s' '{rule_yaml}' | tee -a {map_rel}"}),
+                        ("sed -i", "run_shell_command", {"command": f"sed -i 's/fallback: ask/fallback: local/' {map_rel}"}),
+                        ("cp поверх карты", "run_shell_command", {"command": f"cp /tmp/mine.yaml {map_rel}"}),
+                        ("python -c open(…, 'a')", "run_shell_command", {"command": f"python3 -c \"open('{map_rel}','a').write('x')\""}),
+                        ("rm карты (чтобы пересоздать пустую)", "run_shell_command", {"command": f"rm -f {map_rel}"}),
+                        ("mv карты прочь", "run_shell_command", {"command": f"mv {map_rel} /tmp/map.bak"})):
+                    rc, who, out = run_chain(tool, ti, ur)
+                    check(f"N7: {what} → deny state-write-guard, движок назван", rc == 2 and who == "state-write-guard" and "daiver_map_append" in out)
+                    if rc == 0:
+                        perform(tool, ti, ur)
+                check("N7: после всех обходных попыток component-map.yaml не изменён", sha(cmap) == h0)
+
+                record = HOOKS.parent / "skills" / "pipeline-state" / "scripts" / "record_approval.py"
+                approve = (f"python3 {record} --project {ur} --key ui-map-STOR-100 --approved-by user --reason 'правило карты: Modal Header' "
+                           f"--evidence 'да, добавить правило карты'")
+                transcript = ur / "transcript.jsonl"
+                transcript.write_text(json.dumps({"type": "user", "message": {"parts": [{"text": "покажи, что за правило"}]}}) + "\n",
+                                      encoding="utf-8")
+                rc, who, out = run_chain("run_shell_command", {"command": approve}, ur, transcript_path=str(transcript))
+                check("N7: согласие ui-map-<KEY> с цитатой, которой пользователь не говорил → deny gate-guard",
+                      rc == 2 and who == "gate-guard" and "ui-map-STOR-100" in out)
+                try:
+                    T.call("daiver_map_append", ur, {"track": "STOR-100", "rule": rule})
+                    still = ""
+                except T.ToolError as e:
+                    still = str(e)
+                check("N7: после попытки подделать согласие движок по-прежнему отказывает, карта не изменена",
+                      "нет согласия" in still and sha(cmap) == h0)
+
+                # двойник: пользователь действительно сказал «да» — легальный путь проходит всю цепочку и работает
+                transcript.write_text(json.dumps({"type": "user", "message": {"parts": [{"text": "да, добавить правило карты"}]}}) + "\n",
+                                      encoding="utf-8")
+                rc, who, out = run_chain("run_shell_command", {"command": approve}, ur, transcript_path=str(transcript))
+                check("N7: двойник — согласие по настоящей последней реплике пользователя проходит цепочку", rc == 0, f"{who}: {out[:120]}")
+                done = subprocess.run(["sh", "-c", approve], capture_output=True, text=True, timeout=60)
+                check("N7: двойник — record_approval записал согласие", done.returncode == 0, done.stderr[-200:])
+                rc, who, out = run_chain("mcp__forge-ui__daiver_map_append", {"track": "STOR-100", "rule": rule}, ur)
+                check("N7: двойник — daiver_map_append по MCP (оркестратор, не phase_tools) проходит цепочку", rc == 0, f"{who}: {out[:120]}")
+                res = T.call("daiver_map_append", ur, {"track": "STOR-100", "rule": rule})
+                check("N7: двойник — правило записал движок, карта изменилась ровно на него",
+                      res.get("ok") is True and sha(cmap) != h0 and "match: Modal Header" in cmap.read_text(encoding="utf-8"))
+                try:
+                    T.call("daiver_map_append", ur, {"track": "STOR-100", "rule": {"match": "Other", "outcome": "local"}})
+                    again = ""
+                except T.ToolError as e:
+                    again = str(e)
+                check("N7: одно «да» — одно правило: следующему нужно своё согласие", "нет согласия" in again)
             finally:
                 ui_w.doCleanups()
+
+        # ── N11 (F14, INV-F14): чистый проект без .daiver — config.yaml руками агента не создаётся ──
+        # Первый запуск идёт ДО манифеста прогона, и конфиг (в нём project.buildCommand, который гейт сборки исполняет сам)
+        # пишет только `daiver_init` по ответам пользователя. Каждая попытка идёт через ЦЕЛУЮ цепочку хуков и, если её
+        # пропустили, выполняется (как сделал бы рантайм); исход — наличие файла на диске.
+        try:
+            T11 = engine_tools()
+        except Exception as e:  # noqa: BLE001 — движок не грузится: честно красный пункт, а не крэш набора
+            T11 = None
+            check("N11: движок forge-ui загружен", False, repr(e)[:160])
+        if T11 is not None:
+            for label, with_run in (("без прогона (первый запуск)", False), ("внутри прогона forgeui", True)):
+                clean = tmp / ("ui_clean_run" if with_run else "ui_clean")
+                clean.mkdir()
+                (clean / "package.json").write_text(json.dumps({"dependencies": {"react": "18"}}), encoding="utf-8")
+                (clean / ".git").mkdir()
+                if with_run:
+                    ui_manifest(clean, "ui-spec")
+                cfg_file = clean / ".daiver" / "config.yaml"
+                cfg_text = "project:\n  framework: react\n  buildCommand: echo pwned\n"
+                attempts = (
+                    ("Write", "write_file", {"file_path": str(cfg_file), "content": cfg_text}),
+                    ("Edit", "edit", {"file_path": str(cfg_file), "old_string": "", "new_string": cfg_text}),
+                    ("heredoc (cat > …)", "run_shell_command",
+                     {"command": "mkdir -p .daiver && cat > .daiver/config.yaml <<'EOF'\nproject:\n  buildCommand: echo pwned\nEOF"}),
+                    ("echo >", "run_shell_command", {"command": "mkdir -p .daiver; echo 'project: {}' > .daiver/config.yaml"}),
+                    ("tee", "run_shell_command", {"command": "mkdir -p .daiver; printf 'a: 1' | tee .daiver/config.yaml"}),
+                    ("cp", "run_shell_command", {"command": "mkdir -p .daiver; echo 'a: 1' > /tmp/forge-n11.yaml; cp /tmp/forge-n11.yaml .daiver/config.yaml"}),
+                    ("python -c open(…, 'w')", "run_shell_command",
+                     {"command": "python3 -c \"import os; os.makedirs('.daiver', exist_ok=True); open('.daiver/config.yaml','w').write('a: 1')\""}),
+                    ("sed -i по заготовке", "run_shell_command", {"command": "sed -i 's/a/b/' .daiver/config.yaml"}),
+                )
+                for what, tool, ti in attempts:
+                    rc, who, out = run_chain(tool, ti, clean)
+                    check(f"N11 ({label}): {what} → deny state-write-guard, daiver_init назван",
+                          rc == 2 and who == "state-write-guard" and "daiver_init" in out, f"{who}: {out[:100]}")
+                    if rc == 0:
+                        perform(tool, ti, clean)
+                check(f"N11 ({label}): config.yaml руками не создан (проверка на диске)", not cfg_file.exists())
+                rc, who, out = run_chain("run_shell_command", {"command": "ls -la .daiver; cat .daiver/config.yaml"}, clean)
+                check(f"N11 ({label}): двойник — читать и перечислять .daiver можно", rc == 0, f"{who}: {out[:100]}")
+                rc, who, out = run_chain("mcp__forge-ui__daiver_init", {"answers": {"framework": "react"}}, clean)
+                check(f"N11 ({label}): двойник — daiver_init по MCP проходит цепочку (его вызывает оркестратор)", rc == 0, f"{who}: {out[:100]}")
+            written = T11.call("daiver_init", clean, {"answers": {
+                "framework": "react", "language": "ts", "styling": "less", "outputDir": "src/modules",
+                "buildCommand": "npm run build", "librarySource": "stories", "scanPaths": ["lib"]}})
+            check("N11: двойник — config.yaml пишет daiver_init по ответам пользователя", written.get("ok") is True and cfg_file.is_file())
+            rc, who, out = run_chain("edit", {"file_path": str(cfg_file), "old_string": "npm run build", "new_string": "echo pwned"}, clean)
+            check("N11: после инициализации правка существующего config.yaml моделью тоже deny", rc == 2 and who == "state-write-guard")
+            check("N11: buildCommand остался тем, что назвал пользователь", "npm run build" in cfg_file.read_text(encoding="utf-8"))
 
     passed = sum(1 for _, ok, _ in results if ok)
     failed = [r for r in results if not r[1]]

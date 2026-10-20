@@ -31,6 +31,13 @@ state-recorder — они пишут через Bash→python→open(), т.е. �
 fail-open на не-JSON stdin / отсутствии цели (нечего блокировать). Хук не должен ронять прогон,
 но при совпадении control-plane-цели — блок.
 
+**`.daiver/` фронт-репо (forge-ui, задача 3.4).** Тот же запрет — для состояния движка forge-ui: конфиг,
+карта компонентов, требования ДС, манифест трека, канон макета, резолв, план и подпись, прогресс сборки и
+проверки (шаблоны — `_DAIVER_PATTERNS`, рядом с ними комментарий «почему»). Охраняется ВСЕГДА, не только в
+прогоне: первый запуск (`daiver_init`) идёт до манифеста. Запись, `rm`, `mv`, `touch`, `find -delete` и снос
+каталогов `.daiver`/`tracks`/трека моделью — deny; пишет движок (MCP `forge-ui`, процесс Python вне tool-вызова).
+`inbox/` (выгрузки макета) и `assets/` не охраняются.
+
 Легитимные пути записи approval-маркеров
 =========================================
 Прямая запись моделью в `ground/approvals/<key>.json` (старая раскладка) И в
@@ -155,6 +162,39 @@ _CP_PATTERNS = [
     # Легитимная запись — Edit в PR с явным обоснованием, не в проде.
     r"(?<![\w-])(?:hooks/|\.gigacode/hooks/)risk-policy\.json\b",
 ]
+
+# ── `.daiver/` — состояние движка forge-ui (фронт-репо; задача 3.4) ───────────────────────────
+# Конфиг, карта компонентов, требования дизайн-системы, манифест трека, канон макета, резолв, план и подпись,
+# прогресс сборки и проверки — всё это решает не модель, а движок (MCP `forge-ui`, процесс Python вне tool-вызова).
+# Прямая запись сюда обходит его проверки: `config.yaml` — это и `project.buildCommand`, который гейт сборки
+# исполняет процессом Python мимо Bash-хуков (правка конфига моделью = выполнение произвольной команды);
+# `component-map.yaml` — правило карты без согласия `ui-map-<KEY>` (INV-F9, N7); `build-state.json` — обнулённый
+# прогресс и снятый запрет перетяжки собранного кадра (INV-B15); `plan.json`/`plan.lock.json`/`ui-plan.md` —
+# подделанный план и подпись; `verify-state.json` — счётчик итераций проверки. Поэтому запись, `rm`, `mv`,
+# `touch` моделью — deny (пишет только движок), чтение свободно. Защищаем ВСЕГДА, не только внутри прогона:
+# первый запуск (N11) идёт ДО манифеста — `daiver_init` пишет конфиг, а рукой он не пишется.
+# Охраняется ровно это (остальное в `.daiver/` — вход, не состояние): `inbox/` (выгрузки макета кладёт Pixso MCP
+# или человек) и `assets/` (svg-экспорты арта) не затронуты. Глубина под треком любая — со второго кадра файлы
+# кадров лежат в `tracks/<KEY>/frames/<имя>/`. Все шаблоны привязаны к `.daiver/`: `plan.md`, `verify/` или
+# `versions/` в исходниках проекта — обычные файлы. Замок `ground/build-state.lock` (control-plane, не `.daiver`)
+# сюда не входит. Файлы будущих задач (отчёт verify, решения) добавляет задача, которая их заведёт.
+_DV = r"(?<![\w-])\.daiver/"
+_DV_TRACK = _DV + r"tracks/[^/]+/(?:[^/]+/)*"
+_DAIVER_PATTERNS = [
+    # любой yaml под .daiver: config.yaml, component-map.yaml (library.mapFile может называть карту иначе), track.yaml
+    _DV + r"(?:[^/]+/)*[^/]+\.ya?ml\b",
+    _DV + r"design-system-requirements[^/]*\.json\b",
+    _DV_TRACK + r"(?:build-state|verify-state|resolutions|run|plan(?:\.lock)?)\.json\b",
+    _DV_TRACK + r"(?:plan|ui-plan|resolution-report)\.md\b",
+    _DV_TRACK + r"[^/]*\.canonical\.json\b",
+    _DV_TRACK + r"visual-requirements\.[^/]+",
+    _DV_TRACK + r"(?:verify|versions|baseline)(?:/|$)",
+]
+_CP_PATTERNS.extend(_DAIVER_PATTERNS)
+_DAIVER_RE = re.compile("|".join(_DAIVER_PATTERNS), re.IGNORECASE)
+# Каталоги `.daiver/`, снос которых уносит файлы выше: сам `.daiver`, `tracks`, трек и каталог кадра. `inbox/` — нет.
+_DAIVER_CONTAINER_RE = re.compile(
+    r"(?<![\w-])\.daiver(?:/tracks(?:/[^/]+(?:/frames(?:/[^/]+)?)?)?)?(?:/\*)?/?$", re.IGNORECASE)
 # IGNORECASE обязателен: ФС macOS/Windows регистронезависимы, а regex — нет. `write_file
 # GROUND/statements/<s>/<f>/manifest.json` попадал в ТОТ ЖЕ файл, но мимо гарда — это был
 # мастер-ключ к состоянию (без манифеста все хуки становятся noop).
@@ -236,7 +276,10 @@ def _pipeline_active(cwd: str) -> bool:
         return False
 
 
-def _unlink_hint(target: str) -> str:
+def _unlink_hint(target: str, real: str = "") -> str:
+    if _DAIVER_RE.search(target) or _DAIVER_CONTAINER_RE.search(target) \
+            or (real and (_DAIVER_RE.search(real) or _DAIVER_CONTAINER_RE.search(real))):
+        return _daiver_hint(target, removal=True)
     return (
         f"[state-write-guard] DENY: удаление/перенос control-plane-цели '{target}' запрещено.\n"
         f"  Без manifest.json фазовая машина не резолвится и ВСЕ хуки становятся noop — снести "
@@ -302,6 +345,19 @@ _CP_SAMPLES = (
     "ground/approvals.jsonl", "ground/inventory/grounding-excerpt.json",
     ".gigacode/hooks/gate-guard.py", ".gigacode/hooks/risk-policy.json",
 )
+# То же для `.daiver/` — сверяются, только если в проекте есть `.daiver/` (иначе `find . -name '*.png' -delete`
+# в бэк-репо ловился бы по файлам, которых там нет и быть не может).
+_DAIVER_SAMPLES = (
+    ".daiver/config.yaml", ".daiver/component-map.yaml", ".daiver/design-system-requirements.json",
+    ".daiver/design-system-requirements.details.json", ".daiver/tracks/s/track.yaml",
+    ".daiver/tracks/s/plan.json", ".daiver/tracks/s/plan.lock.json", ".daiver/tracks/s/plan.md",
+    ".daiver/tracks/s/ui-plan.md", ".daiver/tracks/s/resolution-report.md", ".daiver/tracks/s/resolutions.json",
+    ".daiver/tracks/s/run.json", ".daiver/tracks/s/build-state.json", ".daiver/tracks/s/verify-state.json",
+    ".daiver/tracks/s/visual-requirements.canonical.json", ".daiver/tracks/s/visual-requirements.pixso.json",
+    ".daiver/tracks/s/visual-requirements.png", ".daiver/tracks/s/frames/f/plan.json",
+    ".daiver/tracks/s/frames/f/build-state.json", ".daiver/tracks/s/verify/iter-1/diff.png",
+    ".daiver/tracks/s/versions/v1/visual-requirements.canonical.json", ".daiver/tracks/s/baseline/page.png",
+)
 
 
 def _find_is_deleting(argv: list[str], cmd: str) -> bool:
@@ -330,10 +386,10 @@ def _find_roots_and_filters(argv: list[str]) -> "tuple[list[str], list[tuple[str
     return roots or ["."], filters
 
 
-def _filter_hits_cp(opt: str, value: str) -> bool:
-    """Задевает ли фильтр find хоть один файл control-plane (по образцам _CP_SAMPLES)."""
+def _filter_hits_cp(opt: str, value: str, samples: "tuple[str, ...]" = _CP_SAMPLES) -> bool:
+    """Задевает ли фильтр find хоть один файл control-plane (по образцам `samples`; по умолчанию _CP_SAMPLES)."""
     import fnmatch
-    for sample in _CP_SAMPLES:
+    for sample in samples:
         if opt in ("-name", "-iname"):
             hit = fnmatch.fnmatch(posixpath.basename(sample).lower(), value.lower())
         elif opt in ("-regex", "-iregex"):
@@ -368,12 +424,17 @@ def _find_delete_hit(cmd: str, cwd: str) -> str:
             proj = base
         cp_dirs = [posixpath.normpath(posixpath.join(proj, d).replace("\\", "/"))
                    for d in ("ground", ".gigacode")]
+        daiver_dir = posixpath.normpath(posixpath.join(proj, ".daiver").replace("\\", "/"))
+        has_daiver = os.path.isdir(daiver_dir)
         for r in roots:
             rr = _collapse(r)
-            if _CP_LIVE_RE.search(rr) or _CP_CONTAINER_RE.search(rr):
+            if _CP_LIVE_RE.search(rr) or _CP_CONTAINER_RE.search(rr) or _DAIVER_CONTAINER_RE.search(rr):
                 return r                    # корень поиска — сам control-plane
             absr = posixpath.normpath(posixpath.join(base.replace("\\", "/"),
                                                      os.path.expanduser(r).replace("\\", "/")))
+            if has_daiver and _covers(absr, daiver_dir) and (
+                    not filters or any(_filter_hits_cp(o, v, _DAIVER_SAMPLES) for o, v in filters)):
+                return r                    # поиск накрывает .daiver/, а фильтр задевает файл движка
             if not any(_covers(absr, d) for d in cp_dirs):
                 continue                    # под этим корнем control-plane нет
             if not filters or any(_filter_hits_cp(o, v) for o, v in filters):
@@ -430,7 +491,30 @@ def _collapse(p: str) -> str:
     return posixpath.normpath(p)
 
 
-def _hint(target: str) -> str:
+def _daiver_hint(target: str, removal: bool = False) -> str:
+    """Отказ для `.daiver/`: куда идти вместо руки. Список «вместо» — инструменты движка (MCP forge-ui)."""
+    what = (f"удаление/перенос '{target}' запрещены" if removal else f"прямая запись в '{target}' запрещена")
+    why = ("Удалённый build-state.json обнулил бы прогресс сборки и снял запрет перетяжки собранного кадра, "
+           "verify-state.json — счётчик итераций проверки, plan.json/plan.lock.json — подпись плана."
+           if removal else
+           "Запись руками обходит проверки движка: чужое значение в конфиге, карте или плане он принял бы за своё "
+           "(config.yaml к тому же задаёт buildCommand, который гейт сборки исполняет сам).")
+    return (
+        f"[state-write-guard] DENY: {what}: .daiver/ — состояние движка forge-ui, его "
+        f"пишет только движок своим процессом. {why}\n"
+        f"  Вместо руки — инструменты MCP forge-ui: config.yaml — daiver_init (по ответам пользователя; существующий "
+        f"конфиг не перезаписывается — поле в нём правит человек); component-map.yaml — daiver_map_append (после "
+        f"согласия ui-map-<KEY>); track.yaml — daiver_track_manifest; канон — daiver_pixso_pull / daiver_normalize; "
+        f"резолв, отчёт, план — daiver_resolve_* / daiver_plan_write / daiver_plan_contract; прогресс сборки — "
+        f"daiver_build_state / daiver_build_state_set; требования ДС — daiver_ds_requirements.\n"
+        f"  Нужной правки среди них нет — это вопрос пользователю, а не повод писать файл. "
+        f"Выгрузки макета кладут в .daiver/inbox/ (это не состояние)."
+    )
+
+
+def _hint(target: str, real: str = "") -> str:
+    if _DAIVER_RE.search(target) or (real and _DAIVER_RE.search(real)):
+        return _daiver_hint(target)
     return (
         f"[state-write-guard] DENY: прямая запись в control-plane-файл '{target}' запрещена. "
         f"State меняется ТОЛЬКО санкционированными скриптами (провенанс форсится update.py):\n"
@@ -483,8 +567,8 @@ def main() -> int:
                 return 2
             for t in (_collapse(x) for x in _unlink_targets(cmd)):
                 for v in (t, _resolved(t, cwd)):
-                    if v and _CP_LIVE_RE.search(v):
-                        print(_unlink_hint(t), file=sys.stderr)
+                    if v and (_CP_LIVE_RE.search(v) or _DAIVER_CONTAINER_RE.search(v)):
+                        print(_unlink_hint(t, v), file=sys.stderr)
                         return 2
                     if v and _CP_CONTAINER_RE.search(v):
                         print(_container_hint(t), file=sys.stderr)
@@ -495,8 +579,9 @@ def main() -> int:
                     return 2
             targets = [_collapse(t) for t in _write_targets(cmd)]
             for t in targets:
-                if _CP_RE.search(t) or _CP_RE.search(_resolved(t, cwd)):
-                    print(_hint(t), file=sys.stderr)
+                real = _resolved(t, cwd)
+                if _CP_RE.search(t) or _CP_RE.search(real):
+                    print(_hint(t, real), file=sys.stderr)
                     return 2
             for t in targets:
                 if _in_harness(t, cwd) and _pipeline_active(cwd):
