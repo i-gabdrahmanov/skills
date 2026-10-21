@@ -96,7 +96,8 @@
 2. **ui-design, часть 2** — карта компонентов, DS-требования (node-хелпер на typescript фронт-репо),
    resolve query/finalize, plan.json/buildOrder, контракт готовности, lock плана и подпись.
 3. **ui-build** + `ui-guard` и всё из раздела «Чего пока нет».
-4. **ui-verify** — CDP-клиент (stdlib WebSocket к найденному Chromium), dom-snapshot, compare,
+4. **ui-verify** — CDP-клиент (stdlib WebSocket к найденному Chromium; сделан в 4.1: поиск браузера, WebSocket/CDP,
+   `daiver_capabilities`), dom-snapshot, compare,
    код-гейт, verify-state, отчёт. Правка кода — переоткрытием `ui-build` (`verify_to_impl`).
 5. **Визуальный слой** — дифф в Chromium (canvas), визуальный обзор (PNG модели; не прочтёт — JPEG),
    e2e по сценариям `ui-spec.md`.

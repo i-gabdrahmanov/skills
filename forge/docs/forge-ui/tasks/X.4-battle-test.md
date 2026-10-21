@@ -48,3 +48,8 @@
 MCP-инструментов в рантайме GigaCode (ожидается `mcp__forge-ui__daiver_*`) и приходит ли `PreToolUse` на MCP-вызов субагента с отметкой субагента (иначе `phase_tools` блокирует и субагента: проверка — `inline-phase-guard` на первом
 `daiver_pixso_pull` субагента `ui-design`); `mocks.ts` с реалистичными данными макета (проходят ли телефоны и почты «дословно»: неразрывные пробелы, переносы в канонических текстах), и сколько ПДн-подобного слабая модель кладёт в
 `defaultProps` компонентов (там исключения нет); ложные отказы SoD на командах с `npm`/`vite`/`playwright` в аргументах и настоящие формы `buildCommand` команды (`nx`, `turbo`, `pnpm -F`); R2 на `.tsx` в каталогах `docs/`, `e2e/` фронт-репо.
+
+*Чек-лист браузера (4.1).* На корп-машине GigaCode: находит ли поиск Chrome/Chromium без подсказок (`daiver_capabilities().browser.source`: env | config.* | standard | PATH) и какая версия; если Chrome нет, а Edge есть —
+`verify.browserChannel: msedge`; запускается ли `--headless=new` без `--no-sandbox` (root, контейнер, политики, антивирус) и сколько занимает старт (на macOS с Chrome 155 — около 1 с); остаются ли процессы Chrome и каталоги
+`$TMPDIR/forgeui-chrome-*` после прерванного прогона (SIGKILL хозяина не покрыт); Windows: пути `Program Files` / `LocalAppData`, версия из каталога рядом с `chrome.exe`, `taskkill /T`; как слабая модель читает `blocked: no-browser` /
+`supply` / `nextStep` и не идёт ли за `npx playwright install` (запрет — только текст ответа, хука на установку нет); совпадают ли метрики текста с `--font-render-hinting=none` и `--disable-gpu` и без них (один экран, два снимка).

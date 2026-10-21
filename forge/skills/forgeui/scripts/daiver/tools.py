@@ -8,7 +8,8 @@
 daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_section,
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
 daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report,
-daiver_plan_write, daiver_plan_contract, daiver_build_state, daiver_build_state_set, daiver_color_tokens.
+daiver_plan_write, daiver_plan_contract, daiver_build_state, daiver_build_state_set, daiver_color_tokens,
+daiver_capabilities.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from . import build_state as BS
+from . import capabilities as CA
 from . import color_tokens as CT
 from . import component_map as CM
 from . import ds_lookup as DL
@@ -122,6 +124,10 @@ def _story_specs(root: Path) -> Callable[[str], Optional[Path]]:
 
 def t_status(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return ST.status(root, story_spec=_story_specs(root))
+
+
+def t_capabilities(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    return CA.capabilities(root)
 
 
 def t_init(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -455,6 +461,20 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                         "(ui-design | ui-build | ui-verify) с именем кадра; warnings — пересказывай "
                         "пользователю вслух. Каталог .daiver/ руками не листай и ступень «на глаз» не "
                         "выводи — её решает код."),
+        "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "daiver_capabilities": {
+        "fn": t_capabilities,
+        "description": ("Первый ход итерации проверки (ui-verify): чем располагает машина. browser — какой Chrome/Chromium будет запущен "
+                        "(found, path, version, source: env | config.browserPath | config.browserChannel | standard | PATH); он ищется: "
+                        "переменная CHROMIUM_EXECUTABLE_PATH → verify.browserPath / verify.browserChannel конфига → стандартные места → PATH. "
+                        "ready: false (blocked: no-browser) — цикл проверки НЕ стартует: скажи пользователю reason и supply дословно и "
+                        "остановись. Браузер не скачивай и не ставь (ни npx playwright install, ни brew/apt/winget) и сам не запускай — "
+                        "это решение человека. node, typescript (пакет репо), playwright (@playwright/test репо — нужен только e2e-гейту; "
+                        "страницу снимает встроенный клиент, playwright для захвата не нужен) — справочно. vision.enabled — смотрит ли модель "
+                        "картинки (verify.vision): картинки открывает сам агент, ничего не загружается наружу; off — визуальный обзор "
+                        "записывается skipped. warnings пересказывай пользователю. Только читает: ничего не пишет и не открывает браузер (версию берёт из пакета "
+                        "или коротким `--version`)."),
         "schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     "daiver_init": {

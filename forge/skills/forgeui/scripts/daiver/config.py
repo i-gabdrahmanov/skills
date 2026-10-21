@@ -14,7 +14,9 @@
 
 Дополнения forge-ui к схеме спеки: `project.buildCommand` (гейт сборки запускает его
 детерминированно) и `verify.vision: on|off` (зрение модели; при off визуальный обзор
-записывается skipped кодом). Телеметрии (§17) в forge-ui нет — ключ `telemetry` игнорируется.
+записывается skipped кодом). `verify.browserPath` (путь, `~/…` или от корня репо) и `verify.browserChannel` (канал Chrome/
+Edge/Chromium) — из шаблона спеки, нужны, только когда проекту нужен не машинный браузер; путь выигрывает у канала, обе
+переменные окружения и конфиг читает `browser/find.py`. Телеметрии (§17) в forge-ui нет — ключ `telemetry` игнорируется.
 """
 from __future__ import annotations
 
@@ -35,6 +37,8 @@ SVG_RENDER = ("component", "url", "inline")
 WORKFLOW_MODES = ("interactive", "autonomous")
 AUTO_ROUTE = ("signal", "ask", "off")
 CONFIDENCE = ("high", "medium", "low")
+BROWSER_CHANNELS = ("chrome", "chrome-beta", "chrome-dev", "chrome-canary", "chromium",
+                    "msedge", "msedge-beta", "msedge-dev", "msedge-canary")
 
 DEFAULT_TOLERANCES = {"px": 2, "color": 2, "fontSize": 0.5, "lineHeight": 1,
                       "sizeRatio": 0.01, "sizeRatioMaxPx": 8}
@@ -52,7 +56,7 @@ DEFAULTS: Dict[str, Any] = {
                  "warnAfterVerifyIterations": 3, "weightBudget": 24000},
     "verify": {"viewport": {"width": 1280, "height": 900}, "visualDiffThreshold": 0.05,
                "tolerances": dict(DEFAULT_TOLERANCES), "editorUrlTemplate": "vscode://file/{path}:{line}:{column}",
-               "vision": True},
+               "vision": True, "browserPath": None, "browserChannel": None},
 }
 
 
@@ -256,6 +260,18 @@ def normalize(raw: Any) -> Tuple[Dict[str, Any], List[str], List[str]]:
     if isinstance(eut, str) and eut.strip():
         vf["editorUrlTemplate"] = eut.strip()
     vf["vision"] = _switch(_get(raw, "verify", "vision"), True, "verify.vision", warnings)
+    bp = _get(raw, "verify", "browserPath")
+    if bp is not None:
+        if isinstance(bp, str) and bp.strip():
+            vf["browserPath"] = bp.strip()
+        else:
+            warnings.append("verify.browserPath: не путь — игнорируется, браузер ищется по умолчанию")
+    bc = _get(raw, "verify", "browserChannel")
+    if bc is not None:
+        if isinstance(bc, str) and bc in BROWSER_CHANNELS:
+            vf["browserChannel"] = bc
+        else:
+            warnings.append(f"verify.browserChannel: «{bc}» — ожидается одно из {', '.join(BROWSER_CHANNELS)}; игнорируется")
     return cfg, warnings, problems
 
 

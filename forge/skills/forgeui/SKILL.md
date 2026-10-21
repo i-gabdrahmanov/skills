@@ -319,6 +319,9 @@ prompt:
 переоткрытие `ui-build`. Цикл заканчивает пользователь: чисто или стоп с согласием
 `ui-accept-<KEY>`.
 
+Первый ход итерации — `daiver_capabilities`: `ready: false` (`blocked: no-browser`) — цикл не стартует, скажи пользователю `reason` и
+`supply` дословно. Браузер не скачивай, не ставь (ни `npx playwright install`, ни brew/apt) и не запускай сам; `warnings` перескажи.
+
 ---
 
 ## Что НЕ делать

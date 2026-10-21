@@ -45,6 +45,7 @@ sys.path.insert(0, str(HERE.parents[2] / "hooks"))
 import _testkit as K  # noqa: E402
 import forge_events as FE  # noqa: E402
 from daiver import canon as C  # noqa: E402
+from daiver import config as CFG  # noqa: E402
 from daiver import ds_requirements as DR  # noqa: E402
 from daiver import init as I  # noqa: E402
 from daiver import outline as OL  # noqa: E402
@@ -266,6 +267,7 @@ class Base(unittest.TestCase):
         self.root.mkdir()
         chrome = Path(self.tmp.name) / "chrome"
         chrome.write_text("#!/bin/sh\n", encoding="utf-8")
+        chrome.chmod(0o755)                              # поиск браузера (4.1) требует исполняемый файл, а не просто файл
         patcher = mock.patch.dict(os.environ, {PC.BROWSER_ENV: str(chrome)})
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -2259,27 +2261,31 @@ class PlanCorners(Base):
 # ── угловые случаи контракта ─────────────────────────────────────────────────
 
 class ContractCorners(Base):
-    # — поиск браузера по платформам (частный; 4.1 заменит) —
-    def test_the_browser_is_searched_in_the_standard_places_of_each_platform_when_the_variable_is_unset(self):
-        fake = Path(self.tmp.name) / "standard-chrome"
-        fake.write_text("#!/bin/sh\n", encoding="utf-8")
+    # — поиск браузера: делегирован daiver.browser.find (4.1); платформы, порядок и приоритеты — test_cdp.FindBrowser —
+    def test_the_browser_search_is_delegated_to_browser_find_with_the_verify_block_of_the_config(self):
+        self.repo()
+        seen = {}
+
+        def fake(config=None, **kw):
+            seen["config"], seen["root"] = config, kw.get("root")
+            return {"found": True, "path": "/x/chrome", "source": "config.browserPath", "detail": "verify.browserPath из .daiver/config.yaml"}
+
+        with mock.patch.object(PC.BF, "find_browser", side_effect=fake):
+            out = self.contract()
+        self.assertEqual(self.check_line(out, "browser"), "browser: ok")
+        self.assertIn("browserPath", seen["config"], "в поиск уходит блок verify эффективного конфига")
+        self.assertEqual(Path(seen["root"]), self.root)
+
+    def test_the_browser_named_by_the_config_is_found_when_the_variable_is_unset(self):
+        self.repo()
+        cfg = self.root / ".daiver" / "config.yaml"
+        text = cfg.read_text(encoding="utf-8").replace("verify:\n", f"verify:\n  browserPath: {self.chrome}\n", 1)
+        cfg.write_text(text, encoding="utf-8")
         with mock.patch.dict(os.environ):
             os.environ.pop(PC.BROWSER_ENV, None)
-            with mock.patch.object(PC.sys, "platform", "linux"), \
-                    mock.patch.object(PC.shutil, "which", side_effect=lambda n: str(fake) if n == "chromium-browser" else None):
-                self.assertEqual(PC.find_browser(), (str(fake), "стандартный путь"))
-            with mock.patch.object(PC.sys, "platform", "linux"), mock.patch.object(PC.shutil, "which", return_value=None):
-                path, why = PC.find_browser()
-                self.assertIsNone(path)
-                self.assertIn("ни переменной окружения", why)
-            pf = Path(self.tmp.name) / "pf" / "Google" / "Chrome" / "Application"
-            pf.mkdir(parents=True)
-            (pf / "chrome.exe").write_text("x", encoding="utf-8")
-            with mock.patch.object(PC.sys, "platform", "win32"), mock.patch.dict(os.environ, {"PROGRAMFILES": str(Path(self.tmp.name) / "pf")}):
-                self.assertEqual(PC.find_browser()[0], str(pf / "chrome.exe"))
-            with mock.patch.object(PC.sys, "platform", "darwin"), \
-                    mock.patch.object(PC.Path, "is_file", autospec=True, side_effect=lambda self_: str(self_).endswith("Google Chrome")):
-                self.assertTrue(PC.find_browser()[0].endswith("/Google Chrome.app/Contents/MacOS/Google Chrome"))
+            path, how = PC.find_browser(CFG.load(self.root)["config"]["verify"], self.root)
+            self.assertEqual((path, how), (str(self.chrome), "verify.browserPath из .daiver/config.yaml"))
+            self.assertEqual(self.check_line(self.contract(), "browser"), "browser: ok")
 
     # — сбои данных —
     def test_a_requirement_file_that_cannot_be_read_counts_as_missing(self):

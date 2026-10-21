@@ -197,6 +197,8 @@ verify:
   viewport: {{ width: 1280, height: 900 }}
   visualDiffThreshold: 0.05  # подсказка, не блокирующий гейт
   vision: {vision}               # on | off — видит ли модель картинки
+  # browserPath / browserChannel — только когда проекту нужен другой браузер, чем машинный дефолт (путь обычно в переменной
+  # окружения CHROMIUM_EXECUTABLE_PATH); browserChannel: chrome | chrome-beta | chrome-dev | chrome-canary | chromium | msedge | …
   # tolerances: {{ px: 2, color: 2, fontSize: 0.5, lineHeight: 1, sizeRatio: 0.01, sizeRatioMaxPx: 8 }}
 """
 

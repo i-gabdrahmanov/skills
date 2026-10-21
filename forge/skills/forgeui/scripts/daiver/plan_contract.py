@@ -27,7 +27,7 @@ resolutions, assets, goal-image, specs, state, baseline, sources, implementation
 
 Отклонения от спеки (README): `resolutions` блокирует (в спеке — нет: автономия появится в 7.1/7.2, до неё подтверждение требуется
 всегда); `signature` блокирует всегда (в спеке — «только при confirmPlan»: `phase_approvals` ui-build/ui-verify требуют `ui-plan-<KEY>`
-безусловно, D9); `browser` и `baseline/sources` проверяются минимально (поиск Chromium — частный, 4.1 заменит; база страницы — по полям
+безусловно, D9); `browser` и `baseline/sources` проверяются минимально (поиск Chromium — `daiver/browser/find.py`, задача 4.1; база страницы — по полям
 `sources`/`scope` манифеста и непустому `baseline/`, захват базы и поток правки страницы — 4.x/6.4); поле `directive` ответа спеки —
 в 7.1 (грамматику строки задаёт она).
 
@@ -38,9 +38,6 @@ resolutions, assets, goal-image, specs, state, baseline, sources, implementation
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -56,6 +53,7 @@ from . import resolve as RS
 from . import svg_assets as SA
 from . import track as TR
 from . import uispec as U
+from .browser import find as BF
 
 CHECK_IDS = ("initialized", "library-source", "browser", "requirement", "canonical", "plan", "resolutions", "assets",
              "goal-image", "specs", "state", "baseline", "sources", "implementation", "dev-command", "signature")
@@ -64,7 +62,7 @@ OWNERS = ("human", "plan", "host")
 CONSENT_PREFIX = "ui-plan"
 UI_PLAN_NAME = "ui-plan.md"
 LOCK_NAME = "plan.lock.json"
-BROWSER_ENV = "CHROMIUM_EXECUTABLE_PATH"
+BROWSER_ENV = BF.BROWSER_ENV
 SHOWN = 10
 
 # Причина останова автономного прогона, к месту которой стоит пункт (§20.3); None — пункт не останавливает прогон сам.
@@ -122,31 +120,14 @@ def ok(cid: str, owner: str, detail: str, frame: Optional[str] = None, na: bool 
     return item(cid, "ok", cid not in ("assets", "goal-image", "specs", "state", "dev-command"), owner, detail, frame=frame, na=na)
 
 
-# ── поиск браузера (частный; 4.1 заменит вызовом daiver.browser.find) ────────
+# ── поиск браузера (daiver.browser.find, задача 4.1) ─────────────────────────
 
-def find_browser() -> Tuple[Optional[str], str]:
-    """(путь, источник | причина). Порядок как у 4.1: env CHROMIUM_EXECUTABLE_PATH, затем стандартные места платформы. Ничего не
-    скачивается и не запускается; заданная, но битая переменная окружения не заменяется молча другим браузером."""
-    env = os.environ.get(BROWSER_ENV)
-    if env:
-        if Path(env).is_file():
-            return env, f"переменная {BROWSER_ENV}"
-        return None, f"{BROWSER_ENV}={env}: файла нет"
-    cands: List[str] = []
-    if sys.platform == "darwin":
-        cands = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                 "/Applications/Chromium.app/Contents/MacOS/Chromium"]
-    elif sys.platform.startswith("win"):
-        for var in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
-            base = os.environ.get(var)
-            if base:
-                cands.append(str(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe"))
-    else:
-        cands = [p for p in (shutil.which(n) for n in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable")) if p]
-    for c in cands:
-        if Path(c).is_file():
-            return c, "стандартный путь"
-    return None, "ни переменной окружения, ни Chrome/Chromium в стандартных местах"
+def find_browser(config: Optional[Dict[str, Any]] = None, root: Any = None) -> Tuple[Optional[str], str]:
+    """(путь, источник | причина). Поиск — `daiver.browser.find`: переменная CHROMIUM_EXECUTABLE_PATH → `verify.browserPath` /
+    `verify.browserChannel` конфига (`config` — блок verify) → стандартные места платформы → PATH. Ничего не скачивается и не
+    запускается; заданная, но битая переменная или путь конфига не заменяются молча другим браузером."""
+    found = BF.find_browser(config, root=root)
+    return (found["path"], found["detail"]) if found["found"] else (None, found["reason"])
 
 
 # ── мир: всё, что читают проверки ────────────────────────────────────────────
@@ -332,12 +313,13 @@ def chk_library(w: World) -> List[Dict[str, Any]]:
 
 
 def chk_browser(w: World) -> List[Dict[str, Any]]:
-    path, how = find_browser()
+    path, how = find_browser(w.cfg["config"]["verify"], w.root)
     if path:
         return [ok("browser", "human", f"браузер для verify найден ({how})")]
     return [item("browser", "open", True, "human", f"Chrome/Chromium для проверки страницы не найден: {how}", reason=REASONS["browser"],
-                 ask=f"Где на этой машине Chrome или Chromium? Установите его либо укажите путь переменной окружения {BROWSER_ENV}.",
-                 record=f"переменная окружения {BROWSER_ENV} (ничего не скачивается и не ставится само)")]
+                 ask=(f"Где на этой машине Chrome или Chromium? Установите его либо укажите путь переменной окружения {BROWSER_ENV} "
+                      f"(или ключом verify.browserPath в .daiver/config.yaml — файл правит человек)."),
+                 record=f"переменная окружения {BROWSER_ENV} либо verify.browserPath (ничего не скачивается и не ставится само)")]
 
 
 def chk_requirement(w: World) -> List[Dict[str, Any]]:

@@ -112,6 +112,54 @@ class Config(unittest.TestCase):
             self.assertEqual(res["config"]["workflow"]["weightBudget"], 24000)
 
 
+class BrowserKeys(unittest.TestCase):
+    """`verify.browserPath` / `verify.browserChannel` (спека §5.1, задача 4.1): читаются строго, ищет по ним `browser/find.py`."""
+
+    def test_unset_by_default(self):
+        vf = C.normalize({})[0]["verify"]
+        self.assertEqual((vf["browserPath"], vf["browserChannel"]), (None, None))
+
+    def test_valid_values_are_kept_trimmed_and_both_may_be_set(self):
+        raw = {"verify": {"browserPath": "  /opt/my chrome/chrome  ", "browserChannel": "msedge"}}
+        cfg, warnings, _ = C.normalize(raw)
+        self.assertEqual((cfg["verify"]["browserPath"], cfg["verify"]["browserChannel"]), ("/opt/my chrome/chrome", "msedge"))
+        self.assertEqual(warnings, [])
+        for channel in C.BROWSER_CHANNELS:
+            self.assertEqual(C.normalize({"verify": {"browserChannel": channel}})[0]["verify"]["browserChannel"], channel)
+
+    def test_a_typo_is_a_warning_and_the_default_not_a_guess(self):
+        for bad in (5, "", "   ", ["x"], True, {"a": 1}):
+            with self.subTest(browserPath=bad):
+                cfg, warnings, _ = C.normalize({"verify": {"browserPath": bad}})
+                self.assertIsNone(cfg["verify"]["browserPath"])
+                self.assertTrue(any(w.startswith("verify.browserPath") for w in warnings), warnings)
+        for bad in ("Chrome", "firefox", "chrome ", 5, ["chrome"], "", True):
+            with self.subTest(browserChannel=bad):
+                cfg, warnings, _ = C.normalize({"verify": {"browserChannel": bad}})
+                self.assertIsNone(cfg["verify"]["browserChannel"])
+                self.assertTrue(any(w.startswith("verify.browserChannel") and "ожидается одно из" in w for w in warnings), warnings)
+
+    def test_paths_with_spaces_and_windows_slashes_survive_the_yaml_reader(self):
+        doc = Y.loads("verify:\n  browserPath: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n  browserChannel: chrome-beta\n")
+        vf = C.normalize(doc)[0]["verify"]
+        self.assertEqual((vf["browserPath"], vf["browserChannel"]), ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "chrome-beta"))
+        win = Y.loads('verify:\n  browserPath: "C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe"\n')
+        self.assertEqual(C.normalize(win)[0]["verify"]["browserPath"], "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe")
+
+    def test_the_first_run_template_mentions_the_keys_in_comments_only(self):
+        text = I.render_config(ANSWERS)
+        self.assertIn("browserPath / browserChannel", text)
+        vf = C.normalize(Y.loads(text))[0]["verify"]
+        self.assertEqual((vf["browserPath"], vf["browserChannel"]), (None, None), "комментарий ключей не включает")
+
+    def test_load_hands_the_block_to_the_browser_search(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".daiver").mkdir()
+            (root / ".daiver" / "config.yaml").write_text("verify:\n  browserChannel: chrome-dev\n", encoding="utf-8")
+            self.assertEqual(C.load(root)["config"]["verify"]["browserChannel"], "chrome-dev")
+
+
 class Init(unittest.TestCase):
     def _repo(self, tmp: str) -> Path:
         root = Path(tmp)
