@@ -9,7 +9,7 @@ daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_s
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
 daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report,
 daiver_plan_write, daiver_plan_contract, daiver_build_state, daiver_build_state_set, daiver_color_tokens,
-daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare, daiver_verify_state, daiver_verify_state_record, daiver_verify_decide.
+daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare, daiver_verify_state, daiver_verify_state_record, daiver_verify_decide, daiver_render_reference, daiver_visual_diff.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -42,8 +42,10 @@ from .ingest import normalize as NZ
 from .pixso import pull as PP
 from .verify import capture as CP
 from .verify import code_compare as CCMP
+from .verify import reference as VREF
 from .verify import state as VST
 from .verify import verify_compare as VCMP
+from .verify import visual_diff as VDIFF
 
 HOOKS = Path(__file__).resolve().parents[4] / "hooks"
 
@@ -443,6 +445,20 @@ def _frame_arg(args: Dict[str, Any]) -> Optional[str]:
     if frame is not None:
         TR.check_frame_name(frame)
     return frame
+
+
+def t_render_reference(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return VREF.run(root, TR.check_track_name(args["track"]), _frame_arg(args), _path_inside(root, args["iterationDir"]))
+    except (TR.TrackError, VREF.ReferenceError_, CP.CaptureError) as e:
+        raise ToolError(str(e))
+
+
+def t_visual_diff(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return VDIFF.run(root, TR.check_track_name(args["track"]), _frame_arg(args), _path_inside(root, args["iterationDir"]), args.get("against"))
+    except (TR.TrackError, VDIFF.VisualDiffError) as e:
+        raise ToolError(str(e))
 
 
 def t_verify_state(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -887,6 +903,35 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "waitForGone": {"type": "string", "description": "CSS-селектор загрузчика, который должен исчезнуть до снимка"},
             "target": {"type": "string", "enum": list(CP.TARGETS), "description": "implementation (по умолчанию) | reference (эталонный рендер)"}},
             "required": ["track", "url", "iterationDir", "waitMs"], "additionalProperties": False},
+    },
+    "daiver_render_reference": {
+        "fn": t_render_reference,
+        "description": ("Эталонный рендер кадра: строит HTML из КАНОНА макета (раскладка, стили, тексты, шрифты слотов) и снимает его тем же захватом и в том же viewport — "
+                        "reference.png, reference.html и reference-snapshot.json (маркеры макета для отчёта) в iterationDir. Нужен, когда у кадра нет картинки дизайна "
+                        "(goal image правдивее и берётся первой) и для визуального обзора. Это РЕКОНСТРУКЦИЯ: арт без .svg нарисован помеченным блоком (файл — "
+                        "daiver_svg_assets), слоты-плейсхолдеры библиотеки помечены пунктиром, поверхность библиотечных компонентов не нарисована — поэтому дифф с ним "
+                        "сигнал, а не вердикт. Браузера нет — blocked: no-browser (прочти reason и supply дословно, остановись). iterationDir — подпапка verify/ кадра."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "iterationDir": {"type": "string", "description": "папка итерации — подпапка verify/ кадра"}},
+            "required": ["track", "iterationDir"], "additionalProperties": False},
+    },
+    "daiver_visual_diff": {
+        "fn": t_visual_diff,
+        "description": ("Пиксельный дифф «макет | реализация» (после daiver_screenshot в ту же iterationDir). against: goal — картинка дизайна кадра (обрезка по frameBox, подложка "
+                        "на белое), reference — эталонный рендер (daiver_render_reference); без against берётся goal, если он есть: он правдивее, в ответе сказано, что "
+                        "использовано. Дифф — СИГНАЛ, а не вердикт: сам дефектов не создаёт и гейт не валит (gate всегда pass, если браузер был). diffPercent — ПРОЦЕНТ "
+                        "(3.18 = 3.18 %), передавай его в daiver_verify_state_record как есть, не делением на 100. zones — где расходится; explainedBy — дефекты compare, которые "
+                        "зону уже объяснили (повторно не комментируй); зоны без объяснения — материал для визуального обзора (diff-strip.png). Сглаживание шрифтов и "
+                        "плейсхолдеры эталона — не баги; aboveHint — подсказка по verify.visualDiffThreshold, не блокировка. Размеры разные — оба кладутся на белый холст. "
+                        "Пишет diff.png, diff-strip.png, visual-diff.json. Браузера нет — blocked: no-browser, gate: skipped."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "iterationDir": {"type": "string", "description": "папка итерации с actual.png (подпапка verify/ кадра)"},
+            "against": {"type": "string", "enum": list(VDIFF.AGAINST), "description": "goal | reference; по умолчанию goal, если картинка дизайна есть"}},
+            "required": ["track", "iterationDir"], "additionalProperties": False},
     },
     "daiver_verify_state": {
         "fn": t_verify_state,
