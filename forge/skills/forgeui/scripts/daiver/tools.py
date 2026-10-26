@@ -9,7 +9,7 @@ daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_s
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
 daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report,
 daiver_plan_write, daiver_plan_contract, daiver_build_state, daiver_build_state_set, daiver_color_tokens,
-daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare, daiver_verify_state, daiver_verify_state_record, daiver_verify_decide, daiver_render_reference, daiver_visual_diff, daiver_visual_review.
+daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare, daiver_verify_state, daiver_verify_state_record, daiver_verify_decide, daiver_render_reference, daiver_visual_diff, daiver_visual_review, daiver_verify_report.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -43,6 +43,7 @@ from .pixso import pull as PP
 from .verify import capture as CP
 from .verify import code_compare as CCMP
 from .verify import reference as VREF
+from .verify import report_html as VRPT
 from .verify import state as VST
 from .verify import verify_compare as VCMP
 from .verify import visual_diff as VDIFF
@@ -466,6 +467,13 @@ def t_visual_review(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         return VREV.run(root, TR.check_track_name(args["track"]), _frame_arg(args), _path_inside(root, args["iterationDir"]), args.get("review"), args.get("prepare"))
     except (TR.TrackError, VREV.ReviewError, VDIFF.VisualDiffError) as e:
+        raise ToolError(str(e))
+
+
+def t_verify_report(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return VRPT.run(root, TR.check_track_name(args["track"]), _frame_arg(args), _path_inside(root, args["iterationDir"]), args.get("date"))
+    except (TR.TrackError, VRPT.ReportError) as e:
         raise ToolError(str(e))
 
 
@@ -923,6 +931,20 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "track": {"type": "string", "description": "ключ стори (имя трека)"},
             "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
             "iterationDir": {"type": "string", "description": "папка итерации — подпапка verify/ кадра"}},
+            "required": ["track", "iterationDir"], "additionalProperties": False},
+    },
+    "daiver_verify_report": {
+        "fn": t_verify_report,
+        "description": ("ШАГ 7 итерации (interactive): рендерит report.html в iterationDir — самодостаточную страницу без внешних ресурсов: макет и реализация рядом (картинки вшиты), "
+                        "пронумерованные пины дефектов, таблица МАКЕТ | РЕАЛИЗАЦИЯ с русскими именами свойств, чипы-фильтры по фактическим кодам, ссылки на узлы макета и файл:строку, ранее принятые "
+                        "решения человека, полоса кадров трека. Вызывай ПОСЛЕ daiver_verify_state_record. ПУТЬ ОТЧЁТА (report в ответе) сообщай пользователю ВСЕГДА, до любых слов о результатах: он "
+                        "решает глазами. stateRecorded: false — итерация не записана: сначала запись, потом отчёт. date — дата входом (например 2026-10-26; в файл идёт как есть, часы не читаются): "
+                        "одинаковый вход — одинаковые байты. Автономный режим — rendered: false (отчёт заменяет триаж). Находки обзора в нём помечены «не подтверждено»."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "iterationDir": {"type": "string", "description": "папка итерации с actual.png (подпапка verify/ кадра)"},
+            "date": {"type": "string", "description": "дата входом, одна короткая строка; без неё даты в отчёте нет"}},
             "required": ["track", "iterationDir"], "additionalProperties": False},
     },
     "daiver_visual_review": {
