@@ -153,7 +153,7 @@ class PhaseToolsRegistry(unittest.TestCase):
     EXPECTED_UI = {
         "ui-design": ("daiver_pixso_pull", "daiver_normalize", "daiver_resolve_*", "daiver_plan_write", "daiver_plan_contract"),
         "ui-build": ("daiver_build_state", "daiver_build_state_set", "daiver_svg_assets"),
-        "ui-verify": ("daiver_screenshot", "daiver_verify_*"),
+        "ui-verify": ("daiver_screenshot", "daiver_code_compare", "daiver_verify_*"),
     }
 
     @staticmethod
@@ -198,7 +198,7 @@ class PhaseToolsRegistry(unittest.TestCase):
             "ui-design": ["daiver_normalize", "daiver_pixso_pull", "daiver_plan_contract", "daiver_plan_write",
                           "daiver_resolve_candidates", "daiver_resolve_finalize", "daiver_resolve_query", "daiver_resolve_report"],
             "ui-build": ["daiver_build_state", "daiver_build_state_set", "daiver_svg_assets"],
-            "ui-verify": ["daiver_screenshot"],
+            "ui-verify": ["daiver_code_compare", "daiver_screenshot"],
         })
 
     def test_every_engine_tool_has_an_owner(self):

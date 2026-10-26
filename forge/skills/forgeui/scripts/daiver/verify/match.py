@@ -152,8 +152,9 @@ def read_plan(plan: Any, known_ids: Iterable[str]) -> Dict[str, Dict[str, Any]]:
 class _Tree:
     """Дерево канона в плоском виде: preorder-индексы, родитель, дети, конец поддерева, поддерево-тексты. Итеративно."""
 
-    def __init__(self, root: Dict[str, Any], side: str, skip: Optional[Set[str]] = None):
+    def __init__(self, root: Dict[str, Any], side: str, skip: Optional[Set[str]] = None, code: bool = False):
         self.side = side
+        self.code = code
         self.nodes: List[Dict[str, Any]] = []
         self.parent: List[int] = []
         self.kids: List[List[int]] = []
@@ -218,7 +219,7 @@ class _Tree:
         if t:
             out.add(t)
         comp = n.get("component")
-        if self.side == "design" and isinstance(comp, dict):
+        if isinstance(comp, dict) and (self.side == "design" or comp.get("textProps")):    # у страницы textProps бывают только в модели кода
             for slot in comp.get("content") or []:
                 if isinstance(slot, dict) and norm_text(slot.get("text")):
                     out.add(norm_text(slot["text"]))
@@ -248,7 +249,8 @@ class _Tree:
             if self.role[i] == "text":
                 return bool(self.own[i])                  # пустой текстовый слой не толкуется: на странице его не увидеть
             return self.role[i] == "media" or n.get("kind") == "instance"
-        return self.role[i] in ("text", "media")
+        n = self.nodes[i]
+        return self.role[i] in ("text", "media") or n.get("kind") == "instance"      # instance у страницы бывает только в модели кода
 
     def box(self, i: int) -> Optional[Tuple[float, float, float, float]]:
         b = self.nodes[i].get("box")
@@ -263,7 +265,8 @@ class _Tree:
         while stack:
             c = stack.pop()
             out.append(c)
-            if self.role[c] == "block" and self.kids[c] and not self.paint[c] and not self.names[c] and not self.own[c]:
+            named = bool(self.names[c]) and not (self.code and self.nodes[c].get("kind") != "instance")   # в модели кода инлайн-компонент — обёртка
+            if self.role[c] == "block" and self.kids[c] and not self.paint[c] and not named and not self.own[c]:
                 stack.extend(reversed(self.kids[c]))
         return out
 
@@ -292,8 +295,8 @@ def _descend_root(impl: _Tree) -> int:
     cur = 0
     while True:
         kids = impl.kids[cur]
-        if len(kids) != 1 or impl.paint[cur] or impl.own[cur] or impl.role[cur] != "block":
-            return cur
+        if len(kids) != 1 or impl.paint[cur] or impl.own[cur] or impl.role[cur] != "block" or impl.role[kids[0]] != "block":
+            return cur                                    # корень макета — рамка: в одинокий текст/значок страницы не спускаемся
         b, c = impl.box(cur), impl.box(kids[0])
         if b and c and not (c[0] <= b[0] + 1 and c[1] <= b[1] + 1 and c[0] + c[2] >= b[0] + b[2] - 1 and c[1] + c[3] >= b[1] + b[3] - 1):
             return cur
@@ -301,12 +304,13 @@ def _descend_root(impl: _Tree) -> int:
 
 
 class _Run:
-    def __init__(self, design: Dict[str, Any], impl: Dict[str, Any], plan: Any):
+    def __init__(self, design: Dict[str, Any], impl: Dict[str, Any], plan: Any, descend_root: bool = True):
+        self.descend_root = descend_root
         ids = [n for n in self._ids(design)]
         self.bridge = read_plan(plan, ids) if plan is not None else {}
         ignored = {k for k, v in self.bridge.items() if v["resolution"] == "ignore"}
         self.D = _Tree(design, "design", ignored)
-        self.I = _Tree(impl, "impl")
+        self.I = _Tree(impl, "impl", code=not descend_root)
         self.ignored = len(ignored)
         self.dpair: Dict[int, int] = {}          # индекс макета → индекс страницы
         self.ipair: Dict[int, int] = {}
@@ -476,7 +480,7 @@ class _Run:
     # --- обход -------------------------------------------------------------------------------------------------------
     def run(self) -> None:
         D, I = self.D, self.I
-        r = _descend_root(I)
+        r = _descend_root(I) if self.descend_root else 0
         self.accept(0, r, "root", "high", 0)
         queue = [(0, r)]
         while queue:
@@ -518,31 +522,60 @@ class _Run:
             made.append((d, j))
         return made
 
+    def _transparent_texts(self, dp: int) -> List[int]:
+        """Тексты макета, до которых можно дойти от dp через несматченные фреймы (они «прозрачны»): их дети ищутся в той же области."""
+        D = self.D
+        out: List[int] = []
+        stack = list(reversed(D.kids[dp]))
+        while stack:
+            d = stack.pop()
+            if d in self.dpair:
+                continue
+            if D.role[d] == "text":
+                out.append(d)
+            elif D.nodes[d].get("kind") in ("frame", "rect"):
+                stack.extend(reversed(D.kids[d]))
+        return out
+
     def _leftover(self, dp: int, ip: int, family: List[int]) -> List[Tuple[int, int]]:
-        """Добивающий проход по позиции: несматченные дети макета и свободные плоские дети страницы одной роли — при равном числе."""
+        """Добивающий проход. Тексты: несматченный текст макета (в том числе под прозрачным фреймом) и свободный текст страницы,
+        похожие не меньше MIN_TEXT_SIMILARITY, — опечатка, а не другой текст (жадно по убыванию сходства). Значки и блоки: по позиции,
+        если свободных детей макета и плоских детей страницы одной роли поровну."""
         D, I = self.D, self.I
         made: List[Tuple[int, int]] = []
         free_i = [j for j in I.flat_children(ip) if j not in self.ipair and self._consistent(j, family)]
+        texts_d = [d for d in self._transparent_texts(dp) if D.own[d]]
+        texts_i = [j for j in free_i if I.role[j] == "text" and I.own[j]]
+        ranked = []
+        for d in texts_d:
+            for j in texts_i:
+                r = self._text_ratio(d, j)
+                if r >= MIN_TEXT_SIMILARITY:
+                    ranked.append((-r, d, j))
+        for _r, d, j in sorted(ranked):
+            if d in self.dpair or j in self.ipair or not self._consistent(j, family):
+                continue
+            self.accept(d, j, "textSimilar", "low", SC_POS)
+            family.append(j)
+            made.append((d, j))
         free_d = [d for d in D.kids[dp] if d not in self.dpair and self._pairable(d)]
-        for role in ("text", "media", "block"):
+        for role in ("media", "block"):
             ds = [d for d in free_d if D.role[d] == role]
-            js = [j for j in free_i if I.role[j] == role]
+            js = [j for j in free_i if I.role[j] == role and j not in self.ipair]
             if ds and len(ds) == len(js):
                 for d, j in zip(ds, js):
                     if j in self.ipair or not self._consistent(j, family):
-                        continue
-                    if role == "text" and not self._similar_text(d, j):
                         continue
                     self.accept(d, j, "position", "low", SC_POS)
                     family.append(j)
                     made.append((d, j))
         return made
 
-    def _similar_text(self, d: int, j: int) -> bool:
+    def _text_ratio(self, d: int, j: int) -> float:
         a, b = sorted(self.D.own[d]), sorted(self.I.own[j])
         if not a or not b:
-            return False
-        return difflib.SequenceMatcher(None, a[0], b[0]).ratio() >= MIN_TEXT_SIMILARITY
+            return 0.0
+        return difflib.SequenceMatcher(None, a[0], b[0]).ratio()
 
     def _pairable(self, d: int) -> bool:
         """Узел макета, у которого вообще есть что искать на странице (пустой непокрашенный фрейм — нет)."""
@@ -765,16 +798,18 @@ def _order(run: _Run) -> List[Dict[str, Any]]:
     return out
 
 
-def match(design: Any, impl: Any, plan: Any = None) -> Dict[str, Any]:
+def match(design: Any, impl: Any, plan: Any = None, descend_root: bool = True) -> Dict[str, Any]:
     """Макет и страница (конверты канона или корни) [+ plan.json] → пары и находки (см. докстринг модуля).
 
+    `descend_root=False` — режим модели кода: корень макета парой с корнем дерева как есть (`code:root` — синтетика) и инлайн-компонент
+    (frame с именем) — прозрачная обёртка, а не соперник; чёрные ящики пакетов (`instance`) остаются компонентами.
     Выход: pairs, missing, extra, order, stats, hardGate, lowMatchRate. Один вход — побайтно один выход."""
     d_root, i_root = _root_of(design), _root_of(impl)
     if d_root is None:
         raise MatchError("макет пуст: сравнивать не с чем")
     if i_root is None:
         i_root = {"id": "dom:empty", "kind": "frame", "box": {"x": 0, "y": 0, "w": 0, "h": 0}}
-    run = _Run(d_root, i_root, plan)
+    run = _Run(d_root, i_root, plan, descend_root)
     run.run()
     D, I = run.D, run.I
     content_total = sum(D.content)

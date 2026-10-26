@@ -186,6 +186,9 @@ class _Ctx:
             n = self.I[x]
             if isinstance(n.get("text"), str) and n["text"] and not n.get("children"):
                 out.append((x, n))
+            for pk, pv in sorted(((n.get("component") or {}).get("textProps") or {}).items()):     # модель кода: литеральные пропсы
+                if isinstance(pv, str) and pv:
+                    out.append((f"{x}#{pk}", {"text": pv}))
             stack.extend(reversed([k["id"] for k in (n.get("children") or []) if isinstance(k, dict)]))
         return out
 
@@ -297,6 +300,7 @@ def rule_slots(c: _Ctx) -> None:
                 if _norm_copy(n.get("text")) == want:
                     found[s["id"]] = free.pop(k)
                     break
+        pending: List[Dict[str, Any]] = []
         for s in slots:
             if s["id"] in found:
                 continue
@@ -311,6 +315,14 @@ def rule_slots(c: _Ctx) -> None:
             if elsewhere:
                 c.dismiss("SLOT_MISSING", d, i, f"текст слота «{s['text'][:40]}» нарисован в другом месте страницы "
                                                   f"({elsewhere[0]}): слот на месте не обязателен — не чинить", prop=s["id"])
+                continue
+            pending.append(s)
+        by_order = len(pending) == len(free) > 0               # непарных слотов ровно столько же, сколько непарных текстов: это их другая копия
+        for s in pending:
+            want = _norm(s["text"])
+            if by_order:
+                x, n = free.pop(0)
+                c.find("SLOT_TEXT", d, i, s["text"], n["text"], f"слот «{s.get('name') or s['id']}»: другая копия", prop=s["id"])
                 continue
             best = max(((difflib.SequenceMatcher(None, want, _norm(n.get("text"))).ratio(), k) for k, (x, n) in enumerate(free)),
                        default=(0.0, -1))
@@ -706,9 +718,10 @@ def unverified(c: _Ctx) -> Dict[str, Any]:
 # ------------------------------------------------------------------------------------------------------------------ вход
 
 def check(design: Any, impl: Any, matched: Dict[str, Any], tolerances: Optional[Dict[str, Any]] = None,
-          flags: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+          flags: Optional[Dict[str, Dict[str, Any]]] = None, rules: Optional[Any] = None) -> Dict[str, Any]:
     """Макет, страница, результат `match.match`, допуски (по умолчанию config.DEFAULT_TOLERANCES), флаги страницы по id
-    (`overflowing`/`scrolls`) → {findings, dismissals, unverified, degraded, executed, stats}."""
+    (`overflowing`/`scrolls`) → {findings, dismissals, unverified, degraded, executed, stats}. `rules` — имена правил из RULES, которые
+    исполнять (код-гейт берёт только structure·text·slots: у дерева кода нет чисел, а INVISIBLE осудил бы каждый библиотечный компонент)."""
     d_root = _root_of(design)
     i_root = _root_of(impl) if impl is not None else None
     if not isinstance(matched, dict) or not isinstance(matched.get("pairs"), list):
@@ -721,6 +734,8 @@ def check(design: Any, impl: Any, matched: Dict[str, Any], tolerances: Optional[
     degraded: List[Dict[str, str]] = []
     executed: List[str] = []
     for name, fn in RULES:
+        if rules is not None and name not in rules:
+            continue
         try:
             fn(c)
             executed.append(name)

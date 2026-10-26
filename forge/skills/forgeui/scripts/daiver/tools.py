@@ -9,7 +9,7 @@ daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_s
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
 daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report,
 daiver_plan_write, daiver_plan_contract, daiver_build_state, daiver_build_state_set, daiver_color_tokens,
-daiver_capabilities, daiver_screenshot.
+daiver_capabilities, daiver_screenshot, daiver_code_compare.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -41,6 +41,7 @@ from . import uispec as U
 from .ingest import normalize as NZ
 from .pixso import pull as PP
 from .verify import capture as CP
+from .verify import code_compare as CCMP
 
 HOOKS = Path(__file__).resolve().parents[4] / "hooks"
 
@@ -432,6 +433,17 @@ def t_screenshot(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         return CP.run(root, track, frame, args["url"], _path_inside(root, args["iterationDir"]), args["waitMs"], args.get("actions"),
                       args.get("clipSelector"), args.get("waitForSelector"), args.get("waitForGone"), args.get("target", "implementation"))
     except (TR.TrackError, CP.CaptureError) as e:
+        raise ToolError(str(e))
+
+
+def t_code_compare(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        frame = args.get("frame")
+        if frame is not None:
+            TR.check_frame_name(frame)
+        return CCMP.run(root, track, frame, _path_inside(root, args["iterationDir"]))
+    except (TR.TrackError, CCMP.CodeCompareError, BS.BuildStateError) as e:
         raise ToolError(str(e))
 
 
@@ -831,6 +843,23 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "waitForGone": {"type": "string", "description": "CSS-селектор загрузчика, который должен исчезнуть до снимка"},
             "target": {"type": "string", "enum": list(CP.TARGETS), "description": "implementation (по умолчанию) | reference (эталонный рендер)"}},
             "required": ["track", "url", "iterationDir", "waitMs"], "additionalProperties": False},
+    },
+    "daiver_code_compare": {
+        "fn": t_code_compare,
+        "description": ("Код-гейт итерации проверки (ui-verify) — исходники модуля против макета, БЕЗ браузера: читает файлы из outputs "
+                        "build-state (+ mocks.ts рядом), строит по ним дерево, сверяет с макетом и проверяет только текст, содержимое "
+                        "слотов и покрытие (никаких чисел). Пишет в iterationDir code-model.json, code-findings.json, code-defects.json, "
+                        "code-summary.json. Читай status: pass | fail (есть блокирующие дефекты кода — у каждого file:line и editor-ссылка) | "
+                        "skipped (Vue/Svelte, нет build-state, исходники пропали, дереву не доверяют — причина в reason, не блокирует). "
+                        "treeRecognized: false — страница-код не похожа на макет, находки только улики. MISSING status: unconfirmed — "
+                        "отсутствие подтверждает только DOM-гейт (compare-summary.json рядом); dismissals/unverified читай вслух: динамика, "
+                        "неразрешённые импорты и условный рендер — не судятся. DS_* код-гейт не выдаёт — это дело DS-гейта. "
+                        "iterationDir — подпапка verify/ (или baseline/) кадра из daiver_verify_state."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "iterationDir": {"type": "string", "description": "папка итерации — подпапка verify/ кадра (путь от корня проекта)"}},
+            "required": ["track", "iterationDir"], "additionalProperties": False},
     },
     "daiver_color_tokens": {
         "fn": t_color_tokens,

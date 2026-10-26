@@ -432,6 +432,12 @@ class Engine(unittest.TestCase):
         self.assertEqual(codes(res), [("TEXT", "text")], "остальные правила идут")
         self.assertNotIn("boom", res["executed"])
 
+    def test_rules_argument_runs_only_the_named_rules(self):
+        d, i = screen([text("d:t", "Привет", font={"family": "A", "size": 20})]), page([ptext("p:t", "Приветт", font={"family": "A", "size": 25})])
+        res = CK.check(d, i, MT.match(d, i), rules=("structure", "text"))
+        self.assertEqual(res["executed"], ["structure", "text"])
+        self.assertEqual(codes(res), [("TEXT", "text")], "типографика не исполнялась")
+
     def test_normal_run_is_not_degraded(self):
         res = run(screen([text("d:t", "Привет")]), page([ptext("p:t", "Привет")]))
         self.assertEqual(res["degraded"], [])

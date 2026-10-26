@@ -345,6 +345,12 @@ class RootPair(unittest.TestCase):
         res = M.match(screen([T("d:a", "Привет")]), outer)
         self.assertEqual(res["stats"]["rootImpl"], "p:card")
 
+    def test_does_not_descend_into_a_lone_text_leaf(self):
+        leaf = D("frame", "p:root", [D("text", "p:t", text="Привет", box=box(0, 0, 400, 300), tag="h2")], box=box(0, 0, 400, 300), tag="div")
+        res = M.match(screen([T("d:a", "Привет")]), D("frame", "p:body", [leaf], box=box(0, 0, 400, 300), tag="body"))
+        self.assertEqual(res["stats"]["rootImpl"], "p:root", "корень макета — рамка, а не текст")
+        self.assertEqual(pairs_of(res)["d:a"], "p:t")
+
     def test_does_not_descend_past_a_non_covering_child(self):
         small = D("frame", "p:small", [P("p:a", "Привет")], box=box(10, 10, 50, 30), tag="div")
         outer = D("frame", "p:body", [small], box=box(0, 0, 400, 300), tag="body")
@@ -536,6 +542,31 @@ class Gates(unittest.TestCase):
         self.assertEqual(len(res["missing"]), 2)
 
 
+class CodeMode(unittest.TestCase):
+    """Модель кода: корень макета — парой с `code:root` как есть, инлайн-компонент (frame с именем) — прозрачная обёртка."""
+
+    def test_root_is_not_descended(self):
+        sec = D("frame", "code:s1", [P("code:s1/0", "Привет")], tag="div")
+        root = D("frame", "code:root", [sec])
+        res = M.match(screen([T("d:a", "Привет")]), root, descend_root=False)
+        self.assertEqual(res["stats"]["rootImpl"], "code:root")
+        self.assertEqual(pairs_of(res)["d:a"], "code:s1/0")
+
+    def test_inline_component_is_transparent_but_a_package_black_box_is_not(self):
+        wrapped = D("frame", "code:s1", [P("code:s1/0", "Привет")], component={"figmaName": "Card", "implName": "Card"})
+        res = M.match(screen([T("d:a", "Приветт")]), D("frame", "code:root", [wrapped]), descend_root=False)
+        self.assertEqual(pairs_of(res).get("d:a"), "code:s1/0", "опечатку нашли через обёртку-компонент")
+        box_ = D("instance", "code:s1", [P("code:s1/0", "Привет")], component={"figmaName": "Card", "implName": "Card"})
+        free = M._Tree(D("frame", "code:root", [box_]), "impl", code=True).flat_children(0)
+        self.assertEqual(len(free), 1, "чёрный ящик пакета остаётся компонентом: его содержимое не вытаскивается наружу")
+
+    def test_instance_with_props_counts_as_page_content(self):
+        root = D("frame", "code:root", [D("instance", "code:s1", component={"figmaName": "Btn", "implName": "Btn", "textProps": {"l": "Ок"}})])
+        res = M.match(screen([inst("d:b", "Btn", comp={"origin": "library", "textProps": {"l": "Ок"}})]), root, descend_root=False)
+        self.assertTrue(res["hardGate"]["pass"])
+        self.assertEqual(pairs_of(res)["d:b"], "code:s1")
+
+
 class Leftover(unittest.TestCase):
     def test_equal_counts_pair_by_position_with_low_confidence(self):
         d = screen([D("icon", "d:i1", box=box(0, 0, 10, 10)), D("icon", "d:i2", box=box(20, 0, 10, 10))])
@@ -555,7 +586,18 @@ class Leftover(unittest.TestCase):
         d = screen([T("d:a", "Сохранить")])
         res = M.match(d, page([P("p:a", "Сохранить!")]))
         p = [x for x in res["pairs"] if x["design"] == "d:a"][0]
-        self.assertEqual((p["impl"], p["anchor"], p["confidence"]), ("p:a", "position", "low"))
+        self.assertEqual((p["impl"], p["anchor"], p["confidence"]), ("p:a", "textSimilar", "low"))
+
+    def test_typo_pairs_by_similarity_even_when_counts_differ_and_under_a_transparent_frame(self):
+        d = screen([D("frame", "d:f", [T("d:a", "Сохранить изменения"), T("d:b", "Отмена", y=20), T("d:c", "Футер", y=40)], box=box(0, 0, 100, 60))])
+        res = M.match(d, page([P("p:a", "Сохранить изменения!"), P("p:b", "Отмена", y=20)]))
+        got = pairs_of(res)
+        self.assertEqual((got["d:a"], got["d:b"]), ("p:a", "p:b"))
+        self.assertEqual([m["id"] for m in res["missing"]], ["d:c"])
+
+    def test_dissimilar_texts_are_never_paired_by_similarity(self):
+        res = M.match(screen([T("d:a", "Альфа"), T("d:b", "Гамма", y=20)]), page([P("p:x", "Бета"), P("p:y", "Дельта", y=20)]))
+        self.assertEqual([p["design"] for p in res["pairs"]], ["d:root"])
 
 
 if __name__ == "__main__":
