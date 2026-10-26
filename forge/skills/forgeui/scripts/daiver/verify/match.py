@@ -245,7 +245,9 @@ class _Tree:
     def _content(self, i: int) -> bool:
         if self.side == "design":
             n = self.nodes[i]
-            return self.role[i] in ("text", "media") or n.get("kind") == "instance"
+            if self.role[i] == "text":
+                return bool(self.own[i])                  # пустой текстовый слой не толкуется: на странице его не увидеть
+            return self.role[i] == "media" or n.get("kind") == "instance"
         return self.role[i] in ("text", "media")
 
     def box(self, i: int) -> Optional[Tuple[float, float, float, float]]:
@@ -545,6 +547,8 @@ class _Run:
     def _pairable(self, d: int) -> bool:
         """Узел макета, у которого вообще есть что искать на странице (пустой непокрашенный фрейм — нет)."""
         D = self.D
+        if D.role[d] == "text":
+            return bool(D.own[d])
         if D.role[d] != "block":
             return True
         return bool(D.kids[d]) or D.paint[d] or D.nodes[d].get("kind") == "instance"

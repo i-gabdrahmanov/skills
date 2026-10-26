@@ -506,6 +506,11 @@ class Gates(unittest.TestCase):
         res = M.match(d, page([P("p:a", "Раз")]))
         self.assertEqual((res["stats"]["designContent"], res["stats"]["matchRate"]), (1, 1.0))
 
+    def test_empty_text_layer_is_not_content(self):
+        d = screen([D("text", "d:e", text="  ", box=box(0, 0, 10, 10)), T("d:a", "Раз", y=20)])
+        res = M.match(d, page([P("p:a", "Раз", y=20)]))
+        self.assertEqual((res["stats"]["designContent"], res["missing"]), (1, []), "пустой слой не виден и не ищется")
+
     def test_design_without_content_has_rate_one(self):
         res = M.match(screen([D("frame", "d:f", box=box(0, 0, 10, 10))]), page([P("p:a", "Раз")]))
         self.assertEqual(res["stats"]["matchRate"], 1.0)
