@@ -162,17 +162,15 @@ class Lifecycle(unittest.TestCase):
             self.assertEqual([x["name"] for x in h], ["iter-2", "iter-3", "iter-9"], "iter-9 раньше iter-10; битый файл — пустая итерация; iter-4 без файла нет")
             self.assertEqual(h[1]["defects"], [])
 
-    def test_declared_noise_from_history_and_decisions(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            hist = [{"name": "iter-1", "defects": [{"id": "a", "noise": True}, {"id": "b"}]}]
-            dec = Path(tmp) / "decisions.json"
-            dec.write_text(json.dumps([{"id": "c", "verdict": "false_positive"}, {"id": "d", "verdict": "fixed"}, "мусор"]), encoding="utf-8")
-            self.assertEqual(LC.declared_noise(hist, dec), {"a", "c"})
-            dec.write_text(json.dumps({"decisions": [{"id": "e", "verdict": "false_positive"}]}), encoding="utf-8")
-            self.assertEqual(LC.declared_noise([], dec), {"e"})
-            dec.write_text("не json", encoding="utf-8")
-            self.assertEqual(LC.declared_noise([], dec), set())
-            self.assertEqual(LC.declared_noise([], Path(tmp) / "нет.json"), set())
+    def test_declared_noise_from_history(self):
+        hist = [{"name": "iter-1", "defects": [{"id": "a", "noise": True}, {"id": "b"}]}, {"name": "iter-2", "defects": [{"id": "c", "noise": True}]}]
+        self.assertEqual(LC.declared_noise(hist), {"a", "c"})
+        self.assertEqual(LC.declared_noise([]), set())
+
+    def test_noise_set_by_a_decision_survives_the_lifecycle(self):
+        now = [{"id": "a", "noise": True}, {"id": "b"}]
+        LC.apply(now, [], set())
+        self.assertEqual([d["noise"] for d in now], [True, False])
 
 
 class Pipeline(unittest.TestCase):
@@ -381,7 +379,8 @@ class World(unittest.TestCase):
     def test_decisions_file_marks_noise(self):
         self.put("iter-1", snapshot(["Заголовок!", "Описание"]))
         did = self.call("iter-1")["defects"][0]["id"]
-        (self.verify / "decisions.json").write_text(json.dumps([{"id": did, "verdict": "false_positive"}]), encoding="utf-8")
+        (self.verify.parent / "verify-decisions.json").write_text(json.dumps({"schema": 1, "decisions": [{"id": did, "verdict": "false_positive"}]}),
+                                                                  encoding="utf-8")
         self.put("iter-2", snapshot(["Заголовок!", "Описание"]))
         r = self.call("iter-2")
         self.assertEqual((r["status"], r["counts"]["blocking"], r["counts"]["noise"]), ("clean", 0, 1))

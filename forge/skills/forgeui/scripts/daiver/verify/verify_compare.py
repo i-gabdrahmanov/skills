@@ -14,7 +14,7 @@
   • ничего не пропадает молча: подавленные находки хранятся с `suppressedBy`, dismissals и unverified — счётчиками и выборкой, `degraded` — списком.
 
 Блокирующий дефект — `severity` critical | major без `noise`; `minor` (DS_DEPRECATED) предупреждает, но не блокирует. declaredNoise (прошлые
-`noise: true` и `false_positive` из `verify/decisions.json`) помечается, остаётся в дефектах и выходит из blocking и из знаменателя fidelity.
+`noise: true` и `false_positive` из `verify-decisions.json`, 4.8) помечается, остаётся в дефектах и выходит из blocking и из знаменателя fidelity.
 
 Не проверено данными (боевых прогонов нет): градация severity (critical/major — выбор 4.4); подпись вида для свёртки на реальных таблицах и
 списках; формат `decisions.json` (его закрепит 5.4); fidelity на больших экранах; доля `recapture` на реальных страницах.
@@ -32,6 +32,7 @@ from .. import plan as PL
 from .. import track as TR
 from . import capture as CP
 from . import check as CK
+from . import decisions as DEC
 from . import ds_gate as DS
 from . import group as GR
 from . import ids as IDS
@@ -182,7 +183,8 @@ def _next_step(status: str, rate: float, fidelity: Optional[float], unmatched: i
 
 
 def build_report(design: Any, impl: Any, plan: Any, tolerances: Optional[Dict[str, Any]], flags: Optional[Dict[str, Any]],
-                 ds_inputs: Optional[Dict[str, Any]], history: List[Dict[str, Any]], noise: Set[str], template: Optional[str]) -> Dict[str, Any]:
+                 ds_inputs: Optional[Dict[str, Any]], history: List[Dict[str, Any]], noise: Set[str], template: Optional[str],
+                 decisions: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Чистая часть: макет, модель страницы, план, допуски, флаги, входы DS-гейта (`gather`-словарь | None), история, шум → отчёт."""
     d_root = design["root"] if isinstance(design, dict) and "root" in design and "kind" not in design else design
     i_root = impl["root"] if isinstance(impl, dict) and "root" in impl and "kind" not in impl else impl
@@ -205,6 +207,7 @@ def build_report(design: Any, impl: Any, plan: Any, tolerances: Optional[Dict[st
     defects = [_defect(g, d_index, i_index, template) for g in groups]
     defects.sort(key=lambda x: (SEVERITY_RANK.get(x["severity"], 1), LC_ORDER.get(x["layer"], 9), x.get("design") or "", x["id"]))
     emitted = defects if gate_ok else []
+    dres = DEC.apply(emitted, decisions) if decisions else {"unknown": [], "reopened": [], "declined": [], "noise": [], "fix": []}
     life = LC.apply(emitted, history, noise)
     blocking = [d for d in emitted if d["severity"] in BLOCKING and not d["noise"]]
     by_layer: Dict[str, int] = {}
@@ -233,6 +236,7 @@ def build_report(design: Any, impl: Any, plan: Any, tolerances: Optional[Dict[st
     return {
         "status": status, "matchRate": rate, "fidelity": fidelity, "unmatched": unmatched, "lowMatchRate": low, "hardGate": matched["hardGate"],
         "counts": counts, "layers": sup["layers"], "lifecycle": life["counts"], "fixed": life["fixed"], "nextStep": nxt,
+        "decisions": {**dres, "problems": (decisions or {}).get("problems", []), "elsewhere": (decisions or {}).get("elsewhere", [])},
         "gates": {"match": "pass" if gate_ok else "fail", "check": "degraded" if res["degraded"] else "pass",
                   "ds": ("degraded" if ds["degraded"] else "pass") if ds["ran"] else "skipped",
                   "pixel": "skipped" if not gate_ok else "not-run", "vision": "skipped" if not gate_ok else "not-run"},
@@ -319,12 +323,16 @@ def run(root: Any, track: str, frame: Optional[str], iteration_dir: Path) -> Dic
         ds_inputs = {"lib": None, "libProblem": str(e), "sources": {}, "colors": None, "colorsFile": None}
     verify_dir = iteration_dir.parent
     history = LC.load_history(verify_dir, iteration_dir.name)
-    noise = LC.declared_noise(history, verify_dir / "decisions.json")
-    rep = build_report(design, impl, plan, cfg["verify"]["tolerances"], _flags(snapshot), ds_inputs, history, noise, template)
+    noise = LC.declared_noise(history)
+    try:
+        decisions = DEC.load(root, manifest, frame)
+    except DEC.DecisionsError as e:
+        raise VerifyCompareError(str(e))
+    rep = build_report(design, impl, plan, cfg["verify"]["tolerances"], _flags(snapshot), ds_inputs, history, noise, template, decisions)
     summary = {k: rep[k] for k in ("status", "matchRate", "fidelity", "unmatched", "lowMatchRate", "hardGate", "counts", "layers", "lifecycle", "fixed",
                                    "nextStep", "gates", "ds", "degraded", "tolerances", "unverified", "dismissals", "pairs", "defectIds",
-                                   "designUrlTemplate")}
-    summary.update(track=track, frame=f["name"], capture=cap, files=out_files, declaredNoise=sorted(noise))
+                                   "designUrlTemplate", "decisions")}
+    summary.update(track=track, frame=f["name"], capture=cap, files=out_files, declaredNoise=sorted(d["id"] for d in rep["defects"] if d.get("noise")))
     _write(iteration_dir / "findings.json", {"findings": rep["findings"], "dismissals": rep["dismissalsAll"]})
     _write(iteration_dir / "defects.json", {"defects": rep["defects"] if rep["status"] != "hard-gate-fail" else [], "fixed": rep["fixed"]})
     _write(iteration_dir / "compare-summary.json", summary)

@@ -9,7 +9,7 @@
   • команда: запускается из корня репо, как строка оболочки (`a && b`, кавычки), stdin закрыт (вопрос не повесит гейт), зелёный
     (exit 0) → exit гейта 0, красный → 1 с кодом и ХВОСТОМ вывода в stderr последним (раннер record_gate берёт конец вывода);
     таймаут → 1, команда убита вместе с потомками; гигантский вывод не раздувает ответ; ANSI и «\\r» хвоста вычищены;
-  • гейт ничего не пишет (дерево до и после побайтно равно), `verify` по-прежнему exit 3, неверные аргументы — exit 2;
+  • гейт ничего не пишет (дерево до и после побайтно равно), `verify` без записанной итерации — exit 1 (4.8), неверные аргументы — exit 2;
   • «Modal» из Pixso: полный цикл (pull → резолв → план → build-state → секция → done) и зелёный гейт.
 
 Данные. «Modal» — настоящий образец Pixso (одна секция); экраны на несколько секций — СИНТЕТИКА из построителей test_build_state.py.
@@ -401,7 +401,7 @@ class Cli(Gate):
         self.assertEqual(self.gate("--timeout", "-5").returncode, 2)
         v = subprocess.run([sys.executable, "-X", "utf8", str(GATE), "verify", "--project", str(self.root), "--feature", TRACK],
                            capture_output=True, text=True, encoding="utf-8", timeout=60)
-        self.assertEqual(v.returncode, 3)
+        self.assertEqual(v.returncode, 1, "у ui-verify теперь есть механика: шаг не готов, а не «не реализовано» (exit 3)")
         self.assertIn("ui-verify", v.stderr)
 
     def test_the_gate_command_of_the_pipeline_matches_what_record_gate_expects(self):

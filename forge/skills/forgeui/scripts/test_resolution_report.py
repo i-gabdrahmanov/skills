@@ -916,9 +916,9 @@ class Gate(Base):
         self.assertIn("daiver_plan_write", r.stderr)
 
     def test_other_steps_are_untouched_and_arguments_are_checked(self):
-        r = self.gate("verify")
-        self.assertEqual(r.returncode, 3)
-        self.assertIn("не реализована", r.stderr)
+        r = self.gate("verify")                         # ui-verify реализован (4.8): цикла проверки здесь не было — «не готово», а не «не реализовано»
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("не реализована", r.stderr)
         r = self.gate("build")                          # ui-build реализован (3.2): сборки здесь не было — «не готово», а не «не реализовано»
         self.assertEqual(r.returncode, 1)
         self.assertNotIn("не реализована", r.stderr)

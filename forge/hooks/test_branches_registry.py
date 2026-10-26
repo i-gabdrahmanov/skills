@@ -149,11 +149,12 @@ class PhaseToolsRegistry(unittest.TestCase):
     # читающие и «оркестраторские» инструменты: в phase_tools не входят (иначе оркестратор заблокировал бы собственную работу)
     FREE = {"daiver_status", "daiver_init", "daiver_map_append", "daiver_map_lookup", "daiver_outline", "daiver_section",
             "daiver_source_nodes", "daiver_ds_inventory", "daiver_ds_lookup", "daiver_ds_details", "daiver_ds_requirements",
-            "daiver_color_tokens", "daiver_spec", "daiver_track_manifest", "daiver_capabilities"}
+            "daiver_color_tokens", "daiver_spec", "daiver_track_manifest", "daiver_capabilities", "daiver_verify_decide"}
     EXPECTED_UI = {
         "ui-design": ("daiver_pixso_pull", "daiver_normalize", "daiver_resolve_*", "daiver_plan_write", "daiver_plan_contract"),
         "ui-build": ("daiver_build_state", "daiver_build_state_set", "daiver_svg_assets"),
-        "ui-verify": ("daiver_screenshot", "daiver_code_compare", "daiver_verify_*"),
+        "ui-verify": ("daiver_screenshot", "daiver_code_compare", "daiver_verify_compare", "daiver_verify_state",
+                      "daiver_verify_state_record"),
     }
 
     @staticmethod
@@ -198,7 +199,8 @@ class PhaseToolsRegistry(unittest.TestCase):
             "ui-design": ["daiver_normalize", "daiver_pixso_pull", "daiver_plan_contract", "daiver_plan_write",
                           "daiver_resolve_candidates", "daiver_resolve_finalize", "daiver_resolve_query", "daiver_resolve_report"],
             "ui-build": ["daiver_build_state", "daiver_build_state_set", "daiver_svg_assets"],
-            "ui-verify": ["daiver_code_compare", "daiver_screenshot", "daiver_verify_compare"],
+            "ui-verify": ["daiver_code_compare", "daiver_screenshot", "daiver_verify_compare", "daiver_verify_state",
+                          "daiver_verify_state_record"],
         })
 
     def test_every_engine_tool_has_an_owner(self):
@@ -232,7 +234,9 @@ class PhaseToolsRegistry(unittest.TestCase):
         self.assertIsNone(BR.phase_tool("ui-design", None))
         self.assertIsNone(BR.phase_tool("ui-design", ""))
         self.assertEqual(BR.tool_steps("mcp__forge-ui__daiver_build_state_set"), ("ui-build",))
-        self.assertEqual(BR.tool_steps("mcp__forge-ui__daiver_verify_anything"), ("ui-verify",))
+        self.assertEqual(BR.tool_steps("mcp__forge-ui__daiver_resolve_anything"), ("ui-design",), "шаблон fnmatch")
+        self.assertEqual(BR.tool_steps("mcp__forge-ui__daiver_verify_state_record"), ("ui-verify",))
+        self.assertEqual(BR.tool_steps("mcp__forge-ui__daiver_verify_decide"), (), "решение человека вносит оркестратор — инструмент свободен")
         self.assertEqual(BR.tool_steps("mcp__atlassian__create_issue"), ())
 
     def test_the_server_prefix_does_not_matter_and_the_case_does(self):

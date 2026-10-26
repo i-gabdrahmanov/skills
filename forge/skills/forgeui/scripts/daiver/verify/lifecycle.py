@@ -8,16 +8,16 @@
   regressed   id встречался раньше, пропал в предыдущей итерации (был исправлен) и вернулся;
   fixed       id был в предыдущей, а в текущей нет — не дефект, а запись в `fixed[]`.
 
-declaredNoise: каждый `noise: true` любой прошлой итерации и каждый `false_positive` из `verify/decisions.json` (формат файла решений
-уточнит 5.4: здесь читается список `[{id, verdict}]` или `{decisions: […]}`) помечаются в текущем compare — остаются в дефектах, не блокируют,
-уходят из `counts.blocking` и из знаменателя fidelity.
+declaredNoise: каждый `noise: true` любой прошлой итерации и каждый `false_positive` из файла решений человека (`decisions.apply` ставит
+`noise` на дефект до жизненного цикла) помечаются в текущем compare — остаются в дефектах, не блокируют, уходят из `counts.blocking` и из
+знаменателя fidelity.
 """
 from __future__ import annotations
 
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 _NUM = re.compile(r"(\d+)")
 
@@ -45,18 +45,9 @@ def load_history(verify_dir: Path, current: str) -> List[Dict[str, Any]]:
     return out
 
 
-def declared_noise(history: List[Dict[str, Any]], decisions_path: Optional[Path] = None) -> Set[str]:
-    noise = {x["id"] for it in history for x in it["defects"] if x.get("noise") is True}
-    if decisions_path is not None and decisions_path.is_file():
-        try:
-            data = json.loads(decisions_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, UnicodeDecodeError):
-            data = None
-        items = data.get("decisions") if isinstance(data, dict) else data
-        for x in items if isinstance(items, list) else []:
-            if isinstance(x, dict) and x.get("verdict") == "false_positive" and isinstance(x.get("id"), str):
-                noise.add(x["id"])
-    return noise
+def declared_noise(history: List[Dict[str, Any]]) -> Set[str]:
+    """id, помеченные `noise: true` в любой прошлой итерации."""
+    return {x["id"] for it in history for x in it["defects"] if x.get("noise") is True}
 
 
 def apply(defects: List[Dict[str, Any]], history: List[Dict[str, Any]], noise: Set[str]) -> Dict[str, Any]:
@@ -77,7 +68,7 @@ def apply(defects: List[Dict[str, Any]], history: List[Dict[str, Any]], noise: S
         else:
             d["lifecycle"] = "new"
         counts[d["lifecycle"]] += 1
-        d["noise"] = d["id"] in noise
+        d["noise"] = bool(d.get("noise")) or d["id"] in noise            # шум решения человека (decisions.apply) уже на дефекте
     fixed = [{k: x[k] for k in ("id", "code", "element") if k in x} for i, x in sorted(prev.items()) if i not in now]
     counts["fixed"] = len(fixed)
     return {"counts": counts, "fixed": fixed}

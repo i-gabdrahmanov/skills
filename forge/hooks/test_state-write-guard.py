@@ -660,6 +660,7 @@ DAIVER_GUARDED = [
     f"{D_TRACK}/baseline/page.png", f"{D_TRACK}/verify", f"{D_FRAME}/versions", f"{D_TRACK}/baseline",
     f"{D_TRACK}/plan.md", f"{D_FRAME}/plan.md", f"{D_TRACK}/ui-plan.md", f"{D_TRACK}/resolution-report.md",
     f"{D_FRAME}/dom.canonical.json", f"{D_TRACK}/reference.canonical.json",       # канон — по имени, не только visual-requirements.*
+    f"{D_TRACK}/verify-report.md", f"{D_TRACK}/verify-decisions.json", f"{D_FRAME}/verify-decisions.json", f"{D_TRACK}/report.html",     # 4.8
 ]
 # Не состояние: вход (выгрузки макета), арт, документы и обычные исходники с теми же именами, замки control-plane.
 DAIVER_FREE = [
@@ -667,7 +668,7 @@ DAIVER_FREE = [
     "docs/plan.md", "docs/feature-pipeline/STOR-100/ui-spec.md", "src/verify/index.ts", "src/versions/list.tsx",
     "src/baseline/Base.ts", "src/modules/Modal/plan.json", "src/modules/Modal/mocks.ts", "src/modules/Modal/Modal.tsx",
     "config.yaml", "src/config.yaml", "application.yml", "x.daiver/config.yaml", "my-.daiver/config.yaml",
-    "ground/build-state.lock", "ground/resolve.lock",
+    "ground/build-state.lock", "ground/resolve.lock", "docs/verify-report.md", "src/verify-decisions.json", "src/report.html",
     f"{D_TRACK}/verify.notes.txt", f"{D_TRACK}/versions-draft.md", f"{D_TRACK}/baseline_notes.txt",   # каталоги verify/versions/baseline, а не любое имя на их букву
 ]
 

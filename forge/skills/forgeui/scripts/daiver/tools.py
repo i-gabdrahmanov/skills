@@ -9,7 +9,7 @@ daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_s
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
 daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report,
 daiver_plan_write, daiver_plan_contract, daiver_build_state, daiver_build_state_set, daiver_color_tokens,
-daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare.
+daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare, daiver_verify_state, daiver_verify_state_record, daiver_verify_decide.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -42,6 +42,7 @@ from .ingest import normalize as NZ
 from .pixso import pull as PP
 from .verify import capture as CP
 from .verify import code_compare as CCMP
+from .verify import state as VST
 from .verify import verify_compare as VCMP
 
 HOOKS = Path(__file__).resolve().parents[4] / "hooks"
@@ -434,6 +435,37 @@ def t_screenshot(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         return CP.run(root, track, frame, args["url"], _path_inside(root, args["iterationDir"]), args["waitMs"], args.get("actions"),
                       args.get("clipSelector"), args.get("waitForSelector"), args.get("waitForGone"), args.get("target", "implementation"))
     except (TR.TrackError, CP.CaptureError) as e:
+        raise ToolError(str(e))
+
+
+def _frame_arg(args: Dict[str, Any]) -> Optional[str]:
+    frame = args.get("frame")
+    if frame is not None:
+        TR.check_frame_name(frame)
+    return frame
+
+
+def t_verify_state(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return VST.open_iteration(root, TR.check_track_name(args["track"]), _frame_arg(args))
+    except (TR.TrackError, VST.VerifyStateError) as e:
+        raise ToolError(str(e))
+
+
+def t_verify_state_record(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return VST.record(root, TR.check_track_name(args["track"]), _frame_arg(args), args["iteration"], args["gates"], args.get("diffPercent"),
+                          args.get("reviewReport"), args.get("reviewSkipped"), args.get("defects"), args.get("decision"), args.get("fixed"),
+                          args.get("declined"))
+    except (TR.TrackError, VST.VerifyStateError) as e:
+        raise ToolError(str(e))
+
+
+def t_verify_decide(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return VST.decide(root, TR.check_track_name(args["track"]), _frame_arg(args), args["iteration"], args["decision"], args.get("fixed"),
+                          args.get("declined"))
+    except (TR.TrackError, VST.VerifyStateError) as e:
         raise ToolError(str(e))
 
 
@@ -855,6 +887,61 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "waitForGone": {"type": "string", "description": "CSS-селектор загрузчика, который должен исчезнуть до снимка"},
             "target": {"type": "string", "enum": list(CP.TARGETS), "description": "implementation (по умолчанию) | reference (эталонный рендер)"}},
             "required": ["track", "url", "iterationDir", "waitMs"], "additionalProperties": False},
+    },
+    "daiver_verify_state": {
+        "fn": t_verify_state,
+        "description": ("ПЕРВЫЙ вызов итерации проверки (ui-verify): открывает итерацию кадра и называет всё, что нужно для хода. Читай: iteration и "
+                        "iterationDir (каждый артефакт итерации — только в свою папку, она не перезаписывается; повторный вызов до записи номер НЕ двигает); "
+                        "unrecordedIterations — итерация исполнена, но не записана: сначала запиши её (daiver_verify_state_record), и только потом новые "
+                        "гейты; priorReview — Fix plan прошлой итерации или null; goalImage (нет картинки дизайна на 1-й итерации — спроси пользователя, "
+                        "положи visual-requirements.png в папку кадра и вызови снова); missingArt; warnStalling; history; implementation (url, open, "
+                        "devCommand; нет url — спроси пользователя, не выдумывай); declinedSoFar — отклонённое человеком НЕ переспрашивай; mode. "
+                        "Шаги итерации: daiver_screenshot → daiver_verify_compare → daiver_code_compare → [дифф → обзор → e2e] → "
+                        "daiver_verify_state_record. Чинить посреди итерации нельзя: гейты только собирают свидетельства."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"}},
+            "required": ["track"], "additionalProperties": False},
+    },
+    "daiver_verify_state_record": {
+        "fn": t_verify_state_record,
+        "description": ("ЗАПИСЬ итога итерации — без неё тот же номер итерации, пустой priorReview и сломанные progress/stall/итог. Вызывай ПОСЛЕ гейтов, до "
+                        "любых слов человеку. gates — ровно пять имён: compare, code, visualDiff, review, e2e, каждый pass | fail | skipped | degraded "
+                        "(строкой или {status, reason}); гейты, которых ещё нет (визуальный дифф, обзор, e2e), — skipped с причиной. Статусы compare и "
+                        "code, matchRate, fidelity и ВСЕ дефекты compare/code движок берёт из артефактов итерации сам и переписывает твои слова фактом "
+                        "(расхождение вернётся в warnings): defects — только пункты, которых движок не знает (zone: vision | e2e, id, severity). "
+                        "diffPercent — проценты 0–100 ровно как вернул дифф (3.18, не 0.0318). Ответ: clean, blocking, progress (stalled: не лучше прошлой; "
+                        "регресс — тоже stall), report — путь verify-report.md. Решение человека (clean/fix_all/fix_some/stop, fixed, declined) к "
+                        "записанной итерации вносит оркестратор через daiver_verify_decide; здесь decision допустим только для автономного прогона."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "iteration": {"type": "number", "description": "номер итерации из daiver_verify_state"},
+            "gates": {"type": "object", "description": "ровно пять ключей: compare, code, visualDiff, review, e2e"},
+            "diffPercent": {"type": "number", "description": "проценты 0–100, как вернул дифф"},
+            "reviewReport": {"type": "object", "description": "отчёт визуального обзора (Fix plan) — станет priorReview следующей итерации"},
+            "reviewSkipped": {"type": "string", "description": "почему обзор не проводился"},
+            "defects": {"type": "array", "items": {"type": "object"}, "description": "только пункты vision/e2e: {id, zone, severity, message, …}"},
+            "decision": {"type": "string", "enum": list(VST.DECISIONS), "description": "только автономный прогон (решение человека — daiver_verify_decide)"},
+            "fixed": {"type": "array", "items": {"type": "string"}, "description": "id дефектов, исправленных по решению"},
+            "declined": {"type": "array", "items": {"type": "string"}, "description": "id дефектов, отклонённых человеком"}},
+            "required": ["track", "iteration", "gates"], "additionalProperties": False},
+    },
+    "daiver_verify_decide": {
+        "fn": t_verify_decide,
+        "description": ("РЕШЕНИЕ человека к уже записанной итерации (его вызывает оркестратор после ответа пользователя). decision: clean (только если "
+                        "итерация чистая) | fix_all | fix_some | stop; fixed — id дефектов, которые будут чиниться, declined — id, от которых человек "
+                        "отказался (их больше не переспрашивают). Решение записывается ОДИН раз и не переписывается. stop — остановка немедленно: без "
+                        "«ещё одной правки», без дополнительного гейта; остановка с открытыми дефектами требует согласия ui-accept-<KEY>. Ответ человека "
+                        "переноси дословно: свои решения за него не принимай."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "iteration": {"type": "number", "description": "номер записанной итерации"},
+            "decision": {"type": "string", "enum": list(VST.DECISIONS)},
+            "fixed": {"type": "array", "items": {"type": "string"}},
+            "declined": {"type": "array", "items": {"type": "string"}}},
+            "required": ["track", "iteration", "decision"], "additionalProperties": False},
     },
     "daiver_verify_compare": {
         "fn": t_verify_compare,

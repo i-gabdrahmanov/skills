@@ -6,7 +6,7 @@
   • ui-design — этапы 1–2 (макет → канон, компоненты и план секций, подпись плана);
   • ui-build  — этап 3 (сборка по секциям, buildCommand проекта);
   • ui-verify — этапы 4–5 (захват страницы, сравнение с макетом, отчёт).
-Пока механики шага нет (сейчас — ui-verify), гейт отвечает exit 3 «не реализовано» — это честная
+Если механики шага нет (сейчас такого шага нет), гейт отвечает exit 3 «не реализовано» — это честная
 остановка прогона, а не пропуск: `record_gate` запишет passed:false, и update.py шаг не закроет.
 
 ui-design (задачи 2.5–2.6) закрыт, когда готов контракт плана и план подписан: резолв компонентов закончен и подтверждён
@@ -20,6 +20,9 @@ in_progress / stale, `outputs` готовых секций лежат на ди�
 собирается: `project.buildCommand` из конфига запускается из корня репо с таймаутом (`--timeout`, по умолчанию 900 с), красный итог —
 красный гейт с хвостом вывода. Команда запускается, только когда секции готовы. Модуль, который не компилируется, чинит субагент
 сам (§13.8). Логика — `daiver/build_gate.py`; подпись плана здесь не перепроверяется (её охраняет хук ui-guard, 3.3).
+
+ui-verify (задача 4.8) закрыт, когда цикл ЗАКОНЧЕН человеком: у каждого кадра последняя записанная итерация чистая ИЛИ человек остановил цикл
+(`decision: stop`) и дал согласие `ui-accept-<KEY>` (итог defects-remaining честно в `verify-report.md`). Логика — `daiver/verify/verify_gate.py`.
 
 exit 0 — шаг готов; 1 — не готов (причины в выводе); 2 — неверные аргументы;
 3 — механика шага ещё не реализована (стоп прогона, решение за человеком).
@@ -37,7 +40,7 @@ from typing import Optional
 STAGES = {
     "design": "этапы 1–2: макет → канон → компоненты библиотеки → план секций + подпись плана",
     "build": "этап 3: сборка модуля по секциям плана + buildCommand проекта",
-    "verify": "этапы 4–5: захват страницы, сравнение с макетом, визуальный обзор, отчёт",
+    "verify": "этапы 4–5: цикл проверки (захват, сравнение, код-гейт, визуальный обзор) закончен человеком: чисто или стоп",
 }
 
 
@@ -90,6 +93,23 @@ def _build(project: Path, feature: str, timeout: Optional[int]) -> int:
     return 1
 
 
+def _verify(project: Path, feature: str) -> int:
+    """Цикл проверки закончен человеком? Нет — exit 1 с причинами; да — exit 0 (и итог: clean или defects-remaining)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from daiver.verify import verify_gate as VG     # noqa: WPS433 — движок рядом со скриптом
+
+    res = VG.check(project, feature)
+    if res["problems"]:
+        print(f"⛔ ui-verify: цикл проверки не закончен ({len(res['problems'])}):", file=sys.stderr)
+        for p in res["problems"]:
+            print(f"   • {p}", file=sys.stderr)
+        print("   Цикл заканчивает человек: чисто или стоп. Исправлять посреди итерации нельзя; шаг не закрыт.", file=sys.stderr)
+        return 1
+    names = ", ".join(f"{k}: {v}" for k, v in res["frames"].items())
+    print(f"✓ ui-verify: цикл закончен ({names}); итог — {res['outcome']} (подробности — .daiver/tracks/{feature}/verify-report.md).")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Гейты шагов forge-ui (ui-design/ui-build/ui-verify).")
     ap.add_argument("step", choices=sorted(STAGES), help="какой шаг проверить")
@@ -103,6 +123,8 @@ def main(argv=None) -> int:
         return _design(Path(args.project).resolve(), args.feature)
     if args.step == "build":
         return _build(Path(args.project).resolve(), args.feature, args.timeout)
+    if args.step == "verify":
+        return _verify(Path(args.project).resolve(), args.feature)
     print(f"⛔ ui-{args.step}: механика шага ещё не реализована ({STAGES[args.step]}; "
           f"план — tasks/019-forge-ui.md).\n"
           f"   Прогон честно останавливается здесь: шаг не закрыт. Скажи пользователю, что "

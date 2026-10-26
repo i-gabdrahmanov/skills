@@ -184,8 +184,10 @@ _DAIVER_PATTERNS = [
     # любой yaml под .daiver: config.yaml, component-map.yaml (library.mapFile может называть карту иначе), track.yaml
     _DV + r"(?:[^/]+/)*[^/]+\.ya?ml\b",
     _DV + r"design-system-requirements[^/]*\.json\b",
-    _DV_TRACK + r"(?:build-state|verify-state|resolutions|run|plan(?:\.lock)?)\.json\b",
-    _DV_TRACK + r"(?:plan|ui-plan|resolution-report)\.md\b",
+    _DV_TRACK + r"(?:build-state|verify-state|verify-decisions|resolutions|run|plan(?:\.lock)?)\.json\b",
+    # verify-report.md пишет движок из verify-state; verify-decisions.json — ответы ЧЕЛОВЕКА (кладёт он сам, вне tool-вызовов модели); report.html рисует движок
+    _DV_TRACK + r"(?:plan|ui-plan|resolution-report|verify-report)\.md\b",
+    _DV_TRACK + r"report\.html\b",
     _DV_TRACK + r"[^/]*\.canonical\.json\b",
     _DV_TRACK + r"visual-requirements\.[^/]+",
     _DV_TRACK + r"(?:verify|versions|baseline)(?:/|$)",
