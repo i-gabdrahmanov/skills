@@ -9,7 +9,7 @@ daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_s
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
 daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report,
 daiver_plan_write, daiver_plan_contract, daiver_build_state, daiver_build_state_set, daiver_color_tokens,
-daiver_capabilities, daiver_screenshot, daiver_code_compare.
+daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -42,6 +42,7 @@ from .ingest import normalize as NZ
 from .pixso import pull as PP
 from .verify import capture as CP
 from .verify import code_compare as CCMP
+from .verify import verify_compare as VCMP
 
 HOOKS = Path(__file__).resolve().parents[4] / "hooks"
 
@@ -433,6 +434,17 @@ def t_screenshot(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         return CP.run(root, track, frame, args["url"], _path_inside(root, args["iterationDir"]), args["waitMs"], args.get("actions"),
                       args.get("clipSelector"), args.get("waitForSelector"), args.get("waitForGone"), args.get("target", "implementation"))
     except (TR.TrackError, CP.CaptureError) as e:
+        raise ToolError(str(e))
+
+
+def t_verify_compare(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        frame = args.get("frame")
+        if frame is not None:
+            TR.check_frame_name(frame)
+        return VCMP.run(root, track, frame, _path_inside(root, args["iterationDir"]))
+    except (TR.TrackError, VCMP.VerifyCompareError, BS.BuildStateError) as e:
         raise ToolError(str(e))
 
 
@@ -843,6 +855,25 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "waitForGone": {"type": "string", "description": "CSS-селектор загрузчика, который должен исчезнуть до снимка"},
             "target": {"type": "string", "enum": list(CP.TARGETS), "description": "implementation (по умолчанию) | reference (эталонный рендер)"}},
             "required": ["track", "url", "iterationDir", "waitMs"], "additionalProperties": False},
+    },
+    "daiver_verify_compare": {
+        "fn": t_verify_compare,
+        "description": ("Жёсткий гейт итерации проверки (ui-verify): модельное сравнение реализации с макетом ОДНИМ вызовом. Читает snapshot.json, "
+                        "записанный daiver_screenshot в ту же iterationDir, строит модель страницы, сопоставляет её с макетом, проверяет правила "
+                        "(текст, слоты, размеры, отступы, типографика, цвет, форма), DS-гейт и каскад подавления; пишет impl-model.json, "
+                        "findings.json, defects.json, compare-summary.json. ЧИТАЙ status: clean | defects | hard-gate-fail (matchRate < 0.5: "
+                        "страница — не этот кадр, чини захват: рецепт, адрес, состояние — а не код; дефектов нет) | recapture (снимок не готов или "
+                        "недорисован — перезахвати и повтори). matchRate (сколько макета найдено) и fidelity (доля найденного без блокирующих "
+                        "неправильностей) — ОБЕ: unmatched > 0 и lowMatchRate читай вслух, при низком matchRate fidelity выглядит хорошо только "
+                        "потому, что считается по найденному. Дефекты: стабильный id (не от значений), coverage (сколько находок свёрнуто), "
+                        "lifecycle (new | persisting | regressed; fixed — в ответе списком), rows МАКЕТ|РЕАЛИЗАЦИЯ, designLink — ссылка на узел макета. "
+                        "Блокируют critical и major без noise; minor (deprecated) предупреждает. unverified и dismissals пересказывай: «нечего "
+                        "было сравнивать» не то же, что «чисто». Каждая итерация — своя подпапка verify/ кадра из daiver_verify_state."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "iterationDir": {"type": "string", "description": "папка итерации — та же, куда писал daiver_screenshot (подпапка verify/ кадра)"}},
+            "required": ["track", "iterationDir"], "additionalProperties": False},
     },
     "daiver_code_compare": {
         "fn": t_code_compare,

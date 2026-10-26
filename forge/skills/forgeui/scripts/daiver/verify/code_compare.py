@@ -25,7 +25,6 @@
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from pathlib import Path
@@ -39,6 +38,7 @@ from .. import plan as PL
 from .. import track as TR
 from . import capture as CP
 from . import check as CK
+from . import ids as IDS
 from . import jsx_tree as JT
 from . import match as MT
 from . import tsx_scan as TS
@@ -50,14 +50,11 @@ NON_REACT = (".vue", ".svelte")
 SAMPLES = 5
 
 
+defect_id = IDS.defect_id                 # id дефекта живёт в ids.py (общий с DOM-гейтом); имя оставлено для вызывающих и тестов
+
+
 class CodeCompareError(ValueError):
     """Вызов или входы не годятся — сообщение называет причину."""
-
-
-def defect_id(code: str, design: Optional[str], impl: Optional[str], prop: Optional[str]) -> str:
-    """Стабильный id дефекта: у MISSING implId не входит (один и тот же пробел у DOM- и код-гейта — один дефект)."""
-    parts = [code, design or "", "" if code == "MISSING" else (impl or ""), prop or ""]
-    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:12]
 
 
 def editor_link(template: str, root: Path, file: str, line: int, column: int) -> str:
@@ -156,7 +153,7 @@ def compare(design: Any, model: Dict[str, Any], dom: Optional[Dict[str, Any]] = 
         for f in kept:
             if f["status"] == "unconfirmed":
                 continue
-            did = defect_id(f["code"], f.get("design"), f.get("impl"), f.get("prop"))
+            did = IDS.defect_id(f["code"], f.get("design"), f.get("impl"), f.get("prop"))
             if did in dom_ids:
                 deduped += 1
                 continue

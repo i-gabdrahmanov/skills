@@ -176,7 +176,8 @@ class _State:
         if key in self.seen:
             return
         self.seen.add(key)
-        self.findings.append({"code": code, "layer": LAYER, "severity": "major", "rule": rule, "message": message, **kw})
+        sev = "minor" if code == "DS_DEPRECATED" else "major"           # deprecated — предупреждение: ничего не объясняет и не блокирует
+        self.findings.append({"code": code, "layer": LAYER, "severity": sev, "rule": rule, "message": message, **kw})
 
     def dismiss(self, code: str, reason: str, **kw: Any) -> None:
         key = ("d", code, reason, kw.get("design"), kw.get("file"), kw.get("line"), kw.get("prop"))
@@ -374,10 +375,10 @@ def _rule_tokens(st: _State, bound: List[Tuple[str, str, str, str]], scans: Dict
                 else:
                     tail = f"; переменная проекта {var}" if var else ""
                     st.find("DS_TOKEN_MISSED", where, f"в макете токен {token}, в коде литерал {c['raw']}{tail}", design=nid, file=rel,
-                            line=c["line"], prop=token, expected=token, actual=c["raw"])
+                            line=c["line"], prop=token, slot=slot, expected=token, actual=c["raw"])
             elif _near(c["value"], color) and not c["fallback"]:
                 st.find("DS_OFF_SCALE", where, f"литерал {c['raw']} рядом с токеном {token}, но не равен ему: мимо шкалы", design=nid,
-                        file=rel, line=c["line"], prop=token, expected=color, actual=c["value"])
+                        file=rel, line=c["line"], prop=token, slot=slot, expected=color, actual=c["value"])
 
 
 def run(design: Any, impl: Any, matched: Dict[str, Any], plan: Any, lib: Any, sources: Optional[Dict[str, str]],
