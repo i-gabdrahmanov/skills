@@ -146,7 +146,7 @@ BRANCHES = {
                           "daiver_plan_contract"),
             "ui-build": ("daiver_build_state", "daiver_build_state_set", "daiver_svg_assets"),
             "ui-verify": ("daiver_screenshot", "daiver_code_compare", "daiver_verify_compare", "daiver_verify_state",
-                          "daiver_verify_state_record", "daiver_render_reference", "daiver_visual_diff"),
+                          "daiver_verify_state_record", "daiver_render_reference", "daiver_visual_diff", "daiver_visual_review"),
         },
         "docs_target": "feature-docs",
         "doc_approval": {"ui-spec": "ui-spec"},

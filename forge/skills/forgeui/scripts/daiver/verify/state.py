@@ -14,8 +14,9 @@ INV-C21, C24, C25, C33, G4, G11, F12, F15).
 
 Запись не доверяет словам агента там, где у движка есть факт: статусы гейтов `compare` и `code`, `matchRate`, `fidelity` берутся из
 `compare-summary.json` / `code-summary.json` ПАПКИ ИТЕРАЦИИ, дефекты — из `defects.json` и `code-defects.json` (измеренное выигрывает у кода по общему id);
-агент добавляет только то, чего движок не знает: визуальные гейты (`visualDiff`, `review`, `e2e` — до этапа 5 это `skipped` с причиной), `diffPercent`
-(проценты 0–100: 3.18 ≠ 0.0318), vision-/e2e-пункты (`defects`, зона `vision`). Расхождение слов агента с фактом — в `warnings`, побеждает факт.
+гейты `visualDiff` и `review`, `diffPercent` (проценты 0–100: 3.18 ≠ 0.0318), находки обзора и `reviewReport` — из `visual-diff.json` и `visual-review.json`
+(нет артефакта — `skipped`, как бы ни назвал гейт агент; `fail` у этих двух невозможен: дифф и обзор — сигнал, не вердикт). Агент добавляет только то, чего движок не знает:
+`e2e` (до 5.5 — `skipped` с причиной) и пункты e2e / ручных меток в `defects`. Расхождение слов агента с фактом — в `warnings`, побеждает факт.
 
 Правило clean (§14.9): блокируют только не-noise critical и major из зоны deterministic; vision не блокирует никогда; pre-existing
 (`standing: pre-existing`, scope change — 6.4) не блокирует; регрессия блокирует; hard gate fail и перезахват — не clean; любой другой failed-гейт —
@@ -212,7 +213,8 @@ def _derive(iteration_dir: Path) -> Dict[str, Any]:
     """Факты итерации из артефактов движка: статусы compare / code, числа, дефекты обоих гейтов."""
     cmp_ = _json(iteration_dir / "compare-summary.json")
     code = _json(iteration_dir / "code-summary.json")
-    facts: Dict[str, Any] = {"compare": None, "code": None, "matchRate": None, "fidelity": None, "hardGate": None, "defects": [], "unverified": None}
+    facts: Dict[str, Any] = {"compare": None, "code": None, "matchRate": None, "fidelity": None, "hardGate": None, "defects": [], "unverified": None,
+                             "visualDiff": None, "review": None, "diffPercent": None, "reviewReport": None}
     if cmp_ is None:
         facts["compare"] = {"status": "skipped", "reason": "compare-summary.json нет: daiver_verify_compare в эту папку не вызывался"}
     else:
@@ -238,6 +240,14 @@ def _derive(iteration_dir: Path) -> Dict[str, Any]:
         for d in (_json(iteration_dir / "code-defects.json") or {}).get("defects") or []:
             if isinstance(d, dict) and isinstance(d.get("id"), str) and d["id"] not in have:        # измеренное выигрывает у кода
                 facts["defects"].append(dict(d, source="code", zone=d.get("zone") or "deterministic"))
+    diff = _json(iteration_dir / "visual-diff.json")
+    if diff is not None and isinstance(diff.get("diffPercent"), (int, float)) and not isinstance(diff["diffPercent"], bool):
+        facts["visualDiff"], facts["diffPercent"] = {"status": "pass"}, diff["diffPercent"]
+    rev = _json(iteration_dir / "visual-review.json")
+    if rev is not None and (iteration_dir / "visual-review.md").is_file():
+        facts["review"] = {"status": "pass"}
+        facts["reviewReport"] = {"mode": rev.get("mode"), "nothingFound": rev.get("nothingFound")}
+        facts["visionDefects"] = [dict(d, source="review", zone="vision") for d in rev.get("defects") or [] if isinstance(d, dict) and isinstance(d.get("id"), str)]
     return facts
 
 
@@ -302,6 +312,9 @@ def record(root: Any, track: str, frame: Optional[str], iteration: Any, gates: A
         raise VerifyStateError("diffPercent: проценты 0–100 ровно так, как вернул дифф (3.18, а не 0.0318)")
     if decision is not None and decision not in DECISIONS:
         raise VerifyStateError(f"decision: {' | '.join(DECISIONS)}")
+    for n in ("visualDiff", "review"):
+        if given[n]["status"] == "fail":
+            raise VerifyStateError(f"gates.{n}: fail невозможен — дифф и визуальный обзор сигнал, а не вердикт (pass | skipped | degraded)")
     extras = _extra_defects(defects)
     facts = _derive(iteration_dir)
     warnings: List[str] = []
@@ -312,11 +325,31 @@ def record(root: Any, track: str, frame: Optional[str], iteration: Any, gates: A
         loaded = DEC.load(root, manifest, f["name"])
     except DEC.DecisionsError as e:
         raise VerifyStateError(str(e))
-    merged = facts["defects"] + [dict(d, source=d.get("source") or d["zone"]) for d in extras if d["id"] not in {x["id"] for x in facts["defects"]}]
+    base = facts["defects"] + [d for d in facts.get("visionDefects", []) if d["id"] not in {x["id"] for x in facts["defects"]}]
+    merged = base + [dict(d, source=d.get("source") or d["zone"]) for d in extras if d["id"] not in {x["id"] for x in base}]
     dres = DEC.apply(merged, loaded)
     gate_out: Dict[str, Dict[str, Any]] = {"compare": facts["compare"], "code": facts["code"]}
-    for n in ("visualDiff", "review", "e2e"):
-        gate_out[n] = given[n]
+    for n in ("visualDiff", "review"):
+        if facts[n] is not None:
+            gate_out[n] = facts[n]
+            if given[n]["status"] != "pass":
+                warnings.append(f"gates.{n}: записано «{given[n]['status']}», а артефакты итерации говорят «pass» — записан факт")
+        else:
+            said = given[n].get("reason") or (review_skipped.strip() if n == "review" and isinstance(review_skipped, str) and review_skipped.strip() else None)
+            gate_out[n] = {"status": "skipped", "reason": said or "гейт не исполнялся: артефактов итерации нет"}
+            if given[n]["status"] != "skipped":
+                warnings.append(f"gates.{n}: записано «{given[n]['status']}», а артефактов итерации нет (гейт не вызывался) — записан skipped")
+    gate_out["e2e"] = given["e2e"]
+    if diff_percent is not None and facts["diffPercent"] is None:
+        warnings.append("diffPercent передан, а visual-diff.json в папке итерации нет (daiver_visual_diff не вызывался) — значение отброшено")
+        diff_percent = None
+    elif facts["diffPercent"] is not None:
+        if diff_percent is not None and diff_percent != facts["diffPercent"]:
+            warnings.append(f"diffPercent: передано {diff_percent}, а дифф вернул {facts['diffPercent']} (проценты 0–100) — записан факт")
+        diff_percent = facts["diffPercent"]
+    if facts["reviewReport"] is not None:
+        review_report = dict(facts["reviewReport"], path=_rel(root, iteration_dir / "visual-review.md"))
+        review_skipped = None
     blocking_defects = [d for d in merged if is_blocking(d)]
     blocking = [d["id"] for d in blocking_defects]
     code_blocking = [d for d in blocking_defects if d.get("source") == "code"]
@@ -338,6 +371,8 @@ def record(root: Any, track: str, frame: Optional[str], iteration: Any, gates: A
         rec["reviewReport"] = review_report
     if isinstance(review_skipped, str) and review_skipped.strip():
         rec["reviewSkipped"] = review_skipped.strip()
+    elif gate_out["review"]["status"] == "skipped" and gate_out["review"].get("reason"):
+        rec["reviewSkipped"] = gate_out["review"]["reason"]
     if facts["unverified"]:
         rec["unverified"] = facts["unverified"]
     if decision is not None:

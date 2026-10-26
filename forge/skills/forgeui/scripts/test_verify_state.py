@@ -188,13 +188,26 @@ class RecordValidation(World):
         self.assertIn("gates.e2e", str(cm.exception))
 
     def test_diff_percent_is_a_percent(self):
-        self.fake_iteration(1)
+        d = self.fake_iteration(1)
         for bad in (-1, 101, "3.18"):
             with self.assertRaises(T.ToolError):
                 self.rec(1, diffPercent=bad)
         self.assertEqual(self.state()["history"], [])
+        (d / "visual-diff.json").write_text(json.dumps({"diffPercent": 3.18}), encoding="utf-8")
         self.rec(1, diffPercent=3.18)
         self.assertEqual(self.state()["history"][0]["diffPercent"], 3.18)
+
+    def test_the_diff_percent_comes_from_the_artifact_not_from_the_agent(self):
+        d = self.fake_iteration(1)
+        res = self.rec(1, diffPercent=12.5)
+        self.assertEqual(self.state()["history"][0]["diffPercent"], None)
+        self.assertTrue(any("visual-diff.json" in w for w in res["warnings"]))
+        d2 = self.fake_iteration(2)
+        (d2 / "visual-diff.json").write_text(json.dumps({"diffPercent": 3.18}), encoding="utf-8")
+        res = self.rec(2, diffPercent=0.0318)
+        self.assertEqual(self.state()["history"][1]["diffPercent"], 3.18)
+        self.assertTrue(any("0.0318" in w for w in res["warnings"]))
+        self.assertEqual(res["gates"]["visualDiff"], "pass", "артефакт есть — гейт pass, как бы его ни назвал агент")
 
     def test_iteration_must_have_been_executed_and_not_recorded_twice(self):
         with self.assertRaises(T.ToolError) as cm:
@@ -287,11 +300,16 @@ class CleanRule(World):
         self.check(False, compare=None, label="compare не исполнялся")
 
     def test_any_other_failed_gate_is_not_clean_skipped_e2e_and_review_do_not_matter(self):
-        self.check(False, compare="clean", gates={"visualDiff": "fail"}, label="visualDiff fail")
-        self.check(False, compare="clean", gates={"review": "fail"}, label="review fail")
         self.check(False, compare="clean", gates={"e2e": "fail"}, label="e2e fail")
         self.check(True, compare="clean", gates={"review": "skipped", "e2e": "skipped"}, label="skipped не мешает")
         self.check(True, compare="clean", gates={"visualDiff": "degraded"}, label="degraded не fail")
+
+    def test_diff_and_review_are_signals_a_fail_there_is_refused(self):
+        for gate in ("visualDiff", "review"):
+            self.fake_iteration(1, compare="clean")
+            with self.assertRaises(T.ToolError) as cm:
+                self.rec(1, gates={gate: "fail"})
+            self.assertIn("сигнал, а не вердикт", str(cm.exception))
 
     def test_code_fail_blocks_code_skip_does_not(self):
         self.check(False, compare="clean", code="fail", code_defects=[defect("c1", "critical")], label="code fail")
@@ -471,15 +489,16 @@ class Report(World):
     def test_format_of_a_finished_cycle(self):
         self.fake_iteration(1, compare="defects", defects=[defect("a", "major", location={"file": "src/A.tsx", "line": 12}), defect("m", "minor"),
                                                            defect("n", "major", noise=True)], code="skipped", match=0.93)
+        (self.verify / "iter-1" / "visual-diff.json").write_text(json.dumps({"diffPercent": 3.18}), encoding="utf-8")
         res = self.rec(1, diffPercent=3.18, reviewSkipped="обзора нет")
         self.assertTrue(res["report"].endswith("verify-report.md"))
         self.decide(1, "stop", declined=["a"])
         t = self.text()
         head = t.split("---\n")[1]
         self.assertEqual(head, "track: STOR-100\noutcome: defects-remaining\niterations: 1\ndefectsRemaining: 1\nmode: interactive\n")
-        for needle in ("# Проверка STOR-100", "## frame: main", "### Итерация 1", "сравнение: pass · код-гейт: skipped · пиксельный дифф: skipped · визуальный обзор: skipped · e2e: skipped",
+        for needle in ("# Проверка STOR-100", "## frame: main", "### Итерация 1", "сравнение: pass · код-гейт: skipped · пиксельный дифф: pass · визуальный обзор: skipped · e2e: skipped",
                        "matchRate 0.93", "diff 3.18%", "обзор пропущен: обзора нет", "блокирующих: 1", "решение: stop", "### Итог кадра main",
-                       "не исполнялись или исполнены не полностью: код-гейт — skipped: нет build-state; пиксельный дифф — skipped: гейт не реализован; визуальный обзор — skipped; e2e — skipped",
+                       "не исполнялись или исполнены не полностью: код-гейт — skipped: нет build-state; визуальный обзор — skipped: обзора нет; e2e — skipped",
                        "кто закончил цикл: пользователь остановил цикл на итерации 1 — согласия ui-accept нет",
                        "Нерешённое (последняя запись, включая minor, noise и vision):", "`a` **major** SIZE", "src/A.tsx:12", "_[noise]_", "`m` **minor**"):
             self.assertIn(needle, t, needle)

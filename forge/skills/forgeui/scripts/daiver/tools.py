@@ -9,7 +9,7 @@ daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_s
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
 daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report,
 daiver_plan_write, daiver_plan_contract, daiver_build_state, daiver_build_state_set, daiver_color_tokens,
-daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare, daiver_verify_state, daiver_verify_state_record, daiver_verify_decide, daiver_render_reference, daiver_visual_diff.
+daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare, daiver_verify_state, daiver_verify_state_record, daiver_verify_decide, daiver_render_reference, daiver_visual_diff, daiver_visual_review.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -46,6 +46,7 @@ from .verify import reference as VREF
 from .verify import state as VST
 from .verify import verify_compare as VCMP
 from .verify import visual_diff as VDIFF
+from .verify import visual_review as VREV
 
 HOOKS = Path(__file__).resolve().parents[4] / "hooks"
 
@@ -458,6 +459,13 @@ def t_visual_diff(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         return VDIFF.run(root, TR.check_track_name(args["track"]), _frame_arg(args), _path_inside(root, args["iterationDir"]), args.get("against"))
     except (TR.TrackError, VDIFF.VisualDiffError) as e:
+        raise ToolError(str(e))
+
+
+def t_visual_review(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return VREV.run(root, TR.check_track_name(args["track"]), _frame_arg(args), _path_inside(root, args["iterationDir"]), args.get("review"), args.get("prepare"))
+    except (TR.TrackError, VREV.ReviewError, VDIFF.VisualDiffError) as e:
         raise ToolError(str(e))
 
 
@@ -915,6 +923,24 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "track": {"type": "string", "description": "ключ стори (имя трека)"},
             "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
             "iterationDir": {"type": "string", "description": "папка итерации — подпапка verify/ кадра"}},
+            "required": ["track", "iterationDir"], "additionalProperties": False},
+    },
+    "daiver_visual_review": {
+        "fn": t_visual_review,
+        "description": ("Визуальный обзор итерации — рукопожатие ДВУХ вызовов; картинки открываешь ТЫ сам (ничего не уходит наружу, vision-бэкенда у движка нет). ПЕРВЫЙ вызов без review "
+                        "ничего не пишет: вернёт images (картинка дизайна ПЕРВОЙ, реализация ВТОРОЙ — открой обе по порядку), prompt, reportPath, priorFixes и, для длинного экрана, slices "
+                        "(парные полосы). Есть доказанные дефекты compare — вопрос сужается до ОСТАТКА (иконки, перекрытия и обрезка, перенос текста, порядок, сбои рендера): значения "
+                        "(px, %, HEX, шрифт) в ответе ЗАПРЕЩЕНЫ, «ничего не нашёл» — законный ответ; доказанных нет — полный обзор по семи осям с числами и без «слегка/примерно». "
+                        "ВТОРОЙ вызов с review={opened: [пути из images как есть], prior?: [{n, verdict: FIXED|NOT FIXED|REGRESSED}], findings: [{title, now, shouldBe, fix, check}] | nothingFound: true} "
+                        "проверяется по форме и пишет visual-review.md (это priorFixes следующей итерации; руками файл не пишется). Не смог открыть картинки, модель их не принимает или "
+                        "verify.vision: off — review={skipped: «причина»}: гейт skipped, ничего не описывай по имени файла. Находки — НЕПОДТВЕРЖДЁННЫЕ (zone vision): показываются человеку, "
+                        "чистоту не блокируют, автономно не чинятся. prepare: jpeg — JPEG-копии картинок и полос через canvas, если PNG не прочёлся."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "iterationDir": {"type": "string", "description": "папка итерации с actual.png (подпапка verify/ кадра)"},
+            "review": {"type": "object", "description": "ответ обзора: {opened, prior?, findings | nothingFound} либо {skipped: «причина»}; без него — первый вызов"},
+            "prepare": {"type": "string", "enum": ["jpeg"], "description": "только в первом вызове: JPEG-копии картинок и полос в review-images/"}},
             "required": ["track", "iterationDir"], "additionalProperties": False},
     },
     "daiver_visual_diff": {
