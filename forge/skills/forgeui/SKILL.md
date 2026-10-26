@@ -318,8 +318,8 @@ prompt:
 
 **Ход итерации (субагент).** 0) `daiver_capabilities`: `ready: false` (`blocked: no-browser`) — цикл не стартует, скажи `reason` и `supply` дословно; браузер не
 скачивай, не ставь (ни `npx playwright install`, ни brew/apt) и не запускай сам; `warnings` перескажи. 1) `daiver_verify_state` — номер, `iterationDir`, `priorReview`,
-`goalImage`, `implementation`, `declinedSoFar`; `unrecordedIterations` — СНАЧАЛА запиши их. Нет goal image на 1-й итерации или адреса страницы — спроси человека (`needs_input`),
-не выдумывай. 2) `daiver_screenshot` в `iterationDir`. 3) `daiver_verify_compare`. 4) `daiver_code_compare`. 5) Визуальный дифф, обзор и e2e в движке пока нет — в `gates`
+`goalImage`, `implementation`, `declinedSoFar`; `unrecordedIterations` — СНАЧАЛА запиши их. Нет goal image, адреса страницы или рецепта открытия (`implementation.need`) — спроси человека ОДИН раз (`needs_input`) и запиши ответ `daiver_track_manifest`, не
+выдумывай; dev-сервер сам не запускай; `blocked` — останов, назови причину; рецепт, clip и viewport закреплены (`pinned`) и одинаковы во всех итерациях. 2) `daiver_screenshot` в `iterationDir`. 3) `daiver_verify_compare`. 4) `daiver_code_compare`. 5) Визуальный дифф, обзор и e2e в движке пока нет — в `gates`
 они `skipped` с причиной «гейт не реализован». 6) `daiver_verify_state_record(iteration, gates{compare, code, visualDiff, review, e2e})` СРАЗУ, до слов человеку: статусы
 compare/code и дефекты движок берёт из артефактов итерации сам. 7) Верни JSON: `{"step_id":"ui-verify","status":"completed|needs_input|failed","iteration":N,"clean":bool,
 "report":"<путь verify-report.md>","blocking":["<id>"],"pending_questions":[…]}`.

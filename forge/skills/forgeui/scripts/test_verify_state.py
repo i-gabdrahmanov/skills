@@ -122,7 +122,8 @@ class Numbering(World):
         self.assertIsNone(a["goalImage"])
         self.assertTrue(any("goal image" in w for w in a["warnings"]))
         self.assertIsNone(a["implementation"]["url"])
-        self.assertIn("адреса страницы", a["implementation"]["need"])
+        self.assertIn("адреса страницы", " ".join(a["implementation"]["need"]))
+        self.assertEqual(len(a["implementation"]["ask"]), 1, "человека спрашивают ОДИН раз и об одном")
         self.assertEqual((a["mode"], a["maxVerifyIterations"]), ("interactive", 3))
 
     def test_executed_but_unrecorded_is_named_and_the_number_does_not_move(self):

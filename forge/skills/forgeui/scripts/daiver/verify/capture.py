@@ -27,6 +27,7 @@ from .. import config as CFG
 from .. import recipe as RC
 from .. import track as TR
 from ..browser import cdp as CD
+from . import implementation as IMPL
 from . import readiness as RD
 
 TARGETS = ("implementation", "reference")
@@ -345,6 +346,11 @@ def run(root: Path, track: str, frame: Optional[str], url: str, iteration_dir: P
                            f"повтором не лечится — одна папка итерации не получает два вердикта. Подними waitMs либо назови "
                            f"загрузчик через waitForGone / waitForSelector")
 
+    if target == "implementation" and _inside(iteration_dir.resolve(), paths["verify"].resolve()):
+        drift = IMPL.pin_problems(IMPL.read_pin(paths["verifyState"]), recipe, {"width": viewport[0], "height": viewport[1]})
+        if drift:
+            raise CaptureError("захват отличается от закреплённого прошлыми итерациями (рецепт, clip и viewport одинаковы во ВСЕХ итерациях, INV-C23): "
+                               + "; ".join(drift) + ". Верни прежние значения — иначе дефекты разных итераций несравнимы")
     design: Optional[Dict[str, Any]] = None
     notes: List[str] = []
     if paths["canonical"].is_file():

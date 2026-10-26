@@ -22,6 +22,9 @@ INV-C21, C24, C25, C33, G4, G11, F12, F15).
 не clean; skipped e2e/review не мешают; code fail блокирует (через блокирующие дефекты кода), skip — нет. Решения человека (`verify-decisions.json`)
 накладываются до расчёта: false_positive → noise (не блокирует), skip → declined (блокирует, но не переспрашивается).
 
+Пин захвата (4.9): первая записанная итерация закрепляет в `verify-state.json` рецепт открытия (actions, clipSelector…) и viewport из метаданных
+снимка; `daiver_screenshot` отказывает на отличающиеся (`capture.run` → `implementation.pin_problems`), запись предупреждает, если отличие всё же просочилось.
+
 Не проверено данными (боевых прогонов нет): порог «не лучше прошлой» для stall (число блокирующих; регресс — тоже stall); формат `reviewReport`
 (его закрепит 5.2); как слабая модель читает `unrecordedIterations`; `implementation` — только то, что даёт манифест (URL и dev-сервер — 4.9).
 """
@@ -38,6 +41,7 @@ from .. import svg_assets as SA
 from .. import track as TR
 from . import capture as CP
 from . import decisions as DEC
+from . import implementation as IMPL
 from . import verify_report as VR
 
 SCHEMA = 1
@@ -169,17 +173,23 @@ def open_iteration(root: Any, track: str, frame: Optional[str] = None) -> Dict[s
     except DEC.DecisionsError as e:
         decided = {"decisions": {}, "problems": [str(e)], "elsewhere": [], "sources": []}
     declined = sorted({i for h in history for i in (h.get("declined") or [])} | {i for i, e in decided["decisions"].items() if e["verdict"] == "skip"})
-    impl_url = TR.implementation_url(manifest, f["name"])
-    impl = {"url": impl_url, "open": f.get("open"), "devCommand": (manifest.get("implementation") or {}).get("devCommand")}
-    if impl_url is None and f.get("role") != "dialog":
-        impl["need"] = "адреса страницы реализации нет: спроси у пользователя и запиши daiver_track_manifest(implementation.url)"
+    impl = IMPL.resolve(manifest, f["name"], wf.get("mode", "interactive"))
+    pin = state.get("capture") if isinstance(state.get("capture"), dict) else None
     out: Dict[str, Any] = {"track": track, "frame": f["name"], "iteration": number, "iterationDir": _rel(root, iteration_dir),
                            "unrecordedIterations": unrecorded, "priorReview": (last or {}).get("reviewReport"),
                            "goalImage": goal, "missingArt": missing, "warnStalling": warn, "history": [compact(h) for h in history],
-                           "implementation": impl, "mode": wf.get("mode", "interactive"),
+                           "implementation": impl, "pinned": pin, "mode": wf.get("mode", "interactive"),
                            "maxVerifyIterations": (wf.get("autonomous") or {}).get("maxVerifyIterations"),
                            "declinedSoFar": declined, "decisions": {"sources": decided["sources"], "problems": decided["problems"]},
                            "nextStep": next_step}
+    if impl.get("blocked"):
+        out["blocked"] = impl["blocked"]
+        out["nextStep"] = impl["nextStep"]
+    elif impl.get("need"):
+        out["nextStep"] = "СНАЧАЛА недостающее для захвата: " + " ".join(impl["need"]) + " — " + out["nextStep"]
+    if pin:
+        out["nextStep"] += ("; рецепт, clipSelector и viewport уже закреплены прошлыми итерациями (pinned) — используй те же, "
+                            "иначе daiver_screenshot откажет")
     if warnings:
         out["warnings"] = warnings
     return out
@@ -336,6 +346,14 @@ def record(root: Any, track: str, frame: Optional[str], iteration: Any, gates: A
         ids = _ids(k, v, {d["id"] for d in merged})
         if ids:
             rec[k] = ids
+    got_pin = IMPL.pin_of((_json(iteration_dir / "snapshot.json") or {}).get("capture"))
+    if got_pin is not None:
+        if "capture" not in state:
+            state["capture"] = got_pin                          # первая записанная итерация пинит рецепт и viewport на весь цикл
+        else:
+            drift = IMPL.pin_problems(state["capture"], got_pin["recipe"], got_pin["viewport"])
+            if drift:
+                warnings.append("захват этой итерации отличается от закреплённого прошлыми (INV-C23): " + "; ".join(drift))
     history.append(rec)
     _write(paths["verifyState"], state)
     report_path = VR.write(root, manifest)
