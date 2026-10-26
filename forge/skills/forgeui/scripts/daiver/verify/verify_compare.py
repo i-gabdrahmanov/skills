@@ -17,7 +17,7 @@
 `noise: true` и `false_positive` из `verify-decisions.json`, 4.8) помечается, остаётся в дефектах и выходит из blocking и из знаменателя fidelity.
 
 Не проверено данными (боевых прогонов нет): градация severity (critical/major — выбор 4.4); подпись вида для свёртки на реальных таблицах и
-списках; формат `decisions.json` (его закрепит 5.4); fidelity на больших экранах; доля `recapture` на реальных страницах.
+списках; форма `verify-decisions.json` на боевых итерациях (схема закреплена в 5.4); fidelity на больших экранах; доля `recapture` на реальных страницах.
 """
 from __future__ import annotations
 

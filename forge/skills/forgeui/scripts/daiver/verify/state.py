@@ -53,6 +53,7 @@ EXECUTED_MARKERS = ("snapshot.json", "compare-summary.json", "code-summary.json"
 BLOCKING_SEVERITY = ("critical", "major")
 KEEP = ("id", "code", "layer", "severity", "zone", "element", "message", "coverage", "lifecycle", "noise", "declined", "standing", "source",
         "decision", "designLink", "location", "rows", "rule", "prop", "design")
+MARK_KEEP = ("reported", "problem", "pin", "designPin", "side", "impl")     # ручная метка человека несёт в историю всю постановку и рамку (INV-C34)
 _ITER = re.compile(r"^iter-(\d+)$")
 
 
@@ -251,6 +252,12 @@ def _derive(iteration_dir: Path) -> Dict[str, Any]:
     return facts
 
 
+def reported_marks(f: Dict[str, Any], paths: Dict[str, Path], iteration_dir: Path, loaded: Dict[str, Any], existing: set) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Ручные метки человека (`verify-decisions.json → marks`) как пункты итерации и поимённые отказы — одним кодом для записи итерации и для отчёта."""
+    design = paths["raster"] if f.get("raster") and paths["raster"].is_file() else None
+    return DEC.reported(loaded, paths["verify"], iteration_dir, design, existing)
+
+
 def _extra_defects(raw: Any) -> List[Dict[str, Any]]:
     if raw is None:
         return []
@@ -327,6 +334,10 @@ def record(root: Any, track: str, frame: Optional[str], iteration: Any, gates: A
         raise VerifyStateError(str(e))
     base = facts["defects"] + [d for d in facts.get("visionDefects", []) if d["id"] not in {x["id"] for x in facts["defects"]}]
     merged = base + [dict(d, source=d.get("source") or d["zone"]) for d in extras if d["id"] not in {x["id"] for x in base}]
+    marks, rejected_marks = reported_marks(f, paths, iteration_dir, loaded, {d["id"] for d in merged})
+    merged = merged + marks
+    if rejected_marks:
+        warnings.extend(rejected_marks)
     dres = DEC.apply(merged, loaded)
     gate_out: Dict[str, Dict[str, Any]] = {"compare": facts["compare"], "code": facts["code"]}
     for n in ("visualDiff", "review"):
@@ -366,7 +377,7 @@ def record(root: Any, track: str, frame: Optional[str], iteration: Any, gates: A
     prog = _progress(prev, blocking, merged)
     rec: Dict[str, Any] = {"iteration": iteration, "dir": _rel(root, iteration_dir), "gates": gate_out, "matchRate": facts["matchRate"],
                            "fidelity": facts["fidelity"], "diffPercent": diff_percent, "clean": clean, "blocking": blocking, "progress": prog,
-                           "defects": [{k: v for k, v in d.items() if k in KEEP} for d in merged]}
+                           "defects": [{k: v for k, v in d.items() if k in KEEP or (d.get("reported") and k in MARK_KEEP)} for d in merged]}
     if review_report is not None:
         rec["reviewReport"] = review_report
     if isinstance(review_skipped, str) and review_skipped.strip():
@@ -392,8 +403,11 @@ def record(root: Any, track: str, frame: Optional[str], iteration: Any, gates: A
     history.append(rec)
     _write(paths["verifyState"], state)
     report_path = VR.write(root, manifest)
+    answered = {"fix": dres["fix"], "skip": dres["declined"], "false_positive": dres["noise"], "reopened": dres["reopened"]}
     out: Dict[str, Any] = {"iteration": iteration, "clean": clean, "blocking": len(blocking), "blockingIds": blocking, "progress": prog,
-                           "gates": {k: v["status"] for k, v in gate_out.items()}, "decisions": {k: v for k, v in dres.items() if v},
+                           "gates": {k: v["status"] for k, v in gate_out.items()},
+                           "decisions": {"answered": {k: v for k, v in answered.items() if v}, "reported": [m["id"] for m in marks], "answeredElsewhere": loaded["elsewhere"],
+                                         "unknown": dres["unknown"]},
                            "report": _rel(root, report_path), "stateRecorded": True}
     if warnings:
         out["warnings"] = warnings

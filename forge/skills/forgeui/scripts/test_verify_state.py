@@ -408,7 +408,7 @@ class Decisions(World):
         self.assertTrue(d["b"]["declined"])
         self.assertEqual(d["c"]["decision"], {"verdict": "fix", "note": "поправить дословно: отступ 16"})
         self.assertEqual(sorted(res["blockingIds"]), ["b", "c"], "declined остаётся блокирующим: цикл заканчивает человек")
-        self.assertEqual(res["decisions"], {"noise": ["a"], "declined": ["b"], "fix": ["c"]})
+        self.assertEqual(res["decisions"], {"answered": {"fix": ["c"], "skip": ["b"], "false_positive": ["a"]}, "reported": [], "answeredElsewhere": [], "unknown": []})
 
     def test_a_frozen_snapshot_reopens_when_the_values_moved_but_not_when_only_the_text_changed(self):
         base = defect("a")
@@ -420,7 +420,7 @@ class Decisions(World):
         moved = defect("a", rows=[{"МАКЕТ": "10", "РЕАЛИЗАЦИЯ": "30", "count": 1}])
         self.fake_iteration(2, defects=[moved])
         res = self.rec(2)
-        self.assertEqual((res["blockingIds"], res["decisions"]["reopened"]), (["a"], ["a"]))
+        self.assertEqual((res["blockingIds"], res["decisions"]["answered"]["reopened"]), (["a"], ["a"]))
         d = self.state()["history"][1]["defects"][0]
         self.assertEqual(d["decision"]["status"], "reopened")
         self.assertIn("уехали", d["decision"]["reopenedNote"])

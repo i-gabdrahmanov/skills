@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import html
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -35,6 +36,7 @@ from . import decisions as DEC
 from . import state as ST
 
 FILE = "report.html"
+ANNOTATE_JS = (Path(__file__).resolve().parents[1] / "assets" / "report-annotate.js").read_text(encoding="utf-8")
 CODES_RU = {"MISSING": "нет на странице", "EXTRA": "лишнее на странице", "ORDER": "нарушен порядок", "TEXT": "другой текст", "SLOT_MISSING": "слот не нарисован",
             "SLOT_TEXT": "другой текст слота", "SLOT_TYPOGRAPHY": "типографика слота", "SLOT_COLOR": "цвет слота", "INVISIBLE": "невидимая поверхность",
             "SPACING": "отступы", "SIZE": "размер", "POSITION": "позиция", "OVERFLOW": "переполнение", "TYPOGRAPHY": "типографика", "COLOR": "цвет", "SHAPE": "форма",
@@ -115,6 +117,33 @@ def _frames_bar(root: Path, manifest: Dict[str, Any], current: str) -> List[Dict
     return out
 
 
+MAX_BOXES = 4000
+
+
+def _boxes(root: Any) -> List[List[Any]]:
+    """Боксы узлов снимка страницы для «Пометить проблему»: [[id, x, y, w, h]] в координатах страницы, обход в ширину, не больше MAX_BOXES (без детей за пределом)."""
+    out: List[List[Any]] = []
+    queue = [root] if isinstance(root, dict) else []
+    k = 0
+    while k < len(queue) and len(out) < MAX_BOXES:
+        n = queue[k]
+        k += 1
+        b = n.get("box")
+        if isinstance(b, dict) and all(isinstance(b.get(c), (int, float)) and not isinstance(b.get(c), bool) for c in ("x", "y", "w", "h")) and b["w"] > 0 and b["h"] > 0 \
+                and isinstance(n.get("id"), str):
+            out.append([n["id"], b["x"], b["y"], b["w"], b["h"]])
+        queue.extend(c for c in (n.get("children") or []) if isinstance(c, dict))
+    return out
+
+
+def _next_mark_index(iteration: str, existing: List[str]) -> Tuple[str, int]:
+    """Префикс id меток этой итерации (`user-<N>-`) и следующий свободный номер: старые метки сохраняют свои id."""
+    m = re.search(r"(\d+)$", iteration)
+    prefix = f"user-{m.group(1) if m else iteration}-"
+    used = [int(i[len(prefix):]) for i in existing if i.startswith(prefix) and i[len(prefix):].isdigit()]
+    return prefix, (max(used) if used else 0) + 1
+
+
 def collect(root: Any, track: str, frame: Optional[str], iteration_dir: Path) -> Dict[str, Any]:
     """Всё, что показывает отчёт, — данными (рендер — чистая функция от них)."""
     root = Path(root).resolve()
@@ -134,6 +163,8 @@ def collect(root: Any, track: str, frame: Optional[str], iteration_dir: Path) ->
         loaded = DEC.load(root, manifest, f["name"])
     except DEC.DecisionsError as e:
         raise ReportError(str(e))
+    marks, rejected_marks = ST.reported_marks(f, paths, iteration_dir, loaded, {d["id"] for d in defects})
+    defects = defects + marks
     dres = DEC.apply(defects, loaded)
     ground = "goal" if (f.get("raster") and paths["raster"].is_file()) else ("reference" if (iteration_dir / "reference.png").is_file() else None)
     design_path = paths["raster"] if ground == "goal" else (iteration_dir / "reference.png" if ground else None)
@@ -157,6 +188,7 @@ def collect(root: Any, track: str, frame: Optional[str], iteration_dir: Path) ->
     review = _json(iteration_dir / "visual-review.json")
     diff = _json(iteration_dir / "visual-diff.json")
     return {"track": track, "frame": f["name"], "iteration": iteration_dir.name, "summary": summary, "defects": defects, "decisions": loaded, "decisionResult": dres,
+            "marks": marks, "rejectedMarks": rejected_marks, "boxes": _boxes(snap.get("root")), "targets": {label: path.relative_to(root).as_posix() for label, path in DEC.paths(root, manifest, f["name"])},
             "ground": ground, "design": _uri(design_path) if design_path else None, "actual": _uri(iteration_dir / "actual.png"),
             "diffImage": _uri(iteration_dir / "diff.png"), "diff": diff, "review": review, "clip": (float(clip.get("x", 0) or 0), float(clip.get("y", 0) or 0))
             if isinstance(clip, dict) else (0.0, 0.0), "rootSize": root_size, "recorded": recorded, "frames": _frames_bar(root, manifest, f["name"]),
@@ -181,7 +213,13 @@ header,main{max-width:1280px;margin:0 auto;padding:16px}h1{font-size:20px;margin
 .sev-critical{color:var(--crit);font-weight:600}.sev-major{color:var(--maj);font-weight:600}.sev-minor{color:var(--min)}
 table{border-collapse:collapse;margin:6px 0}th,td{border:1px solid var(--line);padding:3px 10px;text-align:left}th{background:var(--bg);color:var(--mut);font-weight:600}
 .note{color:var(--mut);font-size:12px}.tag{font-size:11px;border:1px solid var(--line);border-radius:4px;padding:0 5px;color:var(--mut)}
-.gates td:first-child{color:var(--mut)}code{font:12px ui-monospace,Menlo,monospace}a{color:var(--acc)}"""
+.gates td:first-child{color:var(--mut)}code{font:12px ui-monospace,Menlo,monospace}a{color:var(--acc)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0}.bar input,#mark-form textarea,.dnote{font:inherit;border:1px solid var(--line);border-radius:6px;padding:3px 8px;background:var(--bg);color:var(--fg)}
+button.vb,#mark-toggle,#mark-form button,#export-dl{font:inherit;border:1px solid var(--line);border-radius:6px;padding:3px 10px;background:var(--card);color:var(--fg);cursor:pointer}
+button.vb.on,#mark-toggle.on{background:var(--acc);color:#fff;border-color:var(--acc)}.decide{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center}.dnote{flex:1;min-width:140px}
+body.marking .shot[data-side]{cursor:crosshair;user-select:none;touch-action:none}.mark-draft{position:absolute;border:2px dashed var(--acc);background:rgba(58,91,217,.12);pointer-events:none}
+.pin.user{border-color:var(--acc)}.pin.user b{background:var(--acc)}.defect.removed{opacity:.5}#mark-form{border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin:8px 0;background:var(--card)}
+#mark-form textarea{width:100%;min-height:56px;margin:6px 0}#export-json{width:100%;min-height:120px;font:12px ui-monospace,Menlo,monospace}"""
 
 JS = """(function(){var chips=document.querySelectorAll('[data-filter]'),cards=document.querySelectorAll('.defect'),active={};
 function apply(){var any=Object.keys(active).length;cards.forEach(function(c){c.hidden=any&&!active[c.dataset.code]});
@@ -236,6 +274,10 @@ def render(data: Dict[str, Any], date: Optional[str] = None) -> str:
         f'<span class="chip static{" cur" if f["current"] else ""}">{_e(f["name"])} — {_e(f["state"])}</span>' for f in data["frames"]) + "</div></header><main>")
     if summary.get("nextStep"):
         out.append(f'<p class="note">{_e(summary["nextStep"])}</p>')
+    out.append('<div class="bar"><label>Кто решает <input id="reviewer" type="text" placeholder="имя"></label>'
+               '<button id="mark-toggle" type="button">Пометить проблему</button><span id="mark-status" class="note"></span></div>'
+               '<div id="mark-form" hidden><div id="mark-what" class="note"></div><textarea id="mark-note" placeholder="Что не так (постановка дословно уйдёт в чинимое)"></textarea>'
+               '<button id="mark-add" type="button">Добавить метку</button> <button id="mark-cancel" type="button">Отмена</button></div>')
     # картинки с пинами
     design, actual = data["design"], data["actual"]
     out.append('<section class="panes">')
@@ -256,11 +298,11 @@ def render(data: Dict[str, Any], date: Optional[str] = None) -> str:
             zones.append(f'<div class="zone{" ex" if z.get("explainedBy") else ""}" style="{pin_style(z, (0, 0), actual[1]) or ""}"></div>')
     label = {"goal": "Макет (картинка дизайна)", "reference": "Макет (эталонный рендер — реконструкция)"}.get(data["ground"], "Макет")
     if design:
-        out.append(f'<div class="pane"><h3>{_e(label)}</h3><div class="shot"><img alt="макет" src="{design[0]}">{"".join(dpins)}</div>'
+        out.append(f'<div class="pane"><h3>{_e(label)}</h3><div class="shot" data-side="design"><img alt="макет" src="{design[0]}">{"".join(dpins)}</div>'
                    + ("" if dpins or not d_list else '<p class="note">пины макета не показаны: у корня кадра нет числового размера</p>') + "</div>")
     else:
         out.append('<div class="pane"><h3>Макет</h3><p class="note">картинки дизайна у кадра нет, эталонный рендер не строился (daiver_render_reference)</p></div>')
-    out.append(f'<div class="pane"><h3>Реализация</h3><div class="shot"><img alt="реализация" src="{actual[0]}">{"".join(apins)}{"".join(zones)}</div></div></section>')
+    out.append(f'<div class="pane"><h3>Реализация</h3><div class="shot" data-side="impl"><img alt="реализация" src="{actual[0]}">{"".join(apins)}{"".join(zones)}</div></div></section>')
     if data["diffImage"]:
         z = data["diff"] or {}
         out.append(f'<h2>Дифф</h2><div class="pane"><div class="shot"><img alt="дифф" src="{data["diffImage"][0]}"></div><p class="note">красное — расхождение, жёлтое — сглаживание; '
@@ -288,7 +330,9 @@ def render(data: Dict[str, Any], date: Optional[str] = None) -> str:
             tags.append('<span class="tag">не подтверждено (обзор)</span>')
         if d.get("coverage", 1) > 1:
             tags.append(f'<span class="tag">×{_e(d["coverage"])}</span>')
-        if d.get("source"):
+        if d.get("reported"):
+            tags.append('<span class="tag">метка человека</span>')
+        elif d.get("source"):
             tags.append(f'<span class="tag">{_e(d["source"])}</span>')
         body = [f'<div class="defect" data-n="{n}" data-id="{_e(d["id"])}" data-code="{_e(d["code"])}"><div class="head"><span class="num">{n}</span>'
                 f'<b>{_e(d.get("element") or d.get("prop") or d["code"])}</b>{" ".join(tags)}</div>']
@@ -320,10 +364,22 @@ def render(data: Dict[str, Any], date: Optional[str] = None) -> str:
         out.append("<h2>Визуальный обзор</h2>")
         out.append(f'<p class="note">режим: {_e(rev.get("mode"))}; находки НЕПОДТВЕРЖДЁННЫЕ — они в списке выше с пометкой и чистоту не блокируют.'
                    + (" Ничего не найдено." if rev.get("nothingFound") else "") + "</p>")
+    out.append('<h2>Мои метки</h2><div id="my-marks"><p class="note">Новые метки появятся здесь; ранее сохранённые — среди дефектов с пометкой «метка человека».</p></div>')
+    tg = data["targets"]
+    out.append('<h2>Решения</h2><div class="note">Кнопки на карточках дефектов и метки пишутся в файл, который кладёшь ты, а не агент: <code>' + _e(tg.get("трека", DEC.FILE)) + '</code> (на весь трек) '
+               'или <code>' + _e(tg.get("кадра", DEC.FILE)) + '</code> (только этот кадр); затем снова <code>daiver_verify_report</code> или запись итерации.</div>'
+               '<div class="bar"><button id="export-dl" type="button">Скачать verify-decisions.json</button><span id="export-count" class="note"></span></div>'
+               '<textarea id="export-json" readonly></textarea>')
     seeded = {k: {kk: vv for kk, vv in v.items() if kk in ("verdict", "note", "reviewer", "decidedAt")} for k, v in data["decisions"]["decisions"].items()}
     out.append(f'<script type="application/json" id="seeded-decisions">{script_json(seeded)}</script>')
-    out.append(f'<script type="application/json" id="report-data">{script_json({"track": data["track"], "frame": data["frame"], "iteration": data["iteration"], "defects": [d["id"] for d in d_list]})}</script>')
-    out.append(f"<script>{JS}</script></main></body></html>")
+    prefix, nxt = _next_mark_index(data["iteration"], list(data["decisions"]["marks"]))
+    rs_ = data["rootSize"]
+    report_data = {"track": data["track"], "frame": data["frame"], "iteration": data["iteration"], "defects": [d["id"] for d in d_list],
+                   "snapshots": {d["id"]: DEC.snapshot_of(d) for d in d_list}, "decisionsFile": data["decisions"]["decisions"], "marksFile": data["decisions"]["marks"],
+                   "foreign": data["decisions"]["foreign"], "markPrefix": prefix, "nextMark": nxt, "clip": list(data["clip"]), "boxes": data["boxes"],
+                   "rootSize": {k: rs_.get(k) for k in ("x", "y", "w", "h")}, "images": {"impl": actual[1] if actual else None, "design": design[1] if design else None}}
+    out.append(f'<script type="application/json" id="report-data">{script_json(report_data)}</script>')
+    out.append(f"<script>{JS}</script><script>{ANNOTATE_JS}</script></main></body></html>")
     return "".join(out)
 
 
@@ -345,6 +401,10 @@ def run(root: Any, track: str, frame: Optional[str], iteration_dir: Path, date: 
                            "nextStep": f"ПУТЬ ОТЧЁТА — {path} — сообщи пользователю ВСЕГДА, до любых слов о результатах; он решает по картинкам, а не по твоему пересказу"}
     if not data["recorded"]:
         out["nextStep"] = "итерация НЕ записана (stateRecorded: false): сначала daiver_verify_state_record, потом снова отчёт. " + out["nextStep"]
+    dr = data["decisionResult"]
+    answered = {k: v for k, v in {"fix": dr["fix"], "skip": dr["declined"], "false_positive": dr["noise"], "reopened": dr["reopened"]}.items() if v}
+    out["decisions"] = {"answered": answered, "reported": [m["id"] for m in data["marks"]], "answeredElsewhere": data["decisions"]["elsewhere"],
+                        "unknown": dr["unknown"], "rejectedMarks": data["rejectedMarks"]}
     if data["decisions"]["problems"]:
         out["decisionProblems"] = data["decisions"]["problems"]
     return out
