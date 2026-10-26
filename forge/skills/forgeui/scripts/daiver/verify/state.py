@@ -15,8 +15,8 @@ INV-C21, C24, C25, C33, G4, G11, F12, F15).
 Запись не доверяет словам агента там, где у движка есть факт: статусы гейтов `compare` и `code`, `matchRate`, `fidelity` берутся из
 `compare-summary.json` / `code-summary.json` ПАПКИ ИТЕРАЦИИ, дефекты — из `defects.json` и `code-defects.json` (измеренное выигрывает у кода по общему id);
 гейты `visualDiff` и `review`, `diffPercent` (проценты 0–100: 3.18 ≠ 0.0318), находки обзора и `reviewReport` — из `visual-diff.json` и `visual-review.json`
-(нет артефакта — `skipped`, как бы ни назвал гейт агент; `fail` у этих двух невозможен: дифф и обзор — сигнал, не вердикт). Агент добавляет только то, чего движок не знает:
-`e2e` (до 5.5 — `skipped` с причиной) и пункты e2e / ручных меток в `defects`. Расхождение слов агента с фактом — в `warnings`, побеждает факт.
+(нет артефакта — `skipped`, как бы ни назвал гейт агент; `fail` у этих двух невозможен: дифф и обзор — сигнал, не вердикт); гейт `e2e` и его падения — из `e2e-summary.json` /
+`e2e-defects.json` (прогон `daiver_e2e_run`, 5.5; нет прогона — `skipped`, даже если агент записал `pass`). Агент добавляет только то, чего движок не знает: свои пункты vision / e2e в `defects`. Расхождение слов агента с фактом — в `warnings`, побеждает факт.
 
 Правило clean (§14.9): блокируют только не-noise critical и major из зоны deterministic; vision не блокирует никогда; pre-existing
 (`standing: pre-existing`, scope change — 6.4) не блокирует; регрессия блокирует; hard gate fail и перезахват — не clean; любой другой failed-гейт —
@@ -215,7 +215,7 @@ def _derive(iteration_dir: Path) -> Dict[str, Any]:
     cmp_ = _json(iteration_dir / "compare-summary.json")
     code = _json(iteration_dir / "code-summary.json")
     facts: Dict[str, Any] = {"compare": None, "code": None, "matchRate": None, "fidelity": None, "hardGate": None, "defects": [], "unverified": None,
-                             "visualDiff": None, "review": None, "diffPercent": None, "reviewReport": None}
+                             "visualDiff": None, "review": None, "diffPercent": None, "reviewReport": None, "e2e": None}
     if cmp_ is None:
         facts["compare"] = {"status": "skipped", "reason": "compare-summary.json нет: daiver_verify_compare в эту папку не вызывался"}
     else:
@@ -244,6 +244,13 @@ def _derive(iteration_dir: Path) -> Dict[str, Any]:
     diff = _json(iteration_dir / "visual-diff.json")
     if diff is not None and isinstance(diff.get("diffPercent"), (int, float)) and not isinstance(diff["diffPercent"], bool):
         facts["visualDiff"], facts["diffPercent"] = {"status": "pass"}, diff["diffPercent"]
+    e2e = _json(iteration_dir / "e2e-summary.json")
+    if e2e is not None and e2e.get("status") in GATE_STATUS:
+        facts["e2e"] = {"status": e2e["status"], **({"reason": e2e["reason"]} if e2e.get("reason") else {})}
+        have = {d["id"] for d in facts["defects"]}
+        for d in (_json(iteration_dir / "e2e-defects.json") or {}).get("defects") or []:
+            if isinstance(d, dict) and isinstance(d.get("id"), str) and d["id"] not in have:
+                facts["defects"].append(dict(d, source="e2e", zone="e2e"))
     rev = _json(iteration_dir / "visual-review.json")
     if rev is not None and (iteration_dir / "visual-review.md").is_file():
         facts["review"] = {"status": "pass"}
@@ -350,7 +357,17 @@ def record(root: Any, track: str, frame: Optional[str], iteration: Any, gates: A
             gate_out[n] = {"status": "skipped", "reason": said or "гейт не исполнялся: артефактов итерации нет"}
             if given[n]["status"] != "skipped":
                 warnings.append(f"gates.{n}: записано «{given[n]['status']}», а артефактов итерации нет (гейт не вызывался) — записан skipped")
-    gate_out["e2e"] = given["e2e"]
+    if facts["e2e"] is not None:
+        gate_out["e2e"] = facts["e2e"]
+        if given["e2e"]["status"] != facts["e2e"]["status"]:
+            warnings.append(f"gates.e2e: записано «{given['e2e']['status']}», а прогон e2e (e2e-summary.json) говорит «{facts['e2e']['status']}» — записан факт")
+    else:
+        gate_out["e2e"] = given["e2e"]
+        if given["e2e"]["status"] == "pass":                    # «прошёл» без прогона — слова; «упал» без прогона остаётся упавшим (сомнение в пользу остановки)
+            gate_out["e2e"] = {"status": "skipped", "reason": "гейт не исполнялся: e2e-summary.json в папке итерации нет (daiver_e2e_run не вызывался)"}
+            warnings.append("gates.e2e: записано «pass», а прогона e2e нет (daiver_e2e_run не вызывался) — записан skipped")
+        elif given["e2e"]["status"] == "fail":
+            warnings.append("gates.e2e: «fail» записан без прогона e2e (daiver_e2e_run не вызывался) — остаётся fail, причину назови в reason")
     if diff_percent is not None and facts["diffPercent"] is None:
         warnings.append("diffPercent передан, а visual-diff.json в папке итерации нет (daiver_visual_diff не вызывался) — значение отброшено")
         diff_percent = None
@@ -366,6 +383,9 @@ def record(root: Any, track: str, frame: Optional[str], iteration: Any, gates: A
     code_blocking = [d for d in blocking_defects if d.get("source") == "code"]
     if gate_out["code"]["status"] == "fail" and not code_blocking:
         gate_out["code"] = {"status": "pass", "reason": "блокирующих дефектов кода не осталось (noise / решения человека)"}
+    e2e_defects = [d for d in merged if d.get("source") == "e2e"]
+    if gate_out["e2e"]["status"] == "fail" and e2e_defects and not any(is_blocking(d) for d in e2e_defects):
+        gate_out["e2e"] = {"status": "pass", "reason": "блокирующих падений e2e не осталось (noise / решения человека)"}
     failed = [n for n, g in gate_out.items() if g["status"] == "fail"]
     skipped_required = [n for n in ("compare",) if gate_out[n]["status"] == "skipped"]
     clean = not blocking and not failed and not skipped_required

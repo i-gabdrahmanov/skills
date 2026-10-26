@@ -154,7 +154,8 @@ class PhaseToolsRegistry(unittest.TestCase):
         "ui-design": ("daiver_pixso_pull", "daiver_normalize", "daiver_resolve_*", "daiver_plan_write", "daiver_plan_contract"),
         "ui-build": ("daiver_build_state", "daiver_build_state_set", "daiver_svg_assets"),
         "ui-verify": ("daiver_screenshot", "daiver_code_compare", "daiver_verify_compare", "daiver_verify_state",
-                      "daiver_verify_state_record", "daiver_render_reference", "daiver_visual_diff", "daiver_visual_review", "daiver_verify_report"),
+                      "daiver_verify_state_record", "daiver_render_reference", "daiver_visual_diff", "daiver_visual_review", "daiver_verify_report",
+                      "daiver_e2e_plan", "daiver_e2e_run"),
     }
 
     @staticmethod
@@ -199,7 +200,7 @@ class PhaseToolsRegistry(unittest.TestCase):
             "ui-design": ["daiver_normalize", "daiver_pixso_pull", "daiver_plan_contract", "daiver_plan_write",
                           "daiver_resolve_candidates", "daiver_resolve_finalize", "daiver_resolve_query", "daiver_resolve_report"],
             "ui-build": ["daiver_build_state", "daiver_build_state_set", "daiver_svg_assets"],
-            "ui-verify": ["daiver_code_compare", "daiver_render_reference", "daiver_screenshot", "daiver_verify_compare", "daiver_verify_report",
+            "ui-verify": ["daiver_code_compare", "daiver_e2e_plan", "daiver_e2e_run", "daiver_render_reference", "daiver_screenshot", "daiver_verify_compare", "daiver_verify_report",
                           "daiver_verify_state", "daiver_verify_state_record", "daiver_visual_diff", "daiver_visual_review"],
         })
 

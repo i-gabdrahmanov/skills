@@ -415,7 +415,7 @@ PRODUCTIVE = {
     "ui-design": ("daiver_pixso_pull", "daiver_normalize", "daiver_resolve_candidates", "daiver_resolve_query",
                   "daiver_resolve_finalize", "daiver_resolve_report", "daiver_plan_write", "daiver_plan_contract"),
     "ui-build": ("daiver_build_state", "daiver_build_state_set", "daiver_svg_assets"),
-    "ui-verify": ("daiver_screenshot", "daiver_code_compare", "daiver_verify_state", "daiver_verify_state_record", "daiver_verify_compare", "daiver_render_reference", "daiver_visual_diff", "daiver_visual_review", "daiver_verify_report"),
+    "ui-verify": ("daiver_screenshot", "daiver_code_compare", "daiver_verify_state", "daiver_verify_state_record", "daiver_verify_compare", "daiver_render_reference", "daiver_visual_diff", "daiver_visual_review", "daiver_verify_report", "daiver_e2e_plan", "daiver_e2e_run"),
 }
 # читающие и «оркестраторские» инструменты — свободны на любом шаге: иначе оркестратор заблокировал бы собственную работу
 FREE_TOOLS = ("daiver_status", "daiver_init", "daiver_map_append", "daiver_map_lookup", "daiver_outline", "daiver_section",

@@ -19,7 +19,7 @@ HOOKS = Path(__file__).resolve().parent
 SERVER = HOOKS / "daiver_mcp.py"
 
 EXPECTED_TOOLS = ["daiver_build_state", "daiver_build_state_set", "daiver_capabilities", "daiver_code_compare", "daiver_color_tokens", "daiver_ds_details",
-                  "daiver_ds_inventory", "daiver_ds_lookup", "daiver_ds_requirements",
+                  "daiver_ds_inventory", "daiver_ds_lookup", "daiver_ds_requirements", "daiver_e2e_plan", "daiver_e2e_run",
                   "daiver_init", "daiver_map_append", "daiver_map_lookup", "daiver_normalize", "daiver_outline",
                   "daiver_pixso_pull", "daiver_plan_contract", "daiver_plan_write", "daiver_render_reference", "daiver_resolve_candidates",
                   "daiver_resolve_finalize", "daiver_resolve_query", "daiver_resolve_report", "daiver_screenshot", "daiver_section",

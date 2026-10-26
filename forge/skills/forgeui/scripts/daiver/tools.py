@@ -42,6 +42,7 @@ from .ingest import normalize as NZ
 from .pixso import pull as PP
 from .verify import capture as CP
 from .verify import code_compare as CCMP
+from .verify import e2e as E2E
 from .verify import reference as VREF
 from .verify import report_html as VRPT
 from .verify import state as VST
@@ -474,6 +475,22 @@ def t_verify_report(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         return VRPT.run(root, TR.check_track_name(args["track"]), _frame_arg(args), _path_inside(root, args["iterationDir"]), args.get("date"))
     except (TR.TrackError, VRPT.ReportError) as e:
+        raise ToolError(str(e))
+
+
+def t_e2e_plan(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        return E2E.plan(root, track, t_spec(root, {"feature": track}))
+    except (TR.TrackError, E2E.E2eError) as e:
+        raise ToolError(str(e))
+
+
+def t_e2e_run(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        return E2E.run(root, track, _frame_arg(args), _path_inside(root, args["iterationDir"]), t_spec(root, {"feature": track}))
+    except (TR.TrackError, E2E.E2eError) as e:
         raise ToolError(str(e))
 
 
@@ -945,6 +962,28 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
             "iterationDir": {"type": "string", "description": "папка итерации с actual.png (подпапка verify/ кадра)"},
             "date": {"type": "string", "description": "дата входом, одна короткая строка; без неё даты в отчёте нет"}},
+            "required": ["track", "iterationDir"], "additionalProperties": False},
+    },
+    "daiver_e2e_plan": {
+        "fn": t_e2e_plan,
+        "description": ("План e2e-гейта: из спек стори (ui-spec.md и зарегистрированные) — сценарии {id, file, title, body, context, line, skip?}. Имя файла детерминировано по id "
+                        "(ui-spec#2 → <dir>/ui-spec-2.e2e.spec.ts), каталог — testDir из playwright.config, иначе e2e/, но НЕ внутри outputDir (туда пишет только ui-build). Сценарий с "
+                        "контекстом REMOVED Requirements — skip с причиной: тест на удаляемое поведение НЕ пиши, но скажи, что скипнуто. hasE2e: false — гейт skipped (gate в ответе), скажи один раз. "
+                        "Тела тестов пишешь ты (по одному файлу на сценарий, ассерты — по текстам mocks.ts, повторный прогон заменяет свои файлы), потом daiver_e2e_run."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"}},
+            "required": ["track"], "additionalProperties": False},
+    },
+    "daiver_e2e_run": {
+        "fn": t_e2e_run,
+        "description": ("Гейт e2e итерации: прогоняет НАПИСАННЫЕ тесты плана (`npx --no-install playwright test <файлы> --reporter=junit`) и разбирает JUnit в дефекты итерации (zone e2e, у каждого "
+                        "file:line). Пишет в iterationDir e2e-summary.json, e2e-defects.json, e2e-junit.xml. status: pass | fail (падения, прогон не дошёл до тестов, не уложился во время — называется, "
+                        "не глушится) | skipped (нет сценариев / файлов / @playwright/test / node — с причиной в reason, clean не блокирует; ничего не устанавливается). Статус гейта в "
+                        "daiver_verify_state_record берётся из этих файлов, а не из твоих слов. Вызывай после визуального обзора, до записи итерации."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "iterationDir": {"type": "string", "description": "папка итерации — подпапка verify/ кадра"}},
             "required": ["track", "iterationDir"], "additionalProperties": False},
     },
     "daiver_visual_review": {
