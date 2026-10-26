@@ -39,6 +39,20 @@ def _frames_table(frames: List[Dict[str, Any]]) -> List[str]:
     return out
 
 
+def _module(frames: List[Dict[str, Any]]) -> List[str]:
+    """Раздел «Модуль» — только когда у трека есть не-первичные кадры с решением о месте корня (у одного кадра раздела нет: дайджест прежних треков не меняется)."""
+    rows = [(f["name"], f["plan"]["module"]) for f in frames if isinstance(f.get("plan"), dict) and f["plan"].get("module")]
+    if not rows:
+        return []
+    out = [f"Трек строится в ОДИН модуль — по первичному кадру «{rows[0][1]['name']}». Место корня остальных кадров — решение плана:", "",
+           "| Кадр | Где корень | Компонент | Основание |", "|---|---|---|---|"]
+    for name, m in rows:
+        r = m["root"]
+        where = f"внутри первичного кадра, узел `{r['host']}`" if r["mode"] == "inside-primary" else "отдельный компонент в каталоге модуля"
+        out.append(f"| {name} | {where} | {r['component']} | {r.get('reason') or '—'} |")
+    return out + [""]
+
+
 def _sections(frames: List[Dict[str, Any]]) -> List[str]:
     out: List[str] = []
     for f in frames:
@@ -192,6 +206,9 @@ def render(track: str, frames: List[Dict[str, Any]], design_system: str, degrada
            "resolution-report.md рядом.", "",
            "## Кадры", ""]
     out += _frames_table(frames)
+    mod = _module(frames)
+    if mod:
+        out += ["", "## Модуль", ""] + mod
     out += ["", "## Секции", ""] + _sections(frames)
     out += ["## Компоненты", ""] + _components(frames)
     out += ["## Дизайн-система", ""] + _design(frames, design_system)

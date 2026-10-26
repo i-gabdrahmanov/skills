@@ -768,6 +768,10 @@ class Contract:
                  "Компоненты библиотеки: " + (", ".join(lib[:SHOWN]) + (" …" if len(lib) > SHOWN else "") or "нет")]
         if shared:
             lines.append("Общие local-компоненты: " + ", ".join(shared[:SHOWN]))
+        mods = [(fx.f["name"], p["module"]) for fx, p in zip(self.w.frames.values(), plans) if p.get("module")]
+        if mods:
+            lines.append("Один модуль трека; корни кадров: " + "; ".join(f"{n} — " + (f"внутри первичного, узел {m['root']['host']}" if m["root"]["mode"] == "inside-primary"
+                                                                                      else f"отдельный компонент {m['root']['component']}") for n, m in mods[:SHOWN]))
         soft = [i for i in self.open if not i["blocking"]]
         lines.append("Принятые деградации: " + ("; ".join(f"{self.label(i)} — {RS._clip(i.get('degradesTo') or i['detail'], 90)}"
                                                          for i in soft[:6]) if soft else "нет"))

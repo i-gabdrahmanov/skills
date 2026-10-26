@@ -27,6 +27,7 @@ from . import component_map as CM
 from . import ds_lookup as DL
 from . import ds_requirements as DR
 from . import init as I
+from . import layout as LAY
 from . import outline as OL
 from . import plan as PL
 from . import plan_contract as PC
@@ -111,8 +112,8 @@ def _path_inside(root: Path, rel: str) -> Path:
         except ValueError:
             raise ToolError(f"путь «{rel}» вне репозитория: рантайм не пускает за пределы каталога запуска — "
                             f"сохраните файл внутри репо")
-        return p
-    return _rel_inside(root, rel)
+        return LAY.redirect(root, p)
+    return LAY.redirect(root, _rel_inside(root, rel))
 
 
 def _story_spec_path(root: Path, feature: str) -> Path:
@@ -646,7 +647,9 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                         "служебное прочь, ~100× на реальном экране), сохранить рядом сырой как свидетельство "
                         "и записать кадр в трек с хешем. Сырой DSL читать нельзя — только этот инструмент. "
                         "frameUrl обязателен (ссылка на кадр; не выдумывай — спроси). Заводит трек и кадр. "
-                        "Повторный pull того же экспорта ничего не меняет; собранный кадр не перезаписывается."),
+                        "Повторный pull того же экспорта ничего не меняет; собранный кадр не перезаписывается. Второй кадр трека — тот же вызов с другим frame: "
+                        "семья первого переезжает в frames/<имя>/, пути переписываются, в ответе layout («LAYOUT — …») — перескажи человеку; два кадра "
+                        "одного трека на одном frameUrl — ошибка именования (отказ)."),
         "schema": {"type": "object", "properties": {
             "track": {"type": "string", "description": "ключ стори (имя трека), напр. STOR-100"},
             "dslPath": {"type": "string", "description": "файл с DSL-экспортом кадра, путь внутри репо"},
@@ -829,13 +832,15 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                         "px → flex меняет только план. plan.layoutRest: \"keep-px\" — остальные записи остаются px без свидетельства "
                         "(они попадут в planUncertainty). plan.buildOrder необязателен: если назван ([{id, hash}] из sections[] "
                         "daiver_outline), код сверяет id, хеши и порядок с настоящими — чужой id, придуманный шаг или неверный хеш отказ. "
-                        "Резолв должен быть закончен и подтверждён, иначе отказ. weightBudget — тот же, что у daiver_outline (по умолчанию "
+                        "plan.placement — ТОЛЬКО у не-первичного кадра без stateOf: решение о месте его корня в ЕДИНОМ модуле трека {mode: own-file | inside-primary, "
+                        "component?: PascalCase, host?: id узла канона первичного кадра (только inside-primary, обязателен там), reason?}; по умолчанию own-file с компонентом по имени "
+                        "кадра; у первичного кадра и у кадра-состояния — отказ. Резолв должен быть закончен и подтверждён, иначе отказ. weightBudget — тот же, что у daiver_outline (по умолчанию "
                         "конфиг/24000), записывается в план: сборка берёт секции при нём. Отказ перечисляет ВСЕ нарушения, ничего не "
                         "записано. Запись идемпотентна: те же данные — те же байты."),
         "schema": {"type": "object", "properties": {
             "track": {"type": "string", "description": "ключ стори (имя трека)"},
             "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
-            "plan": {"type": "object", "description": "{layout?: [решения по unproven], layoutRest?: \"keep-px\", buildOrder?: [{id, hash}]}; "
+            "plan": {"type": "object", "description": "{layout?: [решения по unproven], layoutRest?: \"keep-px\", buildOrder?: [{id, hash}], placement?: {mode, component?, host?, reason?}}; "
                                                         "без unproven — можно {} или не передавать"},
             "weightBudget": {"type": "number", "exclusiveMinimum": 0,
                              "description": "бюджет секции в байтах, как у daiver_outline; без него — конфиг/24000"}},

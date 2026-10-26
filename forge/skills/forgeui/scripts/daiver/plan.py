@@ -11,6 +11,7 @@
 чужие: `daiver_section` режет по бюджету, и сборка обязана брать тот же), `tree` (оболочка над секциями — контейнеры с дайджестом
 раскладки layout/size/box — и ссылки `{section: id}`), `sections[]` (id, hash, вес, дайджест раскладки корня секции, `nodes[]` —
 решения по кандидатам: `{component, props}` | `{resolution: local}` | `{resolution: ignore}` + confidence и откуда вердикт),
+`module` (ТОЛЬКО у не-первичного кадра без `stateOf`: заявленное решение плана о месте корня кадра в едином модуле трека — {name: имя первичного кадра, root: {mode, component, host?, reason?}}, 6.1),
 `buildOrder` (РЕАЛЬНЫЕ id секций с хешами: сначала секции, создающие общие local-компоненты, затем их потребители, дальше порядок
 документа; occluded не строится; пролог — токены и моки — не секция и в порядок не входит, INV-B12), `locals`, `layout` (решение по
 каждой записи `unproven`, §11.4: «принятый hint обязателен, непринятый не применяется»), `specs` (ссылки на разделы спек), `design`
@@ -53,7 +54,10 @@ LAYOUT_REST = "keep-px"
 EVIDENCE = ("declaration", "goal-image", "user", "none")
 LAYOUT_DECISIONS = {OL.HINTS: ("apply", "keep-px"), OL.ABSOLUTE: ("keep-px", "group")}
 GROUP_DIRECTIONS = ("row", "column")
-INPUT_KEYS = ("layout", "layoutRest", "buildOrder")
+INPUT_KEYS = ("layout", "layoutRest", "buildOrder", "placement")
+PLACEMENT_MODES = ("own-file", "inside-primary")
+PLACEMENT_KEYS = ("mode", "component", "host", "reason")
+_COMPONENT_RE = re.compile(r"^[A-Z][A-Za-z0-9]{0,63}$")
 LAYOUT_KEYS = ("id", "reason", "decision", "evidence", "direction", "groups", "note")
 BUILD_ORDER_KEYS = ("id", "hash", "name")
 WHY_MAX = 160                         # знаков основания local/ignore в плане (полностью — в resolution-report.md)
@@ -162,7 +166,7 @@ def check_input(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
-        return {}, ["plan: ожидается объект {layout?, layoutRest?, buildOrder?}"]
+        return {}, ["plan: ожидается объект {layout?, layoutRest?, buildOrder?, placement?}"]
     for k in raw:
         if k not in INPUT_KEYS:
             problems.append(f"plan.{k}: неизвестное поле (допустимы {', '.join(INPUT_KEYS)}); дерево секций, решения по узлам, "
@@ -180,7 +184,75 @@ def check_input(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
     if order is not None and not (isinstance(order, list) and all(isinstance(x, dict) for x in order)):
         problems.append("plan.buildOrder: ожидается список {id, hash} (необязательно — код считает порядок сам)")
         order = None
-    return {"layout": layout or [], "layoutRest": rest, "buildOrder": order}, problems
+    placement = raw.get("placement")
+    if placement is not None:
+        bad = placement_shape_problems(placement)
+        if bad:
+            problems += bad
+            placement = None
+    return {"layout": layout or [], "layoutRest": rest, "buildOrder": order, "placement": placement}, problems
+
+
+def placement_shape_problems(p: Any) -> List[str]:
+    """Форма `placement` (решение о месте корня не-первичного кадра в модуле): {mode: own-file | inside-primary, component?, host?, reason?}."""
+    if not isinstance(p, dict):
+        return ["plan.placement: ожидается объект {mode, component?, host?, reason?}"]
+    out = [f"plan.placement.{k}: неизвестное поле (допустимы {', '.join(PLACEMENT_KEYS)})" for k in p if k not in PLACEMENT_KEYS]
+    if p.get("mode") not in PLACEMENT_MODES:
+        out.append(f"plan.placement.mode: {' | '.join(PLACEMENT_MODES)} — own-file: корень кадра отдельным компонентом в каталоге модуля; "
+                   f"inside-primary: внутри компонента первичного кадра (нужен host)")
+    comp = p.get("component")
+    if comp is not None and not (isinstance(comp, str) and _COMPONENT_RE.match(comp)):
+        out.append("plan.placement.component: имя компонента латиницей в PascalCase (Dialog, EditForm)")
+    host = p.get("host")
+    if host is not None and not (isinstance(host, str) and host.strip()):
+        out.append("plan.placement.host: id узла первичного кадра, внутри которого рисуется корень (строка)")
+    if p.get("mode") == "inside-primary" and not host:
+        out.append("plan.placement.host: для inside-primary назови узел первичного кадра (его id из канона), в который встроен корень")
+    if p.get("mode") == "own-file" and host is not None:
+        out.append("plan.placement.host: host бывает только у inside-primary (own-file — отдельный файл модуля)")
+    reason = p.get("reason")
+    if reason is not None and not (isinstance(reason, str) and reason.strip()):
+        out.append("plan.placement.reason: одна строка — почему так")
+    return out
+
+
+def host_ids(root: Path, manifest: dict, primary: str) -> Optional[set]:
+    """id узлов канона первичного кадра (для проверки `placement.host`); None — канона первичного нет (проверить нечем)."""
+    try:
+        path = TR.frame_paths(Path(root), manifest, primary)["canonical"]
+        if not path.is_file():
+            return None
+        return {n["id"] for n in C.iter_nodes(C.read_canonical(path)["root"]) if isinstance(n.get("id"), str)}
+    except (C.CanonError, OSError, KeyError):
+        return None
+
+
+def module_of(ctx: "RS.Ctx", placement: Optional[Dict[str, Any]], hosts: Optional[set]) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+    """Решение о месте корня кадра в модуле: только у не-первичного кадра без stateOf (состояние живёт ВНУТРИ экрана — 6.2). → (module | None, нарушения)."""
+    frames = ctx.manifest.get("frames") or []
+    primary = frames[0]["name"] if frames else ctx.fname
+    if ctx.fname == primary or ctx.frame.get("stateOf"):
+        if placement is not None:
+            why = "у первичного кадра корень и есть модуль" if ctx.fname == primary else "кадр-состояние строится ВНУТРИ экрана (stateOf), место корня ему не нужно"
+            return None, [f"plan.placement: {why} — поле не принимается"]
+        return None, []
+    problems: List[str] = []
+    mode = (placement or {}).get("mode", "own-file")
+    comp = (placement or {}).get("component") or _pascal(ctx.fname) or "Frame"
+    if not _COMPONENT_RE.match(comp):
+        comp = "Frame" + comp
+    root: Dict[str, Any] = {"mode": mode, "component": comp}
+    host = (placement or {}).get("host")
+    if host:
+        root["host"] = host
+        if hosts is not None and host not in hosts:
+            problems.append(f"plan.placement.host: узла «{host}» нет в каноне первичного кадра «{primary}» — host берётся из его канона (daiver_outline / daiver_section)")
+        elif hosts is None:
+            problems.append(f"plan.placement.host: у первичного кадра «{primary}» нет канона — проверить host нечем (сначала daiver_normalize первичного кадра)")
+    if (placement or {}).get("reason"):
+        root["reason"] = " ".join(placement["reason"].split())[:WHY_MAX]
+    return {"name": primary, "root": root}, problems
 
 
 def _layout_entry_problems(i: int, d: Dict[str, Any], by_key: Dict[Tuple[str, str], dict], m: "OL._Map"
@@ -508,7 +580,7 @@ def _digest(n: dict) -> Dict[str, Any]:
 
 
 def derive(ctx: "RS.Ctx", st: "RS.State", budget: Any, explicit: List[Dict[str, Any]], rest: Optional[str],
-           specs: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+           specs: Dict[str, Any], placement: Optional[Dict[str, Any]] = None, hosts: Optional[set] = None) -> Tuple[Dict[str, Any], List[str]]:
     """План кадра из текущих данных: канон + подтверждённый резолв + карта + спеки + решения по раскладке. → (план, нарушения
     решений по раскладке). Чистая функция: ни времени, ни случайности, ни файлов."""
     env, root_node = ctx.env, ctx.env["root"]
@@ -607,6 +679,10 @@ def derive(ctx: "RS.Ctx", st: "RS.State", budget: Any, explicit: List[Dict[str, 
     }
     if ctx.frame.get("stateOf"):
         plan["stateOf"] = ctx.frame["stateOf"]
+    module, bad = module_of(ctx, placement, hosts)
+    problems = list(problems) + bad
+    if module is not None:
+        plan["module"] = module
     return plan, problems
 
 
@@ -740,6 +816,8 @@ def render_md(plan: Dict[str, Any]) -> str:
            f"секций: {st['sections']} (строится {st['buildable']}) · общих local-компонентов: {st['sharedLocals']} · "
            f"неуверенных узлов: {st['uncertain']}", "", "## Порядок сборки", "",
            "Пролог (токены, моки) — не секция и в порядок не входит; секции под непрозрачным слоем (occluded) не строятся.", ""]
+    if plan.get("module"):
+        out[out.index("## Порядок сборки"):out.index("## Порядок сборки")] = module_md(plan["module"])
     creates: Dict[str, List[str]] = {}
     for x in plan["locals"]:
         if x["shared"]:
@@ -893,7 +971,7 @@ def build_frame(root: Path, track: str, frame: Optional[str], raw_plan: Any, wei
     except OL.OutlineError as e:
         raise PlanError(str(e))
     plan, problems = derive(ctx, st, budget, inp["layout"], inp["layoutRest"],
-                            specs_digest(root, track, ctx.manifest, story_spec))
+                            specs_digest(root, track, ctx.manifest, story_spec), inp["placement"], _hosts(root, ctx, inp["placement"]))
     if inp["buildOrder"] is not None:
         problems += check_build_order(inp["buildOrder"], plan["buildOrder"], {s["id"]: s for s in plan["sections"]}, budget)
     if problems:
@@ -960,6 +1038,31 @@ def _input_from_file(data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Option
     return explicit, lay.get("rest") if lay.get("rest") == LAYOUT_REST else None
 
 
+def _placement_from_file(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Решение о месте корня, восстановленное из плана (вход для пересборки): то, что записано в `module.root`."""
+    mod = data.get("module")
+    root = mod.get("root") if isinstance(mod, dict) else None
+    if not isinstance(root, dict) or placement_shape_problems({k: v for k, v in root.items() if k in PLACEMENT_KEYS}):
+        return None
+    return {k: v for k, v in root.items() if k in PLACEMENT_KEYS}
+
+
+def _hosts(root: Path, ctx: "RS.Ctx", placement: Optional[Dict[str, Any]]) -> Optional[set]:
+    """Узлы первичного кадра грузятся только когда нужен host (канон может быть большим)."""
+    if not (placement or {}).get("host"):
+        return None
+    frames = ctx.manifest.get("frames") or []
+    return host_ids(root, ctx.manifest, frames[0]["name"]) if frames else None
+
+
+def module_md(module: Dict[str, Any]) -> List[str]:
+    r = module["root"]
+    where = (f"компонентом `{r['component']}` внутри компонента первичного кадра «{module['name']}», в узле `{r['host']}`" if r["mode"] == "inside-primary"
+             else f"отдельным компонентом `{r['component']}` в каталоге единого модуля трека (имя модуля — по первичному кадру «{module['name']}»)")
+    return ["## Модуль", "", f"Кадр строится в ОДИН модуль с первичным кадром «{module['name']}»; корень этого кадра — {where}."
+            + (f" Основание: {_cell(r['reason'])}." if r.get("reason") else ""), ""]
+
+
 def _stale_reasons(data: Dict[str, Any], want: Dict[str, Any]) -> List[str]:
     """Почему файл плана не равен тому, что строит движок, — по частям, языком, понятным человеку."""
     out: List[str] = []
@@ -997,8 +1100,9 @@ def check_frame(root: Any, ctx: "RS.Ctx", st: "RS.State", story_spec: Optional[S
         return {"state": "open", "detail": "plan.json: нет положительного weightBudget — файл не от движка; пересобери: "
                                            "daiver_plan_write(track, frame, plan)"}
     explicit, rest = _input_from_file(data)
+    placement = _placement_from_file(data)
     try:
-        want, problems = derive(ctx, st, budget, explicit, rest, specs_digest(root, ctx.track, ctx.manifest, story_spec))
+        want, problems = derive(ctx, st, budget, explicit, rest, specs_digest(root, ctx.track, ctx.manifest, story_spec), placement, _hosts(root, ctx, placement))
     except PlanError as e:
         return {"state": "unknown", "detail": f"план нельзя сверить с данными: {e}"}
     if problems:

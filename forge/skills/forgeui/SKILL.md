@@ -181,7 +181,7 @@ prompt:
 2. Кадра нет в треке или его stage `empty`. Попроси Pixso MCP пользователя сохранить DSL кадра В ФАЙЛ внутри репо (например
    `.daiver/inbox/<кадр>.dsl.json`). DSL в контекст не читай и не вставляй (сотни КБ): MCP отдаёт его только ответом или Pixso MCP нет —
    не вызывай его за DSL, верни `needs_input`: пользователь выгрузит файл сам. Затем `daiver_pixso_pull(track, dslPath, frameUrl, frame)`:
-   `frameUrl` — ссылка из таблицы, `frame` — имя кадра (латиница, цифры, `-`, `_`). Растр кадра (JPEG/PNG: Pixso MCP или пользователь) —
+   `frameUrl` — ссылка из таблицы, `frame` — имя кадра (латиница, цифры, `-`, `_`); второй и следующий кадр — тот же вызов, `layout` в ответе («LAYOUT — …»: семья первого кадра переехала в `frames/<имя>/`) перескажи человеком, а ссылка у двух кадров не может совпадать. Растр кадра (JPEG/PNG: Pixso MCP или пользователь) —
    `daiver_track_manifest(track, frame, rasterPath)`; без растра идти можно, но `goal-image-missing` перескажи.
 3. Stage `requirement` — `daiver_normalize(track, frame)`. Потом `daiver_svg_assets(track, frame)`: на каждый `missingArt` — SVG
    иллюстрации (Pixso MCP или пользователь) → `daiver_svg_assets(track, frame, slug, svgPath)`; иллюстрацию не рисовать.
@@ -223,7 +223,7 @@ prompt:
 8. План, по каждому кадру: `daiver_plan_write(track, frame, plan)`. В `plan.layout` — решение по КАЖДОЙ записи `unproven` (`{id, reason, decision,
    evidence}` из записи; decision: apply | keep-px у layout-hints, keep-px | group у absolute-children, при group ещё `direction` и `groups`; evidence:
    declaration | goal-image | user | none; apply и group без свидетельства код не примет). Не решаешь — `plan.layoutRest: "keep-px"` (px остаётся, узел
-   попадёт в planUncertainty). Секции, хеши, решения по узлам и порядок сборки считает код — в plan их не пиши. Отказ перечисляет ВСЕ нарушения: исправь и повтори.
+   попадёт в planUncertainty). У не-первичного кадра (не `stateOf`) корень в едином модуле — РЕШЕНИЕ плана: `plan.placement` `{mode: own-file | inside-primary, component?, host?, reason?}` (по умолчанию own-file; inside-primary — `host` = id узла первичного кадра из его канона). Секции, хеши, решения по узлам и порядок сборки считает код — в plan их не пиши. Отказ перечисляет ВСЕ нарушения: исправь и повтори.
 9. `daiver_plan_contract(track)` — что автономная сборка ещё спросила бы. Пункт из `open[]` с `ask` и владельцем human — вопрос
    пользователю ДОСЛОВНО (`id:"plan-<id>"`, у пункта с кадром `plan-<id>-<кадр>`, `kind:"plan-question"`) → `needs_input`; ответ запиши по
    `record` и вызови контракт снова. Пункты владельца plan чини сам по `detail` и `record`. Неблокирующий пункт без ответа (в том числе
@@ -278,7 +278,7 @@ prompt:
    (`failed`, причина в `warnings`): план пересобирается на `ui-design`, подпись даёт человек.
 2. Пролог (в каждом запуске; существующие файлы не пересоздавай): прочитай КАЖДЫЙ файл из `project.conventions` (`.daiver/config.yaml`; список пуст — скажи в итоге) — раскладка
    файлов, нейминг, экспорт, стили: они сильнее любых примеров; прочитай `planMd`; `daiver_color_tokens(track)` даёт `matched` (цвет → переменная проекта) и `raw` (сырое
-   значение макета); каталог модуля — `<project.outputDir>/<имя кадра>` (конвенции важнее), в нём пустой `mocks.ts`, если его нет.
+   значение макета); каталог модуля — `<project.outputDir>/<имя ПЕРВИЧНОГО кадра>` — ОДИН на весь трек (конвенции важнее), в нём пустой `mocks.ts`, если его нет; корень не-первичного кадра — по разделу «Модуль» его `planMd` (own-file — свой компонент `component`; inside-primary — внутри компонента первичного кадра, в узле `host`), сам место не выбирай.
 3. Каждая секция `next`, строго по порядку: а) `daiver_build_state_set(track, sectionId, status:"in_progress")`; б) `daiver_section(track, sectionId, weightBudget)` — строй ТОЛЬКО
    `node` (`ancestors` — контекст раскладки, не код) по правилам п. 4; в) `daiver_build_state_set(track, sectionId, status:"done", outputs, hash)`: `outputs` — файлы секции от
    корня проекта, `hash` — `section.hash` из ответа `daiver_section`; предупреждение о несуществующем пути исправь сразу. В ответе — следующая `next`; её нет — п. 5.

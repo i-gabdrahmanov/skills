@@ -11,7 +11,8 @@
 Пины: номер дефекта = номер в списке. Реализация — по `pin` (бокс страницы) со сдвигом `clip` захвата, процентами от размера картинки; макет — по `designPin` процентами от размера корня кадра
 (нет числового размера корня — пинов макета нет, это сказано в отчёте). В автономном режиме отчёт не рендерится (триаж агента заменяет его).
 
-Полоса кадров показывает кадры трека и их состояние из `verify-state.json` (непроверенный кадр назван «не проверялся»); переключение между кадрами и один отчёт на весь трек — 6.1.
+Полоса кадров показывает кадры трека и их состояние из `verify-state.json` (непроверенный кадр назван «не проверялся»); у каждого другого кадра, чей отчёт уже есть, чип — ссылка на ПОСЛЕДНИЙ его
+`report.html` (относительная: страница остаётся самодостаточной, а отчёты лежат рядом); общий итог по всем кадрам — `verify-report.md` трека (он один).
 Решения человека в отчёте (fix / skip / false_positive, разметка «Пометить проблему», экспорт `verify-decisions.json`) — 5.4: у каждого дефекта уже есть `data-id` и место под них.
 
 Не проверено данными (боевых итераций нет): вид на настоящих экранах (длинные таблицы, десятки дефектов), точность пинов макета при `frameBox` и масштабе картинки дизайна, размер
@@ -22,6 +23,7 @@ from __future__ import annotations
 import base64
 import html
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -107,12 +109,25 @@ def pin_style(box: Dict[str, Any], origin: Tuple[float, float], size: Dict[str, 
     return f"left:{_pct(x, size['w'])}%;top:{_pct(y, size['h'])}%;width:{_pct(box['w'], size['w'])}%;height:{_pct(box['h'], size['h'])}%"
 
 
-def _frames_bar(root: Path, manifest: Dict[str, Any], current: str) -> List[Dict[str, Any]]:
+def _latest_report(root: Path, manifest: Dict[str, Any], frame: str, from_dir: Path) -> Optional[str]:
+    """Относительная ссылка на последний `report.html` кадра (по номеру итерации) или None."""
+    verify = TR.frame_paths(root, manifest, frame)["verify"]
+    best: Optional[Tuple[int, Path]] = None
+    if verify.is_dir():
+        for d in verify.iterdir():
+            m = re.match(r"^iter-(\d+)$", d.name)
+            if m and (d / FILE).is_file() and (best is None or int(m.group(1)) > best[0]):
+                best = (int(m.group(1)), d / FILE)
+    return os.path.relpath(str(best[1]), str(from_dir)).replace(os.sep, "/") if best else None
+
+
+def _frames_bar(root: Path, manifest: Dict[str, Any], current: str, from_dir: Path) -> List[Dict[str, Any]]:
     out = []
     for f in manifest.get("frames") or []:
         st = ST._read(TR.frame_paths(root, manifest, f["name"])["verifyState"]) if TR.frame_paths(root, manifest, f["name"])["verifyState"].is_file() else None
         hist = (st or {}).get("history") or []
         out.append({"name": f["name"], "current": f["name"] == current, "iterations": len(hist),
+                    "href": None if f["name"] == current else _latest_report(root, manifest, f["name"], from_dir),
                     "state": "не проверялся" if not hist else ("чисто" if hist[-1].get("clean") else f"блокирующих: {len(hist[-1].get('blocking') or [])}")})
     return out
 
@@ -191,7 +206,7 @@ def collect(root: Any, track: str, frame: Optional[str], iteration_dir: Path) ->
             "marks": marks, "rejectedMarks": rejected_marks, "boxes": _boxes(snap.get("root")), "targets": {label: path.relative_to(root).as_posix() for label, path in DEC.paths(root, manifest, f["name"])},
             "ground": ground, "design": _uri(design_path) if design_path else None, "actual": _uri(iteration_dir / "actual.png"),
             "diffImage": _uri(iteration_dir / "diff.png"), "diff": diff, "review": review, "clip": (float(clip.get("x", 0) or 0), float(clip.get("y", 0) or 0))
-            if isinstance(clip, dict) else (0.0, 0.0), "rootSize": root_size, "recorded": recorded, "frames": _frames_bar(root, manifest, f["name"]),
+            if isinstance(clip, dict) else (0.0, 0.0), "rootSize": root_size, "recorded": recorded, "frames": _frames_bar(root, manifest, f["name"], iteration_dir),
             "template": template, "gates": {"compare": summary.get("status"),
             "code": (_json(iteration_dir / "code-summary.json") or {}).get("status"), "visualDiff": "pass" if diff else None, "review": "pass" if review else None}}
 
@@ -201,7 +216,7 @@ CSS = """:root{--bg:#fff;--fg:#1c1c24;--mut:#6b6b7a;--line:#d9d9e3;--card:#f6f6f
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
 header,main{max-width:1280px;margin:0 auto;padding:16px}h1{font-size:20px;margin:0 0 4px}h2{font-size:16px;margin:24px 0 8px}
 .meta{color:var(--mut)}.chip{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 10px;margin:2px 4px 2px 0;background:var(--card);cursor:pointer;font-size:12px}
-.chip.on{background:var(--acc);color:#fff;border-color:var(--acc)}.chip.static{cursor:default}
+.chip.on{background:var(--acc);color:#fff;border-color:var(--acc)}.chip.static{cursor:default}a.chip{text-decoration:none;color:var(--fg);cursor:pointer}
 .frames .chip.cur{border-color:var(--acc);font-weight:600}.panes{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media (max-width:760px){.panes{grid-template-columns:1fr}}
 .pane{border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--card)}.pane h3{font-size:13px;margin:0 0 6px;color:var(--mut)}
@@ -271,7 +286,8 @@ def render(data: Dict[str, Any], date: Optional[str] = None) -> str:
     if not data["recorded"]:
         out.append('<p class="note"><b>Итерация ещё не записана</b> (stateRecorded: false): сначала daiver_verify_state_record — без записи номер не двигается, а числа в отчёте не попадут в историю.</p>')
     out.append('<div class="frames">' + "".join(
-        f'<span class="chip static{" cur" if f["current"] else ""}">{_e(f["name"])} — {_e(f["state"])}</span>' for f in data["frames"]) + "</div></header><main>")
+        (f'<a class="chip static" href="{_e(f["href"])}">{_e(f["name"])} — {_e(f["state"])}</a>' if f.get("href")
+         else f'<span class="chip static{" cur" if f["current"] else ""}">{_e(f["name"])} — {_e(f["state"])}</span>') for f in data["frames"]) + "</div></header><main>")
     if summary.get("nextStep"):
         out.append(f'<p class="note">{_e(summary["nextStep"])}</p>')
     out.append('<div class="bar"><label>Кто решает <input id="reviewer" type="text" placeholder="имя"></label>'

@@ -11,17 +11,19 @@ Pixso MCP принадлежит пользователю (токен в его 
 сырой — свидетельство на случай исправления slim; сбой его записи — предупреждение, не отказ);
 регистрирует кадр в track.yaml с хешем требования. Повторный pull того же экспорта ничего не меняет.
 
-Отказы с причиной, а не догадка: собранный кадр не перезаписывается (ревизии — задача 6.3), второй
-кадр в треке пока не заводится (мультикадровость — задача 6.1).
+Второй кадр трека (`frame=<имя>`) заводится тем же вызовом и переносит семью первого в `frames/<имя>/` (`layout.migrate`, спека §4.2): в ответе `layout` и строка «LAYOUT — …»;
+два кадра трека на одном frameUrl — ошибка именования, до любых изменений на диске. Отказы с причиной, а не догадка: собранный кадр не перезаписывается (ревизии — задача 6.3).
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .. import layout as LAY
 from .. import track as TR
 from . import dsl as D
 from . import slim as S
@@ -54,6 +56,15 @@ def _read_source(path: Path) -> Any:
         raise PullError(f"{path.name}: не JSON ({e}); ожидается DSL-экспорт Pixso (файл целиком)")
 
 
+def _drop_new_frame(directory: Path) -> None:
+    """Сбой переезда: файлы только что записанного нового кадра убираются (манифест его не знает), пустой `frames/` — тоже."""
+    shutil.rmtree(str(directory), ignore_errors=True)
+    try:
+        directory.parent.rmdir()
+    except OSError:
+        pass
+
+
 def pull(root: Path, track: str, dsl_path: Path, frame_url: Any, frame: Optional[str] = None,
          now: Optional[str] = None) -> Dict[str, Any]:
     root = Path(root)
@@ -81,11 +92,18 @@ def pull(root: Path, track: str, dsl_path: Path, frame_url: Any, frame: Optional
     if created:
         manifest = TR.new_manifest(track, created=now)
     existing = next((f for f in manifest["frames"] if f["name"] == frame_name), None)
+    migrate_from = None
     if existing is None and manifest["frames"]:
-        have = ", ".join(f["name"] for f in manifest["frames"])
-        raise PullError(f"в треке «{track}» уже есть кадр «{have}»: несколько кадров в одном треке — "
-                        f"задача 6.1 (мультикадровый трек), пока не поддержаны. Один кадр на трек; "
-                        f"для кадра «{frame_name}» заведите отдельный трек")
+        same = next((f["name"] for f in manifest["frames"] if f.get("frameUrl") == frame_url), None)
+        if same is not None:
+            raise PullError(f"кадр «{same}» этого трека уже смотрит на тот же frameUrl: два кадра одной фичи на одном URL — ошибка именования "
+                            f"(тот же кадр под другим именем, или у «{frame_name}» другая ссылка); ничего не изменено")
+        if len(manifest["frames"]) == 1 and manifest["frames"][0].get("dir") == ".":
+            migrate_from = manifest["frames"][0]
+            try:
+                LAY.check_target(root, track, migrate_from)
+            except LAY.LayoutError as e:
+                raise PullError(str(e))
     if existing is not None:
         built = TR.frame_paths(root, manifest, frame_name)["buildState"]
         if built.is_file():
@@ -104,6 +122,8 @@ def pull(root: Path, track: str, dsl_path: Path, frame_url: Any, frame: Optional
     notes: List[str] = []
     invalidated: List[str] = []
     stale: List[str] = []
+    migration: Optional[LAY.Migration] = None
+    layout_text: Optional[str] = None
     # путь кадра считается после регистрации в манифесте (раскладка dir — его дело)
     scratch = TR.upsert_frame(manifest, frame_name, frameUrl=frame_url) if existing is None else existing
     paths = TR.frame_paths(root, manifest, frame_name)
@@ -135,10 +155,25 @@ def pull(root: Path, track: str, dsl_path: Path, frame_url: Any, frame: Optional
         TR.upsert_frame(manifest, frame_name, frameUrl=frame_url, requirement={
             "kind": "pixso", "path": req_path.relative_to(paths["dir"]).as_posix(), "sha256": sha,
             "pulledAt": now or TR.now_iso()})
+        if migrate_from is not None:
+            try:
+                migration = LAY.migrate(root, track, migrate_from)
+            except LAY.LayoutError as e:
+                _drop_new_frame(paths["dir"])
+                raise PullError(str(e))
         try:
             TR.save(root, manifest)
-        except TR.TrackError as e:
+        except (TR.TrackError, OSError) as e:
+            if migration is not None:
+                migration.rollback()
+                _drop_new_frame(paths["dir"])
             raise PullError(str(e))
+        if migration is not None:
+            LAY.rewrite_paths(root, track, migration)
+            LAY.rebuild_report(root, manifest, migration)
+            layout_text = migration.message(track, frame_name)
+            notes.append(layout_text)
+            warnings.extend(migration.warnings)
 
     for other in TR.list_tracks(root):
         if other == track:
@@ -155,7 +190,7 @@ def pull(root: Path, track: str, dsl_path: Path, frame_url: Any, frame: Optional
         notes.append(f"сжатие ×{ratio}: экспорт уже без лишней библиотеки (кадр выгружен вместе с нужными "
                      f"компонентами) — для маленького кадра это нормально")
     stats = dict(report["stats"], bytesIn=bytes_in, bytesRaw=raw_bytes, bytesOut=bytes_out, ratio=ratio)
-    return {
+    out: Dict[str, Any] = {
         "track": track, "frame": frame_name, "created": created, "unchanged": unchanged,
         "dir": _rel(root, paths["dir"]),
         "requirement": {"path": _rel(root, req_path), "kind": "pixso", "sha256": sha, "bytes": bytes_out},
@@ -163,3 +198,6 @@ def pull(root: Path, track: str, dsl_path: Path, frame_url: Any, frame: Optional
         "ratio": ratio, "stats": stats, "diagnostics": report["diagnostics"],
         "warnings": warnings, "notes": notes, "invalidated": invalidated, "stale": stale,
     }
+    if migration is not None:
+        out["layout"] = {"message": layout_text, "movedFrame": migration.frame, "moved": migration.moved, "rewritten": migration.rewritten}
+    return out

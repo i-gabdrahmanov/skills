@@ -5,7 +5,7 @@
 slim выбрасывает недостижимые определения, служебные поля и null, оставляя нужное; стили, шрифты и
 specialNode — только используемые; диагностики (нет определения, пропавшая группа, цикл); кадр
 регистрируется в track.yaml с хешем; повторный pull того же экспорта ничего не меняет, изменённый —
-сбрасывает канон и называет устаревшее; собранный кадр и второй кадр отклоняются с причиной; сбой
+сбрасывает канон и называет устаревшее; собранный кадр и второй кадр на том же URL отклоняются с причиной; сбой
 записи сырого — предупреждение, а не отказ.
 """
 from __future__ import annotations
@@ -216,11 +216,14 @@ class Registration(Env):
         self.assertIn("6.3", str(cm.exception))
         self.assertIn("уже собран", str(cm.exception))
 
-    def test_second_frame_is_refused_until_multi_frame_task(self):
+    def test_second_frame_on_the_same_url_is_a_naming_error_and_changes_nothing(self):
         self.pull()
+        before = {p.relative_to(self.root).as_posix(): p.read_bytes() for p in sorted((self.root / ".daiver").rglob("*")) if p.is_file()}
         with self.assertRaises(T.ToolError) as cm:
             self.pull(synth(1), frame="dialog")
-        self.assertIn("6.1", str(cm.exception))
+        self.assertIn("ошибка именования", str(cm.exception))
+        after = {p.relative_to(self.root).as_posix(): p.read_bytes() for p in sorted((self.root / ".daiver").rglob("*")) if p.is_file()}
+        self.assertEqual(before, after, "отказ — до любых изменений на диске, семья main не переезжала")
 
     def test_raw_write_failure_is_a_warning_not_a_refusal(self):
         d = self.root / ".daiver/tracks/STOR-100"

@@ -2071,8 +2071,8 @@ class PlanCorners(Base):
         self.assertEqual(leftovers, [], "ни plan.json, ни хвостов .tmp")
 
     def test_the_input_helpers_work_without_the_tool_layer(self):
-        self.assertEqual(PL.check_input(None), ({"layout": [], "layoutRest": None, "buildOrder": None}, []))
-        self.assertEqual(PL.check_input([])[1], ["plan: ожидается объект {layout?, layoutRest?, buildOrder?}"])
+        self.assertEqual(PL.check_input(None), ({"layout": [], "layoutRest": None, "buildOrder": None, "placement": None}, []))
+        self.assertEqual(PL.check_input([])[1], ["plan: ожидается объект {layout?, layoutRest?, buildOrder?, placement?}"])
         self.assertEqual(PL._rel(Path("/a"), Path("/b/c")), "/b/c", "путь вне корня называется как есть")
 
     def test_more_bad_layout_entries_each_with_its_own_reason(self):
@@ -2360,6 +2360,29 @@ class ContractCorners(Base):
         out = self.contract()
         self.assertTrue(out["ready"], out["open"])
         self.assertIn("state ← «main»", (self.root / UI_PLAN_REL).read_text(encoding="utf-8"))
+
+    def test_a_second_frame_with_a_placement_puts_the_one_module_into_the_digest_and_the_question(self):
+        """6.1: у не-первичного кадра решение о месте корня видно человеку (дайджест и вопрос подписи); у одного кадра раздела «Модуль» нет."""
+        detail = frame("Detail", [inst("d1", "Modal Header", {"Steps": "OFF"}, [("Header", "q")])])
+        self.repo(screen(), {"detail": detail}, roles={"detail": "dialog"})
+        self.resolve_screen()
+        self.fin(verdict("Detail", "local"), frame="detail")
+        self.report()
+        self.write_plan(frame="main")
+        self.write_plan({"placement": {"mode": "own-file", "component": "DetailDialog", "reason": "модалка поверх экрана"}}, frame="detail")
+        self.set_url()
+        self.set_url(frame="detail")
+        self.call("daiver_track_manifest", track=TRACK, frame="detail", set={"open": {"actions": [{"verb": "click", "selector": "#more"}], "clipSelector": ".dlg"}})
+        out = self.contract()
+        self.assertTrue(out["ready"], [(i["id"], i.get("frame"), i["detail"][:80]) for i in out["open"] if i["blocking"]] or out["blocks"])
+        text = (self.root / UI_PLAN_REL).read_text(encoding="utf-8")
+        self.assertIn("## Модуль", text)
+        self.assertIn("| detail | отдельный компонент в каталоге модуля | DetailDialog | модалка поверх экрана |", text)
+        self.assertTrue(any(l.startswith("Один модуль трека; корни кадров: detail — отдельный компонент DetailDialog") for l in out["toSign"]), out["toSign"])
+
+    def test_a_single_frame_digest_has_no_module_section(self):
+        self.ready_world()
+        self.assertNotIn("## Модуль", (self.root / UI_PLAN_REL).read_text(encoding="utf-8"))
 
     def test_shared_local_components_are_named_in_the_question_to_sign(self):
         tall = tall_screen()

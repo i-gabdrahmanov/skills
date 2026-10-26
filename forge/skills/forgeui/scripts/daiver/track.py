@@ -339,7 +339,7 @@ def get_frame(manifest: dict, name: Optional[str] = None) -> dict:
 
 def upsert_frame(manifest: dict, name: str, **fields: Any) -> dict:
     """Завести кадр или обновить его поля (для pull и тестов). Раскладку dir ведёт сам:
-    единственный кадр — «.», при втором переезжают все (файлы переносит 6.1)."""
+    единственный кадр — «.», при втором переезжают все (файлы переносит `layout.migrate`)."""
     check_frame_name(name)
     frames = manifest.setdefault("frames", [])
     frame = next((f for f in frames if f.get("name") == name), None)
