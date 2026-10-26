@@ -144,8 +144,8 @@ class ConsumersSeeEveryBranch(unittest.TestCase):
 class PhaseToolsRegistry(unittest.TestCase):
     """Поле реестра `phase_tools` (задача 3.4): продуктивные MCP-инструменты шага, которые главный агент не вызывает."""
 
-    # инструментов ещё нет — шаблоны ждут задач 4.x (после них эти имена обязаны найтись в движке)
-    PLANNED = {"daiver_screenshot", "daiver_verify_*"}
+    # инструментов ещё нет — шаблоны ждут задач 4.x (daiver_screenshot появился в 4.2) (после них эти имена обязаны найтись в движке)
+    PLANNED = {"daiver_verify_*"}
     # читающие и «оркестраторские» инструменты: в phase_tools не входят (иначе оркестратор заблокировал бы собственную работу)
     FREE = {"daiver_status", "daiver_init", "daiver_map_append", "daiver_map_lookup", "daiver_outline", "daiver_section",
             "daiver_source_nodes", "daiver_ds_inventory", "daiver_ds_lookup", "daiver_ds_details", "daiver_ds_requirements",
@@ -198,7 +198,7 @@ class PhaseToolsRegistry(unittest.TestCase):
             "ui-design": ["daiver_normalize", "daiver_pixso_pull", "daiver_plan_contract", "daiver_plan_write",
                           "daiver_resolve_candidates", "daiver_resolve_finalize", "daiver_resolve_query", "daiver_resolve_report"],
             "ui-build": ["daiver_build_state", "daiver_build_state_set", "daiver_svg_assets"],
-            "ui-verify": [],
+            "ui-verify": ["daiver_screenshot"],
         })
 
     def test_every_engine_tool_has_an_owner(self):

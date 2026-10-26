@@ -9,7 +9,7 @@ daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_s
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
 daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report,
 daiver_plan_write, daiver_plan_contract, daiver_build_state, daiver_build_state_set, daiver_color_tokens,
-daiver_capabilities.
+daiver_capabilities, daiver_screenshot.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -40,6 +40,7 @@ from . import track as TR
 from . import uispec as U
 from .ingest import normalize as NZ
 from .pixso import pull as PP
+from .verify import capture as CP
 
 HOOKS = Path(__file__).resolve().parents[4] / "hooks"
 
@@ -72,9 +73,11 @@ def _check_args(args: Dict[str, Any], schema: Dict[str, Any]) -> None:
         ok = {"string": isinstance(v, str), "object": isinstance(v, dict),
               "boolean": isinstance(v, bool),
               "number": isinstance(v, (int, float)) and not isinstance(v, bool),
-              "array": isinstance(v, list) and all(isinstance(x, str) for x in v)}.get(t, True)
+              "array": isinstance(v, list) and all(isinstance(x, dict if (spec.get("items") or {}).get("type") == "object" else str)
+                                                   for x in v)}.get(t, True)
         if not ok:
-            errors.append(f"«{k}»: ожидается {t}")
+            what = "список объектов" if t == "array" and (spec.get("items") or {}).get("type") == "object" else t
+            errors.append(f"«{k}»: ожидается {what}")
     if errors:
         raise ToolError("; ".join(errors))
 
@@ -417,6 +420,18 @@ def t_build_state_set(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
             TR.check_frame_name(frame)
         return BS.set_section(root, track, frame, args["sectionId"], args["status"], args.get("outputs"), args.get("hash"))
     except (TR.TrackError, BS.BuildStateError) as e:
+        raise ToolError(str(e))
+
+
+def t_screenshot(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        frame = args.get("frame")
+        if frame is not None:
+            TR.check_frame_name(frame)
+        return CP.run(root, track, frame, args["url"], _path_inside(root, args["iterationDir"]), args["waitMs"], args.get("actions"),
+                      args.get("clipSelector"), args.get("waitForSelector"), args.get("waitForGone"), args.get("target", "implementation"))
+    except (TR.TrackError, CP.CaptureError) as e:
         raise ToolError(str(e))
 
 
@@ -778,6 +793,44 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                                        "(src/modules/x/Screen.tsx) или абсолютные внутри репо"},
             "hash": {"type": "string", "description": "только при done: section.hash из ответа daiver_section для этой секции"}},
             "required": ["track", "sectionId", "status"], "additionalProperties": False},
+    },
+    "daiver_screenshot": {
+        "fn": t_screenshot,
+        "description": ("Захват реализации — ОДИН вызов за итерацию проверки (ui-verify): открывает url в браузере, ждёт готовности, "
+                        "проигрывает рецепт открытия (actions) и пишет в iterationDir actual.png + actual.html + snapshot.json (снимок "
+                        "страницы: измеренные боксы, computed-стили, тексты, имена React-компонентов — единственный источник измеренных "
+                        "значений). waitMs — потолок ожидания, а не цена: выбирай осознанно (холодный dev-сервер или первый заход 60000+, "
+                        "обычно 25000, перепроверка известной страницы 5000; минимум 2000). Готово = нет признаков загрузки (loader, "
+                        "spinner, skeleton, aria-busy, progressbar), DOM не менялся 1500 мс и содержимое устойчиво. ПРОЧТИ ready: false — "
+                        "страница ещё грузится: такой снимок НЕ сравнивай и его дефекты НЕ репорти; подними waitMs либо назови загрузчик "
+                        "через waitForGone (селектор, который должен исчезнуть) / waitForSelector (который должен появиться); так и не "
+                        "поднялась — «страница никогда не догрузилась» и есть находка, остановись. Второй ИДЕНТИЧНЫЙ вызов в ту же папку "
+                        "отказ («подождать ещё» повтором не лечится): меняй waitMs или рецепт. sanity.underRendered: true — на странице "
+                        "куда меньше элементов, чем узлов в макете: захват недорисован, что бы ни говорил ready. fonts / warnings — "
+                        "пересказывай (нет шрифта макета = метрики текста разойдутся; react.found: false = имена компонентов недоступны, "
+                        "проверка идентичности НЕ исполнялась). Рецепт: actions — шаги click, dblclick, hover, fill, press, select, waitFor, "
+                        "waitForGone, wait, scrollTo (CSS-селекторы; «выполнить JS» среди них нет и не будет); clipSelector — область "
+                        "снимка: макет попапа или модалки описывает элемент, поэтому для них укажи его, макет целого экрана — весь viewport "
+                        "(не указывай). Рецепт и clip, один раз выбранные, используй во ВСЕХ итерациях одинаково. Диалоги страницы "
+                        "(alert/confirm/prompt) закрываются сами и попадают в dialogs. target: implementation (по умолчанию) | reference "
+                        "(снимок эталонного рендера; url — file: внутри iterationDir; пишет reference.png и reference-snapshot.json). "
+                        "iterationDir — только подпапка verify/ (или baseline/) кадра из daiver_verify_state. Браузера нет — ответ "
+                        "blocked: no-browser (прочти reason и supply дословно, остановись, браузер не ставь). Страница не открылась или "
+                        "рецепт не отработал — отказ с номером шага."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
+            "url": {"type": "string", "description": "адрес страницы реализации (http/https); target=reference — file: внутри iterationDir"},
+            "iterationDir": {"type": "string", "description": "папка итерации — подпапка verify/ кадра (путь от корня проекта), из daiver_verify_state"},
+            "waitMs": {"type": "number", "description": "потолок ожидания готовности, мс: 2000…300000 (60000+ холодный старт, 25000 обычно, 5000 перепроверка)"},
+            "actions": {"type": "array", "items": {"type": "object"},
+                        "description": "рецепт открытия: шаги {verb, selector?, text?, key?, value?, ms?}; verb: click | dblclick | hover | fill (selector, text) | "
+                                       "press (key, selector?) | select (selector, value) | waitFor / waitForGone (selector, ms?) | wait (ms) | scrollTo (selector)"},
+            "clipSelector": {"type": "string", "description": "CSS-селектор элемента, который снимается (попап, модалка); без него — весь viewport"},
+            "waitForSelector": {"type": "string", "description": "CSS-селектор, который должен появиться до снимка"},
+            "waitForGone": {"type": "string", "description": "CSS-селектор загрузчика, который должен исчезнуть до снимка"},
+            "target": {"type": "string", "enum": list(CP.TARGETS), "description": "implementation (по умолчанию) | reference (эталонный рендер)"}},
+            "required": ["track", "url", "iterationDir", "waitMs"], "additionalProperties": False},
     },
     "daiver_color_tokens": {
         "fn": t_color_tokens,

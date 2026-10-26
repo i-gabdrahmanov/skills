@@ -252,6 +252,7 @@ C_FONT = c_obj({
     "letterSpacing": (c_num(), False),
     "italic": (c_bool(), False),
     "token": (c_str(nonempty=True), False),
+    "textTransform": (c_enum("uppercase", "lowercase", "capitalize"), False),   # только dom/code: страница рисует регистр сама (§14.4.3)
 })
 C_SLOT = c_obj({
     "id": (c_str(nonempty=True), True),
@@ -264,6 +265,7 @@ C_SLOT = c_obj({
 C_COMPONENT = c_obj({
     "figmaName": (c_str(nonempty=True), True),
     "implName": (c_str(nonempty=True), False),     # имя компонента реализации (fiber / JSX) — для dom/code
+    "implNames": (c_list(c_str(nonempty=True)), False),   # все имена компонентов с корнем в этом узле: внешний … внутренний (dom)
     "variants": (c_map(c_str()), False),
     "content": (c_list(C_SLOT), False),
     "textProps": (c_map(c_str()), False),
