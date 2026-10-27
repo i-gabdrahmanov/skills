@@ -183,6 +183,9 @@ prompt:
    строкой шапки `**Jira:** <KEY-123>`. В шапке обязательно `**Фронт-часть:** нет | есть: <KEY>` —
    есть ли у стори фронт-часть (её строит forge-ui во фронт-репо); по стори неясно — это
    вопрос в `pending_questions`, а не догадка. UI здесь не проектируй: §5 описывает API, нужный фронту.
+   Имён из кода в спеке нет: классы и хендлеры из grounding — для сверки, а не для цитирования.
+   Пиши `POST /api/v1/claims` и поведение, а не `ClaimController`/`findByStatus(`/`*Service` —
+   gate валит, называя строку и токен.
 
 Gate (только когда написал sdd.md, перед завершением):
   python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py sdd <slug> --project-root <project>

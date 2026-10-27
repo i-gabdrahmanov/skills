@@ -99,6 +99,37 @@ class TestCheckFixDelta(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn("код-блок", r.stdout + r.stderr)
 
+    def test_class_name_introduced_by_delta_fails(self):
+        delta = GOOD_DELTA.replace("считается невалидным", "отклоняет ClaimValidator")
+        r = _run(delta)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("ClaimValidator", r.stdout)
+
+    def test_class_name_inherited_from_master_is_not_blamed(self):
+        """Дельта несёт требование мастера целиком — его старый долг (имя класса) не её вина;
+        новое имя рядом — её."""
+        master = MASTER.replace("по валидному запросу.", "по валидному запросу (ClaimService).")
+        delta = GOOD_DELTA.replace("по валидному запросу;", "по валидному запросу (ClaimService);")
+        self.assertEqual(_run(delta, master=master).returncode, 0)
+        self.assertEqual(_run(delta, master=MASTER).returncode, 2)
+        r = _run(delta.replace("считается невалидным", "отклоняет ClaimValidator"), master=master)
+        self.assertEqual(r.returncode, 2)
+        v = json.loads(r.stdout)
+        self.assertEqual([h["token"] for h in v["impl_names"]], ["ClaimValidator"])
+
+    def test_inventory_names_fail_via_project_root(self):
+        with tempfile.TemporaryDirectory() as td:
+            inv = Path(td) / "ground" / "inventory"
+            inv.mkdir(parents=True)
+            (inv / "grounding-excerpt.json").write_text(json.dumps(
+                {"api_endpoints": [{"method": "POST", "path": "/api/claims",
+                                    "handler": "createClaim"}]}), encoding="utf-8")
+            delta = GOOD_DELTA.replace("считается невалидным", "createClaim отклоняет")
+            self.assertEqual(_run(delta).returncode, 0)
+            r = _run(delta, "--project-root", td)
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("createClaim", r.stdout)
+
     def test_too_many_requirements_fails(self):
         """«Переписал спеку заново» — ровно то, от чего защищает fix-путь."""
         body = "\n".join(

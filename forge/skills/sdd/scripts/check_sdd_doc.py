@@ -6,6 +6,8 @@
   2. Есть все обязательные разделы по политике `sdd.security_gate`.
   3. Есть хотя бы один сценарий Given-When-Then.
   4. Нет утечки реализации (код-блоки/сигнатуры → FAIL; Liquibase → warning).
+  5. Нет имён из кода: классов, методов, пакетов, файлов исходников (impl_names.py — по форме
+     токена и по инвентарю проекта ground/inventory/grounding-excerpt.json) → FAIL.
 
 Состав разделов делится на группы:
   - CORE          — всегда обязательны (ядро спеки).
@@ -24,7 +26,8 @@
 `tech-design/scripts/check_sdd.py` уже на фазе 02-design.
 
 Usage:
-    check_sdd_doc.py <sdd.md> [--pipeline-config <pipeline.json>] [--policy hard|applicability|soft] [--json]
+    check_sdd_doc.py <sdd.md> [--pipeline-config <pipeline.json>] [--policy hard|applicability|soft]
+                     [--project-root <root>] [--json]
 Exit: 0 = pass, 2 = чего-то не хватает.
 """
 from __future__ import annotations
@@ -35,6 +38,7 @@ import re
 from pathlib import Path
 
 import _root  # find_project_root: ко-локейд резолвер корня данных (как hooks/_project)
+import impl_names
 
 # --- Группы разделов. Каждый элемент — список синонимов-маркеров (любой в заголовке = раздел
 #     найден). Синонимы дают обратную совместимость со старыми sdd.md и англ. заголовками. ---
@@ -252,7 +256,7 @@ def _check_group(
             errors.append(f"раздел «{title}» пуст — заполни или пометь «не применимо: <причина>»")
 
 
-def check(sdd_path: Path, policy: str) -> dict:
+def check(sdd_path: Path, policy: str, project_root: Path | None = None) -> dict:
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -312,9 +316,15 @@ def check(sdd_path: Path, policy: str) -> dict:
         warnings.append("в sdd.md упомянут Liquibase changeset — миграции описывай на уровне "
                         "«какие таблицы/поля», детали changeset — в tech-design")
 
+    # 5. Имена из кода прозой: классы, методы, пакеты, файлы (форма токена + инвентарь).
+    known, domain = impl_names.load_inventory(
+        impl_names.excerpt_path(project_root or _root.find_project_root()))
+    hits = impl_names.find(raw, known=known, domain=domain)
+    errors.extend(impl_names.errors(hits))
+
     status = "pass" if not errors else "fail"
     return {"status": status, "sdd": str(sdd_path), "policy": policy,
-            "errors": errors, "warnings": warnings}
+            "errors": errors, "warnings": warnings, "impl_names": hits}
 
 
 def main() -> int:
@@ -324,13 +334,16 @@ def main() -> int:
                     help="путь к ground/pipeline.json (для sdd.security_gate)")
     ap.add_argument("--policy", choices=_POLICIES, default=None,
                     help="явно задать политику (перекрывает конфиг)")
+    ap.add_argument("--project-root", default=None,
+                    help="корень проекта (инвентарь для сверки имён); по умолчанию — от cwd")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
     pipeline_config = Path(args.pipeline_config) if args.pipeline_config else None
     policy = _load_policy(pipeline_config, args.policy)
 
-    verdict = check(Path(args.sdd), policy)
+    verdict = check(Path(args.sdd), policy,
+                    Path(args.project_root).resolve() if args.project_root else None)
 
     if args.json:
         print(json.dumps(verdict, ensure_ascii=False, indent=2))
