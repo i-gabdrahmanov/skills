@@ -9,7 +9,7 @@ daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_s
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
 daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report,
 daiver_plan_write, daiver_plan_contract, daiver_build_state, daiver_build_state_set, daiver_color_tokens,
-daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare, daiver_verify_state, daiver_verify_state_record, daiver_verify_decide, daiver_render_reference, daiver_visual_diff, daiver_visual_review, daiver_verify_report.
+daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare, daiver_verify_state, daiver_verify_state_record, daiver_verify_decide, daiver_render_reference, daiver_visual_diff, daiver_visual_review, daiver_verify_report, daiver_e2e_plan, daiver_e2e_run, daiver_frame_states.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -27,6 +27,7 @@ from . import component_map as CM
 from . import ds_lookup as DL
 from . import ds_requirements as DR
 from . import init as I
+from . import states as STS
 from . import layout as LAY
 from . import outline as OL
 from . import plan as PL
@@ -477,6 +478,31 @@ def t_verify_report(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         return VRPT.run(root, TR.check_track_name(args["track"]), _frame_arg(args), _path_inside(root, args["iterationDir"]), args.get("date"))
     except (TR.TrackError, VRPT.ReportError) as e:
         raise ToolError(str(e))
+
+
+MAX_REGIONS_SHOWN = 60
+
+
+def t_frame_states(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        manifest = TR.load(root, track)
+        if manifest is None:
+            raise ToolError(f"трека «{track}» нет — сначала daiver_pixso_pull")
+        frame = TR.get_frame(manifest, _frame_arg(args))
+        out = STS.public(STS.analyze(root, manifest, frame["name"]))
+    except TR.TrackError as e:
+        raise ToolError(str(e))
+    out = dict({"track": track, "frame": frame["name"]}, **out)
+    if len(out["regions"]) > MAX_REGIONS_SHOWN:
+        out["regionsMore"] = len(out["regions"]) - MAX_REGIONS_SHOWN
+        out["regions"] = out["regions"][:MAX_REGIONS_SHOWN]
+    if out["available"]:
+        out["next"] = ("кадр — состояние экрана «%s»: дальше резолв (daiver_resolve_candidates — кандидаты только в регионах added и changed), план (daiver_plan_write с plan.state: "
+                       "переменная, значения и переключатель — из triggers или названный пользователем), сборка регионов ВНУТРИ модуля экрана. consequence-изменения (размер, позиция) не пинятся" % out["screen"])
+    else:
+        out["next"] = "состояние недоступно: " + out["reason"]
+    return out
 
 
 def t_e2e_plan(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -968,6 +994,17 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "iterationDir": {"type": "string", "description": "папка итерации с actual.png (подпапка verify/ кадра)"},
             "date": {"type": "string", "description": "дата входом, одна короткая строка; без неё даты в отчёте нет"}},
             "required": ["track", "iterationDir"], "additionalProperties": False},
+    },
+    "daiver_frame_states": {
+        "fn": t_frame_states,
+        "description": ("Кадр-состояние против своего экрана (stateOf): регионы дельты shared (стабы с baseId — id узла экрана) / added / removed / changed (+changes: вариант, текст, цвет; "
+                        "consequence: true — изменения размера и позиции от контента, они не пинятся никогда) в порядке документа; triggers — кандидаты-переключатели на экране; available: false + reason, "
+                        "если схожесть < 0.6 или корни разной ширины (±1 px) — чини причину (stateOf не на тот кадр), а не планируй от целой страницы. Читающий инструмент: ничего не пишет. "
+                        "outline / section / резолв / план такого кадра работают на этой дельте автоматически."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра-состояния (у него задан stateOf)"}},
+            "required": ["track", "frame"], "additionalProperties": False},
     },
     "daiver_e2e_plan": {
         "fn": t_e2e_plan,

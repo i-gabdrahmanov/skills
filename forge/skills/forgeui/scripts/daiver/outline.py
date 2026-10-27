@@ -81,6 +81,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import canon as C
 from . import config as CFG
+from . import states as STS
 from . import track as TR
 
 MAX_TEXT_LEN = 80                 # спека §20.4: maxTextLen
@@ -201,6 +202,8 @@ def partition(m: _Map, budget: Any) -> List[Tuple[dict, int, bool, bool]]:
     occluded наследуется: секция под непрозрачным слоем — не контент экрана, даже если флаг стоит на предке."""
     out: List[Tuple[dict, int, bool, bool]] = []
     stack: List[Tuple[dict, int, bool]] = [(m.root, 0, False)]
+    if m.root.get("deltaRoot") is True:                       # кадр-состояние (6.2): секции — регионы дельты, сам синтетический корень секцией не бывает
+        stack = [(k, 1, False) for k in reversed(_kids(m.root))]
     while stack:
         n, depth, occ = stack.pop()
         occ = occ or n.get("occluded") is True
@@ -406,8 +409,8 @@ def unproven_entries(root: dict) -> List[dict]:
         n = stack.pop()
         if n.get("occluded") is True:
             continue                                          # скрытое не контент экрана: ни детей, ни подсказок
-        kids = _kids(n)
-        if n.get("kind") == "frame" and "layout" not in n and "art" not in n and len(kids) >= 2:
+        kids = [k for k in _kids(n) if not k.get("stub")]            # стабы кадра-состояния (6.2) — не дети, а ссылки на уже собранное экраном
+        if n.get("kind") == "frame" and "layout" not in n and "art" not in n and len(kids) >= 2 and not n.get("deltaRoot"):
             ids = [k["id"] for k in kids]
             out.append({"id": n["id"], "name": n.get("name", ""), "reason": ABSOLUTE, "count": len(ids),
                         "children": ",".join(ids[:MAX_ABSOLUTE_CHILD_IDS])})
@@ -464,6 +467,15 @@ def _goal(unproven: List[dict], goal_image: Optional[str], vision: bool) -> str:
     return GOAL_OPEN if vision else GOAL_VISION_OFF
 
 
+def state_view(st: dict) -> dict:
+    """Кадр-состояние в ответе outline: чей это экран, схожесть, счётчики регионов, что убрано, переключатели-кандидаты. Секции ниже — регионы added и changed."""
+    return {"screen": st["screen"], "similarity": st["similarity"], "counts": st["counts"],
+            "removed": [{"baseId": r["baseId"], "name": r["name"], "parentId": r["parentId"]} for r in st["regions"] if r["kind"] == "removed"],
+            "shared": [{"stateId": r["nodeId"], "baseId": r["baseId"], "name": r["name"]} for r in st["regions"] if r["kind"] == "shared"],
+            "triggers": st["triggers"],
+            "note": "кадр-состояние: sections — регионы added и changed (дельта к экрану), остальное уже собрано экраном; строится ВНУТРИ его модуля"}
+
+
 def build_outline(env: dict, budget: Any, *, track: Optional[str] = None, frame: Optional[str] = None,
                   frame_url: Optional[str] = None, goal_image: Optional[str] = None, vision: bool = True,
                   warnings: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -499,6 +511,8 @@ def build_outline(env: dict, budget: Any, *, track: Optional[str] = None, frame:
         out["unproven"] = shown
         if len(entries) > len(shown):
             out["unprovenDropped"] = len(entries) - len(shown)
+        if env.get("state"):
+            out["state"] = state_view(env["state"])
         out["goalImage"] = goal_image
         out["goalImageNext"] = _goal(entries, goal_image, vision)
         out["nodeUrlTemplate"] = tpl
@@ -537,6 +551,19 @@ def _ancestor(n: dict) -> dict:
     return o
 
 
+STATE_NEXT = ("секция кадра-состояния — РЕГИОН дельты, а не страница: state.region.kind added — рендерится в состоянии (поддерево node целиком); changed — правка на месте "
+              "узла экрана baseId (changes: что изменилось; consequence-изменения размера и позиции не пинятся), дети node — стабы inferred:ref:…, их уже построил экран; "
+              "код идёт ВНУТРЬ модуля экрана: переменная состояния из плана, условие на регион, переключатель; отдельной копии экрана и маршрута нет")
+
+
+def _region_of(m: _Map, n: dict) -> dict:
+    """Регион внутри крупного добавленного поддерева (секция глубже корня региона): к какому региону она относится."""
+    for a in reversed(m.chain(n)):
+        if isinstance(a.get("delta"), dict):
+            return dict(a["delta"], regionRoot=a["id"])
+    return {}
+
+
 def _refuse_unknown(m: _Map, parts: List[Tuple[dict, int, bool, bool]], section_id: str, budget: Any) -> OutlineError:
     """Почему id не секция: узла нет / он внутри секции / он тяжелее бюджета и разрезан. Всегда с выходом — какой id брать."""
     n = m.by_id.get(section_id)
@@ -569,11 +596,15 @@ def build_section(env: dict, section_id: str, budget: Any, *, track: Optional[st
     if frame is not None:
         out["frame"] = frame
     out.update({"weightBudget": budget, "section": _section_meta(m, n, depth, oversize, occluded),
-                "ancestors": [_ancestor(a) for a in m.chain(n)], "node": n})
+                "ancestors": [_ancestor(a) for a in m.chain(n) if not a.get("deltaRoot")], "node": n})
+    if env.get("state"):
+        out["state"] = {"screen": env["state"]["screen"], "region": n.get("delta") or _region_of(m, n)}
     if warnings:
         out["warnings"] = list(warnings)
     nxt = ["строй ТОЛЬКО поддерево node; ancestors — контекст (раскладка и поверхность предков root→parent), "
            "в секцию они не входят; box есть только у абсолютных узлов"]
+    if env.get("state"):
+        nxt = [STATE_NEXT]
     if oversize:
         nxt.append("лист тяжелее бюджета: не режется, строится целиком")
     if occluded:
@@ -603,6 +634,11 @@ def _load(root: Path, track: str, frame: Optional[str]) -> Tuple[dict, dict, Dic
     except C.CanonError as e:
         raise OutlineError(f"канон кадра не читается ({e}) — запустите daiver_normalize заново")
     warnings: List[str] = []
+    if f.get("stateOf"):
+        res = STS.analyze(root, manifest, f["name"])
+        if not res["available"]:
+            raise OutlineError(f"кадр «{f['name']}» объявлен состоянием экрана «{res['screen']}», но состояние недоступно: {res['reason']}")
+        env = dict(env, root=res["_delta"], state=STS.public(res))
     req = f.get("requirement") or {}
     src = (env.get("stats") or {}).get("sourceSha256")
     if src and req.get("sha256") and src != req["sha256"]:

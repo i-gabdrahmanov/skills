@@ -29,6 +29,7 @@ from .. import canon as C
 from .. import config as CFG
 from .. import outline as OL
 from .. import plan as PL
+from .. import states as STS
 from .. import track as TR
 from . import capture as CP
 from . import check as CK
@@ -184,11 +185,15 @@ def _next_step(status: str, rate: float, fidelity: Optional[float], unmatched: i
 
 def build_report(design: Any, impl: Any, plan: Any, tolerances: Optional[Dict[str, Any]], flags: Optional[Dict[str, Any]],
                  ds_inputs: Optional[Dict[str, Any]], history: List[Dict[str, Any]], noise: Set[str], template: Optional[str],
-                 decisions: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Чистая часть: макет, модель страницы, план, допуски, флаги, входы DS-гейта (`gather`-словарь | None), история, шум → отчёт."""
+                 decisions: Optional[Dict[str, Any]] = None, state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Чистая часть: макет, модель страницы, план, допуски, флаги, входы DS-гейта (`gather`-словарь | None), история, шум → отчёт. `state` — анализ кадра-состояния
+    (`states.analyze`) или None: тогда вердикт состояния (`reached | not-reached | ambiguous | unknown`) входит в отчёт, а `not-reached` — жёсткий гейт с причиной в рецепте."""
     d_root = design["root"] if isinstance(design, dict) and "root" in design and "kind" not in design else design
     i_root = impl["root"] if isinstance(impl, dict) and "root" in impl and "kind" not in impl else impl
     matched = MT.match(d_root, i_root, plan)
+    state_v = STS.verdict(state, matched, i_root) if state is not None else None
+    if state_v is not None and state_v["verdict"] == "not-reached":
+        matched["hardGate"] = {"pass": False, "matchRate": matched["stats"]["matchRate"], "min": MT.MIN_MATCH_RATE, "reason": state_v["reason"], "stateNotReached": True}
     rate, gate_ok = matched["stats"]["matchRate"], bool(matched["hardGate"]["pass"])
     res = CK.check(d_root, i_root, matched, tolerances, flags)
     react_found = ((impl.get("stats") or {}).get("react") or {}).get("found") if isinstance(impl, dict) and "root" in impl else None
@@ -232,6 +237,14 @@ def build_report(design: Any, impl: Any, plan: Any, tolerances: Optional[Dict[st
     status = "hard-gate-fail" if not gate_ok else ("clean" if not blocking else "defects")
     unverified = res["unverified"]
     nxt = _next_step(status, rate, fidelity, unmatched, counts, low and gate_ok, unverified["summary"])
+    if state_v is not None:
+        if state_v["verdict"] == "not-reached":
+            nxt = ("состояние НЕ достигнуто: " + state_v["reason"] + ". Дефектов нет (страница показывает другое состояние); исправь рецепт открытия кадра "
+                   "(daiver_track_manifest(track, frame, set={open})) и перезахвати, код не трогай")
+        elif state_v["verdict"] == "ambiguous":
+            nxt += "; вердикт состояния ambiguous — " + state_v["reason"]
+        elif state_v["verdict"] == "unknown":
+            nxt += "; вердикт состояния unknown — " + state_v["reason"]
     pairs = [{"design": p["design"], "impl": p["impl"], "anchor": p["anchor"], "confidence": p["confidence"]} for p in matched["pairs"]]
     return {
         "status": status, "matchRate": rate, "fidelity": fidelity, "unmatched": unmatched, "lowMatchRate": low, "hardGate": matched["hardGate"],
@@ -244,7 +257,7 @@ def build_report(design: Any, impl: Any, plan: Any, tolerances: Optional[Dict[st
         "degraded": res["degraded"], "tolerances": res["tolerances"], "matchStats": matched["stats"],
         "unverified": unverified, "dismissals": {"count": counts["dismissals"], "samples": (res["dismissals"] + ds["dismissals"])[:SAMPLES]},
         "pairs": pairs, "defectIds": [d["id"] for d in emitted], "defects": emitted, "findings": findings, "dismissalsAll": res["dismissals"] + ds["dismissals"],
-        "designUrlTemplate": template, "matched": matched,
+        "designUrlTemplate": template, "matched": matched, "state": state_v,
     }
 
 
@@ -328,16 +341,19 @@ def run(root: Any, track: str, frame: Optional[str], iteration_dir: Path) -> Dic
         decisions = DEC.load(root, manifest, frame)
     except DEC.DecisionsError as e:
         raise VerifyCompareError(str(e))
-    rep = build_report(design, impl, plan, cfg["verify"]["tolerances"], _flags(snapshot), ds_inputs, history, noise, template, decisions)
+    state_res = STS.analyze(root, manifest, f["name"]) if f.get("stateOf") else None
+    rep = build_report(design, impl, plan, cfg["verify"]["tolerances"], _flags(snapshot), ds_inputs, history, noise, template, decisions, state_res)
     summary = {k: rep[k] for k in ("status", "matchRate", "fidelity", "unmatched", "lowMatchRate", "hardGate", "counts", "layers", "lifecycle", "fixed",
                                    "nextStep", "gates", "ds", "degraded", "tolerances", "unverified", "dismissals", "pairs", "defectIds",
-                                   "designUrlTemplate", "decisions")}
+                                   "designUrlTemplate", "decisions", "state")}
     summary.update(track=track, frame=f["name"], capture=cap, files=out_files, declaredNoise=sorted(d["id"] for d in rep["defects"] if d.get("noise")))
     _write(iteration_dir / "findings.json", {"findings": rep["findings"], "dismissals": rep["dismissalsAll"]})
     _write(iteration_dir / "defects.json", {"defects": rep["defects"] if rep["status"] != "hard-gate-fail" else [], "fixed": rep["fixed"]})
     _write(iteration_dir / "compare-summary.json", summary)
     out = {k: summary[k] for k in ("status", "matchRate", "fidelity", "unmatched", "lowMatchRate", "counts", "lifecycle", "gates", "nextStep", "files",
                                    "capture") if k in summary}
+    if rep.get("state") is not None:
+        out["state"] = rep["state"]
     out["defects"] = rep["defects"][:20] if rep["status"] != "hard-gate-fail" else []
     if rep["unverified"]["summary"]:
         out["unverified"] = rep["unverified"]["summary"]

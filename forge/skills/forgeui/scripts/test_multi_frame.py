@@ -238,6 +238,9 @@ class Module(World):
         if state_of:
             f["role"], f["stateOf"] = "state", state_of
         node = self.TB.frame("Dlg", [self.TB.leaf("d1", name="d1", text="Диалог")], name=self.TB.autoname("Dlg"), layout={"direction": "column", "gap": 8})
+        if state_of:         # состояние — настоящая дельта экрана main (те же тексты и новая строка): иначе оно недоступно и план от него не строится
+            node = self.TB.frame("Page", [self.TB.leaf("t1", name="t1", text="Заголовок"), self.TB.leaf("t2", name="t2", text="Описание"),
+                                          self.TB.leaf("t3", name="t3", text="Добавленная строка состояния")], name=self.TB.autoname("Page"), layout={"direction": "column", "gap": 8})
         C.write_canonical(paths["canonical"], C.new_envelope(node, "pixso", {"sourceSha256": f["requirement"]["sha256"]}))
         TR.save(self.root, m)
 
@@ -297,7 +300,7 @@ class Module(World):
         with self.assertRaises(T.ToolError) as cm:
             self.write("dialog", {"placement": {"mode": "own-file"}})
         self.assertIn("stateOf", str(cm.exception))
-        self.write("dialog")
+        self.write("dialog", {"state": {"variable": "step", "screenValue": "one", "value": "two", "toggle": {"named": "кнопка «Далее»"}}})
         self.assertNotIn("module", self.plan_of("dialog"), "кадр-состояние строится внутри экрана: решения о корне у него нет (6.2)")
 
     def test_a_hand_edit_of_the_placement_is_seen_as_a_stale_plan(self):

@@ -1852,12 +1852,36 @@ class GoldenAndRpc(ModalWorld):
 
 # ── несколько кадров ─────────────────────────────────────────────────────────
 
+def texted_screen():
+    """Экран с настоящими текстами (состояние сравнивается с ним матчером по тексту): те же кандидаты h1, a, Page."""
+    return frame("Page", [inst("h1", "Modal Header", {"Steps": "OFF"}, [("Header", "Оформление заказа")]),
+                          inst("a", "Modal Action", {"Variant": "Default"}, [("Label", "Сохранить заказ"), ("Label", "Отменить заказ")]),
+                          leaf("t", text="Подробности заказа")], layout={"direction": "column", "gap": 8}, size={"w": 400, "h": "hug"})
+
+
+def error_state_of_texted():
+    """Состояние «ошибка»: кнопка в другом варианте и добавленный блок Notice."""
+    root = texted_screen()
+    root["children"][1]["component"]["variants"] = {"Variant": "Disabled"}
+    root["children"].append(frame("Notice", [leaf("nt", text="Не удалось сохранить заказ")], layout={"direction": "column", "gap": 4}))
+    return root
+
+
+STATE_PLAN = {"state": {"variable": "decision", "screenValue": "idle", "value": "error", "toggle": {"trigger": "a"}}}
+
+
 class MultiFrame(Base):
     def world(self, state=False):
-        detail = frame("Detail", [inst("d1", "Modal Header", {"Steps": "OFF"}, [("Header", "q")])])
-        self.repo(screen(), {"detail": detail}, roles={"detail": "state" if state else "dialog"})
         if state:
+            self.repo(texted_screen(), {"detail": error_state_of_texted()}, roles={"detail": "state"})
             self.call("daiver_track_manifest", track=TRACK, frame="detail", set={"stateOf": "main"})
+            self.resolve_screen()
+            self.fin(verdict("a", "local"), frame="detail")
+            self.fin(verdict("Notice", "local"), frame="detail")
+            self.report()
+            return
+        detail = frame("Detail", [inst("d1", "Modal Header", {"Steps": "OFF"}, [("Header", "q")])])
+        self.repo(screen(), {"detail": detail}, roles={"detail": "dialog"})
         self.resolve_screen()
         self.fin(verdict("Detail", "local"), frame="detail")
         self.report()
@@ -1918,7 +1942,7 @@ class MultiFrame(Base):
 
     def test_a_state_frame_is_planned_as_a_state_of_its_screen(self):
         self.world(state=True)
-        self.write_plan(frame="detail")
+        self.write_plan(STATE_PLAN, frame="detail")
         plan = json.loads((self.root / TRACK_DIR / "frames" / "detail" / "plan.json").read_text(encoding="utf-8"))
         self.assertEqual((plan["role"], plan["stateOf"]), ("state", "main"))
         self.assertIn("состояние экрана «main»", (self.root / TRACK_DIR / "frames" / "detail" / "plan.md").read_text(encoding="utf-8"))
@@ -2071,8 +2095,8 @@ class PlanCorners(Base):
         self.assertEqual(leftovers, [], "ни plan.json, ни хвостов .tmp")
 
     def test_the_input_helpers_work_without_the_tool_layer(self):
-        self.assertEqual(PL.check_input(None), ({"layout": [], "layoutRest": None, "buildOrder": None, "placement": None}, []))
-        self.assertEqual(PL.check_input([])[1], ["plan: ожидается объект {layout?, layoutRest?, buildOrder?, placement?}"])
+        self.assertEqual(PL.check_input(None), ({"layout": [], "layoutRest": None, "buildOrder": None, "placement": None, "state": None}, []))
+        self.assertEqual(PL.check_input([])[1], ["plan: ожидается объект {layout?, layoutRest?, buildOrder?, placement?, state?}"])
         self.assertEqual(PL._rel(Path("/a"), Path("/b/c")), "/b/c", "путь вне корня называется как есть")
 
     def test_more_bad_layout_entries_each_with_its_own_reason(self):
@@ -2346,20 +2370,24 @@ class ContractCorners(Base):
         self.assertEqual((unc["count"], len(unc["nodes"]), unc["nodesMore"]), (22, 20, 2))
 
     def test_a_planned_state_frame_shows_its_screen_in_the_digest_and_shared_locals_reach_the_question(self):
-        detail = frame("Detail", [inst("d1", "Modal Header", {"Steps": "OFF"}, [("Header", "q")])])
-        self.repo(screen(), {"detail": detail}, roles={"detail": "state"})
+        self.repo(texted_screen(), {"detail": error_state_of_texted()}, roles={"detail": "state"})
         self.call("daiver_track_manifest", track=TRACK, frame="detail", set={"stateOf": "main"})
         self.resolve_screen()
-        self.fin(verdict("Detail", "local"), frame="detail")
+        self.fin(verdict("a", "local"), frame="detail")
+        self.fin(verdict("Notice", "local"), frame="detail")
         self.report()
-        for n in ("main", "detail"):
-            self.write_plan(frame=n)
+        self.write_plan(frame="main")
+        self.write_plan(STATE_PLAN, frame="detail")
         self.set_url()
         self.call("daiver_track_manifest", track=TRACK, frame="detail", set={
             "open": {"actions": [{"verb": "click", "selector": "#more"}], "clipSelector": ".state"}})
         out = self.contract()
         self.assertTrue(out["ready"], out["open"])
-        self.assertIn("state ← «main»", (self.root / UI_PLAN_REL).read_text(encoding="utf-8"))
+        digest = (self.root / UI_PLAN_REL).read_text(encoding="utf-8")
+        self.assertIn("state ← «main»", digest)
+        self.assertIn("## Состояния экранов", digest)
+        self.assertIn("| detail | main | `decision`: idle → error | узел `a` | 1 / 1 / 0 |", digest, "регионы: added / changed / убрано")
+        self.assertIn("Состояния экранов (внутри модуля экрана): detail ← main: decision idle → error, переключатель a", out["toSign"])
 
     def test_a_second_frame_with_a_placement_puts_the_one_module_into_the_digest_and_the_question(self):
         """6.1: у не-первичного кадра решение о месте корня видно человеку (дайджест и вопрос подписи); у одного кадра раздела «Модуль» нет."""

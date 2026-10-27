@@ -50,7 +50,7 @@ TEXT = SKILL.read_text(encoding="utf-8")
 STEP_TOOLS = ("daiver_status", "daiver_pixso_pull", "daiver_track_manifest", "daiver_normalize", "daiver_svg_assets",
               "daiver_outline", "daiver_ds_inventory", "daiver_ds_requirements", "daiver_ds_lookup", "daiver_ds_details",
               "daiver_resolve_candidates", "daiver_resolve_query", "daiver_resolve_finalize", "daiver_resolve_report",
-              "daiver_source_nodes", "daiver_map_append", "daiver_plan_write", "daiver_plan_contract")
+              "daiver_source_nodes", "daiver_map_append", "daiver_plan_write", "daiver_plan_contract", "daiver_frame_states")
 MAX_FILE_LINES = 360                            # 320 → 345: шаг ui-build (3.2, §4 — до 52 строк); 345 → 350: daiver_screenshot (4.2); 350 → 360: цикл ui-verify (4.8, §5); рост дальше — выноси в код
 MAX_STEP_LINES = 110                            # шаг вырос на план, контракт и подпись (2.6): 8 → 10 пунктов
 

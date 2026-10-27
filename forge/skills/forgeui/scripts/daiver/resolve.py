@@ -1082,6 +1082,25 @@ def _next_for(ctx: Ctx, hit: Optional[Dict[str, Any]], rec: Optional[Dict[str, A
     return f"правила в карте нет: {how}; затем daiver_resolve_finalize. Геометрии и стилей здесь нет — для выбора они не нужны"
 
 
+def _screen_verdict(ctx: "Ctx", cand: Cand) -> Optional[Dict[str, Any]]:
+    """Кадр-состояние (6.2): changed-регион — тот же узел, что на экране, но с другим вариантом/текстом. Вердикт экрана по базовому узлу — подсказка: тот же компонент остаётся
+    (меняется проп под новый вариант), а не решается заново. Решает по-прежнему резолвер: подсказка вердикта не пишет."""
+    delta = cand.node.get("delta") if isinstance(cand.node.get("delta"), dict) else None
+    screen = ctx.frame.get("stateOf")
+    if not delta or delta.get("kind") != "changed" or not screen or not delta.get("baseId"):
+        return None
+    try:
+        path = store_path(ctx.root, ctx.manifest, screen)
+        store = read_store(ctx.root, path) if path.is_file() else None
+    except (ResolveError, TR.TrackError):
+        return None
+    rec = (store or {}).get("verdicts", {}).get(delta["baseId"])
+    if not rec:
+        return None
+    return {"frame": screen, "nodeId": delta["baseId"], "changes": delta.get("changes"), **_view(rec),
+            "hint": "узел — тот же, что на экране, но изменился: компонент остаётся тем же (decision component, тот же component), уточни props под новый вариант/текст из changes"}
+
+
 def query_frame(root: Any, track: str, frame: Optional[str], node_id: Any) -> Dict[str, Any]:
     """Проекция ОДНОГО кандидата + результат карты (§10.2). Читает, не пишет."""
     if not isinstance(node_id, str) or not node_id:
@@ -1116,6 +1135,9 @@ def query_frame(root: Any, track: str, frame: Optional[str], node_id: Any) -> Di
                 if auth[1]:
                     reuse["fromFrame"] = auth[1]
                 out["reuse"] = reuse
+    screen_verdict = _screen_verdict(ctx, cand)
+    if screen_verdict is not None:
+        out["screenVerdict"] = screen_verdict
     icon = cand.kind == "icon" and st.hits[cand.id] is None
     if icon and rec is None and reuse is None:
         out["iconFallback"] = ctx.mv.icons_fallback

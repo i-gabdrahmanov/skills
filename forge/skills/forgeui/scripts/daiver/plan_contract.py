@@ -768,6 +768,11 @@ class Contract:
                  "Компоненты библиотеки: " + (", ".join(lib[:SHOWN]) + (" …" if len(lib) > SHOWN else "") or "нет")]
         if shared:
             lines.append("Общие local-компоненты: " + ", ".join(shared[:SHOWN]))
+        sts = [(fx.f["name"], p["state"]) for fx, p in zip(self.w.frames.values(), plans) if p.get("state")]
+        if sts:
+            lines.append("Состояния экранов (внутри модуля экрана): " + "; ".join(
+                f"{n} ← {s['screen']}: {s['variable']} {s['values']['screen']} → {s['values']['state']}, переключатель "
+                + (s["toggle"]["id"] if s["toggle"]["kind"] == "trigger" else "по слову пользователя") for n, s in sts[:SHOWN]))
         mods = [(fx.f["name"], p["module"]) for fx, p in zip(self.w.frames.values(), plans) if p.get("module")]
         if mods:
             lines.append("Один модуль трека; корни кадров: " + "; ".join(f"{n} — " + (f"внутри первичного, узел {m['root']['host']}" if m["root"]["mode"] == "inside-primary"

@@ -11,6 +11,8 @@
 чужие: `daiver_section` режет по бюджету, и сборка обязана брать тот же), `tree` (оболочка над секциями — контейнеры с дайджестом
 раскладки layout/size/box — и ссылки `{section: id}`), `sections[]` (id, hash, вес, дайджест раскладки корня секции, `nodes[]` —
 решения по кандидатам: `{component, props}` | `{resolution: local}` | `{resolution: ignore}` + confidence и откуда вердикт),
+`state` и `delta` (ТОЛЬКО у кадра-состояния `stateOf`, 6.2: переменная состояния, её значения у экрана и у состояния, переключатель — из `triggers` или названный; `delta` — что состояние убирает и что берёт у экрана готовым;
+секции такого плана — регионы added и changed дельты к экрану, а не страница),
 `module` (ТОЛЬКО у не-первичного кадра без `stateOf`: заявленное решение плана о месте корня кадра в едином модуле трека — {name: имя первичного кадра, root: {mode, component, host?, reason?}}, 6.1),
 `buildOrder` (РЕАЛЬНЫЕ id секций с хешами: сначала секции, создающие общие local-компоненты, затем их потребители, дальше порядок
 документа; occluded не строится; пролог — токены и моки — не секция и в порядок не входит, INV-B12), `locals`, `layout` (решение по
@@ -30,7 +32,7 @@
 Допущения, не проверенные данными (боевых экранов и планов нет): правило общих local-компонентов и их имён; ровно три яруса
 buildOrder (создатели → потребители → остальное); решения по раскладке и геометрия групп (gap/box из боксов канона в допуске 1 px
 — `LAYOUT_TOLERANCE`, §20.4); состав `design` (токены макета и цвета без привязанного токена; сверка с `project.styling.colorsFile`
-— при сборке, 3.2); `stateOf`-план и per-region рендеры — 6.2; кадр-ревизия и дельты — 6.3.
+— при сборке, 3.2); `stateOf`-план (6.2) — регионы дельты и `plan.state`; кадр-ревизия и дельты версий — 6.3.
 """
 from __future__ import annotations
 
@@ -54,7 +56,9 @@ LAYOUT_REST = "keep-px"
 EVIDENCE = ("declaration", "goal-image", "user", "none")
 LAYOUT_DECISIONS = {OL.HINTS: ("apply", "keep-px"), OL.ABSOLUTE: ("keep-px", "group")}
 GROUP_DIRECTIONS = ("row", "column")
-INPUT_KEYS = ("layout", "layoutRest", "buildOrder", "placement")
+INPUT_KEYS = ("layout", "layoutRest", "buildOrder", "placement", "state")
+STATE_KEYS = ("variable", "screenValue", "value", "toggle")
+_VARIABLE_RE = re.compile(r"^[a-z][A-Za-z0-9]{0,31}$")
 PLACEMENT_MODES = ("own-file", "inside-primary")
 PLACEMENT_KEYS = ("mode", "component", "host", "reason")
 _COMPONENT_RE = re.compile(r"^[A-Z][A-Za-z0-9]{0,63}$")
@@ -166,7 +170,7 @@ def check_input(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
-        return {}, ["plan: ожидается объект {layout?, layoutRest?, buildOrder?, placement?}"]
+        return {}, ["plan: ожидается объект {layout?, layoutRest?, buildOrder?, placement?, state?}"]
     for k in raw:
         if k not in INPUT_KEYS:
             problems.append(f"plan.{k}: неизвестное поле (допустимы {', '.join(INPUT_KEYS)}); дерево секций, решения по узлам, "
@@ -190,7 +194,54 @@ def check_input(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
         if bad:
             problems += bad
             placement = None
-    return {"layout": layout or [], "layoutRest": rest, "buildOrder": order, "placement": placement}, problems
+    state = raw.get("state")
+    if state is not None:
+        bad = state_shape_problems(state)
+        if bad:
+            problems += bad
+            state = None
+    return {"layout": layout or [], "layoutRest": rest, "buildOrder": order, "placement": placement, "state": state}, problems
+
+
+def state_shape_problems(s: Any) -> List[str]:
+    """Форма `state` (план кадра-состояния): {variable, screenValue, value, toggle: {trigger: id} | {named: текст}}."""
+    if not isinstance(s, dict):
+        return ["plan.state: ожидается объект {variable, screenValue, value, toggle}"]
+    out = [f"plan.state.{k}: неизвестное поле (допустимы {', '.join(STATE_KEYS)})" for k in s if k not in STATE_KEYS]
+    if not (isinstance(s.get("variable"), str) and _VARIABLE_RE.match(s["variable"])):
+        out.append("plan.state.variable: имя переменной состояния латиницей в camelCase (decision, step, isOpen)")
+    for k in ("screenValue", "value"):
+        v = s.get(k)
+        if not (isinstance(v, str) and v.strip() and len(v) <= 40 and "\n" not in v):
+            out.append(f"plan.state.{k}: короткая строка — значение переменной ({'на экране' if k == 'screenValue' else 'в этом состоянии'}), например yes | no")
+    if isinstance(s.get("value"), str) and s.get("value") == s.get("screenValue"):
+        out.append("plan.state: value и screenValue одинаковы — переключать нечего")
+    t = s.get("toggle")
+    if not isinstance(t, dict) or set(t) not in ({"trigger"}, {"named"}) or not isinstance(next(iter(t.values())), str) or not next(iter(t.values())).strip():
+        out.append("plan.state.toggle: ровно одно из {trigger: id из triggers кадра-состояния} | {named: что переключает, названное пользователем}")
+    return out
+
+
+def state_of(ctx: "RS.Ctx", given: Optional[Dict[str, Any]]) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+    """План состояния кадра-состояния: переменная, значения, переключатель. Обязателен у `stateOf`-кадра, чужд остальным. → (state | None, нарушения)."""
+    st = ctx.env.get("state")
+    if not ctx.frame.get("stateOf"):
+        return None, (["plan.state: поле только у кадра-состояния (stateOf) — у этого кадра его нет"] if given is not None else [])
+    if given is None:
+        trig = ", ".join(t["id"] for t in (st or {}).get("triggers", [])[:5]) or "кандидатов нет — назови переключатель словами"
+        return None, [f"plan.state обязателен у кадра-состояния: {{variable, screenValue, value, toggle: {{trigger: id}} | {{named: …}}}}; кандидаты-переключатели экрана: {trig}"]
+    out = {"screen": ctx.frame["stateOf"], "variable": given["variable"], "values": {"screen": given["screenValue"], "state": given["value"]}}
+    problems: List[str] = []
+    if "trigger" in given["toggle"]:
+        tid = given["toggle"]["trigger"]
+        hit = next((t for t in (st or {}).get("triggers", []) if t["id"] == tid), None)
+        if hit is None:
+            problems.append(f"plan.state.toggle.trigger: «{tid}» нет среди переключателей-кандидатов (daiver_frame_states → triggers); названного пользователем — toggle.named")
+        else:
+            out["toggle"] = {"kind": "trigger", "id": tid, "name": hit["name"]}
+    else:
+        out["toggle"] = {"kind": "named", "name": " ".join(given["toggle"]["named"].split())[:WHY_MAX]}
+    return out, problems
 
 
 def placement_shape_problems(p: Any) -> List[str]:
@@ -580,7 +631,8 @@ def _digest(n: dict) -> Dict[str, Any]:
 
 
 def derive(ctx: "RS.Ctx", st: "RS.State", budget: Any, explicit: List[Dict[str, Any]], rest: Optional[str],
-           specs: Dict[str, Any], placement: Optional[Dict[str, Any]] = None, hosts: Optional[set] = None) -> Tuple[Dict[str, Any], List[str]]:
+           specs: Dict[str, Any], placement: Optional[Dict[str, Any]] = None, hosts: Optional[set] = None,
+           state_in: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], List[str]]:
     """План кадра из текущих данных: канон + подтверждённый резолв + карта + спеки + решения по раскладке. → (план, нарушения
     решений по раскладке). Чистая функция: ни времени, ни случайности, ни файлов."""
     env, root_node = ctx.env, ctx.env["root"]
@@ -619,6 +671,8 @@ def derive(ctx: "RS.Ctx", st: "RS.State", budget: Any, explicit: List[Dict[str, 
             if k in mt:
                 s[k] = mt[k]
         s.update(_digest(m.by_id[sid]))
+        if root_node.get("deltaRoot"):                       # секция кадра-состояния — регион (или часть добавленного региона): какого вида
+            s["region"] = (m.by_id[sid].get("delta") or OL._region_of(m, m.by_id[sid])).get("kind")
         s["nodes"] = sec_nodes[sid]
         sections.append(s)
     order_ids = [sid for sid in sec_ids if not meta[sid].get("occluded")]
@@ -679,6 +733,13 @@ def derive(ctx: "RS.Ctx", st: "RS.State", budget: Any, explicit: List[Dict[str, 
     }
     if ctx.frame.get("stateOf"):
         plan["stateOf"] = ctx.frame["stateOf"]
+    state, bad_state = state_of(ctx, state_in)
+    problems = list(problems) + bad_state
+    if state is not None:
+        plan["state"] = state
+    if root_node.get("deltaRoot"):
+        plan["delta"] = {"removed": root_node.get("removed") or [], "shared": root_node.get("shared") or [],
+                         "similarity": (ctx.env.get("state") or {}).get("similarity")}
     module, bad = module_of(ctx, placement, hosts)
     problems = list(problems) + bad
     if module is not None:
@@ -818,6 +879,8 @@ def render_md(plan: Dict[str, Any]) -> str:
            "Пролог (токены, моки) — не секция и в порядок не входит; секции под непрозрачным слоем (occluded) не строятся.", ""]
     if plan.get("module"):
         out[out.index("## Порядок сборки"):out.index("## Порядок сборки")] = module_md(plan["module"])
+    if plan.get("state"):
+        out[out.index("## Порядок сборки"):out.index("## Порядок сборки")] = state_md(plan)
     creates: Dict[str, List[str]] = {}
     for x in plan["locals"]:
         if x["shared"]:
@@ -828,7 +891,7 @@ def render_md(plan: Dict[str, Any]) -> str:
         out.append(f"{i}. {_link(tpl, b['id'])} «{_cell(b['name'])}» · hash `{b['hash']}` · {s['weight']} Б{mark}")
     if not plan["buildOrder"]:
         out.append("Строить нечего: все секции кадра закрыты непрозрачным слоем.")
-    if "section" not in plan["tree"]:
+    if "section" not in plan["tree"] and not plan.get("state"):
         out += ["", "## Оболочка над секциями", ""]
         out += _tree_lines(plan["tree"], by_id)
     out += ["", "## Секции", ""]
@@ -971,7 +1034,7 @@ def build_frame(root: Path, track: str, frame: Optional[str], raw_plan: Any, wei
     except OL.OutlineError as e:
         raise PlanError(str(e))
     plan, problems = derive(ctx, st, budget, inp["layout"], inp["layoutRest"],
-                            specs_digest(root, track, ctx.manifest, story_spec), inp["placement"], _hosts(root, ctx, inp["placement"]))
+                            specs_digest(root, track, ctx.manifest, story_spec), inp["placement"], _hosts(root, ctx, inp["placement"]), inp["state"])
     if inp["buildOrder"] is not None:
         problems += check_build_order(inp["buildOrder"], plan["buildOrder"], {s["id"]: s for s in plan["sections"]}, budget)
     if problems:
@@ -1047,12 +1110,38 @@ def _placement_from_file(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return {k: v for k, v in root.items() if k in PLACEMENT_KEYS}
 
 
+def _state_from_file(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Решение о состоянии, восстановленное из плана (вход для пересборки)."""
+    s = data.get("state")
+    if not isinstance(s, dict) or not isinstance(s.get("values"), dict) or not isinstance(s.get("toggle"), dict):
+        return None
+    t = s["toggle"]
+    toggle = {"trigger": t.get("id")} if t.get("kind") == "trigger" else {"named": t.get("name")}
+    given = {"variable": s.get("variable"), "screenValue": s["values"].get("screen"), "value": s["values"].get("state"), "toggle": toggle}
+    return None if state_shape_problems(given) else given
+
+
 def _hosts(root: Path, ctx: "RS.Ctx", placement: Optional[Dict[str, Any]]) -> Optional[set]:
     """Узлы первичного кадра грузятся только когда нужен host (канон может быть большим)."""
     if not (placement or {}).get("host"):
         return None
     frames = ctx.manifest.get("frames") or []
     return host_ids(root, ctx.manifest, frames[0]["name"]) if frames else None
+
+
+def state_md(plan: Dict[str, Any]) -> List[str]:
+    s, d = plan["state"], plan.get("delta") or {}
+    tg = s["toggle"]
+    toggle = f"узел экрана `{tg['id']}` «{_cell(tg['name'])}»" if tg["kind"] == "trigger" else f"названный пользователем: {_cell(tg['name'])}"
+    out = ["## Состояние экрана", "",
+           f"Кадр — состояние экрана «{s['screen']}» (схожесть {d.get('similarity')}): строится ВНУТРИ его модуля, отдельной копии экрана и маршрута нет. Переменная состояния `{s['variable']}`: "
+           f"на экране `{s['values']['screen']}`, в этом состоянии `{s['values']['state']}`. Переключатель: {toggle}. Секции ниже — регионы added и changed; их условие — "
+           f"`{s['variable']} === '{s['values']['state']}'`.", ""]
+    if d.get("removed"):
+        out += ["Экран рисует, а состояние — нет (условие на скрытие):", ""] + [f"- `{r['baseId']}` «{_cell(r['name'])}» (внутри `{r['parentId']}`)" for r in d["removed"]] + [""]
+    if d.get("shared"):
+        out += ["Берётся у экрана готовым (не пишется заново): " + ", ".join(f"`{r['baseId']}`" for r in d["shared"][:SHOWN]) + (" …" if len(d["shared"]) > SHOWN else ""), ""]
+    return out
 
 
 def module_md(module: Dict[str, Any]) -> List[str]:
@@ -1102,7 +1191,8 @@ def check_frame(root: Any, ctx: "RS.Ctx", st: "RS.State", story_spec: Optional[S
     explicit, rest = _input_from_file(data)
     placement = _placement_from_file(data)
     try:
-        want, problems = derive(ctx, st, budget, explicit, rest, specs_digest(root, ctx.track, ctx.manifest, story_spec), placement, _hosts(root, ctx, placement))
+        want, problems = derive(ctx, st, budget, explicit, rest, specs_digest(root, ctx.track, ctx.manifest, story_spec), placement, _hosts(root, ctx, placement),
+                                _state_from_file(data))
     except PlanError as e:
         return {"state": "unknown", "detail": f"план нельзя сверить с данными: {e}"}
     if problems:

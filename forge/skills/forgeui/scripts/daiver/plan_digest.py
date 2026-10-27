@@ -12,7 +12,7 @@
 Что НЕ входит. Состояние подписи (оно зависит от хеша самого дайджеста — цикл) и блокирующие вопросы контракта: файл пишется,
 только когда их нет, а подпись не должна слетать оттого, что на машине пропал браузер (готовность и подпись — разные вещи); сверка цветов макета с переменными проекта
 (`project.styling.colorsFile`) — она делается при сборке (`daiver_color_tokens`, 3.2), здесь честно названы цвета без привязанного
-токена; per-region рендеры и `stateOf`-план — 6.2.
+токена; кадры-состояния (6.2) — раздел «Состояния экранов» (переменная, значения, переключатель, регионы).
 """
 from __future__ import annotations
 
@@ -50,6 +50,22 @@ def _module(frames: List[Dict[str, Any]]) -> List[str]:
         r = m["root"]
         where = f"внутри первичного кадра, узел `{r['host']}`" if r["mode"] == "inside-primary" else "отдельный компонент в каталоге модуля"
         out.append(f"| {name} | {where} | {r['component']} | {r.get('reason') or '—'} |")
+    return out + [""]
+
+
+def _states(frames: List[Dict[str, Any]]) -> List[str]:
+    """Раздел «Состояния экранов» — только когда в треке есть кадры-состояния с планом: переменная, значения, переключатель, регионы дельты."""
+    rows = [(f["name"], f["plan"]) for f in frames if isinstance(f.get("plan"), dict) and f["plan"].get("state")]
+    if not rows:
+        return []
+    out = ["Кадры-состояния строятся ВНУТРИ модуля своего экрана: переменная состояния, условие на регион, переключатель; отдельной копии экрана и маршрута нет.", "",
+           "| Кадр | Экран | Переменная: значения | Переключатель | Регионы (added / changed / убрано) |", "|---|---|---|---|---|"]
+    for name, p in rows:
+        s, t = p["state"], p["state"]["toggle"]
+        toggle = f"узел `{t['id']}`" if t["kind"] == "trigger" else f"со слов пользователя: {PL._cell(t['name'])}"
+        kinds = [x.get("region") for x in p.get("sections") or []]
+        out.append(f"| {name} | {s['screen']} | `{s['variable']}`: {s['values']['screen']} → {s['values']['state']} | {toggle} | "
+                   f"{len([k for k in kinds if k == 'added'])} / {len([k for k in kinds if k == 'changed'])} / {len((p.get('delta') or {}).get('removed') or [])} |")
     return out + [""]
 
 
@@ -209,6 +225,9 @@ def render(track: str, frames: List[Dict[str, Any]], design_system: str, degrada
     mod = _module(frames)
     if mod:
         out += ["", "## Модуль", ""] + mod
+    states = _states(frames)
+    if states:
+        out += ["", "## Состояния экранов", ""] + states
     out += ["", "## Секции", ""] + _sections(frames)
     out += ["## Компоненты", ""] + _components(frames)
     out += ["## Дизайн-система", ""] + _design(frames, design_system)
