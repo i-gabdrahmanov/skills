@@ -446,11 +446,15 @@ Diff фикса (только src/main): <git diff HEAD -- src/main>.
    внеси точечную правку и добавь регресс-сценарий. Не переписывай требование заново.
    Баг вскрыл поведение, которого в спеке нет вовсе — заведи ОДНО новое требование.
 3. Больше ничего в дельту не клади: ни архитектуру, ни NFR, ни код, ни описание самого фикса.
+   Имён из кода тоже: класс/метод, который чинишь (`ClaimValidator`, `findByStatus(`), в спеке
+   называй поведением («система отклоняет заявку без email»). Имена, уже стоящие в мастере,
+   гейт тебе в вину не ставит.
 4. ПОСЛЕДНИМ действием прогони гейт ЧЕРЕЗ РАННЕР (без него шаг не закроется):
    python3 <project>/.gigacode/skills/pipeline-state/scripts/record_gate.py --project <toplevel> --skill forgefix --feature <KEY|slug> --step-id fix-spec --cmd "python3 <project>/.gigacode/skills/forgefix/scripts/check_fix_delta.py <fixdir>/sdd.md --plan <fixdir>/task-plan.json --project-root <toplevel> --anchor <REQ-ID|none>"
    FAIL «не правит зафиксированный якорь» — название требования в дельте разошлось с якорем.
    FAIL «сценарии будут потеряны» — ты не перенёс сценарии мастера, вернись к п.2.
    FAIL «лимит требований/строк» — ты переписал спеку, оставь только затронутое.
+   FAIL «имена классов / вызовы методов / … : стр. N `X`» — перепиши строку N словами поведения.
 Верни JSON: {"step_id":"fix-spec","status":"completed|failed","delta":"<путь к sdd.md>",
 "requirements":["<названия>"],"anchored":true|false,"summary":"1-2 предложения"}
 ```

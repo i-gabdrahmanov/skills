@@ -1357,7 +1357,9 @@ def check_sdd_doc(slug: str, feature_dir: Path | None) -> dict:
     if sdd_path and sdd_path.exists():
         try:
             r = subprocess.run(
-                [sys.executable, str(check_sdd_doc_script), str(sdd_path), "--json"],
+                [sys.executable, str(check_sdd_doc_script), str(sdd_path), "--json"]
+                # корень — для сверки имён по инвентарю проекта (ground/inventory), а не от cwd
+                + (["--project-root", str(project_root)] if project_root else []),
                 capture_output=True, text=True, timeout=60,
             )
             if r.returncode == 0:
