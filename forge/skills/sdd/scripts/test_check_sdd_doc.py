@@ -233,6 +233,33 @@ class GateTest(unittest.TestCase):
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
+    # --- имена из кода (impl_names) ---
+
+    def test_class_and_method_names_fail(self):
+        doc = full_doc().replace(
+            "**Then** статус ACCEPTED.",
+            "**Then** `ClaimService.accept()` ставит статус ACCEPTED.")
+        v = gate.check(self._write(doc), "applicability")
+        self.assertEqual(v["status"], "fail")
+        self.assertTrue(any("ClaimService.accept(" in e for e in v["errors"]), v["errors"])
+        self.assertEqual({h["rule"] for h in v["impl_names"]}, {"method", "class"})
+
+    def test_inventory_names_fail_via_project_root(self):
+        """Имя без суффикса слоя ловится только по инвентарю — и инвентарь ищется в корне
+        проекта, переданном явно (run_judge передаёт --project-root), а не от cwd."""
+        proj = Path(self._tmp.name) / "proj"
+        inv = proj / "ground" / "inventory"
+        inv.mkdir(parents=True)
+        (inv / "grounding-excerpt.json").write_text(json.dumps(
+            {"components": [{"name": "CftGateway", "layer": "component"}]}), encoding="utf-8")
+        doc = full_doc().replace("Живёт в service-claims", "Живёт в service-claims, ходит в CftGateway")
+        path = self._write(doc)
+        self.assertEqual(gate.check(path, "applicability")["status"], "pass")   # cwd: инвентаря нет
+        r = subprocess.run([sys.executable, str(SCRIPT), str(path), "--json",
+                            "--project-root", str(proj)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("CftGateway", r.stdout)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -181,6 +181,9 @@ prompt:
   (обязательные секции: бизнес-контекст, функциональные требования Given-When-Then, NFR,
    API-контракты, модель данных, критерии приёмки, риски). Если Jira-ключ есть — первой
    строкой шапки `**Jira:** <KEY-123>`.
+   Имён из кода в спеке нет: классы и хендлеры из grounding — для сверки, а не для цитирования.
+   Пиши `POST /api/v1/claims` и поведение, а не `ClaimController`/`findByStatus(`/`*Service` —
+   gate валит, называя строку и токен.
 
 Gate (только когда написал sdd.md, перед завершением):
   python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py sdd <slug> --project-root <project>

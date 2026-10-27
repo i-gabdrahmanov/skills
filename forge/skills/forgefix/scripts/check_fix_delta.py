@@ -11,7 +11,10 @@
   1. Дельта есть, непустая, из неё парсятся требования-кандидаты (`### <название>` в §3).
   2. Есть хотя бы один сценарий Given-When-Then — регресс-сценарий бага (спека должна
      научиться описывать поведение, которого раньше не покрывала).
-  3. В спеке нет кода (fence java/sql/xml/diff, import/@RestController/public class).
+  3. В спеке нет кода (fence java/sql/xml/diff, import/@RestController/public class) и имён из
+     кода — классов, методов, пакетов, файлов (sdd/scripts/impl_names.py, тот же линтер, что у
+     гейта SDD). Имена, которые уже лежат в мастере, дельте в вину не ставятся: она обязана нести
+     требование мастера целиком, а долг мастера — не её.
   4. Дельта МИНИМАЛЬНА: не больше --max-requirements требований и --max-lines строк.
      Превышение = «переписал спеку заново вместо правки» — это и есть то, что fix-путь чинит.
   5. Если мастер резолвится: у требований, попавших в `~ modify`, число GWT-сценариев не
@@ -43,6 +46,11 @@ try:
     import merge_delta_to_master as _engine  # noqa: E402
 except Exception:  # noqa: BLE001 — мастер-движок недоступен: якорь не проверяем, но гейт живёт
     _engine = None
+
+# Линтер имён реализации — общий со спекой фичи (skills/sdd/scripts). Без fallback: нет линтера —
+# падение импорта (rc 1, record_gate пишет passed:false), а не тихо снятая проверка.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sdd" / "scripts"))
+import impl_names  # noqa: E402
 
 _GWT = re.compile(r"(?i)given.*when.*then")
 _CODE_FENCE = re.compile(r"```(?:java|diff|kotlin|sql|xml)\b", re.IGNORECASE)
@@ -77,8 +85,13 @@ def check_delta(raw: str, *, master_reqs=None, plan: dict | None = None,
                 anchor: str | None = None,
                 max_requirements: int = DEFAULT_MAX_REQUIREMENTS,
                 max_lines: int = DEFAULT_MAX_LINES,
-                allow_scenario_drop: bool = False) -> dict:
-    """Вердикт по тексту дельты. {status, requirements, ops, errors, warnings}."""
+                allow_scenario_drop: bool = False,
+                known: "tuple | set" = (), domain: "tuple | set" = (),
+                master_text: str | None = None) -> dict:
+    """Вердикт по тексту дельты. {status, requirements, ops, errors, warnings, impl_names}.
+
+    known/domain — имена кода и сущностей из инвентаря (impl_names.load_inventory);
+    master_text — текст мастера: его имена реализации дельте не ставятся в вину."""
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -117,6 +130,10 @@ def check_delta(raw: str, *, master_reqs=None, plan: dict | None = None,
     if _CODE_SIGNS.search(raw):
         errors.append("в дельте есть сигнатуры кода (import/@RestController/public class) — "
                       "спека описывает поведение, а не реализацию")
+    inherited = {h["token"] for h in impl_names.find(master_text, known=known, domain=domain)} \
+        if master_text else set()
+    hits = impl_names.find(raw, known=known, domain=domain, ignore=inherited)
+    errors.extend(impl_names.errors(hits, where="в дельте"))
 
     # ── якорь в мастере: modify vs add + защита от потери сценариев ────────────────
     ops_fmt: list[str] = []
@@ -180,7 +197,7 @@ def check_delta(raw: str, *, master_reqs=None, plan: dict | None = None,
 
     return {"status": "pass" if not errors else "fail",
             "requirements": len(candidates), "ops": ops_fmt,
-            "errors": errors, "warnings": warnings}
+            "errors": errors, "warnings": warnings, "impl_names": hits}
 
 
 def main() -> int:
@@ -225,11 +242,19 @@ def main() -> int:
 
     root = Path(args.project_root).resolve() if args.project_root else None
     master_reqs, spec_path = _load_master_reqs(root, args.spec, args.capability)
+    master_text = None
+    if spec_path:
+        try:
+            master_text = Path(spec_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            master_text = None
+    known, domain = impl_names.load_inventory(impl_names.excerpt_path(root) if root else None)
 
     verdict = check_delta(delta_text,
                           master_reqs=master_reqs, plan=plan, anchor=args.anchor,
                           max_requirements=args.max_requirements, max_lines=args.max_lines,
-                          allow_scenario_drop=args.allow_scenario_drop)
+                          allow_scenario_drop=args.allow_scenario_drop,
+                          known=known, domain=domain, master_text=master_text)
     verdict["delta"] = str(delta_path)
     if spec_path:
         verdict["master"] = str(spec_path)
