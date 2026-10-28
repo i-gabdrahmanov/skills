@@ -372,7 +372,11 @@ CONSENT_PREFIXES = ("gate-override", "rollback", "skip-judges", "policy-repin",
                     # tech-plan-<F>: утверждение плана техзадачи ЗАДАЁТ скоуп записи (targets)
                     # и разрешённый diff (expected_changes). Самовыписанное согласие = сам себе
                     # расширил, что можно менять, — тот же класс, что снятие гейта.
-                    "tech-plan")
+                    "tech-plan",
+                    # spec-entity-<Имя> — аналитик утвердил имя в форме класса сущностью
+                    # предметной области: линтер имён (sdd/impl_names) его больше не валит.
+                    # Самовыписанное = модель сама сняла гейт с любого `ClaimService`.
+                    "spec-entity")
 
 
 def consent_required(key: str) -> bool:

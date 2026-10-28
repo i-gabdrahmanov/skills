@@ -260,6 +260,40 @@ class GateTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertIn("CftGateway", r.stdout)
 
+    def test_entity_with_layer_suffix_passes_after_grounding_rebuild(self):
+        """`CreateTaskConfig.name` при устаревшем grounding: гейт сверяется с кодом, пересобирает
+        grounding и пропускает сущность, сообщая об этом предупреждением."""
+        proj = Path(self._tmp.name) / "proj"
+        (proj / "ground").mkdir(parents=True)
+        (proj / "ground" / "policy.json").write_text("{}", encoding="utf-8")
+        src = proj / "src" / "main" / "java" / "CreateTaskConfig.java"
+        src.parent.mkdir(parents=True)
+        src.write_text("@Entity\n@Table(name = \"create_task_config\")\n"
+                       "public class CreateTaskConfig { private String name; }\n",
+                       encoding="utf-8")
+        doc = full_doc().replace("**Then** статус ACCEPTED.",
+                                 "**Then** заполнено поле CreateTaskConfig.name.")
+        v = gate.check(self._write(doc), "applicability", project_root=proj)
+        self.assertEqual(v["impl_names"], [], v["errors"])
+        self.assertTrue(any("CreateTaskConfig" in w for w in v["warnings"]), v["warnings"])
+
+    def test_unknown_object_waits_for_analyst_only_when_nothing_else_fails(self):
+        """Имя в форме класса, которого нет ни среди сущностей, ни в коде, — вопрос аналитику.
+        `awaiting_analyst` — только когда спека во всём остальном готова: иначе это обычная
+        ре-итерация писателя (run_judge её засчитывает)."""
+        proj = Path(self._tmp.name) / "proj"
+        (proj / "ground").mkdir(parents=True)
+        (proj / "ground" / "policy.json").write_text("{}", encoding="utf-8")
+        doc = full_doc().replace("**Then** статус ACCEPTED.",
+                                 "**Then** заполнено поле TaskUpzConfig.name.")
+        v = gate.check(self._write(doc), "applicability", project_root=proj)
+        self.assertEqual(v["status"], "fail")
+        self.assertEqual((v["pending_entities"], v["awaiting_analyst"]), (["TaskUpzConfig"], True))
+
+        doc = doc.replace("**Then** заполнено", "`findByStatus(x)` **Then** заполнено")
+        v = gate.check(self._write(doc), "applicability", project_root=proj)
+        self.assertEqual((v["pending_entities"], v["awaiting_analyst"]), (["TaskUpzConfig"], False))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
