@@ -1529,16 +1529,16 @@ class ModalSample(World):
         self.assertEqual(self.stage(), "built")
         self.assertEqual(BS.gate_problems(self.root, TRACK), [])
 
-    def test_a_started_build_state_locks_the_frame_against_a_repeated_pull_until_task_6_3(self):
-        """Пин ТЕКУЩЕГО правила 1.2: pull считает кадр с build-state.json «собранным» (файл есть — отказ, ревизии — 6.3). Создание
-        состояния первой сверкой запирает кадр уже на pending-секциях; смягчить правило («есть done») — задача 6.3."""
+    def test_a_started_build_state_does_not_lock_the_frame_and_the_same_export_changes_nothing(self):
+        """Правило 6.3: «собран» — все секции done (`status.frame_built`), а не «есть build-state.json». Начатая сборка кадр не запирает:
+        тот же экспорт ничего не меняет (mode unchanged), состояние сборки на месте; ревизию заводит только pull поверх собранного."""
         self.modal()
-        self.call("daiver_pixso_pull", track=TRACK, dslPath=".daiver/inbox/main.dsl.json", frameUrl=URL, frame="main")
         self.bs()
-        with self.assertRaises(T.ToolError) as cm:
-            self.call("daiver_pixso_pull", track=TRACK, dslPath=".daiver/inbox/main.dsl.json", frameUrl=URL, frame="main")
-        self.assertIn("уже собран", str(cm.exception))
-        self.assertIn("6.3", str(cm.exception))
+        before = self.state()
+        out = self.call("daiver_pixso_pull", track=TRACK, dslPath=".daiver/inbox/main.dsl.json", frameUrl=URL, frame="main")
+        self.assertEqual((out["mode"], out["unchanged"]), ("unchanged", True))
+        self.assertEqual(self.state(), before)
+        self.assertNotIn("baseline", TR.get_frame(TR.load(self.root, TRACK), "main"))
 
 
 # ── реестр инструментов ──────────────────────────────────────────────────────

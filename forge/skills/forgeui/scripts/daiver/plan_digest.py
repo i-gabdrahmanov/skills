@@ -12,7 +12,8 @@
 Что НЕ входит. Состояние подписи (оно зависит от хеша самого дайджеста — цикл) и блокирующие вопросы контракта: файл пишется,
 только когда их нет, а подпись не должна слетать оттого, что на машине пропал браузер (готовность и подпись — разные вещи); сверка цветов макета с переменными проекта
 (`project.styling.colorsFile`) — она делается при сборке (`daiver_color_tokens`, 3.2), здесь честно названы цвета без привязанного
-токена; кадры-состояния (6.2) — раздел «Состояния экранов» (переменная, значения, переключатель, регионы).
+токена; кадры-состояния (6.2) — раздел «Состояния экранов» (переменная, значения, переключатель, регионы); ревизии (6.3) — раздел «Ревизии»
+(база, регионы, что удалить из кода).
 """
 from __future__ import annotations
 
@@ -66,6 +67,22 @@ def _states(frames: List[Dict[str, Any]]) -> List[str]:
         kinds = [x.get("region") for x in p.get("sections") or []]
         out.append(f"| {name} | {s['screen']} | `{s['variable']}`: {s['values']['screen']} → {s['values']['state']} | {toggle} | "
                    f"{len([k for k in kinds if k == 'added'])} / {len([k for k in kinds if k == 'changed'])} / {len((p.get('delta') or {}).get('removed') or [])} |")
+    return out + [""]
+
+
+def _revisions(frames: List[Dict[str, Any]]) -> List[str]:
+    """Раздел «Ревизии» — только когда в треке есть кадры-ревизии с планом (6.3): база, регионы, что удалить."""
+    rows = [(f["name"], f["plan"]) for f in frames if isinstance(f.get("plan"), dict) and f["plan"].get("baseline")]
+    if not rows:
+        return []
+    out = ["Ревизия — ИЗМЕНЕНИЕ собранного экрана: строится в существующий код (ни пролога, ни нового модуля), прежняя версия лежит в versions/<n>/.", "",
+           "| Кадр | База | Регионы (added / changed) | Удалить из кода | Решений взято у версии |", "|---|---|---|---|---|"]
+    for name, p in rows:
+        b = p["baseline"]
+        kinds = [x.get("region") for x in p.get("sections") or []]
+        gone = ", ".join(f"`{r['baseId']}`" for r in b["removed"][:5]) + (" …" if len(b["removed"]) > 5 else "") if b["removed"] else "—"
+        out.append(f"| {name} | версия {b['version']} (схожесть {b['similarity']}) | {len([k for k in kinds if k == 'added'])} / "
+                   f"{len([k for k in kinds if k == 'changed'])} | {gone} | {len(b['inherited'])} |")
     return out + [""]
 
 
@@ -228,6 +245,9 @@ def render(track: str, frames: List[Dict[str, Any]], design_system: str, degrada
     states = _states(frames)
     if states:
         out += ["", "## Состояния экранов", ""] + states
+    revisions = _revisions(frames)
+    if revisions:
+        out += ["", "## Ревизии", ""] + revisions
     out += ["", "## Секции", ""] + _sections(frames)
     out += ["## Компоненты", ""] + _components(frames)
     out += ["## Дизайн-система", ""] + _design(frames, design_system)

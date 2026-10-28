@@ -302,7 +302,8 @@ def expected_codes(kw, unreadable) -> list:
     elif spec["req"] == "missing":
         out.append("requirement-missing")
     elif spec["req"] == "stale":
-        out.append("requirement-stale-built" if spec["build"] is not None else "requirement-stale")
+        built = isinstance(spec["build"], list) and spec["build"] and all(x == "done" for x in spec["build"])
+        out.append("requirement-stale-built" if built else "requirement-stale")
     return sorted(out)
 
 
@@ -492,24 +493,26 @@ class Warnings(Env):
         self.assertEqual(t["frames"][0]["requirementStatus"], "stale")
         self.assertIn("Сначала warnings: requirement-stale", t["nextStep"])
 
-    def test_stale_requirement_of_a_built_frame_without_version_is_the_loudest(self):
+    def test_stale_requirement_of_a_built_frame_is_the_loudest(self):
         self.track(frame("a", raster=False), frame("b", req="stale", build=["done"], url=PAGE))
         st = status(self.root)
         self.assertEqual(codes(st), ["goal-image-missing", "requirement-stale-built"])
         self.assertTrue(st["warnings"][0].startswith("requirement-stale-built:"),
                         "громкое идёт первым, хотя кадр «a» раньше в манифесте")
         text = warning(st, "requirement-stale-built")
-        for part in ("СОБРАН", "versions/", "«b»", "верни файл из git"):
+        for part in ("СОБРАН", "versions/", "«b»", "daiver_pixso_pull", "из git"):
             self.assertIn(part, text)
 
-    def test_stale_built_frame_with_a_saved_version_is_an_ordinary_stale(self):
+    def test_a_saved_version_does_not_quiet_a_stale_built_frame(self):
+        """Ревизия (6.3) тоже собирается: требование собранной ревизии, изменённое мимо pull, громко так же — versions/ его не оправдывают."""
         self.track(frame(req="stale", build=["done"], versions=True))
-        self.assertEqual(codes(self.one()[1]), ["requirement-stale"])
-
-    def test_partially_built_frame_is_built_for_the_stale_rule(self):
-        """«Собран» — как у pull: есть build-state.json (он и отказывает в перезаписи), а не «все секции done»."""
-        self.track(frame(req="stale", build=["pending"]))
         self.assertEqual(codes(self.one()[1]), ["requirement-stale-built"])
+
+    def test_partially_built_frame_is_not_built_for_the_stale_rule(self):
+        """«Собран» — как у pull (6.3): все секции done. Недостроенный кадр pull перезаписывает (сверка сборки пометит stale сдвинутые секции),
+        поэтому его устаревшее требование — обычное «тяни заново»."""
+        self.track(frame(req="stale", build=["pending"]))
+        self.assertEqual(codes(self.one()[1]), ["requirement-stale"])
 
     def test_missing_requirement_file_and_frame_without_requirement(self):
         self.track(frame(req="missing"))

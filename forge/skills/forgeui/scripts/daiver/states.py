@@ -125,8 +125,12 @@ def _name(n: dict) -> str:
     return str(n.get("name") or n["id"])
 
 
-def compare(screen_env: dict, state_env: dict, screen_name: str, state_name: str) -> Dict[str, Any]:
-    """Сравнение двух канонов. → публичный ответ + `_delta` (дельта-корень) и `_pairs` для вызывающих внутри пакета."""
+def compare(screen_env: dict, state_env: dict, screen_name: str, state_name: str, *, gate: bool = True,
+            delta_id: Optional[str] = None) -> Dict[str, Any]:
+    """Сравнение двух канонов. → публичный ответ + `_delta` (дельта-корень) и `_pairs` для вызывающих внутри пакета.
+
+    `gate=False` — регионы считаются при любой схожести и ширине (ревизия кадра, 6.3: новая версия макета остаётся тем же экраном, сколько бы
+    дизайнер ни поменял; порог 0.6 и ширина — признак «это не состояние», а не «это не ревизия»). `delta_id` — id синтетического дельта-корня."""
     broot, sroot = screen_env["root"], state_env["root"]
     out: Dict[str, Any] = {"screen": screen_name, "state": state_name, "similarityMin": SAME_SCREEN_SIMILARITY}
     wb, ws = _width(broot), _width(sroot)
@@ -139,11 +143,12 @@ def compare(screen_env: dict, state_env: dict, screen_name: str, state_name: str
         problems.append(f"схожесть кадров {sim} < {SAME_SCREEN_SIMILARITY}: «{state_name}» — не состояние экрана «{screen_name}», а другой экран")
     if wb is not None and ws is not None and abs(wb - ws) > WIDTH_TOLERANCE:
         problems.append(f"корни разной ширины ({ws:g} px у «{state_name}» и {wb:g} px у «{screen_name}»; допуск ±{WIDTH_TOLERANCE}): это другой брейкпоинт или другой экран")
-    if problems:
+    if problems and gate:
         out.update(available=False, reason="; ".join(problems) + ". Чини причину: stateOf указывает не на тот кадр (daiver_track_manifest) — либо заведи кадр как экран; "
                                                                    "план от целой страницы состояния не строится")
         out.update(regions=[], triggers=[], consequences=[])
         return out
+    out["_mismatch"] = problems                           # без гейта — для слов вызывающего (ревизия называет «почти всё другое» предупреждением)
     s2b: Dict[str, str] = {}
     conf: Dict[str, str] = {}
     for p in fwd["pairs"]:
@@ -210,7 +215,7 @@ def compare(screen_env: dict, state_env: dict, screen_name: str, state_name: str
             removed_list.append({"baseId": k["id"], "name": _name(k), "parentId": nid, "hash": h})
             regions.append({"id": f"removed:{k['id']}", "kind": "removed", "nodeId": k["id"], "baseId": k["id"], "name": _name(k), "parentId": nid, "hash": h})
         stack.extend(reversed(_kids(n)))
-    droot = {"id": DELTA_PREFIX + state_name, "kind": "frame", "name": f"{state_name} Δ {screen_name}", "children": delta_children, "deltaRoot": True,
+    droot = {"id": delta_id or DELTA_PREFIX + state_name, "kind": "frame", "name": f"{state_name} Δ {screen_name}", "children": delta_children, "deltaRoot": True,
              "removed": removed_list, "shared": shared_list}
     out.update(available=True, regions=regions, consequences=consequences[:20])
     out["counts"] = {k: sum(1 for r in regions if r["kind"] == k) for k in KINDS}
@@ -239,7 +244,8 @@ def _content_ids(node: dict) -> List[str]:
 
 def _exclusive(regions: List[dict], changes: Dict[str, List[dict]], b_by_id: Dict[str, dict], s_by_id: Dict[str, dict], s2b: Dict[str, str]) -> Dict[str, List[str]]:
     """Эксклюзивное содержимое сторон: что есть ТОЛЬКО в состоянии (added-поддеревья и узлы с изменённым текстом) и ТОЛЬКО на экране (removed-поддеревья и узлы со старым текстом).
-    Узлы с изменённым лишь вариантом или цветом не годятся в свидетели: компонент на странице есть в обоих состояниях."""
+    Узлы с изменённым лишь вариантом или цветом не годятся в свидетели: компонент на странице есть в обоих состояниях. По той же причине не годится инстанс,
+    у которого сменился только текст СЛОТА (`slots`): матчер спаривает инстанс по имени, и он «найден» на странице любой стороны."""
     state: List[str] = []
     screen: List[str] = []
     for r in regions:
@@ -247,7 +253,7 @@ def _exclusive(regions: List[dict], changes: Dict[str, List[dict]], b_by_id: Dic
             state += _content_ids(s_by_id[r["nodeId"]])
         elif r["kind"] == "removed":
             screen += _content_ids(b_by_id[r["nodeId"]])
-        elif r["kind"] == "changed" and any(c["kind"] == "text" for c in changes.get(r["nodeId"], [])):
+        elif r["kind"] == "changed" and any(c["kind"] == "text" and c["prop"] == "text" for c in changes.get(r["nodeId"], [])):
             state.append(r["nodeId"])
             screen.append(s2b[r["nodeId"]])
     return {"state": state, "screen": screen}

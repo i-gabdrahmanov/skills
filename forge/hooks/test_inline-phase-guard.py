@@ -420,7 +420,8 @@ PRODUCTIVE = {
 # читающие и «оркестраторские» инструменты — свободны на любом шаге: иначе оркестратор заблокировал бы собственную работу
 FREE_TOOLS = ("daiver_status", "daiver_init", "daiver_map_append", "daiver_map_lookup", "daiver_outline", "daiver_section",
               "daiver_source_nodes", "daiver_ds_inventory", "daiver_ds_lookup", "daiver_ds_details", "daiver_ds_requirements",
-              "daiver_color_tokens", "daiver_spec", "daiver_track_manifest", "daiver_capabilities", "daiver_frame_states")
+              "daiver_color_tokens", "daiver_spec", "daiver_track_manifest", "daiver_capabilities", "daiver_frame_states",
+              "daiver_frame_baseline")
 
 
 class TPhaseTools(unittest.TestCase):

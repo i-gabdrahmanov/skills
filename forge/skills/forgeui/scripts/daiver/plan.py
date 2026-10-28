@@ -13,6 +13,9 @@
 решения по кандидатам: `{component, props}` | `{resolution: local}` | `{resolution: ignore}` + confidence и откуда вердикт),
 `state` и `delta` (ТОЛЬКО у кадра-состояния `stateOf`, 6.2: переменная состояния, её значения у экрана и у состояния, переключатель — из `triggers` или названный; `delta` — что состояние убирает и что берёт у экрана готовым;
 секции такого плана — регионы added и changed дельты к экрану, а не страница),
+`baseline` (ТОЛЬКО у ревизии, 6.3: `{kind: version, version, similarity, removed: [{baseId, name, parentId, files}], inherited: [{id, baseId, component | resolution}]}` —
+на какой собранной версии стоит изменение, что удалить из кода и из каких файлов, решения узлов shared-частей, взятые у версии по base-id; секции — регионы
+дельты к версии, `delta` — как у состояния; место корня не-первичного кадра (`module`) по умолчанию берётся у версии),
 `module` (ТОЛЬКО у не-первичного кадра без `stateOf`: заявленное решение плана о месте корня кадра в едином модуле трека — {name: имя первичного кадра, root: {mode, component, host?, reason?}}, 6.1),
 `buildOrder` (РЕАЛЬНЫЕ id секций с хешами: сначала секции, создающие общие local-компоненты, затем их потребители, дальше порядок
 документа; occluded не строится; пролог — токены и моки — не секция и в порядок не входит, INV-B12), `locals`, `layout` (решение по
@@ -32,7 +35,7 @@
 Допущения, не проверенные данными (боевых экранов и планов нет): правило общих local-компонентов и их имён; ровно три яруса
 buildOrder (создатели → потребители → остальное); решения по раскладке и геометрия групп (gap/box из боксов канона в допуске 1 px
 — `LAYOUT_TOLERANCE`, §20.4); состав `design` (токены макета и цвета без привязанного токена; сверка с `project.styling.colorsFile`
-— при сборке, 3.2); `stateOf`-план (6.2) — регионы дельты и `plan.state`; кадр-ревизия и дельты версий — 6.3.
+— при сборке, 3.2); `stateOf`-план (6.2) — регионы дельты и `plan.state`; ревизия (6.3) — регионы дельты к собранной версии и `baseline`.
 """
 from __future__ import annotations
 
@@ -43,6 +46,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from . import baseline as BL
 from . import canon as C
 from . import component_map as CM
 from . import outline as OL
@@ -739,7 +743,11 @@ def derive(ctx: "RS.Ctx", st: "RS.State", budget: Any, explicit: List[Dict[str, 
         plan["state"] = state
     if root_node.get("deltaRoot"):
         plan["delta"] = {"removed": root_node.get("removed") or [], "shared": root_node.get("shared") or [],
-                         "similarity": (ctx.env.get("state") or {}).get("similarity")}
+                         "similarity": (ctx.env.get("state") or ctx.env.get("baseline") or {}).get("similarity")}
+    bl = ctx.env.get("baseline")
+    if bl:
+        plan["baseline"] = {"kind": "version", "version": bl["version"], "similarity": bl["similarity"], "removed": BL.removed_view(bl),
+                            "inherited": list(bl.get("inherited") or [])}
     module, bad = module_of(ctx, placement, hosts)
     problems = list(problems) + bad
     if module is not None:
@@ -881,6 +889,10 @@ def render_md(plan: Dict[str, Any]) -> str:
         out[out.index("## Порядок сборки"):out.index("## Порядок сборки")] = module_md(plan["module"])
     if plan.get("state"):
         out[out.index("## Порядок сборки"):out.index("## Порядок сборки")] = state_md(plan)
+    if plan.get("baseline"):
+        out[out.index("## Порядок сборки"):out.index("## Порядок сборки")] = baseline_md(plan)
+        out[out.index("## Порядок сборки") + 2] = ("Пролога у ревизии нет: токены, моки и модуль уже в коде (mocks.ts дополняется); секции под непрозрачным слоем "
+                                                  "(occluded) не строятся.")
     creates: Dict[str, List[str]] = {}
     for x in plan["locals"]:
         if x["shared"]:
@@ -891,7 +903,7 @@ def render_md(plan: Dict[str, Any]) -> str:
         out.append(f"{i}. {_link(tpl, b['id'])} «{_cell(b['name'])}» · hash `{b['hash']}` · {s['weight']} Б{mark}")
     if not plan["buildOrder"]:
         out.append("Строить нечего: все секции кадра закрыты непрозрачным слоем.")
-    if "section" not in plan["tree"] and not plan.get("state"):
+    if "section" not in plan["tree"] and not plan.get("state") and not plan.get("baseline"):
         out += ["", "## Оболочка над секциями", ""]
         out += _tree_lines(plan["tree"], by_id)
     out += ["", "## Секции", ""]
@@ -1033,8 +1045,9 @@ def build_frame(root: Path, track: str, frame: Optional[str], raw_plan: Any, wei
         budget, _warn = OL.effective_budget(Path(root), weight_budget)
     except OL.OutlineError as e:
         raise PlanError(str(e))
+    placement = effective_placement(ctx, inp["placement"])
     plan, problems = derive(ctx, st, budget, inp["layout"], inp["layoutRest"],
-                            specs_digest(root, track, ctx.manifest, story_spec), inp["placement"], _hosts(root, ctx, inp["placement"]), inp["state"])
+                            specs_digest(root, track, ctx.manifest, story_spec), placement, _hosts(root, ctx, placement), inp["state"])
     if inp["buildOrder"] is not None:
         problems += check_build_order(inp["buildOrder"], plan["buildOrder"], {s["id"]: s for s in plan["sections"]}, budget)
     if problems:
@@ -1121,6 +1134,18 @@ def _state_from_file(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None if state_shape_problems(given) else given
 
 
+def effective_placement(ctx: "RS.Ctx", placement: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Место корня не-первичного кадра: названное в плане — оно; у ревизии без названного — то, что решил план собранной версии (корень уже в коде)."""
+    if placement is not None:
+        return placement
+    mod = (ctx.env.get("baseline") or {}).get("module")
+    root = mod.get("root") if isinstance(mod, dict) else None
+    if not isinstance(root, dict):
+        return None
+    got = {k: v for k, v in root.items() if k in PLACEMENT_KEYS}
+    return None if placement_shape_problems(got) else got
+
+
 def _hosts(root: Path, ctx: "RS.Ctx", placement: Optional[Dict[str, Any]]) -> Optional[set]:
     """Узлы первичного кадра грузятся только когда нужен host (канон может быть большим)."""
     if not (placement or {}).get("host"):
@@ -1141,6 +1166,23 @@ def state_md(plan: Dict[str, Any]) -> List[str]:
         out += ["Экран рисует, а состояние — нет (условие на скрытие):", ""] + [f"- `{r['baseId']}` «{_cell(r['name'])}» (внутри `{r['parentId']}`)" for r in d["removed"]] + [""]
     if d.get("shared"):
         out += ["Берётся у экрана готовым (не пишется заново): " + ", ".join(f"`{r['baseId']}`" for r in d["shared"][:SHOWN]) + (" …" if len(d["shared"]) > SHOWN else ""), ""]
+    return out
+
+
+def baseline_md(plan: Dict[str, Any]) -> List[str]:
+    b = plan["baseline"]
+    out = ["## Изменение версии", "",
+           f"Кадр — РЕВИЗИЯ собранной версии {b['version']} (схожесть {b['similarity']}): строится В СУЩЕСТВУЮЩИЙ код читаемым диффом — ни пролога, ни "
+           f"нового модуля, маршрута и моков с нуля; структура, имена и стиль файлов сохраняются. Секции ниже — регионы added (дописать туда, где "
+           f"собран родитель) и changed (правка на месте); файлы региона даёт `daiver_section` (`baseline.region.files`). Прежняя версия — "
+           f"`versions/{b['version']}/` (её `plan.md` — решения, по которым код собран).", ""]
+    if b["removed"]:
+        out += ["Удалить из кода — в новой версии этого нет (если код использует ещё кто-то в проекте, скажи об этом и чужое не ломай):", ""]
+        for r in b["removed"]:
+            where = ", ".join(f"`{_cell(x)}`" for x in r["files"]) if r["files"] else "файлы не найдены — ищи по плану версии"
+            out.append(f"- `{_cell(r['baseId'])}` «{_cell(r['name'])}» (внутри `{_cell(r['parentId'])}`) — {where}")
+        out.append("")
+    out += [f"Решений узлов, взятых у собранной версии без пересмотра (shared-части): {len(b['inherited'])}.", ""]
     return out
 
 
@@ -1189,7 +1231,7 @@ def check_frame(root: Any, ctx: "RS.Ctx", st: "RS.State", story_spec: Optional[S
         return {"state": "open", "detail": "plan.json: нет положительного weightBudget — файл не от движка; пересобери: "
                                            "daiver_plan_write(track, frame, plan)"}
     explicit, rest = _input_from_file(data)
-    placement = _placement_from_file(data)
+    placement = effective_placement(ctx, _placement_from_file(data))
     try:
         want, problems = derive(ctx, st, budget, explicit, rest, specs_digest(root, ctx.track, ctx.manifest, story_spec), placement, _hosts(root, ctx, placement),
                                 _state_from_file(data))

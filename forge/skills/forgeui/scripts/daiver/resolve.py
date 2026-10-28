@@ -27,6 +27,12 @@ component, §7.2; иконки резолвятся по карте/`icons.fallb
 Вердикт по правилу карты в переиспользование не идёт: карта сверяется с каждым узлом отдельно (узлы с тем же ключом и тем же
 вердиктом правила получают запись `map` за один finalize, но эталоном для узлов без правила она не служит).
 
+Кадр-состояние и ревизия (6.2, 6.3, §10.1 п.4–5). Их канон — дельта-корень (`outline._load`), поэтому кандидаты есть ТОЛЬКО в регионах added и
+changed. У ревизии ранним эталоном ключа служит и хранилище собранной версии (`versions/<n>/resolutions.json`, «кадр» `<имя> v<n>`): узел с тем же
+figmaName и вариантами, что был в собранной версии, получает её вердикт копией; changed-узел, у которого сменился вариант, — кандидат с подсказкой
+`baseVerdict` (вердикт версии по base-id + changes), как `screenVerdict` у состояния. Shared-части не кандидаты: их вердикты план ревизии наследует
+по base-id (`baseline.inherited`).
+
 Хранилище — `resolutions.json` в папке кадра (`track.frame_paths(...)["resolutions"]`; у трека из одного кадра это
 `.daiver/tracks/<KEY>/resolutions.json`): машинное хранилище движка, руками не правится; повреждённый файл — отказ с
 названной причиной, а не молчаливый сброс. Ни времени, ни случайности: один и тот же порядок вызовов даёт побайтно один файл.
@@ -35,7 +41,7 @@ component, §7.2; иконки резолвятся по карте/`icons.fallb
 
 Что НЕ делает этот модуль (граница с 2.5/7.2): политика подтверждений `workflow.confirmResolutions` («low — ВСЕГДА
 спрашивается», INV-C6), `resolution-report.md` и согласие `ui-resolve-<KEY>` — `resolution_report.py` (2.5); `icons.fallback` здесь только
-отдаётся в ответе query для иконки без правила; автономия (в ней low → local) — 7.2; state-кадры (§10.1 п.4–5) — 6.2/6.3. Вердикт хранит
+отдаётся в ответе query для иконки без правила; автономия (в ней low → local) — 7.2. Вердикт хранит
 `confidence` как есть; поля подтверждения человеком в записи нет: подтверждение привязано к тексту отчёта (контракт вердикта INV-A7 не меняется).
 """
 from __future__ import annotations
@@ -881,20 +887,30 @@ def foreign_authorities(root: Path, manifest: dict, frame_name: str) -> Tuple[Di
     frames = manifest.get("frames") or []
     here = 0
     out: Dict[str, Tuple[int, Dict[str, Any], str]] = {}
+    sources: List[Tuple[int, Path, str]] = []
     for i, f in enumerate(frames):
         if f["name"] == frame_name:
             here = i
+            n = TR.baseline_version(f)
+            if n is not None:                   # ревизия (6.3): собранная версия — самый ранний эталон, её вердикты уже в коде
+                sources.append((-1, TR.version_paths(root, manifest, frame_name, n)["resolutions"], f"{frame_name} v{n}"))
             continue
-        path = store_path(root, manifest, f["name"])
+        sources.append((i, store_path(root, manifest, f["name"]), f["name"]))
+    for i, path, name in sources:
         if not path.is_file():
             continue
-        other = read_store(root, path)
+        try:
+            other = read_store(root, path)
+        except ResolveError:
+            if i < 0:
+                continue                        # хранилище версии повреждено — эталоном она не служит, резолв идёт как без неё
+            raise
         for rec in other["verdicts"].values():
             if rec["source"] != "resolver" or "|" not in rec["key"]:
                 continue                        # переиспользуются только вердикты резолвера по ключу инстанса (`имя|варианты`)
             cur = out.get(rec["key"])
             if cur is None or (i, rec["seq"]) < (cur[0], cur[1]["seq"]):
-                out[rec["key"]] = (i, rec, f["name"])
+                out[rec["key"]] = (i, rec, name)
     return out, here
 
 
@@ -1101,6 +1117,26 @@ def _screen_verdict(ctx: "Ctx", cand: Cand) -> Optional[Dict[str, Any]]:
             "hint": "узел — тот же, что на экране, но изменился: компонент остаётся тем же (decision component, тот же component), уточни props под новый вариант/текст из changes"}
 
 
+def _base_verdict(ctx: "Ctx", cand: Cand) -> Optional[Dict[str, Any]]:
+    """Ревизия (6.3): changed-регион — узел собранной версии, у которого изменилось содержимое. Вердикт версии по base-id — подсказка (тот же
+    компонент с новым пропом, если сменился только вариант); решает резолвер, подсказка вердикта не пишет."""
+    delta = cand.node.get("delta") if isinstance(cand.node.get("delta"), dict) else None
+    n = TR.baseline_version(ctx.frame)
+    if not delta or delta.get("kind") != "changed" or n is None or not delta.get("baseId"):
+        return None
+    try:
+        path = TR.version_paths(ctx.root, ctx.manifest, ctx.fname, n)["resolutions"]
+        store = read_store(ctx.root, path) if path.is_file() else None
+    except (ResolveError, TR.TrackError):
+        return None
+    rec = (store or {}).get("verdicts", {}).get(delta["baseId"])
+    if not rec:
+        return None
+    return {"version": n, "nodeId": delta["baseId"], "changes": delta.get("changes"), **_view(rec),
+            "hint": ("узел собран в версии %d и изменился: другой figmaName — решай заново; сменился только вариант или текст — обычно тот же "
+                     "компонент (decision component, тот же component) с props под новый вариант из changes") % n}
+
+
 def query_frame(root: Any, track: str, frame: Optional[str], node_id: Any) -> Dict[str, Any]:
     """Проекция ОДНОГО кандидата + результат карты (§10.2). Читает, не пишет."""
     if not isinstance(node_id, str) or not node_id:
@@ -1138,6 +1174,9 @@ def query_frame(root: Any, track: str, frame: Optional[str], node_id: Any) -> Di
     screen_verdict = _screen_verdict(ctx, cand)
     if screen_verdict is not None:
         out["screenVerdict"] = screen_verdict
+    base_verdict = _base_verdict(ctx, cand)
+    if base_verdict is not None:
+        out["baseVerdict"] = base_verdict
     icon = cand.kind == "icon" and st.hits[cand.id] is None
     if icon and rec is None and reuse is None:
         out["iconFallback"] = ctx.mv.icons_fallback

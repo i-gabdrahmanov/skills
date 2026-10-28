@@ -37,6 +37,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from .. import baseline as BL
 from .. import canon as C
 from .. import color_tokens as CT
 from .. import component_map as CM
@@ -84,25 +85,31 @@ def _index(root: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 def plan_decisions(plan: Any, known: Set[str]) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
     """plan.json → ({id узла макета: {"decision": component|local|ignore, "component": имя?}}, id чужих кадров).
 
-    Читаются записи `sections[].nodes[]` (форма нашего плана); пустая или неразобранная запись молча пропускается, остальные
-    работают. Запись с id, которого нет в макете, — чужой кадр: она не решение, а повод `degraded`."""
+    Читаются записи `sections[].nodes[]` (форма нашего плана) и у ревизии — решения, унаследованные у собранной версии (`baseline.inherited`, 6.3);
+    пустая или неразобранная запись молча пропускается, остальные работают. Запись с id, которого нет в макете, — чужой кадр: она не решение, а
+    повод `degraded`."""
     out: Dict[str, Dict[str, Any]] = {}
     foreign: List[str] = []
     secs = plan.get("sections") if isinstance(plan, dict) else None
+    entries: List[Any] = []
     for s in secs if isinstance(secs, list) else []:
-        for e in (s.get("nodes") if isinstance(s, dict) else None) or []:
-            if not isinstance(e, dict) or not isinstance(e.get("id"), str):
-                continue
-            if isinstance(e.get("component"), str) and e["component"].strip():
-                rec = {"decision": "component", "component": e["component"].strip()}
-            elif e.get("resolution") in ("local", "ignore"):
-                rec = {"decision": e["resolution"], "component": None}
-            else:
-                continue
-            if e["id"] not in known:
-                foreign.append(e["id"])
-            else:
-                out[e["id"]] = rec
+        entries += (s.get("nodes") if isinstance(s, dict) else None) or []
+    base = plan.get("baseline") if isinstance(plan, dict) else None
+    if isinstance(base, dict) and isinstance(base.get("inherited"), list):
+        entries += base["inherited"]
+    for e in entries:
+        if not isinstance(e, dict) or not isinstance(e.get("id"), str):
+            continue
+        if isinstance(e.get("component"), str) and e["component"].strip():
+            rec = {"decision": "component", "component": e["component"].strip()}
+        elif e.get("resolution") in ("local", "ignore"):
+            rec = {"decision": e["resolution"], "component": None}
+        else:
+            continue
+        if e["id"] not in known:
+            foreign.append(e["id"])
+        else:
+            out[e["id"]] = rec
     return out, sorted(set(foreign))
 
 
@@ -127,11 +134,13 @@ def gather(root: Any, track: str, frame: Optional[str] = None) -> Dict[str, Any]
     out["plan"] = plan
     if why:
         notes.append(f"plan.json {why}: идентичность по плану не исполняется")
-    state = BS.load_state(root, paths["buildState"], track, TR.get_frame(manifest, frame)["name"])
+    fname = TR.get_frame(manifest, frame)["name"]
+    state = BS.load_state(root, paths["buildState"], track, fname)
     if state is None:
         notes.append("нет build-state.json: исходников для скана нет")
     else:
-        files = sorted({o for s in state["sections"] for o in (s.get("outputs") or [])})
+        files = sorted({o for s in state["sections"] for o in (s.get("outputs") or [])}
+                       | {o for layer in BL.version_sections(root, manifest, fname) for s in layer for o in s["outputs"]})   # ревизия: код всех версий (6.3)
         for rel in files:
             full = root / rel
             if not (TS.is_js(rel) or TS.is_style(rel)) or not full.is_file():

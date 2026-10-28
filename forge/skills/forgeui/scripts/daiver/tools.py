@@ -9,7 +9,7 @@ daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_s
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
 daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report,
 daiver_plan_write, daiver_plan_contract, daiver_build_state, daiver_build_state_set, daiver_color_tokens,
-daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare, daiver_verify_state, daiver_verify_state_record, daiver_verify_decide, daiver_render_reference, daiver_visual_diff, daiver_visual_review, daiver_verify_report, daiver_e2e_plan, daiver_e2e_run, daiver_frame_states.
+daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare, daiver_verify_state, daiver_verify_state_record, daiver_verify_decide, daiver_render_reference, daiver_visual_diff, daiver_visual_review, daiver_verify_report, daiver_e2e_plan, daiver_e2e_run, daiver_frame_states, daiver_frame_baseline.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from . import baseline as BL
 from . import build_state as BS
 from . import capabilities as CA
 from . import color_tokens as CT
@@ -483,6 +484,34 @@ def t_verify_report(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
 MAX_REGIONS_SHOWN = 60
 
 
+def t_frame_baseline(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        manifest = TR.load(root, track)
+        if manifest is None:
+            raise ToolError(f"трека «{track}» нет — сначала daiver_pixso_pull")
+        frame = TR.get_frame(manifest, _frame_arg(args))
+        out = BL.public(BL.analyze(root, manifest, frame["name"]))
+    except TR.TrackError as e:
+        raise ToolError(str(e))
+    out = dict({"track": track}, **out)
+    for r in out["regions"]:
+        if len(r["files"]) > BL.MAX_FILES:
+            r["filesMore"] = len(r["files"]) - BL.MAX_FILES
+            r["files"] = r["files"][:BL.MAX_FILES]
+    if len(out["regions"]) > MAX_REGIONS_SHOWN:
+        out["regionsMore"] = len(out["regions"]) - MAX_REGIONS_SHOWN
+        out["regions"] = out["regions"][:MAX_REGIONS_SHOWN]
+    out["inherited"] = len(out.get("inherited") or [])
+    if out["available"]:
+        out["next"] = ("кадр — ревизия собранной версии %d: дальше резолв (кандидаты только в регионах added и changed; у changed — baseVerdict версии), план "
+                       "(daiver_plan_write: регионы, что удалить, решения shared-частей берутся у версии) и подпись заново; сборка — В СУЩЕСТВУЮЩИЕ файлы "
+                       "регионов (files), removed удаляются, без пролога. consequence-изменения (размер, позиция) не пинятся" % out["version"])
+    else:
+        out["next"] = "база ревизии недоступна: " + out["reason"]
+    return out
+
+
 def t_frame_states(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         track = TR.check_track_name(args["track"])
@@ -673,7 +702,9 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                         "служебное прочь, ~100× на реальном экране), сохранить рядом сырой как свидетельство "
                         "и записать кадр в трек с хешем. Сырой DSL читать нельзя — только этот инструмент. "
                         "frameUrl обязателен (ссылка на кадр; не выдумывай — спроси). Заводит трек и кадр. "
-                        "Повторный pull того же экспорта ничего не меняет; собранный кадр не перезаписывается. Второй кадр трека — тот же вызов с другим frame: "
+                        "Повторный pull того же экспорта ничего не меняет. Поверх СОБРАННОГО кадра (все секции done) — ревизия: прежняя семья уходит в versions/<n>/ "
+                        "целиком, ответ mode: revision + version + схожесть и число регионов, строка «REVISION — …» — перескажи человеку; план и подпись заново, "
+                        "строится только изменённое. Недостроенный кадр перезаписывается (mode: overwrite). Второй кадр трека — тот же вызов с другим frame: "
                         "семья первого переезжает в frames/<имя>/, пути переписываются, в ответе layout («LAYOUT — …») — перескажи человеку; два кадра "
                         "одного трека на одном frameUrl — ошибка именования (отказ)."),
         "schema": {"type": "object", "properties": {
@@ -994,6 +1025,17 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "iterationDir": {"type": "string", "description": "папка итерации с actual.png (подпапка verify/ кадра)"},
             "date": {"type": "string", "description": "дата входом, одна короткая строка; без неё даты в отчёте нет"}},
             "required": ["track", "iterationDir"], "additionalProperties": False},
+    },
+    "daiver_frame_baseline": {
+        "fn": t_frame_baseline,
+        "description": ("Ревизия кадра против собранной версии (база — versions/<n>/, её завёл pull поверх собранного кадра): регионы дельты shared / added / removed / "
+                        "changed (+changes; consequence: true — размер и позиция от контента, не пинятся) в порядке документа, у каждого files — куда регион "
+                        "построен в коде (added — файлы родителя, куда вписать); similarity, inherited — сколько решений узлов взято у версии. available: false + "
+                        "reason — базы или канона нет. Читающий инструмент: ничего не пишет; outline / section / резолв / план ревизии работают на этой дельте сами."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра-ревизии; по умолчанию первичный"}},
+            "required": ["track"], "additionalProperties": False},
     },
     "daiver_frame_states": {
         "fn": t_frame_states,

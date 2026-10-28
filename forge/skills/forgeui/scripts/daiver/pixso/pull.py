@@ -12,7 +12,17 @@ Pixso MCP принадлежит пользователю (токен в его 
 регистрирует кадр в track.yaml с хешем требования. Повторный pull того же экспорта ничего не меняет.
 
 Второй кадр трека (`frame=<имя>`) заводится тем же вызовом и переносит семью первого в `frames/<имя>/` (`layout.migrate`, спека §4.2): в ответе `layout` и строка «LAYOUT — …»;
-два кадра трека на одном frameUrl — ошибка именования, до любых изменений на диске. Отказы с причиной, а не догадка: собранный кадр не перезаписывается (ревизии — задача 6.3).
+два кадра трека на одном frameUrl — ошибка именования, до любых изменений на диске.
+
+Ревизия (задача 6.3, INV-B15, G3). СОБРАННЫЙ кадр (все секции build-state `done` — `status.frame_built`, то же правило, что у лестницы) новый экспорт
+НЕ перезаписывает: семья кадра целиком уходит в `versions/<n>/` (`baseline.retire`), манифест получает запись версии и `baseline`, растр уходит с
+версией, подпись плана снимается сама (в lock входит хеш требования, а плана кадра больше нет). Ответ — `mode: "revision"`, `version` и
+схожесть с собранной версией с числом регионов (канон новой версии считается в памяти; не вышло — предупреждение, регионы покажет
+`daiver_frame_baseline` после `daiver_normalize`) и строка «REVISION — …». Недостроенный кадр (есть секции не `done`) перезаписывается как раньше:
+у ревизии база остаётся прежней, у первой сборки сверка build-state пометит stale секции, чей хеш сдвинулся. Кадр-состояние (`stateOf`) не
+версионируется никогда: его сборка — дельта экрана. Тот же экспорт поверх собранного (тот же хеш) ничего не меняет — ревизии без изменения
+нет (отклонение от буквы INV-G3, см. README). Повреждённый build-state — отказ: собран ли кадр, не понять.
+`mode` в ответе: new | unchanged | overwrite | revision.
 """
 from __future__ import annotations
 
@@ -23,8 +33,13 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .. import baseline as BL
+from .. import config as CFG
 from .. import layout as LAY
+from .. import states as STS
+from .. import status as ST
 from .. import track as TR
+from ..ingest import pixso as PX
 from . import dsl as D
 from . import slim as S
 
@@ -104,19 +119,20 @@ def pull(root: Path, track: str, dsl_path: Path, frame_url: Any, frame: Optional
                 LAY.check_target(root, track, migrate_from)
             except LAY.LayoutError as e:
                 raise PullError(str(e))
-    if existing is not None:
-        built = TR.frame_paths(root, manifest, frame_name)["buildState"]
-        if built.is_file():
-            raise PullError(f"кадр «{frame_name}» уже собран (есть {built.name}): новый экспорт поверх "
-                            f"собранного — это ИЗМЕНЕНИЕ макета, а не перезапись; ревизии (versions/, "
-                            f"правка в существующем коде) — задача 6.3, пока не поддержаны")
-
     slim_text = S.dumps(slim_doc)
     sha = hashlib.sha256(slim_text.encode("utf-8")).hexdigest()
     prev_req = (existing or {}).get("requirement") or {}
     unchanged = (existing is not None and prev_req.get("sha256") == sha
                  and existing.get("frameUrl") == frame_url
                  and TR.frame_paths(root, manifest, frame_name)["requirement"].is_file())
+    revision = False
+    if existing is not None and not unchanged and not existing.get("stateOf"):
+        bs_path = TR.frame_paths(root, manifest, frame_name)["buildState"]
+        built, why = ST.frame_built(bs_path)
+        if why:
+            raise PullError(f"кадр «{frame_name}»: {bs_path.name} не читается ({why}) — собран ли кадр, не понять, а собранный новый экспорт "
+                            f"не перезаписывает. Верни файл из git или удали его (сборка начнётся с первой секции) и повтори pull; ничего не изменено")
+        revision = built and bool(prev_req)
 
     warnings: List[str] = list(report["warnings"])
     notes: List[str] = []
@@ -124,13 +140,26 @@ def pull(root: Path, track: str, dsl_path: Path, frame_url: Any, frame: Optional
     stale: List[str] = []
     migration: Optional[LAY.Migration] = None
     layout_text: Optional[str] = None
+    retired: Optional[BL.Retirement] = None
+    if revision:
+        try:
+            retired = BL.retire(root, manifest, existing, now or TR.now_iso())
+        except BL.BaselineError as e:
+            raise PullError(str(e))
+        BL.record(existing, retired)
+        notes.append(retired.message(frame_name))
     # путь кадра считается после регистрации в манифесте (раскладка dir — его дело)
     scratch = TR.upsert_frame(manifest, frame_name, frameUrl=frame_url) if existing is None else existing
     paths = TR.frame_paths(root, manifest, frame_name)
     req_path, raw_path = paths["requirement"], paths["raw"]
     req_path.parent.mkdir(parents=True, exist_ok=True)
     if not unchanged:
-        req_path.write_text(slim_text, encoding="utf-8")
+        try:
+            req_path.write_text(slim_text, encoding="utf-8")
+        except OSError as e:
+            if retired is not None:
+                retired.rollback()
+            raise PullError(f"требование не записано ({e.strerror or e}); прежняя версия возвращена на место")
     raw_saved = raw_path.is_file() and unchanged
     raw_bytes = raw_path.stat().st_size if raw_saved else 0
     if not raw_saved:
@@ -143,7 +172,7 @@ def pull(root: Path, track: str, dsl_path: Path, frame_url: Any, frame: Optional
                             f"исправлять slim, экспорт придётся выгрузить заново")
 
     if not unchanged:
-        if prev_req and prev_req.get("sha256") != sha:
+        if prev_req and prev_req.get("sha256") != sha and retired is None:
             canon = paths["canonical"]
             if canon.is_file():
                 canon.unlink()
@@ -167,6 +196,11 @@ def pull(root: Path, track: str, dsl_path: Path, frame_url: Any, frame: Optional
             if migration is not None:
                 migration.rollback()
                 _drop_new_frame(paths["dir"])
+            if retired is not None:
+                for p in (req_path, raw_path):
+                    if p.is_file():
+                        p.unlink()
+                retired.rollback()
             raise PullError(str(e))
         if migration is not None:
             LAY.rewrite_paths(root, track, migration)
@@ -200,4 +234,30 @@ def pull(root: Path, track: str, dsl_path: Path, frame_url: Any, frame: Optional
     }
     if migration is not None:
         out["layout"] = {"message": layout_text, "movedFrame": migration.frame, "moved": migration.moved, "rewritten": migration.rewritten}
+    out["mode"] = "new" if existing is None else ("unchanged" if unchanged else ("revision" if retired is not None else "overwrite"))
+    if retired is not None:
+        out["version"] = retired.n
+        out["revision"] = _revision_view(root, retired, slim_doc, sha, warnings)
     return out
+
+
+def _revision_view(root: Path, retired: BL.Retirement, slim_doc: Any, sha: str, warnings: List[str]) -> Dict[str, Any]:
+    """Схожесть новой версии с собранной и число регионов — по канону новой версии, построенному в памяти (на диск его пишет daiver_normalize)."""
+    view: Dict[str, Any] = {"version": retired.n, "moved": list(retired.moved)}
+    base = retired.target / TR.CANONICAL_FILE
+    try:
+        from .. import canon as C
+        base_env = C.read_canonical(base)
+        infer = bool(CFG.load(root)["config"]["layout"]["infer"])
+        new_env = PX.normalize_doc(slim_doc, source_sha256=sha, infer_layout=infer)
+        res = STS.compare(base_env, new_env, f"v{retired.n}", "new", gate=False)
+    except (OSError, ValueError, RecursionError, D.DslError) as e:
+        warnings.append(f"схожесть с собранной версией не посчитана ({str(e)[:160]}): регионы изменения покажет daiver_frame_baseline после "
+                        f"daiver_normalize")
+        return view
+    view["similarity"] = res["similarity"]
+    view["regions"] = {k: v for k, v in res["counts"].items() if k != "shared"}
+    if res.get("_mismatch"):
+        warnings.append("новая версия почти целиком другая (" + "; ".join(res["_mismatch"]) + "): это всё ещё ревизия собранного экрана; если на "
+                        "самом деле это другой экран — заведи его отдельным кадром")
+    return view

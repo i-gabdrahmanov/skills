@@ -13,7 +13,11 @@
 
 Кадр, который правит СУЩЕСТВУЮЩУЮ страницу (а не строит новый модуль), несёт `sources` (файлы страницы, пути от корня репо) и
 `scope` (change | page); нет `sources` — кадр строится с нуля. Поля нужны контракту плана (задача 2.6: `sources` и `baseline`),
-остальной поток правки страницы — 6.3/6.4.
+остальной поток правки страницы — 6.4.
+
+Ревизия (задача 6.3). Pull поверх СОБРАННОГО кадра уводит его семью в `versions/<n>/` и пишет `versions` — ушедшие версии
+`[{n, requirement, retiredAt, raster?, frameBox?}]` (требование, растр и рамка кадра в растре — какими они были у версии) — и `baseline`
+`{kind: version, version: n}`: на какой собранной версии стоит изменение. Оба поля пишет только pull; версии не удаляются никогда.
 """
 from __future__ import annotations
 
@@ -49,10 +53,12 @@ RAW_FILE = "visual-requirements.pixso.raw.json"
 CANONICAL_FILE = "visual-requirements.canonical.json"
 
 FRAME_ORDER = ("name", "role", "dir", "frameUrl", "requirement", "raster", "frameBox", "url", "open",
-               "stateOf", "sources", "scope", "notes")
+               "stateOf", "sources", "scope", "baseline", "versions", "notes")
 FRAME_SETTABLE = ("role", "url", "open", "stateOf", "frameBox", "sources", "scope", "notes")      # daiver_track_manifest
 TRACK_SETTABLE = ("implementation", "specs")
-PULL_OWNED = ("name", "dir", "frameUrl", "requirement", "raster")             # пишут pull и rasterPath
+PULL_OWNED = ("name", "dir", "frameUrl", "requirement", "raster", "baseline", "versions")   # пишут pull и rasterPath
+BASELINE_KINDS = ("version",)           # ревизия кадра (6.3); база страницы, написанной не forge-ui, — 6.4
+VERSION_KEYS = ("n", "requirement", "retiredAt", "raster", "frameBox")
 
 _TRACK_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _FRAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -182,33 +188,13 @@ def _validate_frame(f: Any, i: int) -> List[str]:
     if "frameUrl" in f and not (isinstance(f["frameUrl"], str) and f["frameUrl"].strip()):
         problems.append(f"{where}.frameUrl: ссылка на кадр макета")
     if "requirement" in f:
-        r = f["requirement"]
-        if not isinstance(r, dict):
-            problems.append(f"{where}.requirement: ожидается {{kind, path, sha256, pulledAt}}")
-        else:
-            problems += [f"{where}.requirement.{k}: неизвестное поле" for k in r
-                         if k not in ("kind", "path", "sha256", "pulledAt")]
-            if r.get("kind") not in REQUIREMENT_KINDS:
-                problems.append(f"{where}.requirement.kind: {r.get('kind')!r} — допустимы {', '.join(REQUIREMENT_KINDS)}")
-            pr = rel_problem(r.get("path"), f"{where}.requirement.path")
-            if pr:
-                problems.append(pr)
-            if not (isinstance(r.get("sha256"), str) and _SHA_RE.match(r["sha256"])):
-                problems.append(f"{where}.requirement.sha256: 64 hex (хеш файла требования)")
-            if not isinstance(r.get("pulledAt"), str):
-                problems.append(f"{where}.requirement.pulledAt: строка с временем")
+        problems += _requirement_problems(f["requirement"], f"{where}.requirement")
     if "raster" in f:
         pr = rel_problem(f["raster"], f"{where}.raster")
         if pr:
             problems.append(pr)
     if "frameBox" in f:
-        b = f["frameBox"]
-        ok = isinstance(b, dict) and set(b) == {"x", "y", "w", "h"} and all(
-            isinstance(b[k], (int, float)) and not isinstance(b[k], bool) for k in b) \
-            and b["x"] >= 0 and b["y"] >= 0 and b["w"] > 0 and b["h"] > 0
-        if not ok:
-            problems.append(f"{where}.frameBox: {{x, y, w, h}} — числа, x/y ≥ 0, w/h > 0 "
-                            f"(где кадр лежит внутри растра: у макета с тенью вокруг кадра растр больше кадра)")
+        problems += _frame_box_problems(f["frameBox"], f"{where}.frameBox")
     if "url" in f and not (isinstance(f["url"], str) and _URL_RE.match(f["url"])):
         problems.append(f"{where}.url: полный http(s)-адрес страницы реализации, получено {f.get('url')!r}")
     if "open" in f:
@@ -233,7 +219,67 @@ def _validate_frame(f: Any, i: int) -> List[str]:
             problems.append(f"{where}.scope: задаётся только вместе с sources (страницы в коде нет — менять нечего)")
     if "notes" in f and not (isinstance(f["notes"], str) and "\n" not in f["notes"]):
         problems.append(f"{where}.notes: строка в одну линию")
+    numbers = []
+    if "versions" in f:
+        vs = f["versions"]
+        if not isinstance(vs, list) or not vs:
+            problems.append(f"{where}.versions: непустой список ушедших версий кадра (его пишет pull поверх собранного кадра)")
+        else:
+            for j, v in enumerate(vs):
+                w = f"{where}.versions[{j}]"
+                if not isinstance(v, dict):
+                    problems.append(f"{w}: ожидается {{n, requirement, retiredAt}}")
+                    continue
+                problems += [f"{w}.{k}: неизвестное поле версии" for k in v if k not in VERSION_KEYS]
+                n = v.get("n")
+                if not (isinstance(n, int) and not isinstance(n, bool) and n > (numbers[-1] if numbers else 0)):
+                    problems.append(f"{w}.n: номер версии — целое больше предыдущего (1, 2, …)")
+                else:
+                    numbers.append(n)
+                problems += _requirement_problems(v.get("requirement"), f"{w}.requirement")
+                if not isinstance(v.get("retiredAt"), str):
+                    problems.append(f"{w}.retiredAt: строка с временем")
+                if "raster" in v:
+                    pr = rel_problem(v["raster"], f"{w}.raster")
+                    if pr:
+                        problems.append(pr)
+                if "frameBox" in v:
+                    problems += _frame_box_problems(v["frameBox"], f"{w}.frameBox")
+    if "baseline" in f:
+        b = f["baseline"]
+        if not (isinstance(b, dict) and set(b) == {"kind", "version"} and b.get("kind") in BASELINE_KINDS):
+            problems.append(f"{where}.baseline: {{kind: version, version: N}} — на какой собранной версии стоит ревизия")
+        elif b["version"] not in numbers:
+            problems.append(f"{where}.baseline.version: версии {b['version']!r} в versions нет")
+        if f.get("stateOf") is not None:
+            problems.append(f"{where}.baseline: кадр-состояние не версионируется (его сборка — дельта экрана)")
     return problems
+
+
+def _requirement_problems(r: Any, where: str) -> List[str]:
+    if not isinstance(r, dict):
+        return [f"{where}: ожидается {{kind, path, sha256, pulledAt}}"]
+    problems = [f"{where}.{k}: неизвестное поле" for k in r if k not in ("kind", "path", "sha256", "pulledAt")]
+    if r.get("kind") not in REQUIREMENT_KINDS:
+        problems.append(f"{where}.kind: {r.get('kind')!r} — допустимы {', '.join(REQUIREMENT_KINDS)}")
+    pr = rel_problem(r.get("path"), f"{where}.path")
+    if pr:
+        problems.append(pr)
+    if not (isinstance(r.get("sha256"), str) and _SHA_RE.match(r["sha256"])):
+        problems.append(f"{where}.sha256: 64 hex (хеш файла требования)")
+    if not isinstance(r.get("pulledAt"), str):
+        problems.append(f"{where}.pulledAt: строка с временем")
+    return problems
+
+
+def _frame_box_problems(b: Any, where: str) -> List[str]:
+    ok = isinstance(b, dict) and set(b) == {"x", "y", "w", "h"} and all(
+        isinstance(b[k], (int, float)) and not isinstance(b[k], bool) for k in b) \
+        and b["x"] >= 0 and b["y"] >= 0 and b["w"] > 0 and b["h"] > 0
+    if ok:
+        return []
+    return [f"{where}: {{x, y, w, h}} — числа, x/y ≥ 0, w/h > 0 "
+            f"(где кадр лежит внутри растра: у макета с тенью вокруг кадра растр больше кадра)"]
 
 
 # ── файлы ────────────────────────────────────────────────────────────────────
@@ -378,6 +424,39 @@ def frame_paths(root: Path, manifest: dict, frame: Optional[str] = None) -> Dict
         "verifyState": d / "verify-state.json",
         "verify": d / "verify",
         "versions": d / "versions",
+        "baseline": d / "baseline",
+    }
+
+
+def baseline_version(f: dict) -> Optional[int]:
+    """Номер собранной версии, на которой стоит ревизия кадра (6.3); None — кадр не ревизия."""
+    b = f.get("baseline")
+    return b["version"] if isinstance(b, dict) and b.get("kind") == "version" and isinstance(b.get("version"), int) else None
+
+
+def version_record(f: dict, n: int) -> Optional[dict]:
+    return next((v for v in f.get("versions") or [] if isinstance(v, dict) and v.get("n") == n), None)
+
+
+def version_paths(root: Path, manifest: dict, frame: Optional[str], n: int) -> Dict[str, Path]:
+    """Артефакты ушедшей версии `n` кадра по тем же именам, что у `frame_paths` (семья лежит в `versions/<n>/` целиком)."""
+    f = get_frame(manifest, frame)
+    d = frame_paths(root, manifest, f["name"])["versions"] / str(n)
+    rec = version_record(f, n) or {}
+    req = rec.get("requirement") if isinstance(rec.get("requirement"), dict) else {}
+    return {
+        "dir": d,
+        "requirement": d / req["path"] if req.get("path") else d / REQUIREMENT_FILE["pixso"],
+        "raw": d / RAW_FILE,
+        "canonical": d / CANONICAL_FILE,
+        "raster": d / rec["raster"] if rec.get("raster") else d / "visual-requirements.png",
+        "assets": d / "assets",
+        "plan": d / "plan.json",
+        "planMd": d / "plan.md",
+        "resolutions": d / "resolutions.json",
+        "buildState": d / "build-state.json",
+        "verifyState": d / "verify-state.json",
+        "verify": d / "verify",
         "baseline": d / "baseline",
     }
 

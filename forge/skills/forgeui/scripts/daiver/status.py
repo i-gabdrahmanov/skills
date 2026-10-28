@@ -37,8 +37,8 @@ clean ⇔ все кадры clean. `outcome` трека — агрегат: clea
 роутер и не роняет статус. Рассинхрон `plan.json` ↔ `build-state.json` (план перегенерирован, секции не
 сверены) лестница не видит: сверка хешей секций — дело `daiver_build_state` (3.1).
 
-Предупреждения вслух (§15.7), каждое — код + строка: requirement-stale-built (громче всего: собранный
-кадр без versions/), requirement-stale, requirement-missing, frame-no-requirement, frame-url-missing,
+Предупреждения вслух (§15.7), каждое — код + строка: requirement-stale-built (громче всего: у СОБРАННОГО кадра — все секции
+done, `frame_built` — требование изменено мимо pull; ревизию заводит только pull, 6.3), requirement-stale, requirement-missing, frame-no-requirement, frame-url-missing,
 goal-image-missing, art-svg-missing, implementation-url-missing, specs-missing, ds-requirements-missing;
 служебные — artifact-unreadable, canonical-stale, manifest-unreadable. Данные берутся из готовых модулей:
 хеш требования — `track.requirement_status`, арты — `svg_assets.load_arts`/`missing_slugs`, goal image —
@@ -184,11 +184,17 @@ def stage_of(facts: Dict[str, Any]) -> str:
     return "clean" if verify["clean"] else "verifying"
 
 
-def _has_versions(d: Path) -> bool:
-    try:
-        return d.is_dir() and any(p.is_dir() for p in d.iterdir())
-    except OSError:
-        return False
+def frame_built(build_state: Path) -> Tuple[bool, Optional[str]]:
+    """(собран ли кадр, причина нечитаемости). Собран — в `build-state.json` все секции `done` (сборка по плану закончена). Одно правило на
+    лестницу (`requirement-stale-built`) и pull (6.3: pull поверх собранного кадра — ревизия, поверх недостроенного — перезапись, а секции,
+    чей хеш сдвинулся, сверка сборки пометит stale). Нет файла — не собран; файл не читается — (False, причина): решает вызывающий."""
+    data, why = _read_json(build_state)
+    if data is _ABSENT:
+        return False, why
+    fact, why = _build_fact(data)
+    if fact is None:
+        return False, why
+    return fact[0] == fact[1], None
 
 
 def _gather(root: Path, manifest: dict, f: dict) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -245,11 +251,11 @@ def frame_status(root: Path, manifest: dict, f: dict) -> Tuple[Dict[str, Any], L
         warns.append(("requirement-missing", f"{who}: файл требования {reqfile} {why} — "
                       f"тяни кадр заново: daiver_pixso_pull"))
     elif req == "stale":
-        if paths["buildState"].is_file() and not _has_versions(paths["versions"]):
+        if frame_built(paths["buildState"])[0]:
             warns.append(("requirement-stale-built", f"{who}: СОБРАН, а файл требования {reqfile} изменён мимо pull "
-                          f"(sha256 не совпал с манифестом) и сохранённой версии (versions/) нет — собранное "
-                          f"не соответствует требованию, прежний экспорт потерян. Перетянуть собранный кадр "
-                          f"нельзя: верни файл из git или реши с пользователем"))
+                          f"(sha256 не совпал с манифестом) — собранное не соответствует требованию, прежний экспорт "
+                          f"потерян. Правку макета заводи только через daiver_pixso_pull: поверх собранного кадра он "
+                          f"заводит ревизию (семья уходит в versions/<n>/ целиком), а файл руками не правится — верни его из git"))
         else:
             warns.append(("requirement-stale", f"{who}: файл требования {reqfile} изменён мимо pull (sha256 не "
                           f"совпал с манифестом) — всё построенное поверх него устарело; тяни кадр заново: "

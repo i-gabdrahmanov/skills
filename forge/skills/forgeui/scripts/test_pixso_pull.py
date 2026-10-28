@@ -208,13 +208,17 @@ class Registration(Env):
         out = self.pull(track="STOR-2")
         self.assertTrue(any("STOR-1" in w and "один URL" in w for w in out["warnings"]), out["warnings"])
 
-    def test_built_frame_is_refused_with_reason(self):
+    def test_a_broken_build_state_refuses_the_pull_with_reason(self):
+        """Собран ли кадр, решает build-state (6.3); не читается — не понять, а собранный кадр новый экспорт не перезаписывает: отказ, ничего не изменено."""
         self.pull()
         (self.root / ".daiver/tracks/STOR-100/build-state.json").write_text("{}", encoding="utf-8")
+        before = (self.root / ".daiver/tracks/STOR-100/track.yaml").read_bytes()
         with self.assertRaises(T.ToolError) as cm:
             self.pull(synth(1))
-        self.assertIn("6.3", str(cm.exception))
-        self.assertIn("уже собран", str(cm.exception))
+        self.assertIn("build-state.json не читается", str(cm.exception))
+        self.assertIn("ничего не изменено", str(cm.exception))
+        self.assertEqual((self.root / ".daiver/tracks/STOR-100/track.yaml").read_bytes(), before)
+        self.assertFalse((self.root / ".daiver/tracks/STOR-100/versions").exists())
 
     def test_second_frame_on_the_same_url_is_a_naming_error_and_changes_nothing(self):
         self.pull()

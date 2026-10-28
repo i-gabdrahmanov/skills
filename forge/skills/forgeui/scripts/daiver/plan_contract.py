@@ -476,6 +476,17 @@ def _page_base(fx: Facts) -> bool:
 def chk_baseline(w: World) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for name, fx in w.frames.items():
+        n = TR.baseline_version(fx.f)
+        if n is not None:                                   # ревизия (6.3): база — собранная версия, её записал pull
+            canon = TR.version_paths(w.root, w.manifest, name, n)["canonical"]
+            if canon.is_file():
+                out.append(ok("baseline", "human", f"ревизия: база — собранная версия {n} (versions/{n}/, записана pull'ом)", frame=name))
+            else:
+                out.append(item("baseline", "open", True, "human", f"{_p(w, name)}ревизия версии {n}, а её канона в versions/{n}/ нет",
+                                frame=name, reason=REASONS["baseline"],
+                                ask=f"Каталог versions/{n}/ кадра «{name}» пропал или повреждён — это база ревизии, её пишет только pull. Верните его из git.",
+                                record="git checkout каталога versions/<n>/ кадра"))
+            continue
         if not _page_base(fx):
             out.append(ok("baseline", "human", "кадр строится с нуля, базы страницы нет", frame=name, na=True))
             continue
@@ -768,6 +779,10 @@ class Contract:
                  "Компоненты библиотеки: " + (", ".join(lib[:SHOWN]) + (" …" if len(lib) > SHOWN else "") or "нет")]
         if shared:
             lines.append("Общие local-компоненты: " + ", ".join(shared[:SHOWN]))
+        revs = [(fx.f["name"], p["baseline"]) for fx, p in zip(self.w.frames.values(), plans) if p.get("baseline")]
+        if revs:
+            lines.append("Ревизии (правка собранного кода, без пролога): " + "; ".join(
+                f"{n} — база версия {b['version']}, удалить {len(b['removed'])}" for n, b in revs[:SHOWN]))
         sts = [(fx.f["name"], p["state"]) for fx, p in zip(self.w.frames.values(), plans) if p.get("state")]
         if sts:
             lines.append("Состояния экранов (внутри модуля экрана): " + "; ".join(

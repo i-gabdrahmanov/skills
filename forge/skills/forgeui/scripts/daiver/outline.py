@@ -79,6 +79,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import baseline as BL
 from . import canon as C
 from . import config as CFG
 from . import states as STS
@@ -476,6 +477,14 @@ def state_view(st: dict) -> dict:
             "note": "кадр-состояние: sections — регионы added и changed (дельта к экрану), остальное уже собрано экраном; строится ВНУТРИ его модуля"}
 
 
+def baseline_view(bl: dict) -> dict:
+    """Ревизия в ответе outline: база (собранная версия), схожесть, счётчики регионов, что удалить (с файлами), сколько взято готовым."""
+    return {"version": bl["version"], "similarity": bl["similarity"], "counts": bl["counts"], "removed": BL.removed_view(bl),
+            "inherited": len(bl.get("inherited") or []),
+            "note": (f"ревизия собранной версии {bl['version']}: sections — регионы added и changed (дельта к собранному), остальное уже в коде; "
+                     f"строится В СУЩЕСТВУЮЩИЙ код (region.files в daiver_section), removed — удалить; ни пролога, ни нового модуля")}
+
+
 def build_outline(env: dict, budget: Any, *, track: Optional[str] = None, frame: Optional[str] = None,
                   frame_url: Optional[str] = None, goal_image: Optional[str] = None, vision: bool = True,
                   warnings: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -513,6 +522,8 @@ def build_outline(env: dict, budget: Any, *, track: Optional[str] = None, frame:
             out["unprovenDropped"] = len(entries) - len(shown)
         if env.get("state"):
             out["state"] = state_view(env["state"])
+        if env.get("baseline"):
+            out["baseline"] = baseline_view(env["baseline"])
         out["goalImage"] = goal_image
         out["goalImageNext"] = _goal(entries, goal_image, vision)
         out["nodeUrlTemplate"] = tpl
@@ -554,6 +565,12 @@ def _ancestor(n: dict) -> dict:
 STATE_NEXT = ("секция кадра-состояния — РЕГИОН дельты, а не страница: state.region.kind added — рендерится в состоянии (поддерево node целиком); changed — правка на месте "
               "узла экрана baseId (changes: что изменилось; consequence-изменения размера и позиции не пинятся), дети node — стабы inferred:ref:…, их уже построил экран; "
               "код идёт ВНУТРЬ модуля экрана: переменная состояния из плана, условие на регион, переключатель; отдельной копии экрана и маршрута нет")
+
+
+VERSION_NEXT = ("секция ревизии — РЕГИОН дельты к собранной версии, а не новый код: правь СУЩЕСТВУЮЩИЕ файлы baseline.region.files (прочитай их "
+                "до правки: структура, имена и стиль — как там). added — допиши поддерево node туда, где собран родитель (parentId, после afterId); "
+                "changed — правка НА МЕСТЕ узла baseId (changes — что изменилось; consequence-изменения размера и позиции не пинятся); дети node — "
+                "стабы inferred:ref:…, они уже в коде, не трогай; ни пролога, ни нового модуля, маршрута и моков с нуля (mocks.ts дополняется)")
 
 
 def _region_of(m: _Map, n: dict) -> dict:
@@ -599,12 +616,18 @@ def build_section(env: dict, section_id: str, budget: Any, *, track: Optional[st
                 "ancestors": [_ancestor(a) for a in m.chain(n) if not a.get("deltaRoot")], "node": n})
     if env.get("state"):
         out["state"] = {"screen": env["state"]["screen"], "region": n.get("delta") or _region_of(m, n)}
+    if env.get("baseline"):
+        region = n.get("delta") or _region_of(m, n)
+        files = (env["baseline"].get("files") or {}).get(region.get("regionRoot") or n["id"], [])
+        out["baseline"] = {"version": env["baseline"]["version"], "region": dict(region, files=files[:BL.MAX_FILES])}
     if warnings:
         out["warnings"] = list(warnings)
     nxt = ["строй ТОЛЬКО поддерево node; ancestors — контекст (раскладка и поверхность предков root→parent), "
            "в секцию они не входят; box есть только у абсолютных узлов"]
     if env.get("state"):
         nxt = [STATE_NEXT]
+    if env.get("baseline"):
+        nxt = [VERSION_NEXT]
     if oversize:
         nxt.append("лист тяжелее бюджета: не режется, строится целиком")
     if occluded:
@@ -639,6 +662,12 @@ def _load(root: Path, track: str, frame: Optional[str]) -> Tuple[dict, dict, Dic
         if not res["available"]:
             raise OutlineError(f"кадр «{f['name']}» объявлен состоянием экрана «{res['screen']}», но состояние недоступно: {res['reason']}")
         env = dict(env, root=res["_delta"], state=STS.public(res))
+    elif BL.version_of(f) is not None:
+        res = BL.analyze(root, manifest, f["name"])
+        if not res["available"]:
+            raise OutlineError(f"кадр «{f['name']}» — ревизия собранной версии {res['version']}, но база недоступна: {res['reason']}")
+        env = dict(env, root=res["_delta"], baseline=dict(BL.public(res), files=res["files"]))
+        warnings += res["warnings"]
     req = f.get("requirement") or {}
     src = (env.get("stats") or {}).get("sourceSha256")
     if src and req.get("sha256") and src != req["sha256"]:

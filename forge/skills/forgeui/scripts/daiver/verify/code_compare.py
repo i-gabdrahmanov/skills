@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote
 
+from .. import baseline as BL
 from .. import build_state as BS
 from .. import canon as C
 from .. import config as CFG
@@ -282,10 +283,13 @@ def run(root: Any, track: str, frame: Optional[str], iteration_dir: Path) -> Dic
     state = BS.load_state(root, paths["buildState"], track, fname)
     if state is None:
         return finish(_skipped("нет build-state.json: исходников модуля нет (сборка не начата)", warnings), None)
-    sections = [{"id": s["id"], "outputs": list(s.get("outputs") or [])} for s in state["sections"] if s.get("outputs")]
-    outputs = sorted({o for s in sections for o in s["outputs"]})
-    if not outputs:
+    current = [{"id": s["id"], "outputs": list(s.get("outputs") or [])} for s in state["sections"] if s.get("outputs")]
+    mine = sorted({o for s in current for o in s["outputs"]})
+    if not mine:
         return finish(_skipped("в build-state нет ни одного файла outputs", warnings), None)
+    # ревизия (6.3): код shared-частей собран прежними версиями, правки ревизии — в тех же файлах: сканируются файлы КАЖДОЙ версии
+    sections = BL.code_sections(BL.version_sections(root, manifest, fname) + [current])
+    outputs = sorted({o for s in sections for o in s["outputs"]})
     non_react = [o for o in outputs if o.lower().endswith(NON_REACT)]
     react_files = [o for o in outputs if TS.is_js(o)]
     if non_react and not react_files:
@@ -300,7 +304,7 @@ def run(root: Any, track: str, frame: Optional[str], iteration_dir: Path) -> Dic
             full.resolve().relative_to(root)
             data = full.read_bytes()
         except (OSError, ValueError):
-            if rel in outputs:
+            if rel in mine:                     # файл прежней версии, удалённый ревизией, — не находка
                 warnings.append(f"{rel}: файла нет или он не читается")
             continue
         if len(data) > MAX_SOURCE_BYTES:
