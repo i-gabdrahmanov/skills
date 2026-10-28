@@ -72,7 +72,7 @@ Approval-маркер — это «человек сказал да» на ри�
 сам по себе его не доказывает.
 
 Поэтому для ключей **`gate-override-*`, `rollback-*`, `skip-judges-*`, `policy-repin-*`,
-`policy-downgrade-*`, `acceptance-*`, `abandon-*`, `archive-force-*`, `git-discard`, `tech-plan-*`** (список
+`policy-downgrade-*`, `acceptance-*`, `abandon-*`, `archive-force-*`, `git-discard`, `tech-plan-*`, `spec-entity-*`** (список
 один на оба слоя — `forge_events.CONSENT_PREFIXES`) обязателен `--evidence "<дословная фраза пользователя>"`:
 
 * `gate-guard.check_record_approval` сверяет цитату с **репликами пользователя** в транскрипте
@@ -356,5 +356,6 @@ def _approval_valid(root: Path, key: str) -> bool:
 | Утвердить BRD/SDD | PO / lead | `record_approval.py` одиночный (`<doc>-approved-<feature>`) | `ground/approvals.jsonl` |
 | Override гейта судьи | оператор | `override_judge.py` (требует предыдущий approval `gate-override-<judge>`) | `ground/statements/<skill>/<feature>/events.jsonl` |
 | Создать задачи в Jira (R3) | оператор через модель | `record_approval.py` одиночный (`jira-create`) | `ground/approvals.jsonl` |
+| Признать имя в форме класса сущностью (линтер имён спеки) | аналитик через модель | `record_approval.py` одиночный (`spec-entity-<Имя>`, с `--evidence`) | `ground/approvals.jsonl` |
 | **Запрещено** | — | `Write ground/approvals/<key>.json` (без `produced_by`) | `state-write-guard` DENY + `_approval_valid` REFUSE |
 | **Запрещено** | — | `echo ... > ground/approvals.jsonl` | `state-write-guard` DENY (Bash-вектор) |
