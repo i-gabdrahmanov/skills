@@ -8,6 +8,10 @@ Frontmatter: `track`, `outcome` (clean — все кадры чистые; defec
 одного. Тело — секция `## frame: <имя>` на кадр: по итерациям статусы гейтов, matchRate / fidelity, diff %, вердикт обзора, фиксы и отказы, решение;
 итог кадра — не исполнявшиеся гейты и почему, ВСЁ нерешённое из последней записи (включая minor, noise, vision — с пометками), кто закончил цикл и
 на какой итерации. Непроверенные кадры названы, а не спрятаны.
+
+Автономный прогон (7.2): `mode` — режим из записи прогона (`run.mode_of`), у итерации — блок «### Триаж (итерация N)»: каждый дефект, действие
+(fix | skip | noise) и почему, чьё решение (агент или человек) — окно человека в цикл, которого он не видел; кто закончил цикл — по причине
+останова (clean, потолок итераций, застой, чинить нечего).
 """
 from __future__ import annotations
 
@@ -15,7 +19,6 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .. import config as CFG
 from .. import resolution_report as RR
 from .. import track as TR
 from . import capture as CP
@@ -49,7 +52,15 @@ def frame_outcome(history: List[Dict[str, Any]]) -> str:
     return "clean" if history[-1]["clean"] else "defects-remaining"
 
 
+STOP_BY = {"clean": "автономный прогон: итерация {n} чистая",
+           "capReached": "автономный прогон остановил цикл на итерации {n}: потолок итераций (workflow.autonomous.maxVerifyIterations)",
+           "stalled": "автономный прогон остановил цикл на итерации {n}: застой — блокирующих не меньше, чем в прошлой (или регресс)",
+           "nothing-to-fix": "автономный прогон остановил цикл на итерации {n}: по триажу чинить нечего (skip и noise с причинами)"}
+
+
 def finished_by(h: Dict[str, Any], consent: bool) -> str:
+    if h.get("stop") in STOP_BY:
+        return STOP_BY[h["stop"]].format(n=h["iteration"])
     d = h.get("decision")
     if d == "clean":
         return f"пользователь принял результат как чистый (итерация {h['iteration']})"
@@ -79,7 +90,6 @@ def _defect_line(d: Dict[str, Any]) -> str:
 
 def render(root: Path, manifest: dict) -> str:
     track = manifest["track"]
-    cfg = CFG.load(root)["config"]
     consent = accepted(root, track)
     frames = []
     for f in manifest.get("frames") or []:
@@ -89,8 +99,9 @@ def render(root: Path, manifest: dict) -> str:
     total = sum(len(h) for _f, h in frames)
     remaining = sum(len(h[-1].get("blocking") or []) for _f, h in frames if h)
     outcome = "clean" if frames and all(o == "clean" for o in outcomes.values()) else "defects-remaining"
+    from .. import run as RUN
     lines = ["---", f"track: {track}", f"outcome: {outcome}", f"iterations: {total}", f"defectsRemaining: {remaining}",
-             f"mode: {cfg['workflow'].get('mode', 'interactive')}"]
+             f"mode: {RUN.mode_of(root, track)[0]}"]
     if len(frames) > 1:
         lines.append("frames:")
         for f, h in frames:
@@ -132,6 +143,13 @@ def render(root: Path, manifest: dict) -> str:
             if html.is_file():
                 lines.append(f"- отчёт: [report.html]({rec['dir']}/report.html)")
             lines.append("")
+            if rec.get("triage"):
+                lines += [f"### Триаж (итерация {rec['iteration']})", ""]
+                for e in rec["triage"]:
+                    who = "человек" if e.get("by") == "human" else "агент"
+                    conf = f", подтверждено: {e['confirmed']}" if e.get("confirmed") else ""
+                    lines.append(f"- `{e['id']}` **{e['action']}** ({who}{conf}) — {e.get('reason', '')}")
+                lines.append("")
         last = h[-1]
         lines += [f"### Итог кадра {f['name']}", ""]
         not_run = [f"{GATE_NAMES[n]} — {last['gates'][n]['status']}" + (f": {last['gates'][n]['reason']}" if last["gates"][n].get("reason") else "")

@@ -139,6 +139,11 @@ def open_iteration(root: Any, track: str, frame: Optional[str] = None) -> Dict[s
     state = load(paths["verifyState"], track, f["name"])
     history = state["history"]
     last_n = max((h["iteration"] for h in history), default=0)
+    from .. import run as RUN
+    if RUN.mode_of(root, track)[0] == "autonomous" and history and history[-1].get("stop"):
+        raise VerifyStateError(f"автономный цикл кадра «{f['name']}» закончен на итерации {history[-1]['iteration']} "
+                               f"({STOP_TEXT.get(history[-1]['stop'], history[-1]['stop'])}): новая итерация не открывается — "
+                               f"закрой прогон daiver_run(track, finish: true)")
     dirs = _iter_dirs(paths["verify"])
     unrecorded = [n for n, d in dirs.items() if n > last_n and _executed(d)]
     warnings: List[str] = []
@@ -304,9 +309,122 @@ def _progress(prev: Optional[Dict[str, Any]], blocking: List[str], defects: List
     return out
 
 
+TRIAGE_ACTIONS = ("fix", "skip", "noise")
+VISION_EVIDENCE = ("measured", "missing-file")
+REASON_MAX = 400
+_HUMAN_ACTION = {"skip": "skip", "false_positive": "noise", "fix": "fix"}
+
+
+def _human_verdict(d: Dict[str, Any]) -> Optional[str]:
+    dec = d.get("decision")
+    if isinstance(dec, dict) and dec.get("status") != "reopened" and dec.get("verdict") in _HUMAN_ACTION:
+        return _HUMAN_ACTION[dec["verdict"]]
+    return None
+
+
+def triage_entries(raw: Any, merged: List[Dict[str, Any]], blocking: List[str]) -> List[Dict[str, Any]]:
+    """Триаж автономной итерации (§14.12): fix / skip / noise с причиной на КАЖДЫЙ блокирующий дефект и каждый vision-пункт. Решения
+    человека (`verify-decisions.json`) — записи `by: human`, их не переворачивают; fix не-блокирующего (minor, noise, pre-existing) — отказ
+    («не чинится ради закрытия»); fix vision — только самоподтверждённый (`confirmed: measured | missing-file`). Нарушения — одним отказом."""
+    by_id = {d["id"]: d for d in merged}
+    human = {i: _human_verdict(d) for i, d in by_id.items() if _human_verdict(d)}
+    vision = [d["id"] for d in merged if d.get("zone") == "vision"]
+    required = [i for i in blocking + [v for v in vision if v not in blocking] if i not in human]
+    problems: List[str] = []
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list) or not all(isinstance(e, dict) for e in raw):
+        raise VerifyStateError("triage: список {id, action: fix|skip|noise, reason, confirmed?} — по записи на каждый блокирующий дефект и vision-пункт")
+    got: Dict[str, Dict[str, Any]] = {}
+    for k, e in enumerate(raw):
+        did, action, reason = e.get("id"), e.get("action"), e.get("reason")
+        where = f"triage[{k}]" + (f" ({did})" if isinstance(did, str) else "")
+        extra = [x for x in e if x not in ("id", "action", "reason", "confirmed")]
+        if extra:
+            problems.append(f"{where}: неизвестные поля {', '.join(sorted(extra))}")
+        if not isinstance(did, str) or did not in by_id:
+            problems.append(f"{where}: id — дефект этой итерации (из её записи), а не «{did}»")
+            continue
+        if did in got:
+            problems.append(f"{where}: дефект уже триажирован — одна запись на дефект")
+            continue
+        if action not in TRIAGE_ACTIONS:
+            problems.append(f"{where}: action — {' | '.join(TRIAGE_ACTIONS)}")
+            continue
+        if not (isinstance(reason, str) and reason.strip()):
+            problems.append(f"{where}: reason обязателен — триаж без причины это дефект, который никто не ревьюит (у fix — строка исправления: "
+                            f"значение из канона или спеки, не с картинки)")
+            continue
+        d = by_id[did]
+        if did in human and action != human[did]:
+            problems.append(f"{where}: решение человека — {human[did]} (verify-decisions.json); автономия его не отменяет")
+            continue
+        if action == "fix" and d.get("zone") == "vision" and e.get("confirmed") not in VISION_EVIDENCE:
+            problems.append(f"{where}: vision-пункт чинится только самоподтверждённым — confirmed: measured (значение измерено по канону) | "
+                            f"missing-file; иначе skip или noise с причиной")
+            continue
+        if action == "fix" and d.get("zone") != "vision" and did not in blocking:
+            problems.append(f"{where}: дефект не блокирует (minor, noise или старое расхождение страницы) — не чинится ради закрытия; skip или noise")
+            continue
+        entry = {"id": did, "action": action, "reason": " ".join(reason.split())[:REASON_MAX], "by": "agent"}
+        if e.get("confirmed") is not None:
+            if e["confirmed"] not in VISION_EVIDENCE:
+                problems.append(f"{where}: confirmed — {' | '.join(VISION_EVIDENCE)}")
+                continue
+            entry["confirmed"] = e["confirmed"]
+        got[did] = entry
+    missing = [i for i in required if i not in got]
+    if missing:
+        problems.append(f"нет триажа у {len(missing)}: {', '.join(missing[:10])}{' …' if len(missing) > 10 else ''} — на каждый блокирующий дефект и "
+                        f"vision-пункт запись fix | skip | noise с причиной")
+    if problems:
+        raise VerifyStateError("автономная запись без полного триажа не принимается: " + "; ".join(problems))
+    for i, verdict in sorted(human.items()):
+        got.setdefault(i, {"id": i, "action": verdict, "reason": "решение человека (verify-decisions.json)", "by": "human"})
+    return [got[i] for i in sorted(got)]
+
+
+def autonomous_decision(iteration: int, clean: bool, prog: Dict[str, Any], triage: List[Dict[str, Any]], blocking: List[str],
+                        cap: Optional[int]) -> Dict[str, Any]:
+    """Решение автономной итерации и останов (§14.12): clean; capReached (потолок итераций); stalled (не лучше прошлой, регресс — тоже);
+    нечего чинить (весь блок — skip/noise); иначе fix_all / fix_some по fix-записям триажа."""
+    fix = sorted(e["id"] for e in triage if e["action"] == "fix" and e["id"] in blocking)
+    if clean:
+        return {"decision": "clean", "stop": "clean", "fixed": []}
+    if cap is not None and iteration >= cap:
+        return {"decision": "stop", "stop": "capReached", "fixed": []}
+    if prog.get("stalled"):
+        return {"decision": "stop", "stop": "stalled", "fixed": []}
+    if not fix:
+        return {"decision": "stop", "stop": "nothing-to-fix", "fixed": []}
+    return {"decision": "fix_all" if set(fix) >= set(blocking) else "fix_some", "stop": None, "fixed": fix}
+
+
+STOP_TEXT = {"clean": "итерация чистая — цикл закончен",
+             "capReached": "потолок итераций автономии (workflow.autonomous.maxVerifyIterations) — цикл остановлен",
+             "stalled": "застой: блокирующих не меньше, чем в прошлой итерации (или регресс) — цикл остановлен",
+             "nothing-to-fix": "по триажу чинить нечего (весь блок — skip или noise с причиной) — цикл остановлен"}
+
+
+def _cap(root: Path, track: str, cfg: Dict[str, Any]) -> Optional[int]:
+    """Потолок итераций: записанный в политике прогона (run.json), иначе конфига."""
+    from .. import run as RUN
+    rec = RUN.read(root, track) or {}
+    got = ((rec.get("policy") or {}).get("verify") or {}).get("iterationCap") if rec.get("open") else None
+    return got if isinstance(got, int) else (cfg["workflow"].get("autonomous") or {}).get("maxVerifyIterations")
+
+
 def record(root: Any, track: str, frame: Optional[str], iteration: Any, gates: Any, diff_percent: Any = None, review_report: Any = None,
-           review_skipped: Any = None, defects: Any = None, decision: Any = None, fixed: Any = None, declined: Any = None) -> Dict[str, Any]:
+           review_skipped: Any = None, defects: Any = None, decision: Any = None, fixed: Any = None, declined: Any = None,
+           triage: Any = None) -> Dict[str, Any]:
     root, manifest, f, paths = _ctx(root, track, frame)
+    from .. import run as RUN
+    auto = RUN.mode_of(root, track)[0] == "autonomous"
+    if auto and (decision is not None or fixed is not None or declined is not None):
+        raise VerifyStateError("автономный прогон: decision / fixed / declined не передаются — решение выводит запись из triage и правил останова "
+                               "(clean, потолок итераций, застой)")
+    if not auto and triage is not None:
+        raise VerifyStateError("triage — только в автономном прогоне (run.json, mode autonomous): здесь решение за человеком (daiver_verify_decide)")
     if isinstance(iteration, bool) or not isinstance(iteration, int) or iteration < 1:
         raise VerifyStateError("iteration: номер итерации из ответа daiver_verify_state (целое ≥ 1)")
     state = load(paths["verifyState"], track, f["name"])
@@ -397,6 +515,14 @@ def record(root: Any, track: str, frame: Optional[str], iteration: Any, gates: A
             + ([f"не исполнен: {', '.join(skipped_required)}"] if skipped_required else []))) + ")")
     prev = history[-1] if history else None
     prog = _progress(prev, blocking, merged)
+    tri: Optional[List[Dict[str, Any]]] = None
+    auto_dec: Optional[Dict[str, Any]] = None
+    if auto:
+        tri = triage_entries(triage, merged, blocking)
+        auto_dec = autonomous_decision(iteration, clean, prog, tri, blocking, _cap(root, track, CFG.load(root)["config"]))
+        decision = auto_dec["decision"]
+        fixed = auto_dec["fixed"]
+        declined = sorted(e["id"] for e in tri if e["action"] == "skip" and e["by"] == "agent")
     rec: Dict[str, Any] = {"iteration": iteration, "dir": _rel(root, iteration_dir), "gates": gate_out, "matchRate": facts["matchRate"],
                            "fidelity": facts["fidelity"], "diffPercent": diff_percent, "clean": clean, "blocking": blocking, "progress": prog,
                            "defects": [{k: v for k, v in d.items() if k in KEEP or (d.get("reported") and k in MARK_KEEP)} for d in merged]}
@@ -410,6 +536,10 @@ def record(root: Any, track: str, frame: Optional[str], iteration: Any, gates: A
         rec["unverified"] = facts["unverified"]
     if decision is not None:
         rec["decision"] = decision
+    if tri is not None:
+        rec["triage"] = tri
+        if auto_dec and auto_dec["stop"]:
+            rec["stop"] = auto_dec["stop"]
     for k, v in (("fixed", fixed), ("declined", declined)):
         ids = _ids(k, v, {d["id"] for d in merged})
         if ids:
@@ -431,6 +561,16 @@ def record(root: Any, track: str, frame: Optional[str], iteration: Any, gates: A
                            "decisions": {"answered": {k: v for k, v in answered.items() if v}, "reported": [m["id"] for m in marks], "answeredElsewhere": loaded["elsewhere"],
                                          "unknown": dres["unknown"]},
                            "report": _rel(root, report_path), "stateRecorded": True}
+    if auto_dec is not None:
+        out["decision"] = auto_dec["decision"]
+        out["triage"] = {a: sum(1 for e in tri or [] if e["action"] == a) for a in TRIAGE_ACTIONS}
+        if auto_dec["stop"]:
+            out["stop"] = auto_dec["stop"]
+            out["nextStep"] = f"{STOP_TEXT[auto_dec['stop']]}: закрой прогон daiver_run(track, finish: true) — исход из истории, note — в чекбокс"
+        else:
+            out["fixed"] = auto_dec["fixed"]
+            out["nextStep"] = (f"{auto_dec['decision']}: переоткрой ui-build и чини РОВНО fix-пункты триажа ({len(auto_dec['fixed'])}) по их "
+                               f"строкам (значения из канона и спеки, не с картинки), затем новая итерация")
     if warnings:
         out["warnings"] = warnings
     if loaded["problems"]:
@@ -447,8 +587,13 @@ def _ids(label: str, v: Any, known: set) -> List[str]:
 
 
 def decide(root: Any, track: str, frame: Optional[str], iteration: Any, decision: Any, fixed: Any = None, declined: Any = None) -> Dict[str, Any]:
-    """Решение человека к записанной итерации. `clean` — только если итерация чистая; `stop` — всегда."""
+    """Решение человека к записанной итерации. `clean` — только если итерация чистая; `stop` — всегда. В автономном прогоне отказ: решение
+    там выводит запись итерации по триажу."""
     root, manifest, f, paths = _ctx(root, track, frame)
+    from .. import run as RUN
+    if RUN.mode_of(root, track)[0] == "autonomous":
+        raise VerifyStateError("автономный прогон: решения человека нет — его выводит daiver_verify_state_record по триажу и правилам останова; "
+                               "verify-decisions.json человека учитывается сам")
     if decision not in DECISIONS:
         raise VerifyStateError(f"decision: {' | '.join(DECISIONS)}")
     state = load(paths["verifyState"], track, f["name"])

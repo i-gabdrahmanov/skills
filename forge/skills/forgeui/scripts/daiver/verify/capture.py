@@ -364,18 +364,34 @@ def run(root: Path, track: str, frame: Optional[str], url: str, iteration_dir: P
         except CN.CanonError as e:
             notes.append(f"каноническая модель кадра не прочитана ({e}) — число элементов и шрифты макета не сверены")
 
-    chrome, stop = CD.launch_or_skip(verify, root=root, viewport=viewport,
-                                     file_roots=[iteration_dir] if target == "reference" else [])
-    if stop is not None:
-        return stop
-    iteration_dir.mkdir(parents=True, exist_ok=True)
-    with chrome:
-        try:
-            got = _capture(chrome, url, viewport, wait_ms, recipe, _fonts_of(design))
-        except CD.UrlRefused as e:
-            raise CaptureError(f"адрес не пропущен: {e}")
-        except CD.BrowserError as e:
-            raise CaptureError(f"браузер оборвал захват: {e}")
+    server = None
+    if target == "implementation":
+        from .. import run as RUN
+        if RUN.mode_of(root, track)[0] == "autonomous":
+            # автономия поднимает ЗАПИСАННЫЙ devCommand, если адрес не отвечает (§14.12, INV-D4); после захвата сервер убирается всегда
+            from . import devserver as DEV
+            try:
+                server = DEV.start((manifest.get("implementation") or {}).get("devCommand"), root, url, "autonomous")
+            except DEV.DevServerFailed as e:
+                return e.blocked
+            except DEV.DevServerError as e:
+                raise CaptureError(str(e))
+    try:
+        chrome, stop = CD.launch_or_skip(verify, root=root, viewport=viewport,
+                                         file_roots=[iteration_dir] if target == "reference" else [])
+        if stop is not None:
+            return stop
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        with chrome:
+            try:
+                got = _capture(chrome, url, viewport, wait_ms, recipe, _fonts_of(design))
+            except CD.UrlRefused as e:
+                raise CaptureError(f"адрес не пропущен: {e}")
+            except CD.BrowserError as e:
+                raise CaptureError(f"браузер оборвал захват: {e}")
+    finally:
+        if server is not None:
+            server.stop()
     snap = got["snapshot"]
 
     design_nodes = _design_count(design) if target == "implementation" else None

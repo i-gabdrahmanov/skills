@@ -19,8 +19,10 @@
 порога или конфига меняет отчёт и снимает подтверждение). `record_approval` не пишет второе согласие по активному ключу, поэтому
 устаревшее подтверждение снимает сам движок при перегенерации отчёта (`revoke_approval`), а не модель.
 
-Что НЕ делает (граница): автономия (7.1/7.2: medium → `unconfirmed`, low → `local` без вопроса) — здесь режим прогона не читается,
-подтверждение требуется всегда; подпись плана и lock (2.6); поле «подтверждено» в запись вердикта НЕ пишется (форма вердикта —
+Автономный прогон (7.2, §15.4; режим — `run.mode_of`): вопросов нет — подтверждение не требуется, вердикты, которые человек обязан был
+увидеть, отдаются списком `unconfirmed` (и остаются в planUncertainty плана); low-вердикт компонента в автономии не принимается вовсе
+(`resolve.finalize_frame`: только `local`), а гейт ловит прежний low-компонент без согласия; правило карты не пишется — блок «paste-ready»
+отчёта. Текст отчёта от режима не зависит (на нём держится lock плана). Что НЕ делает (граница): подпись плана и lock (2.6); поле «подтверждено» в запись вердикта НЕ пишется (форма вердикта —
 контракт INV-A7, а подтверждение привязано к тексту отчёта целиком, не к узлу).
 
 Данные образца. «Modal» (корень-фрейм и три инстанса, «Modal Header» ×2 с одинаковыми вариантами) даёт после резолва три строки
@@ -428,6 +430,18 @@ def write(root: Any, track: str) -> Dict[str, Any]:
         return out
     asked = to_confirm(rep)
     out["consent"] = consent
+    from . import run as RUN
+    if RUN.mode_of(root, track)[0] == "autonomous":
+        out["autonomous"] = True
+        out["unconfirmed"] = asked[:ASK_LINES]
+        if len(asked) > ASK_LINES:
+            out["unconfirmedMore"] = len(asked) - ASK_LINES
+        if rep.proposals:
+            out["proposals"] = rep.proposals[:PROPOSALS_SHOWN]
+        out["confirmed"] = consent["state"] == "ok" or not asked
+        out["next"] = ("автономный прогон: вопросов нет — вердикты из unconfirmed приняты без подтверждения человека (названы в плане), low — только "
+                       "local; правила карты не пишутся (paste-ready блок в отчёте); резолв закончен, дальше layoutHints")
+        return out
     if rep.proposals:
         out["proposals"] = rep.proposals[:PROPOSALS_SHOWN]
         if len(rep.proposals) > PROPOSALS_SHOWN:
@@ -479,9 +493,17 @@ def check(root: Any, track: str) -> List[str]:
     if have != want:
         return ["отчёт резолва устарел (вердикты, порог или карта изменились после записи) — daiver_resolve_report"]
     asked = to_confirm(rep)
+    from . import run as RUN
+    auto = RUN.mode_of(root, track)[0] == "autonomous"
     if asked:
         st = consent_state(root, track, sha256_bytes(have))
-        if st["state"] != "ok":
+        if auto and st["state"] != "ok":
+            low = [f"{fv.name}: {', '.join(g.ids[:5])}" for fv in rep.frames for g in fv.groups
+                   if g.reason and g.head.get("confidence") == "low" and g.head.get("decision") == "component"]
+            if low:
+                problems.append(f"автономный прогон: low-вердикты компонента без подтверждения человека ({'; '.join(low)}) — в автономии только "
+                                f"local: перезапиши их daiver_resolve_finalize с decision: local")
+        elif st["state"] != "ok":
             why = {"none": "согласия нет", "stale": "согласие привязано к другому тексту отчёта",
                    "unbound": "согласие записано без --bind-file"}[st["state"]]
             problems.append(f"вердикты, которые обязан увидеть человек ({len(asked)}), не подтверждены: {why} "

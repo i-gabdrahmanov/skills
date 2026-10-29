@@ -1285,6 +1285,11 @@ def finalize_frame(root: Any, track: str, frame: Optional[str], raw: Any) -> Dic
     """Принять вердикт по ОДНОМУ кандидату и записать его (§10.2). Любое нарушение — отказ целиком, одним сообщением."""
     ctx = Ctx(root, track, frame)
     clean, problems = check_verdict(raw)
+    if clean is not None and clean.get("confidence") == "low" and clean.get("decision") == "component":
+        from . import run as RUN
+        if RUN.mode_of(ctx.root, track)[0] == "autonomous":          # §15.4: low в автономии — resolution: local, не догадка без вопроса
+            problems.append("автономный прогон: low-вердикт компонента без вопроса человеку не принимается (INV-F7, QG-N5) — запиши "
+                            "decision: local (resolution: local, он будет назван в плане и отчёте) с той же причиной")
     nid = raw.get("nodeId") if isinstance(raw, dict) else None
     cand = ctx.sc.by_id.get(nid) if isinstance(nid, str) else None
     if isinstance(nid, str) and nid and cand is None:

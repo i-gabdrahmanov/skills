@@ -633,7 +633,7 @@ def t_verify_state_record(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         return VST.record(root, TR.check_track_name(args["track"]), _frame_arg(args), args["iteration"], args["gates"], args.get("diffPercent"),
                           args.get("reviewReport"), args.get("reviewSkipped"), args.get("defects"), args.get("decision"), args.get("fixed"),
-                          args.get("declined"))
+                          args.get("declined"), args.get("triage"))
     except (TR.TrackError, VST.VerifyStateError) as e:
         raise ToolError(str(e))
 
@@ -1238,7 +1238,9 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                         "(расхождение вернётся в warnings): defects — только пункты, которых движок не знает (zone: vision | e2e, id, severity). "
                         "diffPercent — проценты 0–100 ровно как вернул дифф (3.18, не 0.0318). Ответ: clean, blocking, progress (stalled: не лучше прошлой; "
                         "регресс — тоже stall), report — путь verify-report.md. Решение человека (clean/fix_all/fix_some/stop, fixed, declined) к "
-                        "записанной итерации вносит оркестратор через daiver_verify_decide; здесь decision допустим только для автономного прогона."),
+                        "записанной итерации вносит оркестратор через daiver_verify_decide. Автономный прогон (run.json): triage — {id, action: fix | skip | "
+                        "noise, reason, confirmed?} на КАЖДЫЙ блокирующий дефект и vision-пункт (без него запись отказывает), decision/fixed/declined не "
+                        "передаются — решение и останов (stop: clean | capReached | stalled | nothing-to-fix) выводит движок."),
         "schema": {"type": "object", "properties": {
             "track": {"type": "string", "description": "ключ стори (имя трека)"},
             "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"},
@@ -1248,9 +1250,11 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "reviewReport": {"type": "object", "description": "отчёт визуального обзора (Fix plan) — станет priorReview следующей итерации"},
             "reviewSkipped": {"type": "string", "description": "почему обзор не проводился"},
             "defects": {"type": "array", "items": {"type": "object"}, "description": "только пункты vision/e2e: {id, zone, severity, message, …}"},
-            "decision": {"type": "string", "enum": list(VST.DECISIONS), "description": "только автономный прогон (решение человека — daiver_verify_decide)"},
+            "decision": {"type": "string", "enum": list(VST.DECISIONS), "description": "прогон человека: решение сразу с записью (обычно — daiver_verify_decide); в автономии не передаётся"},
             "fixed": {"type": "array", "items": {"type": "string"}, "description": "id дефектов, исправленных по решению"},
-            "declined": {"type": "array", "items": {"type": "string"}, "description": "id дефектов, отклонённых человеком"}},
+            "declined": {"type": "array", "items": {"type": "string"}, "description": "id дефектов, отклонённых человеком"},
+            "triage": {"type": "array", "items": {"type": "object"}, "description": "только автономный прогон: {id, action: fix|skip|noise, reason, "
+                                                                                   "confirmed?: measured|missing-file — у fix vision-пункта}"}},
             "required": ["track", "iteration", "gates"], "additionalProperties": False},
     },
     "daiver_verify_decide": {
