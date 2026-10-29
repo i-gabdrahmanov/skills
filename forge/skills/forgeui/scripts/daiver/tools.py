@@ -9,7 +9,7 @@ daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_s
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
 daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report,
 daiver_plan_write, daiver_plan_contract, daiver_build_state, daiver_build_state_set, daiver_color_tokens,
-daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare, daiver_verify_state, daiver_verify_state_record, daiver_verify_decide, daiver_render_reference, daiver_visual_diff, daiver_visual_review, daiver_verify_report, daiver_e2e_plan, daiver_e2e_run, daiver_frame_states, daiver_frame_baseline.
+daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare, daiver_verify_state, daiver_verify_state_record, daiver_verify_decide, daiver_render_reference, daiver_visual_diff, daiver_visual_review, daiver_verify_report, daiver_e2e_plan, daiver_e2e_run, daiver_frame_states, daiver_frame_baseline, daiver_propose_sources.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -31,11 +31,13 @@ from . import init as I
 from . import states as STS
 from . import layout as LAY
 from . import outline as OL
+from . import page_base as PB
 from . import plan as PL
 from . import plan_contract as PC
 from . import resolution_report as RR
 from . import resolve as RS
 from . import source_nodes as SN
+from . import sources as SRC
 from . import specs as S
 from . import status as ST
 from . import svg_assets as SA
@@ -491,6 +493,8 @@ def t_frame_baseline(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         if manifest is None:
             raise ToolError(f"трека «{track}» нет — сначала daiver_pixso_pull")
         frame = TR.get_frame(manifest, _frame_arg(args))
+        if TR.is_page(frame):
+            return _page_baseline(root, track, manifest, frame)
         out = BL.public(BL.analyze(root, manifest, frame["name"]))
     except TR.TrackError as e:
         raise ToolError(str(e))
@@ -510,6 +514,40 @@ def t_frame_baseline(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     else:
         out["next"] = "база ревизии недоступна: " + out["reason"]
     return out
+
+
+def _page_baseline(root: Path, track: str, manifest: dict, frame: dict) -> Dict[str, Any]:
+    """Кадр-правка существующей страницы (6.4): регионы изменения из разрыва базы, место каждого в коде, старые расхождения, правки вне регионов."""
+    res = PB.analyze(root, manifest, frame["name"])
+    out = dict({"track": track}, **PB.public(res))
+    if len(out["regions"]) > MAX_REGIONS_SHOWN:
+        out["regionsMore"] = len(out["regions"]) - MAX_REGIONS_SHOWN
+        out["regions"] = out["regions"][:MAX_REGIONS_SHOWN]
+    if not res["available"]:
+        out["next"] = res["reason"]
+        return out
+    got = PB.outside_edits(root, manifest, frame["name"], res)
+    out["outsideEdits"] = {"checked": got["checked"], "count": len(got["edits"]), "edits": [PB.edit_words(e) for e in got["edits"][:PB.MAX_EDITS]],
+                           **({"unchecked": got["unchecked"]} if got.get("unchecked") else {}), **({"reason": got["reason"]} if got.get("reason") else {})}
+    scope = res["scope"]
+    out["next"] = ("кадр правит существующую страницу (scope %s): строятся только регионы — added вписать по location (ancestor — внутрь найденного "
+                   "предка, между соседями), changed — правка на месте элемента (own/inside: file:line…endLine), removed — удалить элемент; файл "
+                   "прочитай ДО правки — его структура, имена и стиль домашние; вне регионов ничего не реформатится и не переименовывается "
+                   "(outsideEdits — нарушения, гейт сборки их не пустит)" % scope
+                   + ("; preExisting — старые расхождения страницы с макетом: при scope change их не трогают и они не блокируют — если среди них "
+                      "и есть изменение (цвет, отступ), это решение человека: scope page" if scope == "change" and res["counts"]["preExisting"] else ""))
+    return out
+
+
+def t_propose_sources(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        track = TR.check_track_name(args["track"])
+        manifest = TR.load(root, track)
+        if manifest is None:
+            raise ToolError(f"трека «{track}» нет — сначала daiver_pixso_pull")
+        return SRC.propose(root, manifest, _frame_arg(args))
+    except (TR.TrackError, SRC.SourcesError) as e:
+        raise ToolError(str(e))
 
 
 def t_frame_states(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -686,7 +724,8 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                         "растр, что уже готово. set — поля кадра (role screen|dialog|state|breakpoint, url, "
                         "open-рецепт {actions[], clipSelector}, stateOf, frameBox, notes; sources — файлы СУЩЕСТВУЮЩЕЙ "
                         "страницы, которую правит кадр, пути от корня репо; scope change|page — только вместе с "
-                        "sources) при указанном frame либо поля трека (implementation{url,devCommand} — целиком, "
+                        "sources; baselineSkip — причина одной строкой, если работающей страницы нет вовсе и базу не снять: "
+                        "пропуск записан открыто) при указанном frame либо поля трека (implementation{url,devCommand} — целиком, "
                         "specs[]) без него; null снимает поле. rasterPath — прикрепить goal image кадра (PNG/JPEG, путь от корня "
                         "репо). Кадры и требования заводит daiver_pixso_pull, не этот инструмент."),
         "schema": {"type": "object", "properties": {
@@ -1031,10 +1070,24 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "description": ("Ревизия кадра против собранной версии (база — versions/<n>/, её завёл pull поверх собранного кадра): регионы дельты shared / added / removed / "
                         "changed (+changes; consequence: true — размер и позиция от контента, не пинятся) в порядке документа, у каждого files — куда регион "
                         "построен в коде (added — файлы родителя, куда вписать); similarity, inherited — сколько решений узлов взято у версии. available: false + "
-                        "reason — базы или канона нет. Читающий инструмент: ничего не пишет; outline / section / резолв / план ревизии работают на этой дельте сами."),
+                        "reason — базы или канона нет. Кадр с sources (правка существующей страницы) — регионы изменения из разрыва базы страницы с макетом: added / "
+                        "changed / removed с location (own | inside | ancestor; file:line…endLine в файлах страницы), preExisting — старые расхождения (scope change "
+                        "их не трогает), outsideEdits — правки файлов вне регионов. Читающий инструмент: ничего не пишет; outline / section / резолв / план ревизии и "
+                        "правки страницы работают на этой дельте сами."),
         "schema": {"type": "object", "properties": {
             "track": {"type": "string", "description": "ключ стори (имя трека)"},
             "frame": {"type": "string", "description": "имя кадра-ревизии; по умолчанию первичный"}},
+            "required": ["track"], "additionalProperties": False},
+    },
+    "daiver_propose_sources": {
+        "fn": t_propose_sources,
+        "description": ("Где в репо существующая страница кадра: файлы кода с текстами макета (тексты ≥ 3 символов; до 8 кандидатов, ранг — сколько разных "
+                        "текстов нашлось; found — какие и на какой строке), routes — где адрес страницы объявлен в роутере, textFiles — словари с текстами "
+                        "(i18n). Обход до 3000 файлов (truncated). Читающий: ничего не пишет. Кандидат — не решение: страница — файлы, которые РЕНДЕРЯТ этот "
+                        "экран, это подтверждает чтение; потом daiver_track_manifest set={sources, scope}."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "frame": {"type": "string", "description": "имя кадра; по умолчанию первичный"}},
             "required": ["track"], "additionalProperties": False},
     },
     "daiver_frame_states": {

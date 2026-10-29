@@ -80,6 +80,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import baseline as BL
+from . import page_base as PB
 from . import canon as C
 from . import config as CFG
 from . import states as STS
@@ -485,6 +486,18 @@ def baseline_view(bl: dict) -> dict:
                      f"строится В СУЩЕСТВУЮЩИЙ код (region.files в daiver_section), removed — удалить; ни пролога, ни нового модуля")}
 
 
+def page_view(pg: dict) -> dict:
+    """Правка существующей страницы в ответе outline (6.4): scope, счётчики регионов, что удалить (с местом), сколько старых расхождений."""
+    if not pg.get("available"):
+        return {"scope": pg.get("scope"), "skipped": pg.get("reason"),
+                "note": "база страницы не снята (пропуск записан): sections — весь кадр, строится в файлы sources правкой существующей разметки"}
+    return {"scope": pg["scope"], "sources": pg["sources"], "counts": pg["counts"], "removed": PB.removed_view(pg),
+            "preExisting": pg["preExisting"]["count"],
+            "note": ("правка существующей страницы: sections — регионы added и changed (разрыв страницы с макетом), остальное страница уже показывает; "
+                     "строится В файлы страницы (section → page.region: location, files), removed — удалить элемент; ни пролога, ни нового модуля"
+                     + ("; preExisting — старые расхождения, при scope change не трогаются" if pg["scope"] == "change" else ""))}
+
+
 def build_outline(env: dict, budget: Any, *, track: Optional[str] = None, frame: Optional[str] = None,
                   frame_url: Optional[str] = None, goal_image: Optional[str] = None, vision: bool = True,
                   warnings: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -524,6 +537,8 @@ def build_outline(env: dict, budget: Any, *, track: Optional[str] = None, frame:
             out["state"] = state_view(env["state"])
         if env.get("baseline"):
             out["baseline"] = baseline_view(env["baseline"])
+        if env.get("page"):
+            out["page"] = page_view(env["page"])
         out["goalImage"] = goal_image
         out["goalImageNext"] = _goal(entries, goal_image, vision)
         out["nodeUrlTemplate"] = tpl
@@ -573,6 +588,15 @@ VERSION_NEXT = ("секция ревизии — РЕГИОН дельты к с
                 "стабы inferred:ref:…, они уже в коде, не трогай; ни пролога, ни нового модуля, маршрута и моков с нуля (mocks.ts дополняется)")
 
 
+PAGE_NEXT = ("секция правки страницы — РЕГИОН изменения в ЧУЖОМ коде: прочитай page.region.files ДО правки (структура, имена и стиль — домашние, как там). "
+             "added — впиши поддерево node по location (ancestor — внутрь найденного предка, после afterId, между соседями); changed — правка на месте "
+             "элемента location (file:line…endLine; changes — что изменилось); дети node — стабы inferred:ref:…, страница их уже показывает, не трогай; "
+             "вне региона ничего не меняй — ни реформата, ни переименований, ни «заодно»: гейт сборки сверит дифф с базой; нового модуля, маршрута, "
+             "пролога и mocks.ts нет")
+PAGE_SKIP_NEXT = ("база страницы не снята (пропуск записан открыто): строй node В файлы страницы (page.sources) правкой существующей разметки — прочитай "
+                  "их ДО правки, стиль и имена домашние, лишнего не трогай; нового модуля и маршрута нет")
+
+
 def _region_of(m: _Map, n: dict) -> dict:
     """Регион внутри крупного добавленного поддерева (секция глубже корня региона): к какому региону она относится."""
     for a in reversed(m.chain(n)):
@@ -620,6 +644,15 @@ def build_section(env: dict, section_id: str, budget: Any, *, track: Optional[st
         region = n.get("delta") or _region_of(m, n)
         files = (env["baseline"].get("files") or {}).get(region.get("regionRoot") or n["id"], [])
         out["baseline"] = {"version": env["baseline"]["version"], "region": dict(region, files=files[:BL.MAX_FILES])}
+    pg = env.get("page")
+    if pg:
+        if pg.get("available"):
+            region = n.get("delta") or _region_of(m, n)
+            rid = region.get("regionRoot") or n["id"]
+            out["page"] = {"scope": pg["scope"], "region": dict(region, files=(pg.get("files") or {}).get(rid, pg["sources"]),
+                                                                 location=(pg.get("locations") or {}).get(rid))}
+        else:
+            out["page"] = {"scope": pg.get("scope"), "sources": pg.get("sources"), "skipped": pg.get("reason")}
     if warnings:
         out["warnings"] = list(warnings)
     nxt = ["строй ТОЛЬКО поддерево node; ancestors — контекст (раскладка и поверхность предков root→parent), "
@@ -628,6 +661,8 @@ def build_section(env: dict, section_id: str, budget: Any, *, track: Optional[st
         nxt = [STATE_NEXT]
     if env.get("baseline"):
         nxt = [VERSION_NEXT]
+    if pg:
+        nxt = [PAGE_NEXT if pg.get("available") else PAGE_SKIP_NEXT]
     if oversize:
         nxt.append("лист тяжелее бюджета: не режется, строится целиком")
     if occluded:
@@ -668,6 +703,18 @@ def _load(root: Path, track: str, frame: Optional[str]) -> Tuple[dict, dict, Dic
             raise OutlineError(f"кадр «{f['name']}» — ревизия собранной версии {res['version']}, но база недоступна: {res['reason']}")
         env = dict(env, root=res["_delta"], baseline=dict(BL.public(res), files=res["files"]))
         warnings += res["warnings"]
+    elif TR.is_page(f):
+        res = PB.analyze(root, manifest, f["name"], env)
+        if res["available"]:
+            env = dict(env, root=res["_delta"], page=dict(PB.public(res), files=res["files"], locations=res["locations"]))
+            warnings += res["warnings"]
+        elif res.get("skipped"):
+            env = dict(env, page=PB.public(res))
+            warnings.append(res["reason"])
+        else:
+            raise OutlineError(f"кадр «{f['name']}» правит существующую страницу (sources), а её база недоступна: {res['reason']}. Секции правки — "
+                               f"регионы разрыва страницы с макетом, без базы их не из чего взять; работающей страницы нет вовсе — "
+                               f"daiver_track_manifest(track, frame, set={{baselineSkip: \"<причина>\"}}) (пропуск будет записан открыто)")
     req = f.get("requirement") or {}
     src = (env.get("stats") or {}).get("sourceSha256")
     if src and req.get("sha256") and src != req["sha256"]:

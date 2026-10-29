@@ -86,6 +86,25 @@ def _revisions(frames: List[Dict[str, Any]]) -> List[str]:
     return out + [""]
 
 
+def _pages(frames: List[Dict[str, Any]]) -> List[str]:
+    """Раздел «Правка страниц» — только когда в треке есть кадры, правящие существующую страницу (6.4): файлы, scope, регионы, что удалить, старое."""
+    rows = [(f["name"], f["plan"]) for f in frames if isinstance(f.get("plan"), dict) and f["plan"].get("page")]
+    if not rows:
+        return []
+    out = ["Кадр правит СУЩЕСТВУЮЩУЮ страницу, написанную людьми: строится в её файлы точечно, вне регионов ничего не меняется (гейт сборки сверяет дифф с "
+           "базой); scope change — старые расхождения страницы с макетом не трогаются, scope page — страница приводится к макету целиком.", "",
+           "| Кадр | Файлы страницы | scope | База | Регионы (added / changed / удалить) | Старых расхождений не трогается |", "|---|---|---|---|---|---|"]
+    for name, p in rows:
+        pg = p["page"]
+        kinds = [x.get("region") for x in p.get("sections") or []]
+        files = ", ".join(f"`{PL._cell(x)}`" for x in pg["sources"][:4]) + (" …" if len(pg["sources"]) > 4 else "")
+        base = "снята" if pg["baseline"] == "page" else f"НЕ снята: {PL._cell(pg.get('reason') or '')}"
+        pre = str(pg.get("preExisting", 0)) if pg["scope"] == "change" and pg["baseline"] == "page" else "—"
+        out.append(f"| {name} | {files} | {pg['scope']} | {base} | {len([k for k in kinds if k == 'added'])} / {len([k for k in kinds if k == 'changed'])} / "
+                   f"{len(pg.get('removed') or [])} | {pre} |")
+    return out + [""]
+
+
 def _sections(frames: List[Dict[str, Any]]) -> List[str]:
     out: List[str] = []
     for f in frames:
@@ -248,6 +267,9 @@ def render(track: str, frames: List[Dict[str, Any]], design_system: str, degrada
     revisions = _revisions(frames)
     if revisions:
         out += ["", "## Ревизии", ""] + revisions
+    pages = _pages(frames)
+    if pages:
+        out += ["", "## Правка страниц", ""] + pages
     out += ["", "## Секции", ""] + _sections(frames)
     out += ["## Компоненты", ""] + _components(frames)
     out += ["## Дизайн-система", ""] + _design(frames, design_system)

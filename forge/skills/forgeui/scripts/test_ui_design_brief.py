@@ -51,7 +51,7 @@ STEP_TOOLS = ("daiver_status", "daiver_pixso_pull", "daiver_track_manifest", "da
               "daiver_outline", "daiver_ds_inventory", "daiver_ds_requirements", "daiver_ds_lookup", "daiver_ds_details",
               "daiver_resolve_candidates", "daiver_resolve_query", "daiver_resolve_finalize", "daiver_resolve_report",
               "daiver_source_nodes", "daiver_map_append", "daiver_plan_write", "daiver_plan_contract", "daiver_frame_states",
-              "daiver_frame_baseline")
+              "daiver_frame_baseline", "daiver_propose_sources")
 MAX_FILE_LINES = 360                            # 320 → 345: шаг ui-build (3.2, §4 — до 52 строк); 345 → 350: daiver_screenshot (4.2); 350 → 360: цикл ui-verify (4.8, §5); рост дальше — выноси в код
 MAX_STEP_LINES = 110                            # шаг вырос на план, контракт и подпись (2.6): 8 → 10 пунктов
 
@@ -107,8 +107,12 @@ class Tools(unittest.TestCase):
     def test_the_step_names_every_tool_it_needs_and_no_future_ones(self):
         for tool in STEP_TOOLS:
             self.assertTrue(tool in STEP, f"бриф ui-design не называет {tool}")
-        for future in ("daiver_verify_compare", "daiver_screenshot", "daiver_plan_sign"):
-            self.assertTrue(future not in LIVE, f"{future}: инструмента нет, бриф шага не должен его обещать")
+        self.assertTrue("daiver_plan_sign" not in LIVE, "daiver_plan_sign: инструмента нет и не будет — подпись это согласие человека")
+        for tool in ("daiver_verify_compare", "daiver_screenshot"):    # на ui-design — только захват базы существующей страницы (6.4)
+            lines = [ln for ln in STEP.splitlines() if tool in ln]
+            self.assertTrue(lines, tool)
+            for ln in lines:
+                self.assertIn("/baseline", ln, f"{tool} на ui-design — только в базу страницы (iterationDir <папка кадра>/baseline)")
 
     def test_one_place_per_rule_no_duplicated_paragraphs(self):
         # согласия описаны один раз (§3.1), прежние абзацы про карту/библиотеку/резолв влиты в процедуру шага

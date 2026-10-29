@@ -19,7 +19,7 @@ INV-C21, C24, C25, C33, G4, G11, F12, F15).
 `e2e-defects.json` (прогон `daiver_e2e_run`, 5.5; нет прогона — `skipped`, даже если агент записал `pass`). Агент добавляет только то, чего движок не знает: свои пункты vision / e2e в `defects`. Расхождение слов агента с фактом — в `warnings`, побеждает факт.
 
 Правило clean (§14.9): блокируют только не-noise critical и major из зоны deterministic; vision не блокирует никогда; pre-existing
-(`standing: pre-existing`, scope change — 6.4) не блокирует; регрессия блокирует; hard gate fail и перезахват — не clean; любой другой failed-гейт —
+(`standing: pre-existing` при `scope` change — 6.4; при scope page считается всё) не блокирует; регрессия блокирует; hard gate fail и перезахват — не clean; любой другой failed-гейт —
 не clean; skipped e2e/review не мешают; code fail блокирует (через блокирующие дефекты кода), skip — нет. Решения человека (`verify-decisions.json`)
 накладываются до расчёта: false_positive → noise (не блокирует), skip → declined (блокирует, но не переспрашивается).
 
@@ -51,7 +51,7 @@ GATE_STATUS = ("pass", "fail", "skipped", "degraded")
 DECISIONS = ("clean", "fix_all", "fix_some", "stop")
 EXECUTED_MARKERS = ("snapshot.json", "compare-summary.json", "code-summary.json", "actual.png")
 BLOCKING_SEVERITY = ("critical", "major")
-KEEP = ("id", "code", "layer", "severity", "zone", "element", "message", "coverage", "lifecycle", "noise", "declined", "standing", "source",
+KEEP = ("id", "code", "layer", "severity", "zone", "element", "message", "coverage", "lifecycle", "noise", "declined", "standing", "scope", "source",
         "decision", "designLink", "location", "rows", "rule", "prop", "design")
 MARK_KEEP = ("reported", "problem", "pin", "designPin", "side", "impl")     # ручная метка человека несёт в историю всю постановку и рамку (INV-C34)
 _ITER = re.compile(r"^iter-(\d+)$")
@@ -286,7 +286,7 @@ def _extra_defects(raw: Any) -> List[Dict[str, Any]]:
 def is_blocking(d: Dict[str, Any]) -> bool:
     """Правило clean для одного дефекта (§14.9)."""
     return (d.get("severity") in BLOCKING_SEVERITY and not d.get("noise") and d.get("zone", "deterministic") != "vision"
-            and d.get("standing") != "pre-existing")
+            and not (d.get("standing") == "pre-existing" and d.get("scope") != "page"))
 
 
 def _progress(prev: Optional[Dict[str, Any]], blocking: List[str], defects: List[Dict[str, Any]]) -> Dict[str, Any]:

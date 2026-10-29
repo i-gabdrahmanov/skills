@@ -46,6 +46,7 @@ from . import component_map as CM
 from . import config as CFG
 from . import ds_requirements as DR
 from . import outline as OL
+from . import page_base as PB
 from . import plan as PL
 from . import plan_digest as PD
 from . import resolution_report as RR
@@ -490,16 +491,30 @@ def chk_baseline(w: World) -> List[Dict[str, Any]]:
         if not _page_base(fx):
             out.append(ok("baseline", "human", "кадр строится с нуля, базы страницы нет", frame=name, na=True))
             continue
-        base = fx.paths["baseline"]
-        if base.is_dir() and any(p.is_file() for p in base.rglob("*")):
-            out.append(ok("baseline", "human", "база страницы захвачена (baseline/ не пуст)", frame=name))
+        capture = ("daiver_screenshot → daiver_verify_compare → daiver_code_compare с iterationDir=<папка кадра>/baseline (пока код не тронут); "
+                   "работающей страницы нет вовсе — daiver_track_manifest(track, frame, set={baselineSkip: \"<причина>\"})")
+        if TR.page_captured(fx.f):
+            res = PB.analyze(w.root, w.manifest, name) if TR.is_page(fx.f) else {"available": False, "reason": "кадр не правка страницы"}
+            copies = (fx.paths["baseline"] / PB.SOURCES_INDEX).is_file()
+            if res.get("available") and copies:
+                c = res["counts"]
+                out.append(ok("baseline", "human", f"база страницы снята: регионов изменения {c['added'] + c['changed'] + c['removed']} (added {c['added']}, "
+                                                   f"changed {c['changed']}, removed {c['removed']}), старых расхождений {c['preExisting']}", frame=name))
+            else:
+                why = res.get("reason") if not res.get("available") else (f"копий файлов страницы нет ({PB.SOURCES_INDEX}): daiver_code_compare в "
+                                                                            f"baseline не вызывался")
+                out.append(item("baseline", "open", True, "human", f"{_p(w, name)}база страницы неполна: {why}", frame=name, reason=REASONS["baseline"],
+                                ask=f"База страницы кадра «{name}» не снята целиком ({RS._clip(why, 160)}). Страница по-прежнему работает в нетронутом виде? "
+                                    f"Дайте адрес — снимем заново.", record=capture))
+        elif fx.f.get("baselineSkip"):
+            out.append(item("baseline", "open", False, "human", f"{_p(w, name)}база страницы не снята — пропуск записан: {fx.f['baselineSkip']}",
+                            frame=name, degrades="регрессии неотличимы от старых расхождений: кадр строится целиком в файлы страницы, проверка считает всё"))
         else:
-            out.append(item("baseline", "open", True, "human", f"{_p(w, name)}правит существующую страницу, а базы (baseline/) нет",
+            out.append(item("baseline", "open", True, "human", f"{_p(w, name)}правит существующую страницу, а её база не снята",
                             frame=name, reason=REASONS["baseline"],
-                            ask=f"Страница кадра «{name}» уже работает? Запустите её и дайте адрес — снимем базу ДО правок кода (скриншот и "
-                                f"оба сравнения в baseline/). Если работающей страницы нет вовсе — скажите, это будет записано открыто.",
-                            record="daiver_screenshot → daiver_verify_compare → daiver_code_compare с iterationDir=<папка кадра>/baseline "
-                                   "(инструменты проверки — этап 4)"))
+                            ask=f"Страница кадра «{name}» уже работает? Запустите её и дайте адрес — снимем базу ДО правок кода (снимок, сравнение "
+                                f"с макетом и копии файлов в baseline/). Если работающей страницы нет вовсе — скажите, это будет записано открыто.",
+                            record=capture))
     return out
 
 
@@ -783,6 +798,11 @@ class Contract:
         if revs:
             lines.append("Ревизии (правка собранного кода, без пролога): " + "; ".join(
                 f"{n} — база версия {b['version']}, удалить {len(b['removed'])}" for n, b in revs[:SHOWN]))
+        pages = [(fx.f["name"], p["page"]) for fx, p in zip(self.w.frames.values(), plans) if p.get("page")]
+        if pages:
+            lines.append("Правка существующих страниц (в их файлы, вне регионов ничего не меняется): " + "; ".join(
+                f"{n} — scope {g['scope']}, " + (f"удалить {len(g.get('removed') or [])}, старых расхождений не трогается {g.get('preExisting', 0)}"
+                                                 if g["baseline"] == "page" else "база НЕ снята — считается всё") for n, g in pages[:SHOWN]))
         sts = [(fx.f["name"], p["state"]) for fx, p in zip(self.w.frames.values(), plans) if p.get("state")]
         if sts:
             lines.append("Состояния экранов (внутри модуля экрана): " + "; ".join(

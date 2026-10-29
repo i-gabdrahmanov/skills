@@ -397,10 +397,10 @@ class CaptureArgs(unittest.TestCase):
 
     def test_the_iteration_dir_must_live_under_verify_or_baseline_of_the_frame(self):
         p = self.r["paths"]
-        for ok in (p["verify"] / "iter-3", p["baseline"] / "v1", p["verify"] / "a" / "b"):
+        for ok in (p["verify"] / "iter-3", p["baseline"], p["verify"] / "a" / "b"):
             with self.subTest(ok=str(ok)):
                 self.assertTrue(CP.iteration_dir_ok(p, ok))
-        for bad in (p["verify"], p["baseline"], p["dir"], p["dir"] / "assets", p["dir"] / "versions" / "x", self.root, self.root / "src",
+        for bad in (p["verify"], p["baseline"] / "v1", p["dir"], p["dir"] / "assets", p["dir"] / "versions" / "x", self.root, self.root / "src",
                     p["verify"] / ".." / "plan.json", Path(self.tmp.name) / "elsewhere"):
             with self.subTest(bad=str(bad)):
                 self.assertFalse(CP.iteration_dir_ok(p, bad))

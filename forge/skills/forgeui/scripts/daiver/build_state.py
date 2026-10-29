@@ -71,6 +71,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import baseline as BL
 from . import outline as OL
+from . import page_base as PB
 from . import plan as PL
 from . import status as ST
 from . import track as TR
@@ -529,6 +530,18 @@ def run(root: Any, track: str, frame: Optional[str] = None) -> Dict[str, Any]:
                                    "без пролога; removed — удалить из кода (проверь, не использует ли их кто-то ещё)"}
         if nxt is None and bl.get("counts", {}).get("removed"):
             out["nextStep"] += "; удалено ли из кода всё из revision.removed — проверка найдёт остатки как EXTRA"
+    pg = env.get("page")
+    if pg:
+        out["page"] = {"scope": pg.get("scope"), "sources": pg.get("sources"),
+                       "note": ("правка существующей страницы: пролога нет, строится В файлы sources — каждый прочитай ДО правки (структура, имена, стиль — "
+                                "домашние); секции — только регионы (daiver_section → page.region.location), вне регионов ничего не меняй: гейт сборки "
+                                "сверит дифф с базой (baseline/sources/)")}
+        if pg.get("available"):
+            out["page"]["removed"] = PB.removed_view(pg)[:SHOWN]
+            if nxt is None and pg.get("counts", {}).get("removed"):
+                out["nextStep"] += "; удалено ли со страницы всё из page.removed — проверка найдёт остатки как EXTRA"
+        else:
+            out["page"]["skipped"] = pg.get("reason")
     return out
 
 

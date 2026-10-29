@@ -16,7 +16,10 @@
 `baseline` (ТОЛЬКО у ревизии, 6.3: `{kind: version, version, similarity, removed: [{baseId, name, parentId, files}], inherited: [{id, baseId, component | resolution}]}` —
 на какой собранной версии стоит изменение, что удалить из кода и из каких файлов, решения узлов shared-частей, взятые у версии по base-id; секции — регионы
 дельты к версии, `delta` — как у состояния; место корня не-первичного кадра (`module`) по умолчанию берётся у версии),
-`module` (ТОЛЬКО у не-первичного кадра без `stateOf`: заявленное решение плана о месте корня кадра в едином модуле трека — {name: имя первичного кадра, root: {mode, component, host?, reason?}}, 6.1),
+`page` (ТОЛЬКО у правки существующей страницы, 6.4: `{scope, sources, baseline: page | skipped, removed: [{implId, name, parentId, location}], preExisting,
+counts, matchRate}` — файлы страницы, что удалить с неё и где, сколько старых расхождений не трогается; секции — регионы разрыва страницы с макетом, `delta` —
+как у состояния; без базы (`skipped`, причина в `reason`) секции — весь кадр; модуля у такого кадра нет — место кода её файлы),
+`module` (ТОЛЬКО у не-первичного кадра без `stateOf` и не правки страницы: заявленное решение плана о месте корня кадра в едином модуле трека — {name: имя первичного кадра, root: {mode, component, host?, reason?}}, 6.1),
 `buildOrder` (РЕАЛЬНЫЕ id секций с хешами: сначала секции, создающие общие local-компоненты, затем их потребители, дальше порядок
 документа; occluded не строится; пролог — токены и моки — не секция и в порядок не входит, INV-B12), `locals`, `layout` (решение по
 каждой записи `unproven`, §11.4: «принятый hint обязателен, непринятый не применяется»), `specs` (ссылки на разделы спек), `design`
@@ -50,6 +53,7 @@ from . import baseline as BL
 from . import canon as C
 from . import component_map as CM
 from . import outline as OL
+from . import page_base as PB
 from . import resolve as RS
 from . import specs as S
 from . import track as TR
@@ -287,6 +291,10 @@ def module_of(ctx: "RS.Ctx", placement: Optional[Dict[str, Any]], hosts: Optiona
     """Решение о месте корня кадра в модуле: только у не-первичного кадра без stateOf (состояние живёт ВНУТРИ экрана — 6.2). → (module | None, нарушения)."""
     frames = ctx.manifest.get("frames") or []
     primary = frames[0]["name"] if frames else ctx.fname
+    if TR.is_page(ctx.frame) and ctx.fname != primary:
+        if placement is not None:
+            return None, ["plan.placement: кадр правит существующую страницу — место его кода её файлы (sources), placement не принимается"]
+        return None, []
     if ctx.fname == primary or ctx.frame.get("stateOf"):
         if placement is not None:
             why = "у первичного кадра корень и есть модуль" if ctx.fname == primary else "кадр-состояние строится ВНУТРИ экрана (stateOf), место корня ему не нужно"
@@ -748,6 +756,13 @@ def derive(ctx: "RS.Ctx", st: "RS.State", budget: Any, explicit: List[Dict[str, 
     if bl:
         plan["baseline"] = {"kind": "version", "version": bl["version"], "similarity": bl["similarity"], "removed": BL.removed_view(bl),
                             "inherited": list(bl.get("inherited") or [])}
+    pg = ctx.env.get("page")
+    if pg:
+        plan["page"] = {"scope": pg.get("scope"), "sources": list(pg.get("sources") or []), "baseline": "page" if pg.get("available") else "skipped"}
+        if pg.get("available"):
+            plan["page"].update(removed=PB.removed_view(pg), preExisting=pg["preExisting"]["count"], counts=pg["counts"], matchRate=pg.get("matchRate"))
+        else:
+            plan["page"]["reason"] = pg.get("reason")
     module, bad = module_of(ctx, placement, hosts)
     problems = list(problems) + bad
     if module is not None:
@@ -893,6 +908,10 @@ def render_md(plan: Dict[str, Any]) -> str:
         out[out.index("## Порядок сборки"):out.index("## Порядок сборки")] = baseline_md(plan)
         out[out.index("## Порядок сборки") + 2] = ("Пролога у ревизии нет: токены, моки и модуль уже в коде (mocks.ts дополняется); секции под непрозрачным слоем "
                                                   "(occluded) не строятся.")
+    if plan.get("page"):
+        out[out.index("## Порядок сборки"):out.index("## Порядок сборки")] = page_md(plan)
+        out[out.index("## Порядок сборки") + 2] = ("Пролога у правки страницы нет: страница, её данные и стили уже в коде; секции под непрозрачным слоем "
+                                                  "(occluded) не строятся.")
     creates: Dict[str, List[str]] = {}
     for x in plan["locals"]:
         if x["shared"]:
@@ -903,7 +922,7 @@ def render_md(plan: Dict[str, Any]) -> str:
         out.append(f"{i}. {_link(tpl, b['id'])} «{_cell(b['name'])}» · hash `{b['hash']}` · {s['weight']} Б{mark}")
     if not plan["buildOrder"]:
         out.append("Строить нечего: все секции кадра закрыты непрозрачным слоем.")
-    if "section" not in plan["tree"] and not plan.get("state") and not plan.get("baseline"):
+    if "section" not in plan["tree"] and not plan.get("state") and not plan.get("baseline") and not plan.get("page"):
         out += ["", "## Оболочка над секциями", ""]
         out += _tree_lines(plan["tree"], by_id)
     out += ["", "## Секции", ""]
@@ -1183,6 +1202,35 @@ def baseline_md(plan: Dict[str, Any]) -> List[str]:
             out.append(f"- `{_cell(r['baseId'])}` «{_cell(r['name'])}» (внутри `{_cell(r['parentId'])}`) — {where}")
         out.append("")
     out += [f"Решений узлов, взятых у собранной версии без пересмотра (shared-части): {len(b['inherited'])}.", ""]
+    return out
+
+
+def _where(loc: Any) -> str:
+    if not isinstance(loc, dict):
+        return "место в коде не найдено — ищи чтением файлов страницы"
+    span = f"{loc['line']}" + (f"–{loc['endLine']}" if loc.get("endLine") and loc["endLine"] != loc["line"] else "")
+    return f"`{_cell(loc['file'])}:{span}` ({loc['kind']})"
+
+
+def page_md(plan: Dict[str, Any]) -> List[str]:
+    p = plan["page"]
+    files = ", ".join(f"`{_cell(x)}`" for x in p["sources"])
+    out = ["## Правка страницы", ""]
+    if p["baseline"] != "page":
+        return out + [f"Кадр правит СУЩЕСТВУЮЩУЮ страницу ({files}), а её база НЕ снята: {_cell(p.get('reason') or '')}. Регрессии неотличимы от старых "
+                      f"расхождений — кадр строится целиком в файлы страницы правкой существующей разметки, проверка считает всё.", ""]
+    scope = ("scope change — точечное изменение: старые расхождения страницы с макетом не трогаются и не блокируют"
+             if p["scope"] == "change" else "scope page — страница приводится к макету целиком: расхождения значений тоже регионы")
+    out += [f"Кадр правит СУЩЕСТВУЮЩУЮ страницу ({files}); {scope}. Строится В эти файлы читаемым диффом: файл читается до правки, структура, "
+            f"имена и стиль — домашние; вне регионов ничего не реформатится и не переименовывается (гейт сборки сверяет дифф с базой — "
+            f"`baseline/sources/` кадра). Секции ниже — регионы added (вписать по месту) и changed (правка на месте); место каждого — "
+            f"`daiver_section` (`page.region.location`).", ""]
+    if p.get("removed"):
+        out += ["Удалить со страницы (в макете этого нет; если элемент нужен ещё кому-то в проекте — скажи об этом и чужое не ломай):", ""]
+        out += [f"- «{_cell(r['name'])}» — {_where(r.get('location'))}" for r in p["removed"]] + [""]
+    if p["scope"] == "change":
+        out += [f"Старых расхождений страницы с макетом, которые не трогаются: {p.get('preExisting', 0)}"
+                + (" (если среди них и есть изменение — например, цвет или отступ, — нужен scope page: решение человека)." if p.get("preExisting") else "."), ""]
     return out
 
 

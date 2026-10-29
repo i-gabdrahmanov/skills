@@ -16,6 +16,12 @@
 Блокирующий дефект — `severity` critical | major без `noise`; `minor` (DS_DEPRECATED) предупреждает, но не блокирует. declaredNoise (прошлые
 `noise: true` и `false_positive` из `verify-decisions.json`, 4.8) помечается, остаётся в дефектах и выходит из blocking и из знаменателя fidelity.
 
+Правка существующей страницы (6.4). Сравнение в `<кадр>/baseline` — это захват базы ДО правок: истории нет, при годном статусе (clean |
+defects) в манифест пишется `baseline {kind: page}`. У кадра с захваченной базой каждый дефект получает `standing` (change | pre-existing |
+regression, `page_base.classify`; ключи базы — сравнение снимка базы с тем же каноном, планом и правилами) и `scope`; pre-existing при scope
+change из blocking выходит, при scope page — нет; три числа словами — в nextStep. Элемент дефекта без узла макета (EXTRA) — по видимому
+тексту элемента страницы.
+
 Не проверено данными (боевых прогонов нет): градация severity (critical/major — выбор 4.4); подпись вида для свёртки на реальных таблицах и
 списках; форма `verify-decisions.json` на боевых итерациях (схема закреплена в 5.4); fidelity на больших экранах; доля `recapture` на реальных страницах.
 """
@@ -29,6 +35,7 @@ from .. import baseline as BL
 from .. import canon as C
 from .. import config as CFG
 from .. import outline as OL
+from .. import page_base as PB
 from .. import plan as PL
 from .. import states as STS
 from .. import track as TR
@@ -112,8 +119,10 @@ def _defect(g: Dict[str, Any], d_index: Dict[str, Dict[str, Any]], i_index: Dict
     f0 = g["findings"][0]
     dn = d_index.get(f0.get("design") or "")
     sev = min((f.get("severity", "major") for f in g["findings"]), key=lambda s: SEVERITY_RANK.get(s, 1))
+    inode = i_index.get(f0.get("impl") or "") if not dn else None
     out: Dict[str, Any] = {"id": g["id"], "code": g["code"], "layer": g["layer"], "severity": sev, "zone": "deterministic",
-                           "element": element_name(dn) if dn else (f0.get("prop") or f0.get("file")), "message": f0.get("message"),
+                           "element": element_name(dn) if dn else (element_name(inode) if inode else (f0.get("prop") or f0.get("file"))),
+                           "message": f0.get("message"),
                            "coverage": g["coverage"], "suppressedCount": g["suppressedCount"]}
     if g.get("prop"):
         out["prop"] = g["prop"]
@@ -187,11 +196,13 @@ def _next_step(status: str, rate: float, fidelity: Optional[float], unmatched: i
 def build_report(design: Any, impl: Any, plan: Any, tolerances: Optional[Dict[str, Any]], flags: Optional[Dict[str, Any]],
                  ds_inputs: Optional[Dict[str, Any]], history: List[Dict[str, Any]], noise: Set[str], template: Optional[str],
                  decisions: Optional[Dict[str, Any]] = None, state: Optional[Dict[str, Any]] = None,
-                 baseline: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                 baseline: Optional[Dict[str, Any]] = None, page: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Чистая часть: макет, модель страницы, план, допуски, флаги, входы DS-гейта (`gather`-словарь | None), история, шум → отчёт. `state` — анализ кадра-состояния
     (`states.analyze`) или None: тогда вердикт состояния (`reached | not-reached | ambiguous | unknown`) входит в отчёт, а `not-reached` — жёсткий гейт с причиной в рецепте.
     `baseline` — анализ ревизии (`baseline.analyze`) или None: вердикт базы (`current | previous | ambiguous | unknown`, 6.3) входит в отчёт; `previous` НЕ
-    жёсткий гейт — MISSING/EXTRA остаются дефектами (это и есть само изменение), а nextStep велит сперва проверить, что сервер отдаёт свежую сборку."""
+    жёсткий гейт — MISSING/EXTRA остаются дефектами (это и есть само изменение), а nextStep велит сперва проверить, что сервер отдаёт свежую сборку.
+    `page` — правка существующей страницы (6.4): {res: `page_base.analyze`, keys: ключи базы} — у дефектов `standing` и `scope`, pre-existing при
+    scope change не блокирует; {res} без keys или с недоступной базой — standing нет, считается всё (причина в nextStep)."""
     d_root = design["root"] if isinstance(design, dict) and "root" in design and "kind" not in design else design
     i_root = impl["root"] if isinstance(impl, dict) and "root" in impl and "kind" not in impl else impl
     matched = MT.match(d_root, i_root, plan)
@@ -219,7 +230,14 @@ def build_report(design: Any, impl: Any, plan: Any, tolerances: Optional[Dict[st
     emitted = defects if gate_ok else []
     dres = DEC.apply(emitted, decisions) if decisions else {"unknown": [], "reopened": [], "declined": [], "noise": [], "fix": []}
     life = LC.apply(emitted, history, noise)
-    blocking = [d for d in emitted if d["severity"] in BLOCKING and not d["noise"]]
+    page_v: Optional[Dict[str, Any]] = None
+    if page is not None:
+        pres = page.get("res") or {}
+        if pres.get("available") and page.get("keys") is not None:
+            page_v = {"available": True, "standing": PB.classify(emitted, pres, page["keys"])}
+        else:
+            page_v = {"available": False, "scope": pres.get("scope"), "reason": page.get("reason") or pres.get("reason") or "базы страницы нет"}
+    blocking = [d for d in emitted if d["severity"] in BLOCKING and not d["noise"] and not (d.get("standing") == "pre-existing" and d.get("scope") != "page")]
     by_layer: Dict[str, int] = {}
     by_sev: Dict[str, int] = {}
     for d in emitted:
@@ -252,6 +270,9 @@ def build_report(design: Any, impl: Any, plan: Any, tolerances: Optional[Dict[st
             nxt += "; вердикт состояния unknown — " + state_v["reason"]
     if base_v is not None and base_v["verdict"] != "current":
         nxt = (base_v["reason"] + "; " + nxt) if base_v["verdict"] == "previous" else (nxt + f"; вердикт базы {base_v['verdict']} — " + base_v["reason"])
+    if page_v is not None and gate_ok:
+        nxt += "; " + (PB.standing_words(page_v["standing"]) if page_v["available"]
+                       else f"правка страницы без базы ({page_v['reason']}): старые расхождения от регрессий не отличить — считается всё")
     pairs = [{"design": p["design"], "impl": p["impl"], "anchor": p["anchor"], "confidence": p["confidence"]} for p in matched["pairs"]]
     return {
         "status": status, "matchRate": rate, "fidelity": fidelity, "unmatched": unmatched, "lowMatchRate": low, "hardGate": matched["hardGate"],
@@ -264,7 +285,7 @@ def build_report(design: Any, impl: Any, plan: Any, tolerances: Optional[Dict[st
         "degraded": res["degraded"], "tolerances": res["tolerances"], "matchStats": matched["stats"],
         "unverified": unverified, "dismissals": {"count": counts["dismissals"], "samples": (res["dismissals"] + ds["dismissals"])[:SAMPLES]},
         "pairs": pairs, "defectIds": [d["id"] for d in emitted], "defects": emitted, "findings": findings, "dismissalsAll": res["dismissals"] + ds["dismissals"],
-        "designUrlTemplate": template, "matched": matched, "state": state_v, "baseline": base_v,
+        "designUrlTemplate": template, "matched": matched, "state": state_v, "baseline": base_v, "page": page_v,
     }
 
 
@@ -273,6 +294,33 @@ LC_ORDER["ds"] = 2
 
 
 # ---------------------------------------------------------------------------------------------------------------- диск
+
+def _page_inputs(root: Path, manifest: dict, f: dict, paths: Dict[str, Path], design: Any, plan: Any, cfg: Dict[str, Any],
+                 ds_inputs: Dict[str, Any], template: Optional[str]) -> Dict[str, Any]:
+    """Регионы правки страницы и ключи её базы: снимок базы против того же канона, плана и правил (без истории и шума)."""
+    res = PB.analyze(root, manifest, f["name"], design)
+    if not res.get("available"):
+        return {"res": res}
+    snap, model, why = PB.load_snapshot(paths)
+    if model is None:
+        return {"res": res, "reason": why}
+    base = build_report(design, model, plan, cfg["verify"]["tolerances"], _flags(snap), ds_inputs, [], set(), template)
+    if not base["hardGate"]["pass"]:
+        return {"res": res, "reason": f"сравнение базы с макетом не прошло жёсткий гейт (matchRate {base['matchRate']})"}
+    return {"res": res, "keys": PB.base_keys(base["findings"], base["defects"])}
+
+
+def _record_capture(root: Path, track: str, frame: str) -> Dict[str, Any]:
+    """`baseline {kind: page}` в манифест (пропуск базы, если был, снимается: база есть)."""
+    m = TR.load(root, track)
+    f = TR.get_frame(m, frame)
+    changed = not TR.page_captured(f) or "baselineSkip" in f
+    if changed:
+        f["baseline"] = {"kind": "page"}
+        f.pop("baselineSkip", None)
+        TR.save(root, m)
+    return {"recorded": True, "written": changed, "baseline": {"kind": "page"}}
+
 
 def _flags(snapshot: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """overflowing / scrolls по id страницы: `impl_model` их сбрасывает, а правило OVERFLOW (4.4) читает их отсюда."""
@@ -302,6 +350,10 @@ def run(root: Any, track: str, frame: Optional[str], iteration_dir: Path) -> Dic
     if not CP.iteration_dir_ok(paths, iteration_dir):
         raise VerifyCompareError(f"iterationDir: папка итерации лежит под «verify» (или «baseline») кадра, а не «{iteration_dir}»")
     f = TR.get_frame(manifest, frame)
+    why = PB.capture_problem(root, manifest, f, iteration_dir)
+    if why:
+        raise VerifyCompareError(why)
+    capturing = PB.in_baseline(paths, iteration_dir)
     if not paths["canonical"].is_file():
         raise VerifyCompareError("у кадра нет канона: сравнивать не с чем (его строит daiver_normalize)")
     try:
@@ -342,7 +394,7 @@ def run(root: Any, track: str, frame: Optional[str], iteration_dir: Path) -> Dic
     except (DS.DsGateError, OSError, ValueError) as e:
         ds_inputs = {"lib": None, "libProblem": str(e), "sources": {}, "colors": None, "colorsFile": None}
     verify_dir = iteration_dir.parent
-    history = LC.load_history(verify_dir, iteration_dir.name)
+    history = [] if capturing else LC.load_history(verify_dir, iteration_dir.name)       # база — не итерация: прошлых у неё нет
     noise = LC.declared_noise(history)
     try:
         decisions = DEC.load(root, manifest, frame)
@@ -350,11 +402,19 @@ def run(root: Any, track: str, frame: Optional[str], iteration_dir: Path) -> Dic
         raise VerifyCompareError(str(e))
     state_res = STS.analyze(root, manifest, f["name"]) if f.get("stateOf") else None
     base_res = BL.analyze(root, manifest, f["name"]) if BL.version_of(f) is not None else None
-    rep = build_report(design, impl, plan, cfg["verify"]["tolerances"], _flags(snapshot), ds_inputs, history, noise, template, decisions, state_res, base_res)
+    page_in = None
+    if TR.is_page(f) and not capturing:
+        page_in = _page_inputs(root, manifest, f, paths, design, plan, cfg, ds_inputs, template)
+    rep = build_report(design, impl, plan, cfg["verify"]["tolerances"], _flags(snapshot), ds_inputs, history, noise, template, decisions, state_res, base_res,
+                       page_in)
     summary = {k: rep[k] for k in ("status", "matchRate", "fidelity", "unmatched", "lowMatchRate", "hardGate", "counts", "layers", "lifecycle", "fixed",
                                    "nextStep", "gates", "ds", "degraded", "tolerances", "unverified", "dismissals", "pairs", "defectIds",
-                                   "designUrlTemplate", "decisions", "state", "baseline")}
+                                   "designUrlTemplate", "decisions", "state", "baseline", "page")}
     summary.update(track=track, frame=f["name"], capture=cap, files=out_files, declaredNoise=sorted(d["id"] for d in rep["defects"] if d.get("noise")))
+    captured = None
+    if capturing and rep["status"] in ("clean", "defects"):
+        captured = _record_capture(root, track, f["name"])
+        summary["pageBaseline"] = captured
     _write(iteration_dir / "findings.json", {"findings": rep["findings"], "dismissals": rep["dismissalsAll"]})
     _write(iteration_dir / "defects.json", {"defects": rep["defects"] if rep["status"] != "hard-gate-fail" else [], "fixed": rep["fixed"]})
     _write(iteration_dir / "compare-summary.json", summary)
@@ -364,6 +424,13 @@ def run(root: Any, track: str, frame: Optional[str], iteration_dir: Path) -> Dic
         out["state"] = rep["state"]
     if rep.get("baseline") is not None:
         out["baseline"] = rep["baseline"]
+    if rep.get("page") is not None:
+        out["page"] = rep["page"]
+    if capturing:
+        out["pageBaseline"] = captured or {"recorded": False}
+        out["nextStep"] = (("база страницы снята (baseline {kind: page} записан): дальше daiver_code_compare в ЭТУ же папку — копии файлов страницы и "
+                            "место регионов в коде; потом daiver_frame_baseline покажет регионы изменения") if captured else
+                           ("база НЕ записана — " + rep["nextStep"]))
     out["defects"] = rep["defects"][:20] if rep["status"] != "hard-gate-fail" else []
     if rep["unverified"]["summary"]:
         out["unverified"] = rep["unverified"]["summary"]

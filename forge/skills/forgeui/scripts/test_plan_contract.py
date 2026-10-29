@@ -807,7 +807,12 @@ class Matrix(Base):
         base.mkdir(parents=True)
         self.assertEqual(self.one(self.contract(), "baseline", "main")["state"], "open", "пустая папка — не база")
         (base / "actual.png").write_bytes(K.png_bytes(4, 4))
-        self.assertEqual(self.check_line(self.contract(), "baseline"), "baseline: ok")
+        self.assertEqual(self.one(self.contract(), "baseline", "main")["state"], "open",
+                         "файлы в baseline/ — не база: её записывает daiver_verify_compare (baseline {kind: page}), 6.4 — test_page_baseline")
+        self.call("daiver_track_manifest", track=TRACK, frame="main", set={"baselineSkip": "страница не запускается без стенда"})
+        it = self.one(self.contract(), "baseline", "main")
+        self.assertEqual((it["state"], it["blocking"]), ("open", False), "пропуск базы — принятая деградация, записанная открыто")
+        self.assertIn("неотличимы", it["degradesTo"])
 
     # implementation
     def test_implementation_url_blocks_and_a_dialog_does_not_inherit_the_page_address(self):

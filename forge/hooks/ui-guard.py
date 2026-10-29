@@ -14,7 +14,9 @@ exit 2. Четыре запрета (задача 3.3; INV F1, F2, F5, F12, C8, 
      есть такой файл. Отказ называет замену: daiver_outline / daiver_section / daiver_source_nodes.
   2. ЗАПИСЬ КОДА МОДУЛЯ — любая запись в `project.outputDir` (`.daiver/config.yaml`; удаление и перенос
      `rm`/`mv`/`touch` — тоже правка) — только на шаге `ui-build` (C8). На `ui-verify` правка кода = переоткрытие `ui-build` (INV-F12, N9: между открытием
-     итерации и решением человека код не правится); подсказка — как у sod-enforcer.
+     итерации и решением человека код не правится); подсказка — как у sod-enforcer. Файлы СУЩЕСТВУЮЩЕЙ
+     страницы, которую правит кадр трека (`sources` в track.yaml, задача 6.4), — тот же код: правила 2–4
+     к ним применяются так же, как к outputDir (манифест не читается — список пуст, как без страниц).
   3. ПОДПИСЬ ПЛАНА (C9): запись на `ui-build` — только при действительной подписи. Её проверяет
      `daiver.plan_contract.signature_state`, а НЕ хеш файла `plan.lock.json`: lock — производный
      артефакт, правка plan.json руками его не пересобирает; верна проверка по lock'у, СОБРАННОМУ из
@@ -726,6 +728,20 @@ def _signature(root: Path, feature: str, run_dir: Path) -> Tuple[str, str]:
     return state, detail
 
 
+def _page_files(root: Path, feature: str) -> set:
+    """Файлы существующих страниц, которые правят кадры трека (`sources`, 6.4), — posix от корня репо, без регистра."""
+    (TR,) = _engine("track")
+    try:
+        m = TR.load(root, feature)
+    except Exception:  # noqa: BLE001 — манифест не читается: страниц не знаем (подпись его всё равно не пустит)
+        m = None
+    out: set = set()
+    for f in (m or {}).get("frames") or [] if isinstance(m, dict) else []:
+        if isinstance(f, dict):
+            out |= {s.replace("\\", "/").strip("/").casefold() for s in (f.get("sources") or []) if isinstance(s, str)}
+    return out
+
+
 def _judge_write(root: Path, cwd: str, feature: str, run_dir: Path, tool_name: str,
                  tool_input: Dict[str, Any]) -> Optional[str]:
     if tool_name in _BASH_TOOLS:
@@ -739,10 +755,11 @@ def _judge_write(root: Path, cwd: str, feature: str, run_dir: Path, tool_name: s
         return None
     (CFG,) = _engine("config")
     outs = _output_dirs(root, str(CFG.load(root)["config"]["project"]["outputDir"]))
+    pages = _page_files(root, feature)
     hits: List[str] = []
     for t in targets:
         rel = _relative(root, t, cwd)
-        if rel is not None and not _exempt(root, rel) and _in_output(rel, outs):
+        if rel is not None and not _exempt(root, rel) and (_in_output(rel, outs) or rel.casefold() in pages):
             hits.append(rel)
     if not hits:
         return None

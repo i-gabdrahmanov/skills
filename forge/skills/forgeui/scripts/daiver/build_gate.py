@@ -16,6 +16,8 @@ package.json), stdin закрыт (вопросов команда задать 
 
 Хвост ответа — последние `TAIL_LINES` строк (не больше `TAIL_CHARS` знаков) после вырезания ANSI-цветов и перевода `\\r` в перевод строки
 (прогресс-бары). Время и пути машины в ответ не пишутся. Кадры-состояния (`stateOf`, 6.2) имеют своё состояние сборки — по регионам дельты к экрану, — и гейт требует его у них, как у любого кадра.
+Кадр-правка существующей страницы (6.4) сверх того: файлы страницы против копий базы — правка вне регионов изменения (INV-C19) не пускает шаг
+(`page_base.gate_problems`: строка, что вернуть).
 """
 from __future__ import annotations
 
@@ -29,6 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import build_state as BS
 from . import config as CFG
+from . import page_base as PB
 from . import track as TR
 
 DEFAULT_TIMEOUT = 900
@@ -56,6 +59,7 @@ def section_problems(root: Path, track: str) -> List[str]:
     out = list(why)
     for name in names:
         out += BS.gate_problems(root, track, name)
+        out += PB.gate_problems(root, track, name)            # правка страницы (6.4): вне регионов дифф нулевой (INV-C19)
     return out
 
 

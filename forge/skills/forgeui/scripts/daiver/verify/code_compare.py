@@ -20,6 +20,11 @@
 Вердикт гейта: `fail` — только при блокирующих дефектах кода (critical); `skipped` — Vue/Svelte, нет build-state, исходники пропали, дерево
 не узнано — ВСЕГДА с причиной и никогда не блокирует; конфиг (`project.framework`) против файлов: файлы сильнее, расхождение — warning.
 
+Правка существующей страницы (6.4): allowlist — записанные `sources` кадра (секция `page`; секции сборки с общими файлами сливаются с ней).
+В `<кадр>/baseline` (захват базы ДО правок) гейт сначала копирует `sources` в `baseline/sources/` (`page_base.snapshot_sources`) и строит дерево
+из них; на проверке дефекты кода получают `standing`/`scope` по регионам и ключам базы (находки DOM- и код-гейта базы) — pre-existing при scope
+change не валит гейт.
+
 Не проверено данными (боевых модулей и сводок DOM нет): доля ложных MISSING на реальном модуле (хуки, условный рендер через вызовы,
 компоненты из алиасов `@/…`); формат `compare-summary.json` (его пишет 4.6 — читается терпимо: `pairs[{design,impl}]`, `defectIds[]`).
 """
@@ -35,6 +40,7 @@ from .. import baseline as BL
 from .. import build_state as BS
 from .. import canon as C
 from .. import config as CFG
+from .. import page_base as PB
 from .. import plan as PL
 from .. import track as TR
 from . import capture as CP
@@ -247,7 +253,12 @@ def run(root: Any, track: str, frame: Optional[str], iteration_dir: Path) -> Dic
     paths = TR.frame_paths(root, manifest, frame)
     if not CP.iteration_dir_ok(paths, iteration_dir):
         raise CodeCompareError(f"iterationDir: папка итерации лежит под «verify» (или «baseline») кадра, а не «{iteration_dir}»")
-    fname = TR.get_frame(manifest, frame)["name"]
+    fr = TR.get_frame(manifest, frame)
+    fname = fr["name"]
+    why = PB.capture_problem(root, manifest, fr, iteration_dir)
+    if why:
+        raise CodeCompareError(why)
+    capturing = PB.in_baseline(paths, iteration_dir)
     cfg = CFG.load(root)["config"]
     warnings: List[str] = []
     design = None
@@ -263,7 +274,7 @@ def run(root: Any, track: str, frame: Optional[str], iteration_dir: Path) -> Dic
     def finish(result: Dict[str, Any], model: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         result.setdefault("warnings", warnings)
         summary = {k: result[k] for k in ("status", "reason", "treeRecognized", "matchRate", "ledger", "stats", "corroborated", "unverified",
-                                          "designLocations") if k in result}
+                                          "designLocations", "standing") if k in result}
         summary["warnings"] = result["warnings"]
         if model is not None:
             summary["sections"] = model["sections"]
@@ -275,20 +286,35 @@ def run(root: Any, track: str, frame: Optional[str], iteration_dir: Path) -> Dic
         _write(iteration_dir / "code-model.json", {"daiver": {"version": "0.1.0", "role": "canonical", "sourceFormat": "code"},
                                                    "root": model["root"] if model else None, "locations": model["locations"] if model else {},
                                                    "dynamics": (model or {"markers": []})["markers"], "warnings": result["warnings"]})
-        out = {k: result[k] for k in ("status", "reason", "treeRecognized", "matchRate", "stats", "ledger") if k in result}
+        out = {k: result[k] for k in ("status", "reason", "treeRecognized", "matchRate", "stats", "ledger", "standing") if k in result}
+        if capturing:
+            out["pageBaseline"] = ("копии файлов страницы записаны в baseline/sources/: база снята целиком — дальше daiver_frame_baseline "
+                                   "(регионы изменения и их место в коде)")
         out.update(files={n: (iteration_dir / n).relative_to(root).as_posix() for n in ARTIFACTS}, defects=result["defects"][:20],
                    warnings=result["warnings"], track=track, frame=fname)
         return out
 
-    state = BS.load_state(root, paths["buildState"], track, fname)
-    if state is None:
-        return finish(_skipped("нет build-state.json: исходников модуля нет (сборка не начата)", warnings), None)
-    current = [{"id": s["id"], "outputs": list(s.get("outputs") or [])} for s in state["sections"] if s.get("outputs")]
-    mine = sorted({o for s in current for o in s["outputs"]})
-    if not mine:
-        return finish(_skipped("в build-state нет ни одного файла outputs", warnings), None)
-    # ревизия (6.3): код shared-частей собран прежними версиями, правки ревизии — в тех же файлах: сканируются файлы КАЖДОЙ версии
-    sections = BL.code_sections(BL.version_sections(root, manifest, fname) + [current])
+    if capturing:
+        copied, warns = PB.snapshot_sources(root, fr, paths)
+        warnings.extend(warns)
+        if not copied:
+            return finish(_skipped("ни одного файла страницы (sources) не прочесть — копии базы нет", warnings), None)
+        sections, mine = [{"id": "page", "outputs": copied}], copied
+    else:
+        state = BS.load_state(root, paths["buildState"], track, fname)
+        current = [{"id": s["id"], "outputs": list(s.get("outputs") or [])} for s in state["sections"] if s.get("outputs")] if state else []
+        if TR.is_page(fr):
+            # правка страницы (6.4): страница — записанные sources; правки сборки лежат в тех же файлах (или в новых рядом)
+            sections = BL.code_sections([[{"id": "page", "outputs": sorted(fr["sources"])}]] + ([current] if current else []))
+            mine = sorted({o for s in sections for o in s["outputs"]})
+        else:
+            if state is None:
+                return finish(_skipped("нет build-state.json: исходников модуля нет (сборка не начата)", warnings), None)
+            mine = sorted({o for s in current for o in s["outputs"]})
+            if not mine:
+                return finish(_skipped("в build-state нет ни одного файла outputs", warnings), None)
+            # ревизия (6.3): код shared-частей собран прежними версиями, правки ревизии — в тех же файлах: сканируются файлы КАЖДОЙ версии
+            sections = BL.code_sections(BL.version_sections(root, manifest, fname) + [current])
     outputs = sorted({o for s in sections for o in s["outputs"]})
     non_react = [o for o in outputs if o.lower().endswith(NON_REACT)]
     react_files = [o for o in outputs if TS.is_js(o)]
@@ -327,4 +353,24 @@ def run(root: Any, track: str, frame: Optional[str], iteration_dir: Path) -> Dic
     dom = _dom_summary(iteration_dir / "compare-summary.json")
     result = compare(design, model, dom, plan, cfg["verify"]["tolerances"], cfg["verify"]["editorUrlTemplate"], root)
     result["warnings"] = warnings
+    if TR.is_page(fr) and not capturing and TR.page_captured(fr):
+        _page_standing(root, manifest, fr, paths, design, result)
     return finish(result, model)
+
+
+def _page_standing(root: Path, manifest: dict, f: dict, paths: Dict[str, Path], design: Any, result: Dict[str, Any]) -> None:
+    """standing дефектов кода правки страницы: регионы изменения и ключи базы (находки DOM- и код-гейта, записанные при захвате)."""
+    res = PB.analyze(root, manifest, f["name"], design)
+    if not res.get("available"):
+        result["warnings"].append(f"правка страницы: регионов нет ({res.get('reason')}) — дефекты кода считаются все")
+        return
+    keys = set()
+    for name in ("findings.json", "code-findings.json"):
+        got = _dom_summary(paths["baseline"] / name) or {}
+        keys |= PB.base_keys([x for x in got.get("findings") or [] if isinstance(x, dict) and isinstance(x.get("code"), str)], [])
+    st = PB.classify(result["defects"], res, keys)
+    blocking = [x for x in result["defects"] if x["severity"] == "critical" and not (x.get("standing") == "pre-existing" and x.get("scope") != "page")]
+    result["stats"]["blocking"] = len(blocking)
+    result["standing"] = st
+    if result["status"] == "fail" and not blocking:
+        result["status"] = "pass"

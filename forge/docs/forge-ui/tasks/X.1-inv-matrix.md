@@ -19,3 +19,5 @@
 
 ## Готово, когда
 - Матрица заполнена, тест зелёный, README задач ссылается на неё.
+
+*Заметка (6.4).* INV-C18 (часть page: sources записаны, location, файл читается до правки), INV-C19 и QG-U22 (вторая половина: sources-location, standing, scope) и P4 — `skills/forgeui/scripts/test_page_baseline.py` (классы `Regions`, `OutsideRegions`, `Standing`, `Capture`); запрет записи в `sources` вне ui-build — `hooks/test_ui-guard.py::PageSources`. INV-F18 (конвенции сильнее примеров) — только бриф (ui-build п. 2, «домашний стиль» правки страницы), кодом не проверяется.

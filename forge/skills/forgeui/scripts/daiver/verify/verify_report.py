@@ -70,7 +70,7 @@ def _gates(h: Dict[str, Any]) -> str:
 
 def _defect_line(d: Dict[str, Any]) -> str:
     marks = [m for m, on in (("noise", d.get("noise")), ("declined", d.get("declined")), ("vision", d.get("zone") == "vision"),
-                             ("pre-existing", d.get("standing") == "pre-existing")) if on]
+                             ("pre-existing", d.get("standing") == "pre-existing"), ("regression", d.get("standing") == "regression")) if on]
     where = f" — {d['location']['file']}:{d['location'].get('line')}" if isinstance(d.get("location"), dict) and d["location"].get("file") else ""
     tail = f" _[{', '.join(marks)}]_" if marks else ""
     name = d.get("element") or d.get("prop") or ""

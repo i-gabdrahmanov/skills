@@ -150,7 +150,7 @@ class PhaseToolsRegistry(unittest.TestCase):
     FREE = {"daiver_status", "daiver_init", "daiver_map_append", "daiver_map_lookup", "daiver_outline", "daiver_section",
             "daiver_source_nodes", "daiver_ds_inventory", "daiver_ds_lookup", "daiver_ds_details", "daiver_ds_requirements",
             "daiver_color_tokens", "daiver_spec", "daiver_track_manifest", "daiver_capabilities", "daiver_verify_decide", "daiver_frame_states",
-            "daiver_frame_baseline"}
+            "daiver_frame_baseline", "daiver_propose_sources"}
     EXPECTED_UI = {
         "ui-design": ("daiver_pixso_pull", "daiver_normalize", "daiver_resolve_*", "daiver_plan_write", "daiver_plan_contract"),
         "ui-build": ("daiver_build_state", "daiver_build_state_set", "daiver_svg_assets"),

@@ -12,8 +12,10 @@
 Подписи плана в манифесте нет: подпись — согласие человека `ui-plan-<KEY>` в журнале forge.
 
 Кадр, который правит СУЩЕСТВУЮЩУЮ страницу (а не строит новый модуль), несёт `sources` (файлы страницы, пути от корня репо) и
-`scope` (change | page); нет `sources` — кадр строится с нуля. Поля нужны контракту плана (задача 2.6: `sources` и `baseline`),
-остальной поток правки страницы — 6.4.
+`scope` (change | page); нет `sources` — кадр строится с нуля. Поля нужны контракту плана (задача 2.6: `sources` и `baseline`).
+База такой страницы (задача 6.4) — `baseline {kind: page}`: её пишет `daiver_verify_compare` в `<кадр>/baseline` ДО правок кода
+(снимок страницы и копии `sources` лежат там же, `page_base.py`). Работающей страницы нет вовсе — `baselineSkip` (причина одной строкой,
+`daiver_track_manifest`): пропуск базы записан открыто и попадает в ui-plan.md как принятая деградация.
 
 Ревизия (задача 6.3). Pull поверх СОБРАННОГО кадра уводит его семью в `versions/<n>/` и пишет `versions` — ушедшие версии
 `[{n, requirement, retiredAt, raster?, frameBox?}]` (требование, растр и рамка кадра в растре — какими они были у версии) — и `baseline`
@@ -53,11 +55,12 @@ RAW_FILE = "visual-requirements.pixso.raw.json"
 CANONICAL_FILE = "visual-requirements.canonical.json"
 
 FRAME_ORDER = ("name", "role", "dir", "frameUrl", "requirement", "raster", "frameBox", "url", "open",
-               "stateOf", "sources", "scope", "baseline", "versions", "notes")
-FRAME_SETTABLE = ("role", "url", "open", "stateOf", "frameBox", "sources", "scope", "notes")      # daiver_track_manifest
+               "stateOf", "sources", "scope", "baselineSkip", "baseline", "versions", "notes")
+FRAME_SETTABLE = ("role", "url", "open", "stateOf", "frameBox", "sources", "scope", "baselineSkip", "notes")      # daiver_track_manifest
 TRACK_SETTABLE = ("implementation", "specs")
 PULL_OWNED = ("name", "dir", "frameUrl", "requirement", "raster", "baseline", "versions")   # пишут pull и rasterPath
-BASELINE_KINDS = ("version",)           # ревизия кадра (6.3); база страницы, написанной не forge-ui, — 6.4
+BASELINE_KINDS = ("version", "page")    # ревизия кадра (6.3); база страницы, написанной не forge-ui (6.4)
+SKIP_MAX = 300
 VERSION_KEYS = ("n", "requirement", "retiredAt", "raster", "frameBox")
 
 _TRACK_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -217,6 +220,14 @@ def _validate_frame(f: Any, i: int) -> List[str]:
             problems.append(f"{where}.scope: {f['scope']!r} — допустимы {', '.join(SCOPES)}")
         elif not (isinstance(f.get("sources"), list) and f["sources"]):
             problems.append(f"{where}.scope: задаётся только вместе с sources (страницы в коде нет — менять нечего)")
+    if "baselineSkip" in f:
+        sk = f["baselineSkip"]
+        if not (isinstance(sk, str) and sk.strip() and "\n" not in sk and len(sk) <= SKIP_MAX):
+            problems.append(f"{where}.baselineSkip: причина одной строкой ≤ {SKIP_MAX} знаков — почему базу страницы не снять (работающей страницы нет)")
+        elif not (isinstance(f.get("sources"), list) and f["sources"]):
+            problems.append(f"{where}.baselineSkip: только у кадра с sources (база снимается у существующей страницы)")
+        elif isinstance(f.get("baseline"), dict) and f["baseline"].get("kind") == "page":
+            problems.append(f"{where}.baselineSkip: база страницы уже захвачена — пропуск не нужен")
     if "notes" in f and not (isinstance(f["notes"], str) and "\n" not in f["notes"]):
         problems.append(f"{where}.notes: строка в одну линию")
     numbers = []
@@ -247,8 +258,12 @@ def _validate_frame(f: Any, i: int) -> List[str]:
                     problems += _frame_box_problems(v["frameBox"], f"{w}.frameBox")
     if "baseline" in f:
         b = f["baseline"]
-        if not (isinstance(b, dict) and set(b) == {"kind", "version"} and b.get("kind") in BASELINE_KINDS):
-            problems.append(f"{where}.baseline: {{kind: version, version: N}} — на какой собранной версии стоит ревизия")
+        if isinstance(b, dict) and b.get("kind") == "page" and set(b) == {"kind"}:
+            if not (isinstance(f.get("sources"), list) and f["sources"]):
+                problems.append(f"{where}.baseline: база страницы (kind: page) — только у кадра с sources")
+        elif not (isinstance(b, dict) and set(b) == {"kind", "version"} and b.get("kind") == "version"):
+            problems.append(f"{where}.baseline: {{kind: version, version: N}} — на какой собранной версии стоит ревизия, или {{kind: page}} — "
+                            f"база существующей страницы")
         elif b["version"] not in numbers:
             problems.append(f"{where}.baseline.version: версии {b['version']!r} в versions нет")
         if f.get("stateOf") is not None:
@@ -434,6 +449,17 @@ def baseline_version(f: dict) -> Optional[int]:
     return b["version"] if isinstance(b, dict) and b.get("kind") == "version" and isinstance(b.get("version"), int) else None
 
 
+def page_captured(f: dict) -> bool:
+    """База существующей страницы захвачена (6.4): `baseline {kind: page}` записал `daiver_verify_compare` в `<кадр>/baseline`."""
+    b = f.get("baseline")
+    return isinstance(b, dict) and b.get("kind") == "page"
+
+
+def is_page(f: dict) -> bool:
+    """Кадр правит существующую страницу (а не строит модуль с нуля и не ревизия собранной версии)."""
+    return bool(f.get("sources")) and baseline_version(f) is None and not f.get("stateOf")
+
+
 def version_record(f: dict, n: int) -> Optional[dict]:
     return next((v for v in f.get("versions") or [] if isinstance(v, dict) and v.get("n") == n), None)
 
@@ -571,6 +597,9 @@ def apply_set(manifest: dict, frame_name: Optional[str], changes: Any) -> Tuple[
         elif target.get(k) != v:
             target[k] = v
             changed.append(k)
+    if frame_name and "sources" in changes and not changes["sources"] and page_captured(target):
+        del target["baseline"]                         # база страницы без её файлов — не база (поле пишет движок); снимки в baseline/ остаются
+        changed.append("baseline")
     if frame_name and "stateOf" in changes and changes["stateOf"] is not None and "role" not in changes:
         if target.get("role") != "state":
             target["role"] = "state"           # stateOf без роли state — частая забывчивость; фиксируем явно

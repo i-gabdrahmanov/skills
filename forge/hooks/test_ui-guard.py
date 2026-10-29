@@ -490,6 +490,36 @@ class WriteStep(UiWorld):
         self.allowed(self.hook("run_shell_command", {}))
 
 
+class PageSources(UiWorld):
+    """Файлы существующей страницы, которую правит кадр (`sources`, 6.4), — тот же код, что outputDir: шаг ui-build, подпись, инлайн-svg."""
+    PAGE = "src/pages/Orders.tsx"
+
+    def setUp(self):
+        super().setUp()
+        self.put(self.PAGE, "export default function Orders() { return null; }\n")
+        T.call("daiver_track_manifest", self.root, {"track": KEY, "frame": "main", "set": {"sources": [self.PAGE], "scope": "change"}})
+
+    def test_page_files_are_written_only_on_ui_build(self):
+        for step in ("ui-design", "ui-verify"):
+            self.step(step)
+            with self.subTest(step=step):
+                self.denied(self.write(self.PAGE), "ui-build", self.PAGE)
+                self.denied(self.sh(f"sed -i 's/null/1/' {self.PAGE}"), "ui-build")
+        self.step("ui-verify")
+        self.allowed(self.write("src/pages/Other.tsx"), "файл вне sources и вне outputDir — не код кадра")
+
+    def test_on_ui_build_the_page_needs_the_signature_like_the_module(self):
+        self.step("ui-build")
+        r = self.write(self.PAGE)
+        self.denied(r, "подпись плана устарела")          # sources — вход подписи: заявили страницу после подписи — план пересобирается
+        self.assertNotIn("ui-build по подписанному", r.stderr)
+
+    def test_the_hook_lists_the_page_files_of_the_track_case_insensitively(self):
+        hook = _load_hook()
+        self.assertEqual(hook._page_files(self.root, KEY), {self.PAGE.casefold()})
+        self.assertEqual(hook._page_files(self.root, "NOPE-1"), set(), "трека нет — страниц нет")
+
+
 class WriteNeedsASignature(UiWorld):
     def deny_unsigned(self, *needles: str) -> None:
         r = self.write()

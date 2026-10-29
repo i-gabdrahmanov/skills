@@ -289,9 +289,10 @@ def _inside(child: Path, parent: Path) -> bool:
 
 
 def iteration_dir_ok(paths: Dict[str, Path], iteration_dir: Path) -> bool:
-    """Папка итерации — подпапка `verify/` или `baseline/` кадра (их охраняет state-write-guard: пишет только движок)."""
+    """Папка итерации — подпапка `verify/` кадра или ровно его `baseline/` (база существующей страницы, 6.4: её читают регионы, сборка
+    и проверка — подпапок у неё нет). Обе охраняет state-write-guard: пишет только движок."""
     real = iteration_dir.resolve()
-    return any(_inside(real, paths[k].resolve()) for k in ("verify", "baseline"))
+    return _inside(real, paths["verify"].resolve()) or real == paths["baseline"].resolve()
 
 
 def _previous_fingerprint(path: Path) -> Optional[str]:
@@ -333,6 +334,10 @@ def run(root: Path, track: str, frame: Optional[str], url: str, iteration_dir: P
     if not iteration_dir_ok(paths, iteration_dir):
         raise CaptureError(f"iterationDir: папка итерации лежит под «{_rel(root, paths['verify'])}» (или «baseline») кадра, "
                            f"а не «{_rel(root, iteration_dir)}» — адрес берётся из daiver_verify_state")
+    from .. import page_base as PB
+    why = PB.capture_problem(root, manifest, TR.get_frame(manifest, frame), iteration_dir)
+    if why:
+        raise CaptureError(why)
 
     names = FILES[target]
     snap_path = iteration_dir / names["snapshot"]
