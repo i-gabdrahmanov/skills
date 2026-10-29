@@ -25,11 +25,11 @@ resolutions, assets, goal-image, specs, state, baseline, sources, implementation
 сжигает. Читает подпись `signature_state` — для `ui-guard` (3.3): он проверяет согласие по lock'у, собранному из артефактов, а не
 хешем файла `plan.lock.json`.
 
-Отклонения от спеки (README): `resolutions` блокирует (в спеке — нет: автономия появится в 7.1/7.2, до неё подтверждение требуется
-всегда); `signature` блокирует всегда (в спеке — «только при confirmPlan»: `phase_approvals` ui-build/ui-verify требуют `ui-plan-<KEY>`
-безусловно, D9); `browser` и `baseline/sources` проверяются минимально (поиск Chromium — `daiver/browser/find.py`, задача 4.1; база страницы — по полям
-`sources`/`scope` манифеста и непустому `baseline/`, захват базы и поток правки страницы — 4.x/6.4); поле `directive` ответа спеки —
-в 7.1 (грамматику строки задаёт она).
+Отклонения от спеки (README): `resolutions` блокирует (в спеке — нет): в interactive — до согласия `ui-resolve-<KEY>`, в автономии
+(7.2) — только low-вердикт компонента; `signature` блокирует всегда (в спеке — «только при confirmPlan»: `phase_approvals` ui-build/ui-verify
+требуют `ui-plan-<KEY>` безусловно, D9; в автономии — `blocked: plan-unsigned`); `browser` — поиск Chromium (`daiver/browser/find.py`, 4.1);
+`baseline` страницы — запись захвата, регионы и копии файлов страницы (6.4); поле `directive` ответа спеки не пишется (грамматика есть с 7.1,
+строку для хоста контракт не собирает).
 
 Не проверено данными (боевых планов и экранов нет): формулировки вопросов `ask` и то, как слабая модель их читает; полнота кадров
 против таблицы «Кадры» (сопоставление строки с кадром — по ссылке макета, затем по имени); смысл `unknown`; `planUncertainty` как

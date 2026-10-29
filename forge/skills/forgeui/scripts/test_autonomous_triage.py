@@ -193,6 +193,20 @@ class StopRules(Auto):
         self.assertIsNone(VS.autonomous_decision(1, False, {}, tri, ["a"], None)["stop"], "потолка нет — только застой и clean")
 
 
+class InteractiveHasNoCap(TVS.World):
+    def test_the_iteration_cap_is_ignored_when_a_human_runs_the_loop(self):
+        # INV-E5: maxVerifyIterations — стоп-правило только автономии; цикл человека заканчивает человек (INV-E6, F12)
+        cap = VS._cap(self.root, self.TB.TRACK, VS.CFG.load(self.root)["config"])
+        self.assertEqual(cap, 3)
+        for n, ids in ((1, ("a", "b", "c", "d")), (2, ("a", "b", "c")), (3, ("a", "b")), (4, ("a",))):
+            self.fake_iteration(n, "defects", [defect(i) for i in ids])
+            self.assertEqual(self.opened()["iteration"], n)
+            got = self.rec(n)
+            self.assertNotIn("stop", got)
+            self.decide(n, "fix_all", fixed=list(ids))
+        self.assertEqual(self.opened()["iteration"], 5, "после потолка цикл человека открывает следующую итерацию")
+
+
 class Report(Auto):
     def test_the_report_carries_the_mode_the_triage_and_who_finished(self):
         self.fake_iteration(1, "defects", [defect("a"), defect("b")])
