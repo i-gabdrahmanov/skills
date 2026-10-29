@@ -381,7 +381,11 @@ CONSENT_PREFIXES = ("gate-override", "rollback", "skip-judges", "policy-repin",
                     # компонент библиотеки встанет на узел, решает он, а не слабая модель
                     # (привязано к sha256 resolution-report.md). Все четыре — решения, которые
                     # модель не вправе выписать себе сама.
-                    "ui-plan", "ui-map", "ui-resolve", "ui-accept")
+                    "ui-plan", "ui-map", "ui-resolve", "ui-accept",
+                    # spec-entity-<Имя> — аналитик утвердил имя в форме класса сущностью
+                    # предметной области: линтер имён (sdd/impl_names) его больше не валит.
+                    # Самовыписанное = модель сама сняла гейт с любого `ClaimService`.
+                    "spec-entity")
 
 
 def consent_required(key: str) -> bool:

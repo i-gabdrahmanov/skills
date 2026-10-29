@@ -87,10 +87,11 @@ def check_delta(raw: str, *, master_reqs=None, plan: dict | None = None,
                 max_lines: int = DEFAULT_MAX_LINES,
                 allow_scenario_drop: bool = False,
                 known: "tuple | set" = (), domain: "tuple | set" = (),
+                code: "set | None" = None,
                 master_text: str | None = None) -> dict:
     """Вердикт по тексту дельты. {status, requirements, ops, errors, warnings, impl_names}.
 
-    known/domain — имена кода и сущностей из инвентаря (impl_names.load_inventory);
+    known/domain/code — имена кода, сущностей и все классы кода (impl_names.inventory_for);
     master_text — текст мастера: его имена реализации дельте не ставятся в вину."""
     errors: list[str] = []
     warnings: list[str] = []
@@ -132,7 +133,7 @@ def check_delta(raw: str, *, master_reqs=None, plan: dict | None = None,
                       "спека описывает поведение, а не реализацию")
     inherited = {h["token"] for h in impl_names.find(master_text, known=known, domain=domain)} \
         if master_text else set()
-    hits = impl_names.find(raw, known=known, domain=domain, ignore=inherited)
+    hits = impl_names.find(raw, known=known, domain=domain, ignore=inherited, code=code)
     errors.extend(impl_names.errors(hits, where="в дельте"))
 
     # ── якорь в мастере: modify vs add + защита от потери сценариев ────────────────
@@ -197,7 +198,8 @@ def check_delta(raw: str, *, master_reqs=None, plan: dict | None = None,
 
     return {"status": "pass" if not errors else "fail",
             "requirements": len(candidates), "ops": ops_fmt,
-            "errors": errors, "warnings": warnings, "impl_names": hits}
+            "errors": errors, "warnings": warnings, "impl_names": hits,
+            "pending_entities": impl_names.pending_entities(hits)}
 
 
 def main() -> int:
@@ -248,13 +250,15 @@ def main() -> int:
             master_text = Path(spec_path).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             master_text = None
-    known, domain = impl_names.load_inventory(impl_names.excerpt_path(root) if root else None)
+    inv = impl_names.inventory_for(root, delta_text)
 
     verdict = check_delta(delta_text,
                           master_reqs=master_reqs, plan=plan, anchor=args.anchor,
                           max_requirements=args.max_requirements, max_lines=args.max_lines,
                           allow_scenario_drop=args.allow_scenario_drop,
-                          known=known, domain=domain, master_text=master_text)
+                          known=inv.known, domain=inv.domain, code=inv.code,
+                          master_text=master_text)
+    verdict["warnings"].extend(impl_names.added_warning(inv.rebuilt))
     verdict["delta"] = str(delta_path)
     if spec_path:
         verdict["master"] = str(spec_path)

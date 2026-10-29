@@ -7,7 +7,11 @@
   3. Есть хотя бы один сценарий Given-When-Then.
   4. Нет утечки реализации (код-блоки/сигнатуры → FAIL; Liquibase → warning).
   5. Нет имён из кода: классов, методов, пакетов, файлов исходников (impl_names.py — по форме
-     токена и по инвентарю проекта ground/inventory/grounding-excerpt.json) → FAIL.
+     токена и по инвентарю проекта ground/inventory/grounding-excerpt.json) → FAIL. Имя в форме
+     класса, которого нет среди сущностей, сверяется с кодом: grounding пересобирается, и
+     сущность из кода проходит. Не нашлось ни среди сущностей, ни среди классов кода — список
+     уходит аналитику (pending_entities; awaiting_analyst, если больше ошибок нет): утверждённое
+     им (согласие spec-entity-<Имя>) проходит.
 
 Состав разделов делится на группы:
   - CORE          — всегда обязательны (ядро спеки).
@@ -317,14 +321,22 @@ def check(sdd_path: Path, policy: str, project_root: Path | None = None) -> dict
                         "«какие таблицы/поля», детали changeset — в tech-design")
 
     # 5. Имена из кода прозой: классы, методы, пакеты, файлы (форма токена + инвентарь).
-    known, domain = impl_names.load_inventory(
-        impl_names.excerpt_path(project_root or _root.find_project_root()))
-    hits = impl_names.find(raw, known=known, domain=domain)
+    #    Имя в форме класса, которого нет среди сущностей, сверяется с кодом (inventory_for);
+    #    не нашлось ни там, ни среди классов кода — решает аналитик (pending_entities).
+    inv = impl_names.inventory_for(project_root or _root.find_project_root(), raw)
+    hits = impl_names.find(raw, known=inv.known, domain=inv.domain, code=inv.code)
     errors.extend(impl_names.errors(hits))
+    warnings.extend(impl_names.added_warning(inv.rebuilt))
+    pending = impl_names.pending_entities(hits)
 
     status = "pass" if not errors else "fail"
     return {"status": status, "sdd": str(sdd_path), "policy": policy,
-            "errors": errors, "warnings": warnings, "impl_names": hits}
+            "errors": errors, "warnings": warnings, "impl_names": hits,
+            "pending_entities": pending,
+            # Спека во всём остальном готова и ждёт только решения аналитика по списку:
+            # это не ре-итерация писателя (run_judge её не засчитывает), а вопрос человеку.
+            # Ошибка списка — ровно одна (errors() даёт по одной на правило).
+            "awaiting_analyst": bool(pending) and len(errors) == 1}
 
 
 def main() -> int:
@@ -354,6 +366,8 @@ def main() -> int:
             print(f"  ✗ {e}")
         for w in verdict["warnings"]:
             print(f"  · warn: {w}")
+        if verdict.get("pending_entities"):
+            print("  ? на согласование аналитика: " + ", ".join(verdict["pending_entities"]))
     return 0 if verdict["status"] == "pass" else 2
 
 

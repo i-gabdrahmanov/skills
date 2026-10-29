@@ -258,6 +258,32 @@ def _maybe_escalate(slug: str, judge_name: str, project_root: Path) -> bool:
     return True
 
 
+def _awaiting_analyst(verdict: dict) -> list:
+    """Имена, решения по которым ждёт аналитик (sdd: в форме класса, но нет ни среди сущностей,
+    ни в коде). Такой FAIL — вопрос человеку, а не ре-итерация писателя: в errors.json не идёт и
+    к лимиту судьи не считается — иначе вопрос аналитику сжигал бы попытки до ESCALATE."""
+    if verdict.get("passed"):
+        return []
+    return [str(n) for n in verdict.get("awaiting_analyst") or []]
+
+
+def _print_awaiting_analyst(names: list, project_root) -> None:
+    rec = Path(__file__).resolve().parents[2] / "pipeline-state" / "scripts" / "record_approval.py"
+    print()
+    print("  ⏸  Спека ждёт решения аналитика — это не ошибка писателя, субагента на доработку не "
+          "возвращай.")
+    print("     В форме класса, но нет ни среди сущностей, ни в коде: " + ", ".join(names))
+    print("     1) спроси аналитика ОДНИМ вопросом (ask_user_question), показав весь список: "
+          "«это сущности предметной области?» — варианты «Да, все это сущности» / «Нет, это "
+          "код — переписать»; частичный ответ — свободным текстом;")
+    print(f"     2) на каждое утверждённое имя: python3 {rec} --project {project_root} "
+          "--key spec-entity-<Имя> "
+          "--approved-by user --reason \"аналитик: сущность предметной области\" "
+          "--evidence \"<его дословный ответ>\";")
+    print("     3) неутверждённые верни субагенту sdd — переписать словами поведения; "
+          "затем перезапусти гейт.")
+
+
 def _dedup(seq: list) -> list:
     """Стабильная дедупликация (dict в checks нехешируем — сравниваем по repr)."""
     seen, out = set(), []
@@ -1348,6 +1374,7 @@ def check_sdd_doc(slug: str, feature_dir: Path | None) -> dict:
     checks = []
     blocking_issues = []
     warnings = []
+    pending: list = []
 
     # Не передаём --pipeline-config: гейт сам делает dual-read policy.json → pipeline.json
     # через load_project_config(find_project_root()) (Phase 0 v2 refactor). Хардкод
@@ -1370,6 +1397,12 @@ def check_sdd_doc(slug: str, feature_dir: Path | None) -> dict:
                 checks.append({"name": "check_sdd_doc", "status": "FAIL",
                                "detail": detail, "severity": "error"})
                 blocking_issues.append(f"check_sdd_doc FAIL: {detail}")
+                try:
+                    data = json.loads(r.stdout or "")
+                except ValueError:
+                    data = None
+                if isinstance(data, dict) and data.get("awaiting_analyst"):
+                    pending = [str(n) for n in data.get("pending_entities") or []]
         except subprocess.TimeoutExpired:
             checks.append({"name": "check_sdd_doc", "status": "FAIL",
                            "detail": "timeout (60s)", "severity": "error"})
@@ -1391,7 +1424,12 @@ def check_sdd_doc(slug: str, feature_dir: Path | None) -> dict:
     if blocking_issues:
         summary += f", {len(blocking_issues)} blocking"
 
-    return _make_verdict("sdd-judge", slug, passed, checks, blocking_issues, warnings, summary)
+    verdict = _make_verdict("sdd-judge", slug, passed, checks, blocking_issues, warnings, summary)
+    # Спека готова и ждёт только решения аналитика по именам (check_sdd_doc awaiting_analyst),
+    # а пол чистоты текста ничего не добавил — см. _awaiting_analyst.
+    if pending and len(blocking_issues) == 1:
+        verdict["awaiting_analyst"] = pending
+    return verdict
 
 
 def check_design(slug: str, feature_dir: Path | None) -> dict:
@@ -2343,11 +2381,12 @@ def main():
             out_path = _save_verdict(args.slug, f"{args.phase}-judge", verdict)
 
             # Perpetual error store: FAIL → сохранить, PASS → очистить
+            awaiting = _awaiting_analyst(verdict)
             if verdict["passed"]:
                 _clear_errors(args.slug)
             else:
                 blocking = verdict.get("blocking_issues", [])
-                if blocking:
+                if blocking and not awaiting:
                     errors_path = _save_errors(args.slug, f"{args.phase}-judge", blocking)
                     print(f"  Errors saved: {errors_path}")
                     print(f"  Accumulated: {len(_load_json(errors_path).get('accumulated_errors', []))}")
@@ -2357,7 +2396,10 @@ def main():
             print(f"  Summary: {verdict['summary']}")
             for issue in verdict.get("blocking_issues", []):
                 print(f"  BLOCKING: {issue}")
-            if not verdict["passed"] and _maybe_escalate(args.slug, f"{args.phase}-judge", project_root):
+            if awaiting:
+                _print_awaiting_analyst(awaiting, project_root)
+            elif not verdict["passed"] and _maybe_escalate(args.slug, f"{args.phase}-judge",
+                                                           project_root):
                 sys.exit(3)
             sys.exit(0 if verdict["passed"] else 1)
 
@@ -2402,11 +2444,12 @@ def main():
 
     # Perpetual error store: FAIL → сохранить, PASS → очистить
     judge_name = f"{args.phase}-judge"
+    awaiting = _awaiting_analyst(verdict)
     if verdict["passed"]:
         _clear_errors(args.slug)
     else:
         blocking = verdict.get("blocking_issues", [])
-        if blocking:
+        if blocking and not awaiting:
             errors_path = _save_errors(args.slug, judge_name, blocking)
             print(f"  Errors saved: {errors_path}")
             print(f"  Accumulated: {len(_load_json(errors_path).get('accumulated_errors', []))}")
@@ -2423,7 +2466,9 @@ def main():
     # gate-guard пропустит override_judge ТОЛЬКО при approval-маркере, который фиксируется
     # после ЯВНОГО согласия пользователя (раньше тут печаталась готовая команда без
     # approval-шага — модель снимала гейт молча).
-    if not verdict["passed"] and verdict.get("blocking_issues"):
+    if awaiting:
+        _print_awaiting_analyst(awaiting, project_root)
+    elif not verdict["passed"] and verdict.get("blocking_issues"):
         _ps = Path(__file__).resolve().parents[2] / "pipeline-state" / "scripts"
         _ovr = _ps / "override_judge.py"
         _RECORD_APPROVAL_SCRIPT = _ps / "record_approval.py"
@@ -2438,7 +2483,8 @@ def main():
         print(f"     3) python3 {_ovr} --judge {judge_name} "
               f"--feature {args.slug} --step-id <step-id> --reason \"<обоснование>\"")
 
-    if not verdict["passed"] and _maybe_escalate(args.slug, judge_name, project_root):
+    if not verdict["passed"] and not awaiting and _maybe_escalate(args.slug, judge_name,
+                                                                 project_root):
         sys.exit(3)
     sys.exit(0 if verdict["passed"] else 1)
 

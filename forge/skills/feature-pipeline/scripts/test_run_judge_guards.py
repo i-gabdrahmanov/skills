@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Тесты verify-стражей run_judge: C1 (лимит ре-итераций) и C2 (целостность тестов)."""
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(1, str(Path(__file__).resolve().parents[2] / "sdd" / "scripts"))
 import run_judge as rj
 
 
@@ -154,6 +156,62 @@ class TestIterationCap(unittest.TestCase):
         root, _slug = self._setup([])
         self.assertEqual(rj._max_iterations(root), 3)
 
+
+
+class TestSddAwaitingAnalyst(unittest.TestCase):
+    """sdd-judge, упавший только на именах «на согласование аналитика», — вопрос человеку, а не
+    ре-итерация писателя: в errors.json не идёт (лимит не тратится), вместо подсказки override —
+    кого и о чём спросить. Согласие spec-entity-<Имя> снимает FAIL."""
+
+    SCRIPTS = Path(__file__).resolve().parent
+
+    def setUp(self):
+        import test_check_sdd_doc as T  # noqa: E402 — полный валидный sdd.md
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        (self.root / "ground").mkdir()
+        (self.root / "ground" / "policy.json").write_text("{}", encoding="utf-8")
+        self.doc = T.full_doc().replace("**Then** статус ACCEPTED.",
+                                        "**Then** заполнено поле TaskUpzConfig.name.")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _judge(self, doc: str):
+        d = self.root / "docs" / "feature-pipeline" / "F-1"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "sdd.md").write_text(doc, encoding="utf-8")
+        return subprocess.run([sys.executable, str(self.SCRIPTS / "run_judge.py"), "sdd", "F-1",
+                               "--project-root", str(self.root)],
+                              capture_output=True, text=True, cwd=self.root)
+
+    def _errors_json(self) -> Path:
+        return (self.root / "ground" / "statements" / "feature-pipeline" / "F-1" / "judges"
+                / "errors.json")
+
+    def test_waiting_for_analyst_is_not_an_iteration(self):
+        r = self._judge(self.doc)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("ждёт решения аналитика", r.stdout)
+        self.assertIn("TaskUpzConfig", r.stdout)
+        self.assertNotIn("gate-override", r.stdout)
+        self.assertFalse(self._errors_json().exists(), "вопрос аналитику не тратит итерацию")
+
+    def test_other_errors_count_as_usual(self):
+        r = self._judge(self.doc.replace("**Then** заполнено", "`findByStatus(x)` **Then** заполнено"))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertNotIn("ждёт решения аналитика", r.stdout)
+        self.assertTrue(self._errors_json().exists())
+
+    def test_analyst_approval_passes_the_gate(self):
+        rec = self.SCRIPTS.parents[1] / "pipeline-state" / "scripts" / "record_approval.py"
+        a = subprocess.run([sys.executable, str(rec), "--project", str(self.root),
+                            "--key", "spec-entity-TaskUpzConfig", "--approved-by", "user",
+                            "--reason", "аналитик: сущность", "--evidence", "Да, все это сущности"],
+                           capture_output=True, text=True)
+        self.assertEqual(a.returncode, 0, a.stdout + a.stderr)
+        r = self._judge(self.doc)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
 class TestRedJudgePolarity(unittest.TestCase):
