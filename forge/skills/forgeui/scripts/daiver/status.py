@@ -405,6 +405,10 @@ def track_status(root: Path, track: str, story_spec: Optional[StoryResolver] = N
     frontier = next((v for v in views if v["stage"] != "clean"), None)
     out: Dict[str, Any] = {"name": track, "stage": frontier["stage"] if frontier else "clean",
                            "outcome": _outcome(stages)}
+    from . import run as RUN
+    run = RUN.summary(RUN.read(root, track))
+    if run:
+        out["run"] = run
     if frontier is None:
         out["nextStep"] = f"готово: трек {track} чист (clean), все кадры чистые"
     else:

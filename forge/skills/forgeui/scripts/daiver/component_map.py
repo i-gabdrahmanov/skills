@@ -50,8 +50,8 @@
   • Файл карты — `.daiver/` + `library.mapFile` конфига (по умолчанию `./component-map.yaml`); вне `.daiver/`
     карта лежать не может.
 
-Автономный прогон карту не пишет (INV-D3): в нём некому дать согласие. Явный запрет по режиму прогона
-(`run.json`, директива) — задача 7.1.
+Автономный прогон карту не пишет (INV-D3): в нём некому дать согласие, и запись отказывает по режиму открытого прогона
+(`run.json`, задача 7.1); `dryRun` (готовый YAML-блок для отчёта, «paste-ready») — можно.
 """
 from __future__ import annotations
 
@@ -1069,6 +1069,11 @@ def append(root: Any, track: Any, rule: Any, dry_run: bool = False) -> Dict[str,
     except TR.TrackError as e:
         raise MapError(str(e))
     root = Path(root)
+    if not dry_run:
+        from . import run as RUN
+        why = RUN.refuse_autonomous(root, "запись правила в карту компонентов")
+        if why:
+            raise MapError(why + " (dryRun: true — готовый YAML-блок для отчёта — можно)")
     FE, P = _hooks()
     key = consent_key(track)
     if dry_run:

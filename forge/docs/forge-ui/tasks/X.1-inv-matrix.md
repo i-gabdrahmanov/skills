@@ -21,3 +21,5 @@
 - Матрица заполнена, тест зелёный, README задач ссылается на неё.
 
 *Заметка (6.4).* INV-C18 (часть page: sources записаны, location, файл читается до правки), INV-C19 и QG-U22 (вторая половина: sources-location, standing, scope) и P4 — `skills/forgeui/scripts/test_page_baseline.py` (классы `Regions`, `OutsideRegions`, `Standing`, `Capture`); запрет записи в `sources` вне ui-build — `hooks/test_ui-guard.py::PageSources`. INV-F18 (конвенции сильнее примеров) — только бриф (ui-build п. 2, «домашний стиль» правки страницы), кодом не проверяется.
+
+*Заметка (7.1).* INV-B22, E1–E3, E7 (разбор и режим), C38, D10 (закрытие из истории, until), D2, D7, G8 (blocked с supply, конфликт трека, запись остановов), E8 (устаревшая запись), D3 (часть: init, запись карты, report.html) и QG S12, U11 — `skills/forgeui/scripts/test_run_directive.py` (классы `Parse`, `Malformed`, `Mode`, `StartsAt`, `Blocked`, `Finish`, `Records`, `AutonomyBans`). INV-D5 (человеческий шаг не в таск-листе) — только бриф §0 («в autonomous вопросов нет: именованный останов»).

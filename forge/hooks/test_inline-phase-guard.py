@@ -421,7 +421,7 @@ PRODUCTIVE = {
 FREE_TOOLS = ("daiver_status", "daiver_init", "daiver_map_append", "daiver_map_lookup", "daiver_outline", "daiver_section",
               "daiver_source_nodes", "daiver_ds_inventory", "daiver_ds_lookup", "daiver_ds_details", "daiver_ds_requirements",
               "daiver_color_tokens", "daiver_spec", "daiver_track_manifest", "daiver_capabilities", "daiver_frame_states",
-              "daiver_frame_baseline", "daiver_propose_sources")
+              "daiver_frame_baseline", "daiver_propose_sources", "daiver_directive", "daiver_run")
 
 
 class TPhaseTools(unittest.TestCase):

@@ -29,7 +29,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .. import canon as C
-from .. import config as CFG
 from .. import image as IMG
 from .. import outline as OL
 from .. import track as TR
@@ -402,8 +401,8 @@ def render(data: Dict[str, Any], date: Optional[str] = None) -> str:
 def run(root: Any, track: str, frame: Optional[str], iteration_dir: Path, date: Optional[str] = None) -> Dict[str, Any]:
     """`daiver_verify_report`: пишет report.html в папку итерации. В автономном режиме не рендерится."""
     root = Path(root).resolve()
-    cfg = CFG.load(root)["config"]
-    if cfg["workflow"].get("mode") == "autonomous":
+    from .. import run as RUN
+    if RUN.mode_of(root, track)[0] == "autonomous":
         return {"rendered": False, "reason": "автономный режим: report.html не рендерится — его заменяет триаж агента в verify-report.md",
                 "nextStep": "пропусти шаг отчёта"}
     if date is not None and not (isinstance(date, str) and date.strip() and len(date) <= 40 and "\n" not in date):

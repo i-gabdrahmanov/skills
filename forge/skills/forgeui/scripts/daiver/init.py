@@ -223,6 +223,10 @@ rules: []
 def init(root: Path, answers: Dict[str, Any]) -> Dict[str, Any]:
     """Запись конфига по ответам. Отказ — {ok: False, problems: [...]}, ничего не записано."""
     root = Path(root)
+    from . import run as RUN
+    why = RUN.refuse_autonomous(root, "инициализация проекта (daiver_init)")
+    if why:
+        return {"ok": False, "problems": [why]}
     cfg_path = root / C.CONFIG_REL
     if cfg_path.exists():
         return {"ok": False, "problems": [

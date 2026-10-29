@@ -175,12 +175,14 @@ def open_iteration(root: Any, track: str, frame: Optional[str] = None) -> Dict[s
     except DEC.DecisionsError as e:
         decided = {"decisions": {}, "problems": [str(e)], "elsewhere": [], "sources": []}
     declined = sorted({i for h in history for i in (h.get("declined") or [])} | {i for i, e in decided["decisions"].items() if e["verdict"] == "skip"})
-    impl = IMPL.resolve(manifest, f["name"], wf.get("mode", "interactive"))
+    from .. import run as RUN
+    mode, mode_source = RUN.mode_of(root, track)
+    impl = IMPL.resolve(manifest, f["name"], mode)
     pin = state.get("capture") if isinstance(state.get("capture"), dict) else None
     out: Dict[str, Any] = {"track": track, "frame": f["name"], "iteration": number, "iterationDir": _rel(root, iteration_dir),
                            "unrecordedIterations": unrecorded, "priorReview": (last or {}).get("reviewReport"),
                            "goalImage": goal, "missingArt": missing, "warnStalling": warn, "history": [compact(h) for h in history],
-                           "implementation": impl, "pinned": pin, "mode": wf.get("mode", "interactive"),
+                           "implementation": impl, "pinned": pin, "mode": mode, "modeSource": mode_source, "run": RUN.summary(RUN.read(root, track)),
                            "maxVerifyIterations": (wf.get("autonomous") or {}).get("maxVerifyIterations"),
                            "declinedSoFar": declined, "decisions": {"sources": decided["sources"], "problems": decided["problems"]},
                            "nextStep": next_step}

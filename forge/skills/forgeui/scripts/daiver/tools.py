@@ -9,7 +9,7 @@ daiver_pixso_pull, daiver_normalize, daiver_svg_assets, daiver_outline, daiver_s
 daiver_map_lookup, daiver_map_append, daiver_ds_requirements, daiver_ds_inventory, daiver_ds_lookup,
 daiver_ds_details, daiver_resolve_candidates, daiver_resolve_query, daiver_resolve_finalize, daiver_resolve_report,
 daiver_plan_write, daiver_plan_contract, daiver_build_state, daiver_build_state_set, daiver_color_tokens,
-daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare, daiver_verify_state, daiver_verify_state_record, daiver_verify_decide, daiver_render_reference, daiver_visual_diff, daiver_visual_review, daiver_verify_report, daiver_e2e_plan, daiver_e2e_run, daiver_frame_states, daiver_frame_baseline, daiver_propose_sources.
+daiver_capabilities, daiver_screenshot, daiver_code_compare, daiver_verify_compare, daiver_verify_state, daiver_verify_state_record, daiver_verify_decide, daiver_render_reference, daiver_visual_diff, daiver_visual_review, daiver_verify_report, daiver_e2e_plan, daiver_e2e_run, daiver_frame_states, daiver_frame_baseline, daiver_propose_sources, daiver_directive, daiver_run.
 Остальные инструменты спеки появляются по задачам docs/forge-ui/; daiver_plan_sign не появится
 никогда — подпись плана в forge-ui это согласие человека `ui-plan-<KEY>` (record_approval), а не
 инструмент модели.
@@ -25,6 +25,7 @@ from . import build_state as BS
 from . import capabilities as CA
 from . import color_tokens as CT
 from . import component_map as CM
+from . import directive as DIR
 from . import ds_lookup as DL
 from . import ds_requirements as DR
 from . import init as I
@@ -36,6 +37,7 @@ from . import plan as PL
 from . import plan_contract as PC
 from . import resolution_report as RR
 from . import resolve as RS
+from . import run as RUN
 from . import source_nodes as SN
 from . import sources as SRC
 from . import specs as S
@@ -547,6 +549,38 @@ def t_propose_sources(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
             raise ToolError(f"трека «{track}» нет — сначала daiver_pixso_pull")
         return SRC.propose(root, manifest, _frame_arg(args))
     except (TR.TrackError, SRC.SourcesError) as e:
+        raise ToolError(str(e))
+
+
+def t_directive(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Превью разбора строки задачи: ничего не пишет (манифест трека только читается — для сверки ключей кадров)."""
+    parsed = DIR.parse(args["line"])
+    if not parsed["directive"]:
+        return {"directive": False, "nextStep": "строка без префикса forge-ui: (или daiver:) — не директива; работай как с обычной просьбой"}
+    if parsed["ok"]:
+        try:
+            parsed = DIR.check_against(parsed, TR.load(root, parsed["keys"]["track"]))
+        except TR.TrackError as e:
+            parsed = dict(parsed, ok=False, faults=parsed["faults"] + [f"track.yaml трека не читается: {e}"])
+    out = {"directive": True, "ok": parsed["ok"], "faults": parsed["faults"], "warnings": parsed["warnings"], "keys": parsed["keys"]}
+    out["nextStep"] = ("строка разобрана: открой прогон daiver_run(directive) с той же строкой дословно" if parsed["ok"] else
+                       "СТОП: строка malformed — назови каждое нарушение дословно; строку чинит человек в таск-файле, не ты")
+    return out
+
+
+def t_run(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        if args.get("finish"):
+            if "directive" in args:
+                raise ToolError("finish закрывает прогон трека: передай track, а не directive")
+            if "track" not in args:
+                raise ToolError("finish: нужен track — какой прогон закрыть")
+            return RUN.finish_run(root, TR.check_track_name(args["track"]), args.get("blocked"))
+        if "blocked" in args:
+            raise ToolError("blocked передаётся только с finish: true — останов записывается закрытием прогона")
+        track = TR.check_track_name(args["track"]) if "track" in args else None
+        return RUN.open_run(root, track, args.get("directive"), _story_specs(root))
+    except (TR.TrackError, RUN.RunError) as e:
         raise ToolError(str(e))
 
 
@@ -1064,6 +1098,29 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "iterationDir": {"type": "string", "description": "папка итерации с actual.png (подпапка verify/ кадра)"},
             "date": {"type": "string", "description": "дата входом, одна короткая строка; без неё даты в отчёте нет"}},
             "required": ["track", "iterationDir"], "additionalProperties": False},
+    },
+    "daiver_directive": {
+        "fn": t_directive,
+        "description": ("Превью разбора строки задачи `forge-ui: track=<KEY> …` (алиас `daiver:`): ничего не пишет. ok: false — faults дословно (неизвестный ключ, "
+                        "пробелы вокруг «=», mode=auto, from=plan с frame=, state.x=x…) — строка malformed и НИКОГДА не чинится тобой; warnings — не ошибки. "
+                        "Строку передавай как есть, не пересказывай."),
+        "schema": {"type": "object", "properties": {
+            "line": {"type": "string", "description": "строка задачи дословно"}},
+            "required": ["line"], "additionalProperties": False},
+    },
+    "daiver_run": {
+        "fn": t_run,
+        "description": ("Прогон forge-ui. Открытие: directive (строка задачи дословно) или track (прогон человека) — режим (mode, modeSource), startsAt "
+                        "(init | track | resolve | build | verify | done), policy, frames; пишет run.json; ключи строки кладёт в манифест сам (pending — кадры, "
+                        "которых ещё нет: после pull открой той же строкой снова). malformed — faults, ничего не записано. blocked + supply — останов: "
+                        "не обходи. Закрытие: track + finish: true (+ blocked — имя причины) — outcome из записанной истории verify: clean | "
+                        "defects-remaining | blocked:<причина> | never-run, note — заметка для чекбокса."),
+        "schema": {"type": "object", "properties": {
+            "track": {"type": "string", "description": "ключ стори (имя трека)"},
+            "directive": {"type": "string", "description": "строка задачи дословно (forge-ui: …)"},
+            "finish": {"type": "boolean", "description": "true — закрыть прогон трека"},
+            "blocked": {"type": "string", "description": "с finish: имя именованного останова (например plan-unsigned)"}},
+            "additionalProperties": False},
     },
     "daiver_frame_baseline": {
         "fn": t_frame_baseline,
