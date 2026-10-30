@@ -4,9 +4,11 @@ Pre-flight check для feature-pipeline.
 Проверяет, что control-plane включён и конфигурация доступна.
 Вызывается самым первым при старте пайплайна.
 
-Единственная поддерживаемая раскладка — project: код в `<project>/.gigacode/{hooks,skills}`,
-подключение хуков — `<project>/.gigacode/settings.json` (генерится resolve_hook_paths.py).
-Ставится через `bash deploy.sh <project>` (см. INSTALL.md).
+Раскладка — extension внутри проекта: код в `<project>/.gigacode/extensions/<forge|forge-ui>/`,
+подключение хуков — его `hooks/hooks.json`, MCP — его манифест (`gigacode-extension.json`); в
+рантайме — ссылка (`gigacode extensions link`). Ставится `bash install.sh forge|forge-ui <project>`
+(см. INSTALL.md). Старая раскладка (≤ 0.5: `<project>/.gigacode/{hooks,skills}` + settings.json)
+ещё диагностируется (mode "project"), а рядом с extension'ом — ошибка: хуки задвоятся.
 
 Exit 0 — харнес активен, можно продолжать.
 Exit 1 — ENFORCEMENT OFF (essential-хук не подключён / settings / risk-policy).
@@ -69,22 +71,49 @@ def _self_base() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+EXTENSION_KINDS = ("forge", "forge-ui")
+
+
+def _is_extension_base(base: Path) -> bool:
+    return (base.name in EXTENSION_KINDS and base.parent.name == "extensions"
+            and base.parent.parent.name == ".gigacode")
+
+
 def resolve_layout(project_root, self_base=None) -> dict:
     """Где физически лежит код форжа, который грузит рантайм.
 
-    Project-раскладка: код в `<project>/.gigacode`, проверка по наличию
-    `settings.hooks.json` или хотя бы одного essential-хука. Если деплой есть —
-    база = `<project>/.gigacode`; если нет — `mode == "none"` и сообщения ниже
-    подскажут путь установки.
+    Extension: `<project>/.gigacode/extensions/<forge|forge-ui>` — сам preflight лежит там
+    (база = parents[1]) или каталог есть в проекте. Иначе старая project-раскладка
+    (`settings.hooks.json` или essential-хук в `<project>/.gigacode/hooks`), иначе `none` —
+    сообщения ниже подскажут установку.
     """
-    proj_base = Path(project_root) / ".gigacode"
+    root = Path(project_root)
+    proj_base = root / ".gigacode"
     base = Path(self_base).resolve() if self_base is not None else _self_base()
+    if _is_extension_base(base) and base.parents[2].resolve() == root.resolve():
+        return {"mode": "extension", "base": base, "shadow": None}
+    for kind in EXTENSION_KINDS:
+        cand = proj_base / "extensions" / kind
+        if (cand / "hooks").is_dir():
+            return {"mode": "extension", "base": cand, "shadow": None}
     deployed = ((proj_base / "hooks" / "settings.hooks.json").exists()
                 or (proj_base / "hooks" / "gate-guard.py").exists())
     if deployed:
         return {"mode": "project", "base": proj_base, "shadow": None}
-    # Деплой не найден — сообщения ниже подскажут путь установки.
     return {"mode": "none", "base": proj_base, "shadow": None}
+
+
+# Команда починки подключения — по раскладке (preflight() ставит её первой строкой).
+_FIX = "bash .gigacode/deploy-local.sh"
+
+
+def _set_fix_hint(base: Path, project_root) -> None:
+    global _FIX
+    try:
+        rel = Path(base).resolve().relative_to(Path(project_root).resolve()).as_posix()
+    except ValueError:
+        rel = Path(base).as_posix()
+    _FIX = f"bash {rel}/deploy-local.sh"
 
 
 def _find_foreign_hook_paths(settings: dict, project_root=None, prefixes=None) -> list[str]:
@@ -146,9 +175,8 @@ def _referenced_hook_basenames(hooks_block: dict) -> set:
 
     def _walk(node):
         if isinstance(node, str):
-            m = re.search(r"([\w.-]+\.py)\b", node)
-            if m:
-                names.add(m.group(1))
+            # все .py строки: у extension'а команда — `_run_hook.py <хук>.py`
+            names.update(re.findall(r"([\w.-]+\.py)\b", node))
         elif isinstance(node, dict):
             for v in node.values():
                 _walk(v)
@@ -225,7 +253,7 @@ def _check_commands_runnable(hooks_block: dict, wiring_src: str, hooks_dir, erro
         if not Path(interp).exists():
             errors.append(
                 f"{wiring_src}: интерпретатор хуков не найден: {interp}. Каждый вызов "
-                f"инструмента будет отклонён (rc=2). Запусти bash .gigacode/deploy-local.sh"
+                f"инструмента будет отклонён (rc=2). Запусти {_FIX}"
             )
             continue
         try:
@@ -241,13 +269,13 @@ def _check_commands_runnable(hooks_block: dict, wiring_src: str, hooks_dir, erro
             errors.append(
                 f"{wiring_src}: интерпретатор {interp} не грузит бандл forge ({tail[0]}). "
                 f"Все блокирующие хуки уйдут в fail-closed deny. "
-                f"Смени python в settings.json и перезапусти bash .gigacode/deploy-local.sh"
+                f"Поставь здоровый python 3.9+ первым в PATH и перезапусти {_FIX}"
             )
     if missing:
         errors.append(
             f"{wiring_src}: в командах хуков указаны несуществующие файлы: {sorted(set(missing))}. "
             f"python вернёт rc=2 на КАЖДЫЙ вызов инструмента — сессия будет заблокирована "
-            f"целиком. Запусти bash .gigacode/deploy-local.sh"
+            f"целиком. Запусти {_FIX}"
         )
 
 
@@ -552,6 +580,76 @@ def _check_project_layout(base: Path, project_root, errors: list[str],
             )
 
 
+def _check_extension_layout(base: Path, project_root, errors: list[str], warnings: list[str]) -> None:
+    """Extension внутри проекта: файлы, hooks/hooks.json, манифест, ссылка в рантайме, и ничего,
+    что перекрывает или задваивает его (старая раскладка, вторая поставка)."""
+    root = Path(project_root)
+    hooks_dir = base / "hooks"
+    try:
+        rel = base.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        rel = str(base)
+    for hook in ESSENTIAL_HOOKS:
+        if not (hooks_dir / hook).exists():
+            errors.append(f"hook not found: {rel}/hooks/{hook}")
+    hooks_json = hooks_dir / "hooks.json"
+    if not hooks_json.exists():
+        errors.append(f"{rel}/hooks/hooks.json не найден — хуки рантайму не подключены. Запусти {_FIX}")
+    else:
+        try:
+            block = json.loads(hooks_json.read_text(encoding="utf-8")).get("hooks") or {}
+        except (OSError, json.JSONDecodeError) as e:
+            errors.append(f"{rel}/hooks/hooks.json parse error: {e}")
+            block = None
+        if block is not None:
+            if not block:
+                errors.append(f"{rel}/hooks/hooks.json: hooks block is empty — enforcement inactive")
+            else:
+                _check_wiring(block, "hooks/hooks.json", [str(hooks_dir) + "/"], errors)
+                _check_commands_runnable(block, "hooks/hooks.json", hooks_dir, errors)
+    _check_risk_policy(hooks_dir, f"{rel}/hooks", errors)
+    try:
+        sys.path.insert(0, str(hooks_dir))
+        import forge_extension as FX
+        for prob in FX.check(base, root):
+            if "hooks.json" not in prob:          # hooks.json разобран выше своими словами
+                errors.append(f"extension: {prob}")
+        name = FX.extension_name(base.name, root)
+    except Exception as e:  # noqa: BLE001 — диагностика
+        errors.append(f"extension: проверка манифеста не выполнилась ({e})")
+        name = None
+    other = [k for k in EXTENSION_KINDS if k != base.name and (base.parent / k).is_dir()]
+    if other:
+        errors.append(f"в проекте стоят обе поставки ({base.name} и {other[0]}): хуки control-plane выполнятся "
+                      f"дважды. Одна поставка на репо — сними лишнюю: bash uninstall.sh {other[0]} {root}")
+    legacy = root / ".gigacode"
+    if (legacy / "settings.json").exists() and _carries_forge_hooks(legacy / "settings.json"):
+        errors.append(".gigacode/settings.json всё ещё подключает хуки старой раскладки — вместе с extension'ом "
+                      "каждый хук выполнится дважды. Сними старую раскладку: bash uninstall.sh --legacy-only "
+                      f"{root} (из клона forge) или переустанови install.sh — он снимает её сам")
+    shadow = sorted(p.name for p in (base / "skills").iterdir()
+                    if p.is_dir() and (legacy / "skills" / p.name / "SKILL.md").exists()) \
+        if (base / "skills").is_dir() else []
+    if shadow:
+        errors.append(f"в .gigacode/skills/ лежат старые копии скиллов forge ({', '.join(shadow)}): рантайм берёт "
+                      f"проектный скилл раньше скилла extension'а, и брифы будут устаревшими. Сними старую "
+                      f"раскладку: bash uninstall.sh --legacy-only {root}")
+    if name:
+        linked = []
+        for d in (".gigacode", ".qwen"):
+            meta_dir = _home() / d / "extensions" / name
+            for meta in sorted(meta_dir.glob(".*-extension-install.json")) if meta_dir.is_dir() else []:
+                try:
+                    src = json.loads(meta.read_text(encoding="utf-8")).get("source", "")
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if src and os.path.realpath(src) == os.path.realpath(str(base)):
+                    linked.append(f"~/{d}")
+        if not linked:
+            warnings.append(f"extension {name} не найден среди ссылок рантайма (~/.gigacode/extensions): без "
+                            f"ссылки рантайм не видит ни хуков, ни /forge. Подключить: {_FIX}")
+
+
 def _run_doctor(base: Path, project_root, errors: list[str], warnings: list[str]) -> None:
     """doctor.py — self-check целостности пайплайна (advisory: предупреждение, не блок)."""
     doctor_script = base / "skills" / "feature-pipeline" / "scripts" / "doctor.py"
@@ -607,9 +705,9 @@ _FORGE_MCP = {
 }
 
 
-def _profile_mcp(project_root) -> list:
-    """MCP профиля поставки (.gigacode/.forge-profile, строки `mcp <имя>`); нет файла — back."""
-    prof = Path(project_root) / ".gigacode" / ".forge-profile"
+def _profile_mcp(project_root, base=None) -> list:
+    """MCP профиля поставки (<база>/.forge-profile, строки `mcp <имя>`); нет файла — back."""
+    prof = (Path(base) if base is not None else Path(project_root) / ".gigacode") / ".forge-profile"
     try:
         lines = prof.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -629,7 +727,7 @@ def _check_master_mcp(base: Path, project_root, warnings: list) -> None:
     там и Edit, и shell); forge-ui — движок фронтового конвейера. Не enforcement — warning, а не
     error. Проверка — реальный запуск сервера: запись в settings.json есть, а интерпретатор/путь
     битые — то же самое, что записи нет."""
-    for name in _profile_mcp(project_root):
+    for name in _profile_mcp(project_root, base):
         _check_one_mcp(base, project_root, warnings, name)
 
 
@@ -638,15 +736,17 @@ def _check_one_mcp(base: Path, project_root, warnings: list, name: str) -> None:
     server = Path(base) / "hooks" / script
     if not server.exists():
         return                       # деплоя нет — про это скажет _check_project_layout
-    settings = Path(project_root) / ".gigacode" / "settings.json"
+    if _is_extension_base(Path(base)):
+        settings, where = Path(base) / "gigacode-extension.json", "манифесте extension'а (gigacode-extension.json)"
+    else:
+        settings, where = Path(project_root) / ".gigacode" / "settings.json", ".gigacode/settings.json"
     try:
         cfg = (json.loads(settings.read_text(encoding="utf-8")).get("mcpServers") or {}) \
             .get(name)
     except (OSError, json.JSONDecodeError, AttributeError):
         cfg = None
     if not isinstance(cfg, dict) or not cfg.get("command"):
-        warnings.append(f"MCP {name} не зарегистрирован в .gigacode/settings.json — {why}. "
-                        f"Почини: bash .gigacode/deploy-local.sh")
+        warnings.append(f"MCP {name} не зарегистрирован в {where} — {why}. Почини: {_FIX}")
         return
     import subprocess
     req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -662,8 +762,7 @@ def _check_one_mcp(base: Path, project_root, warnings: list, name: str) -> None:
         return
     if not ok:
         tail = ((r.stderr or r.stdout or "").strip().splitlines() or ["(пусто)"])[-1]
-        warnings.append(f"MCP {name} не ответил на initialize: {tail[:200]} — "
-                        f"почини: bash .gigacode/deploy-local.sh")
+        warnings.append(f"MCP {name} не ответил на initialize: {tail[:200]} — почини: {_FIX}")
 
 
 def preflight(project_root: str, self_base=None) -> dict:
@@ -707,14 +806,16 @@ def preflight(project_root: str, self_base=None) -> dict:
     # 2. Проверяем ТУ раскладку кода, которую реально грузит рантайм.
     layout = resolve_layout(project_root, self_base)
     base = layout["base"]
-    # Единственная раскладка — project: либо деплой есть (mode == "project"), либо нет
-    # (mode == "none"). В обоих случаях прогоняем project-проверки: они сами решают,
-    # что ругать (settings.hooks.json/gate-guard.py/resolve_hook_paths.py) и подсказывают
-    # путь установки.
-    _check_project_layout(base, project_root, errors, warnings)
-
-    # 2b. Каталог настроек РАНТАЙМА vs каталог деплоя (см. _check_runtime_settings_dirs).
-    _check_runtime_settings_dirs(project_root, base, warnings)
+    _set_fix_hint(base, project_root)
+    if layout["mode"] == "extension":
+        _check_extension_layout(base, project_root, errors, warnings)
+    else:
+        # Старая project-раскладка (≤ 0.5) или ничего: project-проверки сами решают, что ругать.
+        _check_project_layout(base, project_root, errors, warnings)
+        if layout["mode"] == "none":
+            errors.append("forge не установлен в проект: bash install.sh forge|forge-ui <project> (из клона forge)")
+        # 2b. Каталог настроек РАНТАЙМА vs каталог деплоя (см. _check_runtime_settings_dirs).
+        _check_runtime_settings_dirs(project_root, base, warnings)
 
     # 2c. MCP-канал к мастер-репо (warning: без него не работает только merge вне проекта)
     _check_master_mcp(base, project_root, warnings)

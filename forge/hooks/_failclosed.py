@@ -11,7 +11,7 @@ fail-CLOSED: exit 1 рантайм читает как «хук не возра�
       ... перезапусти: bash .gigacode/deploy-local.sh      ← и она же не проходит
 
 Починить бандл из сессии было нельзя — только руками в терминале. Здесь узкая форточка:
-команды ВОССТАНОВЛЕНИЯ (deploy-local.sh / deploy.sh / preflight.py / doctor.py / проверка
+команды ВОССТАНОВЛЕНИЯ (deploy-local.sh / install.sh / preflight.py / doctor.py / проверка
 версии интерпретатора) пропускаются с предупреждением, всё остальное по-прежнему exit 2.
 
 Маржинальный риск нулевой: при сломанном бандле enforcement и так не работает — вопрос лишь
@@ -34,15 +34,31 @@ _COMPOUND_RE = re.compile(r"[;&|\n]|\$\(|`|\|\|")
 
 # Что считаем восстановлением. Только то, что чинит или ДИАГНОСТИРУЕТ бандл.
 _RECOVERY_RE = re.compile(
-    r"(?:^|[\s/\\])(?:deploy-local\.sh|deploy\.sh|preflight\.py|doctor\.py)\b"
+    r"(?:^|[\s/\\])(?:deploy-local\.sh|deploy\.sh|install\.sh|update\.sh|preflight\.py|doctor\.py)\b"
     r"|(?:^|\s)(?:python3?|py)(?:\s+-[A-Za-z]+)*\s+(?:-V|--version)\s*$"
     r"|(?:^|\s)(?:python3?|py)\s+-c\s+['\"]?import\s+(?:sys|risk_ladder|_project)\b"
 )
 
-_RESTART_HINT = (
-    "Проверь интерпретатор в .gigacode/settings.json (нужен python 3.9+ с рабочим expat), "
-    "затем перезапусти: bash .gigacode/deploy-local.sh"
-)
+def install_rel() -> str:
+    """Каталог установки forge от корня проекта — для подсказок: `.gigacode/extensions/<kind>`
+    (extension; этот файл лежит в его hooks/), иначе `.gigacode` (старая раскладка, source-репо).
+    Копия `_project.install_rel` — здесь нельзя импортировать бандл: модуль грузится, когда он
+    уже не грузится."""
+    from pathlib import Path
+    base = Path(__file__).resolve().parents[1]
+    if base.parent.name == "extensions" and base.parent.parent.name == ".gigacode":
+        return f".gigacode/extensions/{base.name}"
+    return ".gigacode"
+
+
+def _restart_hint() -> str:
+    rel = install_rel()
+    wiring = f"{rel}/hooks/hooks.json" if rel != ".gigacode" else ".gigacode/settings.json"
+    return (f"Проверь интерпретатор в {wiring} (нужен python 3.9+ с рабочим expat), "
+            f"затем перезапусти: bash {rel}/deploy-local.sh")
+
+
+_RESTART_HINT = _restart_hint()
 
 
 def _command_from_stdin() -> str:

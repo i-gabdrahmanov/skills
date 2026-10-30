@@ -45,7 +45,7 @@ from _util import (gate_result_path, judges_dir, load_project_config, origins_di
                    task_docs_dir as _task_docs_dir)
 import forge_events as FE  # журнал evidence (импорт _util уже положил hooks/ в sys.path)
 import _branches as BR  # реестр плоских веток (fix, tech) — hooks/, как forge_events
-from _project import exclusive_lock, safe_component  # noqa: E402
+from _project import exclusive_lock, safe_component, install_rel as _install_rel  # noqa: E402
 
 # Соглашение «какие фазы обязаны идти через субагента» — ЕДИНЫЙ источник pipeline_phases
 # (co-located feature-pipeline). best-effort импорт + inline-fallback, чтобы переименование
@@ -388,7 +388,7 @@ def _check_grounding_substance(step: dict, project: Path, skill: str, feature: s
         return
     raise StepGateBlocked(
         f"Шаг {step_id} нельзя закрыть: {problem}.\n"
-        f"   Сними инвентарь: python3 <project>/.gigacode/skills/system-analyst/scripts/"
+        f"   Сними инвентарь: python3 <project>/{_install_rel()}/skills/system-analyst/scripts/"
         f"ensure_inventory.py --root <project> --force, затем повтори update.py.\n"
         + _override_hint(f"grounding-substance-{step_id}", feature, step_id,
                          "<почему grounding объективно недоступен>")

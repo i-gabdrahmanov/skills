@@ -1,77 +1,79 @@
-# Установка forge (project-модель)
+# Установка forge и forge-ui (extension в проекте)
 
-Forge ставится в целевой Java/Spring-проект через `deploy.sh` — один скрипт копирует
-hooks/ + skills/ + команды в `<project>/.gigacode/` и доводит `settings.json`.
-Боевой рантайм — **GigaCode**: бинарь `gigacode`, базовый каталог `~/.gigacode`.
-Проверено на `gigacode v26.5+`.
+Forge ставится в проект **extension'ом GigaCode**, и поставок две, установки раздельные:
 
-> **Модель установки — единственная (project).** Манифестов extension'а (`qwen-extension.json`
-> / `gigacode-extension.json`) в репо нет, `qwen/gigacode extensions link|install` НЕ
-> поддерживается. Если forge где-то остался от прежней extension-раскладки (user-уровень
-> `~/.gigacode/skills/`, `~/.gigacode/hooks/`, блок hooks в `settings.json`) — он ПЕРЕКРЫВАЕТ
-> project-деплой: задваивает цепочки хуков, подменяет скиллы старыми копиями и уводит
-> `/forge` к устаревшей команде. Снимается `cleanup-legacy.sh` (см. §1).
+| Поставка | Куда | Что внутри | Команда |
+|---|---|---|---|
+| **forge** | бэк-репо (Java/Spring) | весь конвейер: спека → дизайн → TDD, `/forge`, `/forge-fix`, `/forge-tech`, `/forge-spec`, `/forge-merge`, `/forge-archive`; MCP `forge-master` | `bash install.sh forge <repo>` |
+| **forge-ui** | фронт-репо | фронт-часть стори: макет → UI-код → проверка против макета, `/forge`; MCP `forge-ui` (движок `daiver_*`) | `bash install.sh forge-ui <repo>` |
+
+Одна поставка на репо: хуки control-plane у них общие, и две поставки в одном репо выполняли бы
+каждый хук дважды. `install.sh` на второй отказывает и подсказывает, как снять первую.
+
+Боевой рантайм — **GigaCode** (бинарь `gigacode`, базовый каталог `~/.gigacode`). На дев-машине то же
+самое проверяется стоковым `qwen` (`~/.qwen`, `FORGE_RUNTIME=qwen`).
+
+## Как это устроено
+
+```
+<repo>/.gigacode/extensions/forge/          ← каталог целиком форжевый (forge-ui — свой, рядом не ставится)
+    gigacode-extension.json  qwen-extension.json   манифест: имя, версия, MCP-серверы поставки
+    hooks/  hooks/hooks.json                        control-plane и его подключение
+    skills/<скилл>/…  commands/*.md                 скиллы и слэш-команды поставки
+    deploy-local.sh  .forge-profile  .forge-deployed
+~/.gigacode/extensions/forge-<repo>-<хеш>/        ← только ССЫЛКА на каталог выше (gigacode extensions link)
+```
+
+- **Файлы — в проекте.** GigaCode режет shell к скриптам вне каталога проекта, а гейты forge зовут
+  свои скрипты шеллом. Поэтому extension в `~/.gigacode/extensions/` (как в августе) не работал.
+- **В рантайме — ссылка.** Рантайм грузит extensions только из `~/.gigacode/extensions` (загрузка из
+  каталога проекта в его коде есть, но не вызывается). `gigacode extensions link <каталог>` кладёт туда
+  запись `{type: link, source: <каталог>}`, и рантайм читает манифест, хуки, скиллы и команды по пути
+  источника.
+- **Имя уникально на проект**: `forge-<каталог>-<хеш пути>`. Реестр ссылок общий на пользователя,
+  а два extension'а с одним именем рантайм не ставит («already installed»).
+- **Включён только здесь.** Установщик выключает extension под `$HOME` (`disable --scope user`) и
+  включает для этого workspace (`enable --scope workspace`). С другими forge-проектами машины он
+  выключается взаимно: у каждого репо свой `/forge`.
+- **Хук молчит вне своего проекта.** Каждый хук идёт через `hooks/_run_hook.py`. Если рабочий каталог
+  сессии не внутри проекта extension'а, хук выходит с 0, ничего не делая. Это страховка на случай,
+  если правила включения не сработали (см. «Ограничения»).
+- **Пути — абсолютные.** Интерпретатор и пути к хукам и MCP-серверам зашиты в манифест и `hooks.json`
+  при установке. Проект переехал — `bash .gigacode/extensions/<forge|forge-ui>/deploy-local.sh`.
 
 ## 0. Требования
 
-- Python **3.9+** в `PATH` с рабочим `expat` (модуль `xml.etree`).
-  Установщик не берёт «первый python из PATH» вслепую: он пробует кандидатов
-  (`python3`, `python`, `py -3`, затем `python3.13…3.9`) и запекает в `settings.json`
-  первый ЗДОРОВЫЙ — версия не ниже пола и живой stdlib. Это не косметика: выбранный
-  интерпретатор подставляется как `${PYTHON}` в команду КАЖДОГО хука, а хук, падающий
-  на импорте, отдаёт `exit 1` — рантайм читает это как «возражений нет» и выполняет
-  вызов. Кривой python здесь = молча снятый enforcement.
-  Если годного нет, установщик берёт что есть и печатает `⚠ ВНИМАНИЕ` — читай вывод.
-- gigacode, запущенный в корне проекта: хуки он читает из `<project>/.gigacode/settings.json`.
-  В 26.9 — без флагов: `--experimental-hooks` (за ним хуки стояли в ранних сборках форка) и
-  `-y` из CLI убраны, с ними сессия не стартует (`Unknown arguments`, exit 1). Признак, что
-  хуки не загрузились, — `[HOOK_REGISTRY] 0 hook entries` на старте; тогда первым делом §3.
+- Python **3.9+** с рабочим `expat` (модуль `xml.etree`). Установщик не берёт «первый python из PATH»
+  вслепую: он пробует кандидатов (`python3`, `python`, `py -3`, затем `python3.13…3.9`) и зашивает
+  первый ЗДОРОВЫЙ в команду КАЖДОГО хука. Хук, падающий на импорте, отдаёт `exit 1`, и рантайм читает
+  это как «возражений нет». Кривой python здесь = молча снятый enforcement.
+- `gigacode` с поддержкой extensions в `PATH` (`gigacode extensions --help`: есть `link`, `enable`,
+  `disable`, `uninstall`). Нет CLI — установщик соберёт extension и напечатает три команды подключения.
+- gigacode запускается в корне проекта (или внутри него). В 26.9 — без флагов: `--experimental-hooks`
+  и `-y` убраны, с ними сессия не стартует.
 
-## 1. Убрать остатки прежней extension-раскладки (если была)
-
-Если forge раньше стоял как extension (`qwen extensions link|install`), нужно снять
-user-уровень (`~/.gigacode/skills/`, `~/.gigacode/hooks/`), иначе они перекроют project-деплой.
-
-**Одна команда** — `cleanup-legacy.sh` (по умолчанию только план, ничего не меняет):
+## 1. Установка
 
 ```bash
-bash cleanup-legacy.sh --apply                           # user-уровень ($HOME)
-bash cleanup-legacy.sh /path/to/target-project --apply   # + legacy в проекте (если был)
+bash install.sh forge    /path/to/back-repo      # бэк-репо
+bash install.sh forge-ui /path/to/front-repo     # фронт-репо
 ```
 
-Корпоративный контур, где писать в `$HOME` или в проект нельзя:
-
-```bash
-bash cleanup-legacy.sh --apply --backup-dir /tmp/forge-bak
-```
-
-Перенести ещё `ground/` и git-refs чекпойнтов (рабочие данные прогона):
-
-```bash
-bash cleanup-legacy.sh /path/to/target-project --apply --purge-state
-```
-
-Затем — **перезапустить сессию** (рантайм кэширует список скиллов на старте) и проверить
-`preflight.py` — ошибок «старые копии перекрывают» быть не должно.
-
-## 2. Установка в проект
-
-```bash
-bash deploy.sh /path/to/target-project
-```
-
-`deploy.sh` делает:
-1. Копирует `hooks/` и `skills/` (co-located) в `<target>/.gigacode/`.
-2. Удаляет `__pycache__`, `.DS_Store` и локальный `config.json` исходника; конфиг оператора
-   таргета (`skills/minor-defect-fix/config.json`) переживает редеплой.
-3. Удаляет хуки-сироты (были в старом деплое, но нет в исходнике).
-4. Снимает надгробия — скиллы/команды/хуки, которые форж клал раньше и удалил из репо
-   (по реестру `.gigacode/.forge-deployed` прошлой установки + `tombstones.txt`).
-5. Кладёт `deploy-local.sh`, `FORGE.md`, `SKILLS-REGISTRY.md`.
-6. Копирует `commands/*.md`.
-7. Пишет реестр установки `.gigacode/.forge-deployed` — по нему следующий апгрейд отличит
-   «форж это удалил» от «оператор это добавил».
-8. Добавляет в `<target>/.gitignore` блок между маркерами:
+Что делает `install.sh`:
+1. **Снимает старую раскладку** (forge ≤ 0.5: код в `.gigacode/{skills,hooks,commands}`, хуки и MCP —
+   в `.gigacode/settings.json`). Без этого старые хуки задвоятся с хуками extension'а, а проектные
+   скиллы перекроют скиллы extension'а (рантайм резолвит project > extension). Снимается только
+   форж-своё: по исходнику, реестру прошлой установки (`.forge-deployed`) и `tombstones.txt`.
+   Самописные скиллы, хуки и команды оператора остаются. `settings.json` бэкапится, чужие хуки и MCP
+   в нём остаются.
+2. **Собирает поставку по профилю** (`profiles/back.profile` / `profiles/ui.profile`) во временный
+   каталог и подменяет им прежний **целиком**. Снятое из репо в проекте не остаётся.
+   Локальный `minor-defect-fix/config.json` переживает обновление.
+3. **Манифест и `hooks/hooks.json`** (`hooks/forge_extension.py build`). Тексты брифов называют пути
+   поставки: `.gigacode/skills/…` → `.gigacode/extensions/<поставка>/skills/…`.
+4. **Ссылка в рантайме** и включение только для этого workspace (`forge_extension.py link`).
+   `--no-link` — пропустить (CI, ручная установка). `--runtime qwen` или `FORGE_RUNTIME=qwen` — дев-машина.
+5. **`.gitignore`** — блок между маркерами:
 
    ```gitignore
    # >>> forge: рабочие данные пайплайна >>>
@@ -81,104 +83,77 @@ bash deploy.sh /path/to/target-project
    # <<< forge <<<
    ```
 
-   Рабочие данные прогонов (манифесты, evidence, вердикты судей, журналы, архив) —
-   производное, переписываемое на каждом шаге: в истории это шум и конфликт на каждый merge.
-   `ground/policy.json` намеренно оставлен под версионированием — это конфигурация проекта
-   (где доки, какие гейты, какая критичность), её команда держит в git. Форма `ground/*`, а
-   не `ground/`: re-include внутри исключённого каталога git не выполняет.
+   Рабочие данные прогонов (манифесты, evidence, вердикты судей, журналы, архив) — производное,
+   в истории это шум и конфликт на каждый merge. `ground/policy.json` оставлен под версионированием —
+   это конфигурация проекта. `.gigacode/` — установленный forge: манифест и `hooks.json` в нём держат
+   абсолютные пути этой машины, у коллеги они зовут несуществующие файлы. Свои скиллы оператор
+   версионирует точечно: `git add -f .gigacode/skills/<своё>`. Блок идемпотентен, строки оператора
+   не трогаются, вне git-репо шаг пропускается.
 
-   `.gigacode/` — задеплоенный харнес, сразу после установки это 286 файлов: в таком
-   `git status` не видно собственных изменений проекта. Он генерируется `deploy.sh` из репо
-   forge, а `settings.json` внутри держит АБСОЛЮТНЫЕ пути к проекту и интерпретатору — у
-   коллеги на другой машине такой файл зовёт несуществующие скрипты, то есть коммит вреднее
-   отсутствия файла. Свои co-located скиллы версионируются точечно:
-   `git add -f .gigacode/skills/<своё>` (уже отслеживаемые файлы `.gitignore` не трогает).
-
-   Блок идемпотентен (повторный деплой не дублирует), строки оператора не трогаются, вне
-   git-репозитория шаг пропускается. `uninstall.sh` снимает ровно этот блок.
-
-   > Если `ground/` уже попал в историю, `.gitignore` его оттуда не уберёт — файлы уже
-   > отслеживаются. Снять с учёта, сохранив на диске:
+   > Если `ground/` уже попал в историю, `.gitignore` его не уберёт. Снять с учёта, сохранив на диске:
    > `git rm -r --cached ground && git add ground/policy.json`.
-9. Запускает `deploy-local.sh` — генерирует `settings.json` из `settings.hooks.json`
-   (подставляет `${PYTHON}` = выбранный здоровый интерпретатор и `${PROJECT_ROOT}` =
-   абсолютный путь проекта).
-10. Прогоняет `preflight.py` (advisory).
+6. **`preflight.py`** (advisory).
 
-### 2.1. Фронт-репо: forge-ui (профиль `ui`)
+После установки **перезапусти сессию gigacode** в проекте: рантайм читает extensions на старте.
 
-У стори бывает бэк-часть, фронт-часть или обе; фронт живёт в своём репо. Туда ставится forge-ui —
-та же поставка forge, но с фронтовым составом:
+### Фронт-репо: forge-ui
 
-```bash
-bash deploy.sh --profile ui /path/to/front-repo
-```
+Из скиллов едут `forgeui` (ветка фронт-части), `pipeline-state`, `config-helper` и скрипты
+`feature-pipeline` без её SKILL.md (их зовут хуки); Java-скиллов нет. Команда одна — `/forge`
+(запускает `forgeui` напрямую). В манифесте — MCP **`forge-ui`**. `init_pipeline_config.py`
+распознаёт `npm|pnpm|yarn` по lock-файлу. Первый `/forge` один раз спрашивает настройки фронта и
+пишет `.daiver/config.yaml`.
 
-Отличия от бэкового деплоя: из скиллов едут `forgeui` (ветка фронт-части), `pipeline-state`,
-`config-helper` и скрипты `feature-pipeline` без её SKILL.md (их зовут хуки); Java-скиллов нет.
-Команда одна — `/forge` (запускает `forgeui` напрямую, router не нужен). В `settings.json`
-регистрируется MCP **`forge-ui`** (движок `daiver_*`), а `forge-master` — нет. Профиль ложится в
-`.gigacode/.forge-profile`. `init_pipeline_config.py` распознаёт `npm|pnpm|yarn` по lock-файлу.
-Первый `/forge` в репо один раз спрашивает настройки фронта и пишет `.daiver/config.yaml`.
-
-> **Проба extension-раскладки.** forge-ui задуман как extension внутри проекта
-> (`<repo>/.gigacode/extensions/forge-ui/`), но база рантайма (qwen-code 0.21.14) грузит
-> extensions только из домашнего каталога. Проверь на своём GigaCode: скопируй `forge-ui/probe/`
-> в `<repo>/.gigacode/extensions/forge-ui-probe/`, запусти `gigacode` и набери `/forge-ui-probe`.
-> Есть — сообщи, перейдём на extension; нет — остаёмся на `deploy.sh --profile ui`. Подробно —
-> `tasks/019-forge-ui.md`.
-
-## 3. Проверка готовности
+## 2. Проверка готовности
 
 ```bash
-python3 /path/to/target-project/.gigacode/hooks/preflight.py --project /path/to/target-project
+python3 /path/to/repo/.gigacode/extensions/forge/hooks/preflight.py --project /path/to/repo
 ```
 
-- ✅ `exit 0` — можно работать.
-- ❌ `exit 1` — ENFORCEMENT OFF, проверь `deploy.sh` и что рантайм запущен в корне проекта.
-- ❌ `exit 2` — конфиг не инициализирован (`ground/policy.json`; legacy-имя — `pipeline.json`).
-  Нормально для первого запуска.
+- ✅ `exit 0` — можно работать (`layout.mode: extension`).
+- ❌ `exit 1` — ENFORCEMENT OFF: хуки не подключены, рядом старая раскладка или вторая поставка, битый
+  интерпретатор. Текст ошибки называет команду починки.
+- ❌ `exit 2` — конфиг не инициализирован (`ground/policy.json`). Нормально для первого запуска:
+  выполни `init_command` из вывода.
 
-## 4. Запуск рантайма
+Предупреждение «extension не найден среди ссылок рантайма» — ссылка не поставлена:
+`bash .gigacode/extensions/<forge|forge-ui>/deploy-local.sh`.
 
-**Канон — интерактивный запуск:**
+Проверить, что рантайм видит extension: `gigacode extensions list` из корня проекта. Там должно быть
+`forge-<repo>-<хеш>` с «Включено (Рабочее пространство): true» и командами `/forge…`.
+
+## 3. Запуск
 
 ```bash
 gigacode
 ```
 
-Дальше в сессии — команда:
+В сессии:
 
 ```
 /forge <ключ Jira или описание задачи>
 ```
 
-`/forge` зовёт `router`: он классифицирует задачу и уводит в **fix** (минорный дефект),
-**full** (новая функциональность) или **tech** (техзадача без изменения поведения — апгрейд
-библиотек, правка конфигурации). Путь известен заранее — `/forge-fix` или `/forge-tech` напрямую.
+В бэк-репо `/forge` зовёт `router`. Он классифицирует задачу и уводит в **fix** (минорный дефект),
+**full** (новая функциональность) или **tech** (техзадача без изменения поведения). Путь известен
+заранее — `/forge-fix` или `/forge-tech` напрямую. Во фронт-репо `/forge` сразу запускает forge-ui.
 
 ### Headless — отдельный режим, не дефолт
 
-`gigacode "<задача>"` (позиционный промпт; `-p` в 26.9 объявлен устаревшим) для пайплайна
-**не работает** без подготовки по двум независимым причинам, и обе — ограничения рантайма:
+`gigacode "<задача>"` для пайплайна **не работает** без подготовки, и обе причины — ограничения рантайма:
 
-1. **Инструменты с подтверждением надо разрешить заранее.** Без этого вызов `agent`, `skill`,
-   `run_shell_command` получает «requires user approval but cannot execute in non-interactive
-   mode»: субагент фазы не стартует, а каждая продуктивная фаза обязана идти субагентом (BR-10).
-   Модель уходит делать работу фазы сама и упирается в `inline-phase-guard` (`exit 2`). Флага
-   `-y`/YOLO в 26.9 нет — разрешение даётся списком `--allowed-tools`.
-2. **`ask_user_question` в headless не рендерится** — пользовательские гейты (BRD, SDD, дизайн,
-   критичность, «создавать задачи в Jira?») ответить нечем.
+1. **Инструменты с подтверждением надо разрешить заранее**, иначе субагент фазы не стартует («requires
+   user approval but cannot execute in non-interactive mode»). Модель тогда делает работу фазы сама и
+   упирается в `inline-phase-guard` (`exit 2`). Флага `-y`/YOLO в 26.9 нет — нужен `--allowed-tools`.
+2. **`ask_user_question` в headless не рендерится** — ответить на пользовательские гейты нечем.
 
-Если headless нужен (CI, пакетный прогон) — разрешить инструменты **и** предзаписать всё, что
-пайплайн иначе спросит, ДО прогона:
+Если headless нужен (CI, пакетный прогон) — разрешить инструменты **и** предзаписать всё, что пайплайн
+иначе спросит, ДО прогона:
 
 ```bash
-# решения (критичность, режим, пути) — в manifest/policy:
-python3 <project>/.gigacode/skills/config-helper/scripts/config.py set <key> <value> \
+python3 <project>/.gigacode/extensions/forge/skills/config-helper/scripts/config.py set <key> <value> \
         --skill <skill> --feature <slug>
-# согласия человека (BRD/SDD/план) — approval-маркеры с провенансом:
-python3 <project>/.gigacode/skills/pipeline-state/scripts/record_approval.py \
+python3 <project>/.gigacode/extensions/forge/skills/pipeline-state/scripts/record_approval.py \
         --project <project> --key <key> --approved-by user --reason "<кто/почему>"
 
 gigacode --approval-mode auto-edit \
@@ -186,41 +161,58 @@ gigacode --approval-mode auto-edit \
   "<задача>"
 ```
 
-Нет предзаписи → `gate-guard` заблокирует продуктивную запись фазы. Это правильное поведение:
-согласие человека не подделывается моделью.
+Нет предзаписи — `gate-guard` заблокирует продуктивную запись фазы. Так и должно быть: согласие
+человека моделью не подделывается.
 
-## 5. Обновление
-
-```bash
-bash update.sh /path/to/target-project
-```
-
-Или повторный `deploy.sh` — он перезапишет копиями из исходника. Сироты в таргете
-подчищаются автоматически: хуки — по маске, а скилл/команда, удалённые из репо, — по реестру
-прошлой установки и `tombstones.txt`. Раньше они оставались навсегда и оставались
-достижимыми: снятая ветка `forgelite` пережила и мягкий апгрейд, и `--force`, а её брифы
-продолжали предписывать режим, которого актуальный резолвер уже не знает.
-
-## 6. Деинсталляция
+## 4. Обновление
 
 ```bash
-bash uninstall.sh /path/to/target-project
+bash update.sh /path/to/repo               # git pull этого клона + install.sh той поставки, что стоит
+bash update.sh /path/to/repo --no-pull     # из текущего клона
+bash update.sh forge-ui /path/to/repo      # поставку назвать явно
 ```
 
-Снимает:
-- блок hooks из `<project>/.gigacode/settings.json` (с бэкапом);
-- `hooks/`, `skills/`, `commands/`, `deploy-local.sh`, `FORGE.md`, `SKILLS-REGISTRY.md`;
-- блок forge из `<project>/.gitignore` (ровно между маркерами; строки оператора остаются);
-- `--purge-state` дополнительно сносит `ground/` и git-refs чекпойнтов.
+Поставку `update.sh` определяет сам: по каталогу extension'а, а у старой раскладки — по её профилю, и
+`install.sh` её мигрирует. Ссылка в рантайме указывает на каталог в проекте, поэтому после
+обновления её не надо ставить заново. Достаточно перезапустить сессию.
 
-Операторские скиллы/хуки (свопские, не из исходника forge) остаются.
+## 5. Снятие
 
-## 7. Корпоративный контур
+```bash
+bash uninstall.sh forge /path/to/repo       # или forge-ui; без имени — то, что стоит
+bash uninstall.sh forge /path/to/repo --purge-state   # + ground/ и git-refs чекпойнтов refs/forge/*
+```
 
-- Нестандартный python: запусти установщик нужным интерпретатором явно — в `settings.json`
-  попадёт `sys.executable` того процесса, что выполнил `resolve_hook_paths.py`. Проверить
-  выбор без записи: `bash .gigacode/deploy-local.sh --dry-run`.
-- `cleanup-legacy.sh --backup-dir /tmp/forge-bak` — увести бэкап в доступное место
-  (в `$HOME`/проект писать нельзя).
-- Снять прежнюю extension-раскладку в репо-исходнике негде (manifest'ов нет) — снимается
-  только на целевой машине через `cleanup-legacy.sh`.
+Снимает ссылку в рантайме (`gigacode extensions uninstall <имя>` — у link-установки исходники не
+трогаются), каталог extension'а целиком, остатки старой раскладки и блок forge из `.gitignore`.
+`minor-defect-fix/config.json` уходит в `.gigacode/minor-defect-fix-config.json.bak`. Своё оператора
+в `.gigacode/{skills,commands,hooks}` и `ground/` (без `--purge-state`) остаются.
+
+`deploy.sh` оставлен для совместимости: `deploy.sh <repo>` → `install.sh forge <repo>`,
+`deploy.sh --profile ui <repo>` → `install.sh forge-ui <repo>`.
+
+## 6. Остатки на уровне пользователя
+
+Если forge когда-то стоял в `~/.gigacode/` (user-уровень `skills/`, `hooks/`, блок hooks в
+`~/.gigacode/settings.json`), эти копии перекрывают extension. Снимает `cleanup-legacy.sh` (по умолчанию
+только план):
+
+```bash
+bash cleanup-legacy.sh --apply                            # $HOME
+bash cleanup-legacy.sh --apply --backup-dir /tmp/forge-bak  # корп-контур: бэкап в доступное место
+```
+
+Каталоги `extensions/` он не трогает. Старую раскладку внутри проекта `install.sh` снимает сам.
+
+## 7. Ограничения и корпоративный контур
+
+- **Проект вне `$HOME`.** `disable --scope user` у рантайма означает «выключен под `$HOME`». В
+  проектах вне `$HOME` без forge extension остаётся включённым: хуки там молчат (`_run_hook.py`),
+  но `/forge` и MCP видны. Установщик об этом предупреждает. Выключить в таком проекте:
+  `gigacode extensions disable --scope workspace <имя>`. С forge-проектами это делается само.
+- **Проверено на стоковом qwen 0.22.2**: link, включение по workspace, загрузка `hooks/hooks.json`,
+  MCP из манифеста, снятие ссылки. На GigaCode не проверялось. Если `gigacode extensions link` или
+  `--scope workspace` там ведут себя иначе, установщик скажет, какой шаг не прошёл, и напечатает
+  команды для ручного подключения.
+- **Нестандартный python**: поставь нужный первым в `PATH` и перезапусти
+  `bash .gigacode/extensions/<поставка>/deploy-local.sh`. Без записи: `… deploy-local.sh --check`.

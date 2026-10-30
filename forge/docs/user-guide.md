@@ -27,10 +27,10 @@
 ## 2. Предусловия
 
 - **Java/Spring проект** (Gradle или Maven), вы в корне репозитория кода.
-- **Харнес развёрнут в проект:** `bash deploy.sh <project>` положил `hooks/`, `skills/` и
-  `commands/` в `<project>/.gigacode/`. Установка **пофайлово в каждый проект** — это канон
-  (project-модель); прежняя extension-модель снята (см. §3).
-- **Рантайм запущен в корне проекта** — хуки он читает из `<project>/.gigacode/settings.json`
+- **forge установлен в проект:** `bash install.sh forge <project>` положил extension в
+  `<project>/.gigacode/extensions/forge/` и подключил его к рантайму ссылкой (см. §3). Установка —
+  в каждый проект отдельно; во фронт-репо ставится forge-ui (`install.sh forge-ui`).
+- **Рантайм запущен в корне проекта** — extension включён только для этого workspace
   (в gigacode 26.9 без флагов; см. §4).
 - **MCP Atlassian (Jira)** — нужен для фазы 03-jira. Без него пайплайн идёт в режиме «без Jira».
 - Проект — **git-репозиторий**: по нему резолвится корень и работают чекпойнты pipeline-state.
@@ -39,33 +39,33 @@
 
 ## 3. Установка харнеса
 
-Модель — **project**: один скрипт кладёт `hooks/`, `skills/` и `commands/` одним пакетом в
-`<project>/.gigacode/` и доводит `settings.json` (подставляет здоровый интерпретатор и
-абсолютный путь проекта).
+forge ставится в проект **extension'ом**: каталог `<project>/.gigacode/extensions/forge/` (хуки,
+скиллы, команды и их подключение) и ссылка на него в рантайме. Одна команда из клона forge:
 
 ```bash
-bash /path/to/forge/deploy.sh /path/to/target-project
+bash /path/to/forge/install.sh forge /path/to/target-project
 ```
 
-`hooks/` и `skills/` лежат **рядом** в одном `.gigacode/` — co-location обязательна, иначе гейты
-не находят скилл-скрипты. Резолверы выводят базу из фактического расположения файла хука, так что
-привязки к домашнему каталогу нет.
+Файлы лежат в проекте, а не в `~/.gigacode`: GigaCode не даёт shell-вызовов к скриптам вне каталога
+проекта, а гейты forge зовут свои скрипты шеллом. Extension включается только для этого проекта:
+у каждого репо свой `/forge`. Хуки вне своего проекта молчат. Старую раскладку forge (≤ 0.5:
+`.gigacode/{hooks,skills,commands}` + блок hooks в `settings.json`) установщик снимает сам, ваши
+скиллы и хуки рядом не трогает.
 
-Деплой дописывает в `<project>/.gitignore` блок между маркерами: `ground/*` (рабочие данные
-прогонов) и `.gigacode/` (сам харнес — он генерируется деплоем, а `settings.json` внутри держит
-абсолютные пути ЭТОЙ машины). `ground/policy.json` намеренно остаётся под версионированием: это
-конфигурация проекта. Свои co-located скиллы версионируются точечно — `git add -f
-.gigacode/skills/<своё>`. Блок идемпотентен, ваши строки не трогает, `uninstall.sh` снимает
-ровно его.
+Установщик дописывает в `<project>/.gitignore` блок между маркерами: `ground/*` (рабочие данные
+прогонов) и `.gigacode/` (установленный forge — манифест и `hooks.json` внутри держат абсолютные пути
+ЭТОЙ машины). `ground/policy.json` намеренно остаётся под версионированием: это конфигурация проекта.
+Свои скиллы версионируются точечно — `git add -f .gigacode/skills/<своё>`. Блок идемпотентен, ваши
+строки не трогает, `uninstall.sh` снимает ровно его.
 
-📖 Полное руководство (обновление, снятие, корп-контур, диагностика) — [INSTALL.md](../INSTALL.md).
+После установки перезапустите сессию `gigacode` — рантайм читает extensions на старте.
 
-> ⚠️ **Extension-модель снята.** `qwen/gigacode extensions link|install` не поддерживается —
-> манифестов extension'а в репо нет. Если forge остался от прежней раскладки на user-уровне
-> (`~/.gigacode/skills/`, `~/.gigacode/hooks/`, блок hooks в user-`settings.json`), он
-> **перекрывает** project-деплой: задваивает цепочки хуков и подменяет скиллы старыми копиями.
-> Снимается одной командой — `bash cleanup-legacy.sh --apply` (INSTALL.md §1), затем рестарт
-> сессии и `preflight.py` (§4).
+📖 Полное руководство (обновление, снятие, корп-контур, ограничения) — [INSTALL.md](../INSTALL.md).
+
+> ⚠️ **Остатки на уровне пользователя.** Если forge когда-то стоял в `~/.gigacode/` (`skills/`,
+> `hooks/`, блок hooks в user-`settings.json`), эти копии **перекрывают** extension: задваивают хуки и
+> подменяют скиллы старыми. Снимается одной командой — `bash cleanup-legacy.sh --apply` (INSTALL.md
+> §6), затем рестарт сессии и `preflight.py` (§4).
 
 ---
 
@@ -74,14 +74,15 @@ bash /path/to/forge/deploy.sh /path/to/target-project
 **Шаг 1 — pre-flight (обязательно).** Убедитесь, что enforcement реально включён:
 
 ```bash
-python3 <project>/.gigacode/hooks/preflight.py --project <project>
+python3 <project>/.gigacode/extensions/forge/hooks/preflight.py --project <project>
 ```
 - `exit 0` — харнес активен, можно работать.
 - `exit 2` — конфиг не инициализирован (`init_needed`: `ground/policy.json` нет/неполон). Нормально
   сразу после установки — файл появится при первом запуске пайплайна. Инициализируйте конфиг и прогоните
   `preflight` снова до `exit 0`. Это **не** ENFORCEMENT OFF.
-- `exit 1` — **ENFORCEMENT OFF**: хуки не сработают (деплой не прошёл, `disableAllHooks`, либо
-  legacy-раскладка на user-уровне перекрывает пакет). Не ведите пайплайн вслепую — перепроверьте установку (§3) и запустите `preflight` снова.
+- `exit 1` — **ENFORCEMENT OFF**: хуки не сработают (установка не прошла, `disableAllHooks`, рядом
+  старая раскладка). Текст ошибки называет починку. Не ведите пайплайн вслепую — перепроверьте
+  установку (§3) и запустите `preflight` снова.
 
 > `preflight.py` дополнительно прогоняет доктор целостности пайплайна
 > (`skills/feature-pipeline/scripts/doctor.py`) — рассогласование судей, дрейф фаз, битые пути реестра
@@ -93,7 +94,7 @@ python3 <project>/.gigacode/hooks/preflight.py --project <project>
 gigacode
 ```
 
-Хуки рантайм читает из `<project>/.gigacode/settings.json` — в gigacode 26.9 без флагов.
+Хуки рантайм берёт из extension'а forge, включённого для этого проекта — в gigacode 26.9 без флагов.
 `--experimental-hooks` (ранние сборки форка) и `-y` из CLI убраны: с ними сессия не стартует
 (`Unknown arguments`, exit 1). Если на старте `[HOOK_REGISTRY] 0 hook entries` — хуки не
 загрузились, первым делом `preflight`.
@@ -239,10 +240,10 @@ git-чекпойнты — `put` их удаляет, так что если м�
 
 ```bash
 # какие фичи в работе:
-python3 <project>/.gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
+python3 <project>/.gigacode/extensions/forge/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
 
 # состояние конкретной фичи:
-python3 <project>/.gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline --feature <slug>
+python3 <project>/.gigacode/extensions/forge/skills/pipeline-state/scripts/read.py --skill feature-pipeline --feature <slug>
 ```
 
 Снова запустите пайплайн и скажите «резюмируй фичу `<slug>`» — конвейер подхватит незакрытые шаги.
@@ -279,9 +280,10 @@ Override не подделывает вердикт: FAIL остаётся в л
 ## 10. Быстрый чек-лист старта
 
 ```text
-[ ] forge развёрнут в проект: bash deploy.sh <project>  →  <project>/.gigacode/
-[ ] legacy-раскладка на user-уровне снята (cleanup-legacy.sh), сессия перезапущена
-[ ] <project>/.gigacode/hooks/preflight.py --project <project>  →  exit 0
+[ ] forge установлен: bash install.sh forge <project>  →  <project>/.gigacode/extensions/forge/
+[ ] gigacode extensions list (из корня проекта) — forge-<проект>-… включён для workspace
+[ ] остатки на user-уровне сняты (cleanup-legacy.sh), сессия перезапущена
+[ ] <project>/.gigacode/extensions/forge/hooks/preflight.py --project <project>  →  exit 0
 [ ] gigacode запущен ИНТЕРАКТИВНО в корне проекта (без флагов)
 [ ] проект — git-репо; MCP Jira подключён (если нужна фаза 03-jira)
 [ ] запустил: /forge <задача>

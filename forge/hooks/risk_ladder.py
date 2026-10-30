@@ -26,7 +26,7 @@ import warnings
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _project import skills_dir, resolve_skill_path, gigacode_home, resolve_active_run
+from _project import skills_dir, resolve_skill_path, gigacode_home, resolve_active_run, install_rel
 import _branches as BR
 
 _POLICY_PATH = gigacode_home() / "hooks" / "risk-policy.json"
@@ -702,7 +702,7 @@ def check_requirement(level: str, req: dict, root: Path, kind: str,
         return False, (
             f"{level}: нет валидного approval-маркера '{appr}'. Порядок: (1) спроси "
             f"пользователя и покажи, что именно делаешь; (2) после явного «да» — python3 "
-            f"<project>/.gigacode/skills/pipeline-state/scripts/record_approval.py --key {appr} "
+            f"<project>/{install_rel()}/skills/pipeline-state/scripts/record_approval.py --key {appr} "
             f"--approved-by user --reason \"<кто/почему>\" (прямая запись в approvals/ "
             f"заблокирована state-write-guard); (3) повтори действие")
 

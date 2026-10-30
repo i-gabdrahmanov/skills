@@ -37,8 +37,8 @@ red-team-векторы.
   статуса (закрыто / живо / регресс), не как новую находку.
 - Исходник форжа не менять. Полигон — синтетический Java/Spring-проект: `pom.xml` или
   `build.gradle`, `src/main`, `src/test`, git, мастер-спека с требованиями `### REQ-0001: <название>`.
-- Деплой: `bash forge/deploy.sh <проект>`, затем
-  `python3 <проект>/.gigacode/hooks/preflight.py --project <проект>` → exit 0 (exit 2 —
+- Установка: `bash forge/install.sh forge <проект>` (extension в `<проект>/.gigacode/extensions/forge/`), затем
+  `python3 <проект>/.gigacode/extensions/forge/hooks/preflight.py --project <проект>` → exit 0 (exit 2 —
   выполнить напечатанные команды init/answer и повторить).
 - Запуск — `gigacode` из корня проекта **без флагов**: `--experimental-hooks` и `-y` в 26.9
   нет, сессия с ними не стартует. На старте не должно быть `[HOOK_REGISTRY] 0 hook entries`.
@@ -86,7 +86,7 @@ red-team-векторы.
 
 ## 4. Приоритет 2 — регресс находок v0.4.6
 
-Каждая проба — payload'ом в цепочку из задеплоенного `settings.json` (первый exit 2 —
+Каждая проба — payload'ом в цепочку из установленного `hooks/hooks.json` extension'а (первый exit 2 —
 стоп), там, где возможно, — ещё и живой сессией. Ожидаемый исход на v0.4.7:
 
 | Находка 046 | Проба | Ожидание |

@@ -7,13 +7,12 @@ R0–R5, evidence bundle, security-хуки, информационный учё
 состояние берут из `<project>/ground/...`, гейты ищут по `../skills/...`, политику — из
 `risk-policy.json` рядом.
 
-> **Модель установки — единственная (project).** Канон: `bash deploy.sh <project>` →
-> `<project>/.gigacode/` (co-located `hooks/` + `skills/` + `commands/` + `settings.json`).
-> Прежняя extension-раскладка снята 2026-08-22: манифестов extension'а в репо нет,
-> `hooks/hooks.json` с `${CLAUDE_PLUGIN_ROOT}` не поддерживается. Если forge где-то остался
-> на user-уровне (`~/.gigacode/skills/`, `~/.gigacode/hooks/`, блок hooks в `settings.json`)
-> — он ПЕРЕКРЫВАЕТ project-деплой и ломает проводку. Снимается одной командой
-> `cleanup-legacy.sh` (см. INSTALL.md §1).
+> **Модель установки — extension внутри проекта.** Канон: `bash install.sh forge|forge-ui <project>`
+> → `<project>/.gigacode/extensions/<kind>/` (манифест, `hooks/` + `hooks/hooks.json`, `skills/`,
+> `commands/`) + ссылка в `~/.gigacode/extensions` (`gigacode extensions link`), включение — только
+> для этого workspace. Старую co-located раскладку (`.gigacode/{hooks,skills,commands}` + блок hooks в
+> `settings.json`) `install.sh` снимает сам; остатки на user-уровне (`~/.gigacode/skills|hooks`) —
+> `cleanup-legacy.sh`. Подробно — INSTALL.md.
 
 Этот файл — **единственный источник правды по составу хуков**. README.md, INSTALL.md и
 FORGE.md ссылаются на него односторонне. Дрейф «доки ↔ проводка» пинится
@@ -43,9 +42,12 @@ FORGE.md ссылаются на него односторонне. Дрейф �
 
 Не-хуки рядом: `preflight.py` (проверка «харнес активен?» ПЕРЕД пайплайном — ловит
 «0 hook entries»), `risk-policy.json` (policy-as-code, читает `risk_ladder.py`),
-`settings.hooks.json` (эталон блока hooks, плейсхолдеры `${PYTHON}` и `${PROJECT_ROOT}`
-подставляет `resolve_hook_paths.py`), `resolve_hook_paths.py` (in-project фиксер путей,
-его зовёт `deploy-local.sh`), `_shell_targets.py` (общий разбор целей записи/удаления в
+`settings.hooks.json` (эталон блока hooks: из него `forge_extension.py` собирает
+`hooks/hooks.json` extension'а), `settings.mcp.json` (эталон MCP-серверов → манифест),
+`forge_extension.py` (сборка манифеста и `hooks.json`, ссылка в рантайме, проверка — его зовут
+`install.sh` и `deploy-local.sh`), `_run_hook.py` (запуск хука только в своём проекте),
+`resolve_hook_paths.py` (снятие форжевых хуков и MCP из `settings.json` старой раскладки — его
+зовёт `uninstall.sh`), `_shell_targets.py` (общий разбор целей записи/удаления в
 shell-команде для state-write-guard, tdd-guard, tech-guard, ui-guard, eval-guard и sod-enforcer; stdlib-only),
 `_branches.py` (реестр плоских веток fix/tech/ui: шаги, роли, артефакты — единый источник для
 хуков и скриптов),
@@ -71,11 +73,12 @@ ui-guard → grounding-evidence → gate-guard (ui-guard отказывает н
 
 ## Матчеры — канон-имена рантайма
 
-`${PYTHON}` и `${PROJECT_ROOT}` в командах — плейсхолдеры; реальные пути подставляет
-`resolve_hook_paths.py` (`deploy-local.sh` запускает его при деплое, см. INSTALL.md §2):
-`${PYTHON}` → `sys.executable` рабочего интерпретатора, `${PROJECT_ROOT}` → абсолютный
-путь проекта. Подстановка кроссплатформенная (важно для Windows/git-bash, где `python3`
-не всегда есть в PATH). Matcher-ы цепочек матчат **канон-имена инструментов рантайма**
+`${PYTHON}` и `${PROJECT_ROOT}` в командах эталона — плейсхолдеры; при установке
+`forge_extension.py build` пишет `hooks/hooks.json` с командами
+`<python> <ext>/hooks/_run_hook.py <ext>/hooks/<хук>.py`: `<python>` — `sys.executable` здорового
+интерпретатора, пути абсолютные, слэши прямые (важно для Windows/git-bash: рантайм режет команду
+POSIX-правилами, backslash съедается). `_run_hook.py` исполняет хук в том же процессе, но только
+если рабочий каталог сессии внутри проекта extension'а; иначе — молча `exit 0`. Matcher-ы цепочек матчат **канон-имена инструментов рантайма**
 (`run_shell_command`/`write_file`/`edit`/`notebook_edit`/`read_file`/`web_fetch`), а не
 Claude-нотацию (`^Bash$`/`Write|Edit`). Рантайм матчит `new RegExp(matcher).test(
 canonicalToolName)` — Claude-имя `Bash` лишь входной алиас, целью матчинга не бывает.
@@ -96,44 +99,37 @@ Write/Edit-цепочка матчит ещё и `mcp__.*`: создание з�
 
 | Каталог | Зачем |
 |---|---|
-| исходный репо `forge/` (родитель `hooks/`) | **source-of-truth**: `hooks/` + `skills/` + `commands/` + манифест; отсюда `deploy.sh` копирует в проект |
-| `<project>/.gigacode/` | куда развёрнут харнес: co-located `hooks/` + `skills/` + `commands/` + сгенерированный `settings.json` — боевой каталог рантайма |
-| `~/.gigacode/skills/`, `~/.gigacode/hooks/`, `~/.qwen/extensions/forge` | остатки ПРЕЖНЕЙ extension-раскладки, если остались на машине; ПЕРЕКРЫВАЮТ project-деплой и ломают проводку; снимаются `cleanup-legacy.sh` |
+| исходный репо `forge/` (родитель `hooks/`) | **source-of-truth**: `hooks/` + `skills/` + `commands/` + профили; отсюда `install.sh` собирает поставку |
+| `<project>/.gigacode/extensions/<forge\|forge-ui>/` | установленный extension: манифест, `hooks/` + `hooks/hooks.json`, `skills/`, `commands/` — каталог целиком форжевый |
+| `~/.gigacode/extensions/<forge-…-хеш>/` | только ссылка рантайма на каталог выше (`{type: link, source}`) |
+| `<project>/.gigacode/{hooks,skills,commands}` + `settings.json`, `~/.gigacode/skills\|hooks` | старые раскладки; ПЕРЕКРЫВАЮТ extension (project > extension) и задваивают хуки; в проекте снимает `install.sh`, на user-уровне — `cleanup-legacy.sh` |
 
 > Гейты вызываются по `<hooks>/../skills/...` → рядом с `hooks/` должны лежать `skills/`.
-> В project-модели это выполнено по построению: оба каталога в `<project>/.gigacode/`.
-> Привязки к домашнему `~/.gigacode` нет — никакой зависимости от user-уровня.
+> В extension'е это выполнено по построению: оба каталога в `<project>/.gigacode/extensions/<kind>/`.
 
 ## Подключение — одной командой
 
 ```bash
-bash deploy.sh /path/to/target-project
+bash install.sh forge    /path/to/back-repo
+bash install.sh forge-ui /path/to/front-repo
 ```
 
-`deploy.sh` делает: копирует `hooks/` + `skills/` + `commands/` co-located в
-`<project>/.gigacode/`, удаляет `__pycache__`/`.DS_Store`/локальный `config.json` и
-хуки-сироты (были в старом деплое, но нет в исходнике), кладёт `deploy-local.sh` и доки,
-запускает его для генерации `<project>/.gigacode/settings.json` из `settings.hooks.json`
-(подставляет `${PROJECT_ROOT}` и `${PYTHON}`), прогоняет `preflight.py` (advisory).
-Подробнее — INSTALL.md §2.
+`install.sh` снимает старую раскладку (если была), собирает поставку по профилю и подменяет ею
+каталог extension'а целиком, пишет манифест и `hooks/hooks.json` (`forge_extension.py build`),
+ставит ссылку и включает extension только для этого workspace (`forge_extension.py link`; с другими
+forge-проектами машины — взаимно выключен), кладёт блок в `.gitignore`, прогоняет `preflight.py`
+(advisory). Подробнее — INSTALL.md §1.
 
-Снять — `bash uninstall.sh /path/to/target-project` (зеркало `deploy.sh`).
-
-Снять остатки прежней extension-раскладки (`~/.gigacode/skills/`, `~/.gigacode/hooks/`,
-блок hooks в `settings.json`), если они остались после миграции —
-`bash cleanup-legacy.sh /path/to/target-project --apply` (по умолчанию — только план,
-ничего не меняется). Корп-контур, где писать в `$HOME` или в проект нельзя:
-`--backup-dir /tmp/forge-bak`. Снесённое переезжает в `forge-legacy-backup-<TS>/`
-рядом с базой (или под `--backup-dir`).
+Снять — `bash uninstall.sh forge|forge-ui /path/to/repo` (ссылка в рантайме + каталог extension'а).
+Проект переехал или сменился python — `bash .gigacode/extensions/<kind>/deploy-local.sh`.
 
 > ⚠️ **Не копируй скиллы и хуки вручную по отдельности.** Провальный прогон pprb-kid
-> случился именно так: скиллы залили на проектный уровень, а блок `hooks` в `settings.json`
-> НЕ влили → рантайм стартовал с `[HOOK_REGISTRY] 0 hook entries`, весь control-plane
-> молчал. `deploy.sh` исключает этот класс ошибок: код и проводка едут одним пакетом.
+> случился именно так: скиллы залили на проектный уровень, а проводку хуков НЕ влили →
+> рантайм стартовал с `[HOOK_REGISTRY] 0 hook entries`, весь control-plane молчал.
+> `install.sh` исключает этот класс ошибок: код и проводка (`hooks/hooks.json`) едут одним пакетом.
 >
-> ⚠️ **И не удаляй legacy-`.gigacode/` руками** — зеркальная поломка: файлов нет, а блок
-> `hooks` в `settings.json` остался → рантайм зовёт удалённые скрипты и падает на КАЖДОМ
-> вызове инструмента. Для снятия есть `cleanup-legacy.sh` — он чистит и конфиг.
+> ⚠️ **И не удаляй каталог extension'а руками** — зеркальная поломка: файлов нет, а ссылка в
+> рантайме осталась. Снимай `uninstall.sh` — он снимает и ссылку.
 
 ## ⚠️ ЗАПУСК: gigacode без флагов, из корня проекта
 
@@ -143,8 +139,8 @@ gigacode                               # интерактивно — канон
 
 В gigacode 26.9 флагов `--experimental-hooks` и `-y` нет: сессия с ними не стартует
 (`Unknown arguments`, exit 1). Ранние сборки форка держали хуки за `--experimental-hooks` —
-этот совет из прежних инструкций передавать нельзя. Хуки рантайм читает из
-`<project>/.gigacode/settings.json`, поэтому запуск — из корня проекта. Признак, что хуки не
+этот совет из прежних инструкций передавать нельзя. Хуки рантайм берёт из extension'а, который
+включён только для workspace проекта, поэтому запуск — из корня проекта (или изнутри него). Признак, что хуки не
 загрузились, — `[HOOK_REGISTRY] 0 hook entries` на старте: весь control-plane молчит (это и
 был провал pprb-kid), первым делом — preflight ниже.
 
@@ -157,14 +153,15 @@ Headless (`gigacode "<задача>"`) — отдельный режим: инс
 ## Диагностика ПЕРЕД прогоном (обязательно)
 
 ```bash
-python3 <project>/.gigacode/hooks/preflight.py --project <project>
+python3 <project>/.gigacode/extensions/<kind>/hooks/preflight.py --project <project>
 ```
 
 Проверяет: проводка хуков непустая, все essential-хук-скрипты на месте и **РЕАЛЬНО
-перечислены** в `command`-полях `settings.json` (наличие файла ≠ подключение — кейс
-eval-guard: файл был, в settings — нет, и preflight давал зелёный свет при выключенном
-enforcement), пути не ведут за пределы `<project>/.gigacode/`, **skills co-located**
-рядом с hooks, `risk-policy.json` парсится (иначе `risk_ladder` тихо деградирует до
+перечислены** в `command`-полях `hooks/hooks.json` (наличие файла ≠ подключение — кейс
+eval-guard: файл был, в проводке — нет, и preflight давал зелёный свет при выключенном
+enforcement), пути не ведут за пределы extension'а, манифест собран для этого пути проекта,
+ссылка в рантайме есть, рядом нет старой раскладки (задвоила бы хуки) и второй поставки,
+`risk-policy.json` парсится (иначе `risk_ladder` тихо деградирует до
 allow-all). Advisory прогоняет `skills/feature-pipeline/scripts/doctor.py` (целостность
 пакета, валидность скиллов — frontmatter `name`/`description`, иначе рантайм молча
 скипнет). Ловит «0 hook entries», «skills не рядом», неверные матчеры и чужие пути ДО
@@ -172,8 +169,8 @@ allow-all). Advisory прогоняет `skills/feature-pipeline/scripts/doctor.
 
 Exit-коды:
 - `0` — армирован, можно работать.
-- `1` — ENFORCEMENT OFF (essential-хук не подключён / settings / risk-policy):
-  стоп-и-предупреди; переустанови `deploy.sh`.
+- `1` — ENFORCEMENT OFF (essential-хук не подключён / старая раскладка рядом / risk-policy):
+  стоп-и-предупреди; текст ошибки называет починку (`deploy-local.sh` extension'а или `install.sh`).
 - `2` — `ground/policy.json` не инициализирован (нормальный первый запуск): создай
   конфиг и перезапусти preflight.
 
@@ -208,7 +205,7 @@ Exit-коды:
 **Инертные блоки.** `init_pipeline_config.py` их всё ещё пишет, но **читателей у них нет**
 (проверено grep'ом по дереву) — не опирайся на них как на переключатели:
 - `security.{destructive_blocker,pii_boundary,prompt_guard}` — соответствующие хуки
-  подключаются/отключаются только через `settings.json`, эти флаги не читает никто;
+  подключаются/отключаются только проводкой (`hooks/hooks.json` extension'а), эти флаги не читает никто;
 - `risk.deny_first` — deny-first вшит в `gate-guard`/`risk_ladder`, флагом не управляется;
 - `evidence.threshold` — `risk_ladder.evidence_ok` берёт порог из аргумента по умолчанию;
 - `autonomy.{level,auto_max_risk}` — v1-имена. В v2 потолок авто-прохода живёт в манифесте
@@ -219,10 +216,13 @@ Exit-коды:
 
 ## Выключение / тюнинг
 
-- `"disableAllHooks": true` в `<project>/.gigacode/settings.json` — отключить ВСЁ сразу.
-- Нестабилен один хук — убери его строку из события в `settings.json` (остальные, включая
-  логгер, целы). Чтобы выключить хук во ВСЕХ проектах, закомментируй строку в
-  `settings.hooks.json` и перезапусти `deploy.sh`.
+- `"disableAllHooks": true` в `<project>/.gigacode/settings.json` — отключить ВСЁ сразу (настройка
+  рантайма, действует и на хуки extension'а).
+- Выключить forge в проекте целиком — `gigacode extensions disable --scope workspace <имя>` (имя — в
+  `gigacode-extension.json` extension'а).
+- Нестабилен один хук — убери его строку из события в `hooks/hooks.json` extension'а (переустановка
+  вернёт). Чтобы выключить хук во ВСЕХ установках, убери строку из эталона `settings.hooks.json`
+  в исходнике и переустанови (`update.sh`).
 - Политику рисков менять в `risk-policy.json` без правки кода: да/нет конкретному
   действию определяется regex-паттернами (`destructive_blacklist`, `pii_patterns` и т.д.).
 - Диагностику без запуска пайплайна — `preflight.py` (см. выше).

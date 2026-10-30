@@ -14,7 +14,7 @@ description: >
 # Forgeui — фронт-часть стори: макет → UI-код → проверка против макета
 
 > **Пути.** `<project>` — корень фронт-репо (там `ground/` и `.daiver/`). `<forge>` — корень кода
-> forge-ui: каталог на два уровня выше этого SKILL.md (preflight печатает его в `layout.base`).
+> forge-ui: каталог на два уровня выше этого SKILL.md — `<project>/.gigacode/extensions/forge-ui` (preflight печатает его в `layout.base`).
 > Все команды ниже — `python3 <forge>/...`; не используй `~/.gigacode/...`.
 
 > **Рантайм — форк GigaCode (Qwen). Жёсткие правила:**

@@ -38,6 +38,20 @@ import re
 import sys
 from pathlib import Path
 
+
+def _install_rel() -> str:
+    """Каталог установки forge от корня проекта — для подсказок (см. _project.install_rel)."""
+    try:
+        from _project import install_rel
+        return install_rel()
+    except Exception:  # noqa: BLE001 — подсказка, не enforcement
+        return ".gigacode"
+
+
+def _hooks_wiring() -> str:
+    rel = _install_rel()
+    return f"{rel}/hooks/hooks.json" if rel != ".gigacode" else ".gigacode/settings.json"
+
 # risk_ladder (co-located) — те же резолверы project_root/active_manifest, что у sod/gate-guard.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 # Импорт форж-модулей — fail-CLOSED. Крэш на импорте отдаёт exit 1, а блокировка —
@@ -56,8 +70,8 @@ except Exception as _e:  # pragma: no cover — сломанный бандл/и
         from _failclosed import bundle_denied
     except Exception:
         print(f"[inline-phase-guard] DENY: бандл forge не грузится ({_e}). Проверь интерпретатор в "
-              f".gigacode/settings.json (нужен python 3.9+ с рабочим expat), затем "
-              f"перезапусти: bash .gigacode/deploy-local.sh", file=sys.stderr)
+              f"hooks/hooks.json установки forge (нужен python 3.9+ с рабочим expat), затем "
+              f"перезапусти: bash .gigacode/extensions/<forge|forge-ui>/deploy-local.sh", file=sys.stderr)
         sys.exit(2)
     sys.exit(bundle_denied("inline-phase-guard", _e))
 
@@ -362,7 +376,7 @@ def _actor_signal_note(session_id: str) -> str:
                 "может отличить субагента от оркестратора и блокирует обоих. Если ты СУБАГЕНТ "
                 "— повторный запуск субагента даст тот же отказ (замкнутый цикл, tasks/008): "
                 "остановись и скажи пользователю проверить хук SubagentStart "
-                "(`context-injector` в .gigacode/settings.json, `bash .gigacode/deploy-local.sh "
+                f"(`context-injector` в {_hooks_wiring()}, `bash {_install_rel()}/deploy-local.sh "
                 "--check`) и наличие `session_id` в его payload'е.")
     except Exception:
         return ""

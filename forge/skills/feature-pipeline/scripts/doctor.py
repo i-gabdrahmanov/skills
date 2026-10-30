@@ -117,7 +117,10 @@ def run_checks(project_root: Path | None = None) -> dict:
         cp = _load(SCRIPTS / "check_paths.py", "cp_doctor")
         cfg = cp.find_skill_paths_json(project_root)
         if cfg.exists():
-            prof = project_root / ".gigacode" / ".forge-profile"
+            # профиль поставки: в extension'е — рядом с кодом, в старой раскладке — в .gigacode/
+            prof = SCRIPTS.parents[2] / ".forge-profile"
+            if not prof.is_file():
+                prof = project_root / ".gigacode" / ".forge-profile"
             try:
                 profile_text = prof.read_text(encoding="utf-8") if prof.is_file() else None
             except OSError:

@@ -24,7 +24,7 @@
 | D3 | **Одна команда** `/forge` на репо, во фронте **4 шага** = 4 решения человека: `ui-spec` → `ui-design` → `ui-build` → `ui-verify` | восемь шагов и отдельная команда — «слишком много» (пользователь); под-этапы daiver (track/resolve/plan) живут внутри `ui-design` |
 | D4 | Фронт-спека — `docs/feature-pipeline/<KEY>/ui-spec.md` в разделах парсера спек daiver (Кадры, Данные, Состояния, События, Валидации, Сценарии) | один документ для ревьюера и движка; кадры → вход `ui-design`, сценарии → e2e |
 | D5 | Связь частей стори — ключ Jira и поля шапки: `**Фронт-часть:**` в `sdd.md`, `**Бэк-часть:**` в `ui-spec.md`; «нет» пишется явно, гейты требуют поле | отсутствие поля ≠ «нет»; шов — API (`sdd.md` §5 ↔ «Данные» ui-spec) |
-| D6 | Пакет в формате GigaCode-extension внутри проекта (`<repo>/.gigacode/extensions/forge-ui/`) — **под пробой**; сейчас установка project-моделью | в qwen-code 0.21.14 `ExtensionManager` читает только `~/.qwen/extensions`, `loadExtensionsFromDir` нигде не вызывается — см. «Проба» |
+| D6 | Пакет — GigaCode-extension внутри проекта (`<repo>/.gigacode/extensions/forge-ui/`), подключённый к рантайму ССЫЛКОЙ (`gigacode extensions link`), включение — только для workspace; forge — такой же отдельный extension в бэк-репо, установки раздельные (`install.sh forge\|forge-ui`, FORGE.md [BR-22], 2026-10-30) | рантайм (qwen-code 0.21.14 и 0.22.2) читает extensions только из `~/.gigacode/extensions`, `loadExtensionsFromDir` нигде не вызывается, поэтому прежняя проба «extension в каталоге проекта» отменена: link кладёт в домашний каталог только запись с путём источника, файлы остаются в проекте (shell к ним разрешён) |
 | D7 | Из daiver **не переносим**: телеметрию §17, `daiver_sdd_integrate`, инструмент `daiver_plan_sign`, parity QG-X, Vue/Svelte код-гейт | forge снял логи (2026-08-04); хост — сам forge-ui; подпись — согласие человека; эталона нет |
 | D8 | Подпись плана — согласие `ui-plan-<KEY>` (цитата, `--bind-file` на lock плана); стоп verify с дефектами — `ui-accept-<KEY>`; правило в карту — `ui-map-<KEY>` | все три в `forge_events.CONSENT_PREFIXES`: модель не вправе выписать их себе сама |
 | D9 | Автономный прогон без подписанного плана — `blocked: plan-unsigned`, а не «confirmPlan logged» | модель согласий forge строже daiver |
@@ -67,17 +67,14 @@
   даже если они из макета; фронтовый прод-код не поднят до R2; `BUILD_CMD_RE` не знает npm/npx/tsc/vite~~ —
   сделано (задача 3.4): `.daiver/` охраняется, мок-данные макета проходят дословно из канона, `.tsx/.jsx/.vue/.svelte` —
   R2, сборка фронта видна ролям SoD, продуктивные инструменты шага не вызывает главный агент (`phase_tools`).
-- Установка extension-раскладкой — после пробы (D6).
+- ~~Установка extension-раскладкой — после пробы (D6)~~ — сделано 2026-10-30: `install.sh forge-ui` (D6).
 
-## Проба: грузит ли GigaCode extension из каталога проекта
+## Установка (D6)
 
-Файлы — `forge-ui/probe/`. На корп-машине, в любом репо:
-1. скопировать `forge-ui/probe/` в `<repo>/.gigacode/extensions/forge-ui-probe/`;
-2. запустить `gigacode` из корня репо и набрать `/forge-ui-probe` (или посмотреть список
-   extensions);
-3. команда есть → **ставим forge-ui extension'ом в проект** (сборщик пакета — следующий шаг);
-   нет → остаёмся на project-модели (`deploy.sh --profile ui`), она уже работает.
-Пробу снять — удалить каталог `forge-ui-probe`.
+`bash install.sh forge-ui <repo>` → `<repo>/.gigacode/extensions/forge-ui/` + ссылка в рантайме (INSTALL.md).
+Прежняя проба (`forge-ui/probe/`: грузит ли GigaCode extension из каталога проекта) снята: установка
+через ссылку от ответа на неё не зависит. Не проверено на GigaCode: `extensions link` и
+`--scope workspace` форка (на стоковом qwen 0.22.2 — работают) — задача X.4.
 
 ## Этапы дальше
 

@@ -89,8 +89,8 @@ description: >
 python3 <forge>/hooks/preflight.py --project .
 ```
 > **`<forge>` — корень кода форжа: каталог на два уровня выше этого SKILL.md**
-> (`<forge>/skills/feature-pipeline/SKILL.md`). Раскладка одна:
-> `<project>/.gigacode` (развёртывается через `bash deploy.sh <project>`; см. INSTALL.md).
+> (`<forge>/skills/feature-pipeline/SKILL.md`). Раскладка одна — extension в проекте:
+> `<project>/.gigacode/extensions/forge` (ставится `bash install.sh forge <project>`; см. INSTALL.md).
 > **preflight сам сообщает его в `layout.base`** — дальше по этому SKILL.md любой путь вида
 > `<project>/.gigacode/skills/...` читай как `<forge>/skills/...` (данные — `ground/`, `docs/` —
 > всегда в проекте, они от раскладки не зависят).
@@ -99,11 +99,11 @@ python3 <forge>/hooks/preflight.py --project .
   `ground/policy.json not found`/`incomplete`). Это нормальный первый запуск.
   Инициализируй конфиг (§0.1) и **обязательно перезапусти preflight** — он должен стать **exit 0**
   до первого субагента.
-- **exit 1** — посмотри `errors`. Это **ENFORCEMENT OFF**: `settings.json` / `hooks block empty` /
-  `essential hook НЕ подключён` / `resolve_hook_paths` / битый
+- **exit 1** — посмотри `errors`. Это **ENFORCEMENT OFF**: `hooks/hooks.json` / `hooks block empty` /
+  `essential hook НЕ подключён` / старая раскладка рядом / битый
   `policy.json` — хуки реально не срабатывают. **Остановись и предупреди пользователя**:
-  деплой не поднят — `bash deploy.sh <project>` (см. INSTALL.md) +
-  `python3 <project>/.gigacode/hooks/preflight.py --project <project>`.
+  установка не поднята — `bash .gigacode/deploy-local.sh` или из клона forge `bash install.sh forge
+  <project>` (INSTALL.md), затем `python3 <project>/.gigacode/hooks/preflight.py --project <project>`.
   Дальше только после подтверждения, что харнес поднят.
 
 > **ЖЁСТКИЙ ГЕЙТ АРМИНГА.** Не вызывай **ни одного `agent()`**, пока `preflight.py` не вернул

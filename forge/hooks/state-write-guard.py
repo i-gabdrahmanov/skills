@@ -213,7 +213,8 @@ _CP_LIVE_RE = re.compile(
 # прогон, PATH-6/7) — «начать заново» модель может и без умысла. Только для удаления/переноса,
 # не для записи: файлы внутри этих каталогов разбирают паттерны выше.
 _CP_CONTAINER_RE = re.compile(
-    r"(?<![\w-])(?:ground(?:/statements(?:/[^/]+){0,2})?|\.gigacode(?:/(?:hooks|skills))?)"
+    r"(?<![\w-])(?:ground(?:/statements(?:/[^/]+){0,2})?"
+    r"|\.gigacode(?:/(?:hooks|skills|extensions(?:/forge(?:-ui)?(?:/(?:hooks|skills))?)?))?)"
     r"(?:/\*)?/?$", re.IGNORECASE)
 
 
@@ -318,7 +319,7 @@ except Exception as _e:  # pragma: no cover — сломанный бандл
         from _failclosed import bundle_denied
     except Exception:
         print(f"[state-write-guard] DENY: бандл forge не грузится ({_e}). Перезапусти: "
-              f"bash .gigacode/deploy-local.sh", file=sys.stderr)
+              f"bash .gigacode/extensions/<forge|forge-ui>/deploy-local.sh", file=sys.stderr)
         sys.exit(2)
     sys.exit(bundle_denied("state-write-guard", _e))
 
@@ -346,6 +347,8 @@ _CP_SAMPLES = (
     "ground/policy.json", "ground/pipeline.json", "ground/feature-gates.json",
     "ground/approvals.jsonl", "ground/inventory/grounding-excerpt.json",
     ".gigacode/hooks/gate-guard.py", ".gigacode/hooks/risk-policy.json",
+    ".gigacode/extensions/forge/hooks/gate-guard.py", ".gigacode/extensions/forge-ui/hooks/gate-guard.py",
+    ".gigacode/extensions/forge/hooks/hooks.json", ".gigacode/extensions/forge-ui/hooks/hooks.json",
 )
 # То же для `.daiver/` — сверяются, только если в проекте есть `.daiver/` (иначе `find . -name '*.png' -delete`
 # в бэк-репо ловился бы по файлам, которых там нет и быть не может).

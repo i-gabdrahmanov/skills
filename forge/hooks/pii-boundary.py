@@ -44,8 +44,8 @@ except Exception as _e:  # pragma: no cover — сломанный бандл/и
         from _failclosed import bundle_denied
     except Exception:
         print(f"[pii-boundary] DENY: бандл forge не грузится ({_e}). Проверь интерпретатор в "
-              f".gigacode/settings.json (нужен python 3.9+ с рабочим expat), затем "
-              f"перезапусти: bash .gigacode/deploy-local.sh", file=sys.stderr)
+              f"hooks/hooks.json установки forge (нужен python 3.9+ с рабочим expat), затем "
+              f"перезапусти: bash .gigacode/extensions/<forge|forge-ui>/deploy-local.sh", file=sys.stderr)
         sys.exit(2)
     sys.exit(bundle_denied("pii-boundary", _e))
 

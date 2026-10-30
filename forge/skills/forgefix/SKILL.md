@@ -87,8 +87,8 @@ commit/push/PR/отчёт в Jira делает пользователь сам.
 ```
 python3 <forge>/hooks/preflight.py --project <toplevel>
 ```
-> **`<forge>` — корень кода форжа: каталог на два уровня выше этого SKILL.md** (`<project>/.gigacode`
-> при развёртывании через `deploy.sh`; см. INSTALL.md). preflight печатает его в `layout.base`;
+> **`<forge>` — корень кода форжа: каталог на два уровня выше этого SKILL.md**
+> (`<project>/.gigacode/extensions/forge`, ставит `install.sh forge`; см. INSTALL.md). preflight печатает его в `layout.base`;
 > ниже любой путь `<project>/.gigacode/skills/...` читай как `<forge>/skills/...`.
 
 exit 0 — продолжаем; exit 1 — стоп, чинить деплой/установку. **exit 2 — конфиг не инициализирован**

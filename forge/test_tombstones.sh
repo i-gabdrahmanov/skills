@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 #
-# test_tombstones.sh — снятое из репо не переживает апгрейд, а операторское переживает.
+# test_tombstones.sh — снятое из репо не переживает обновление, а операторское переживает.
 #
-# Прецедент. Ветка lite снята из репо в 60ae8cc, но в установках пережила и мягкий деплой,
-# и `update.sh --force`: uninstall определял владение как «запись есть в исходном репо», а у
-# УДАЛЁННОГО скилла её там по определению нет → он классифицировался как самописный скилл
-# оператора и берёгся. Осиротевший /forge-lite остался достижимым, его SKILL.md предписывал
-# `set inputs.mode lite`, и актуальный резолвер отвечал `unknown inputs.mode='lite'` → rc 3
-# на резолве каждой фазы. Пользователь на свежей версии получал «баг resolve_phases».
+# Прецедент. Ветка lite снята из репо в 60ae8cc, но в установках старой раскладки пережила и
+# мягкий деплой, и `update.sh --force`: владение определялось как «запись есть в исходном репо»,
+# а у УДАЛЁННОГО скилла её там по определению нет → он считался самописным и берёгся. Осиротевший
+# /forge-lite оставался достижимым, и резолвер отвечал `unknown inputs.mode='lite'` на каждой фазе.
 #
-# Тест гоняет НАСТОЯЩИЕ deploy.sh/uninstall.sh на копии репо, а не библиотеку в вакууме:
-# дыра была именно в проводке предиката, а не в его арифметике.
+# Сейчас два режима:
+#   • extension (.gigacode/extensions/<kind>/) — каталог целиком форжевый, install подменяет его
+#     целиком: удалённое из репо уходит само, без реестра;
+#   • миграция старой раскладки (co-located .gigacode/{skills,hooks,commands}) — снимается по
+#     исходнику + реестру .forge-deployed + tombstones.txt, операторское рядом остаётся.
 #
-# Запускается через skills/run_all_tests.py --skill root.
+# Тест гоняет НАСТОЯЩИЕ install.sh/uninstall.sh на копии репо: дыры были в проводке, а не в
+# арифметике предиката. Запускается через skills/run_all_tests.py --skill root.
 # Usage: bash test_tombstones.sh
 set -uo pipefail
 
@@ -26,151 +28,94 @@ bad() { echo "  FAIL $1: $2"; fail=$((fail + 1)); }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# Копия репо как исходник (сам репо править нельзя) + пустой таргет.
 SRC="$TMP/forge"
 TGT="$TMP/project"
 mkdir -p "$TGT"
 cp -a "$DIR" "$SRC"
 rm -rf "$SRC/.git"
 GIG="$TGT/.gigacode"
+EXT="$GIG/extensions/forge"
 
-# Временный «форж-скилл» и «форж-команда», которые мы потом удалим из исходника,
-# плюс операторское, которого в исходнике нет никогда.
 mkdir -p "$SRC/skills/zzz-temp"
 echo "temp skill" > "$SRC/skills/zzz-temp/SKILL.md"
 echo "temp command" > "$SRC/commands/zzz-temp.md"
 echo "# temp hook" > "$SRC/hooks/zzz-temp-hook.py"
 
-run_deploy() { bash "$SRC/deploy.sh" "$TGT" >/dev/null 2>&1; }
+run_install() { bash "$SRC/install.sh" forge "$TGT" --no-link >/dev/null 2>&1; }
 
-# ── 1. первый деплой: временное встало, реестр записан ────────────────────────
-run_deploy
-mkdir -p "$GIG/skills/my-own"                       # операторское — ПОСЛЕ деплоя
+# ── 1. extension: временное встало ─────────────────────────────────────────────
+run_install
+mkdir -p "$GIG/skills/my-own" "$GIG/commands"           # своё оператора — в co-located каталогах
 echo "operator skill" > "$GIG/skills/my-own/SKILL.md"
 echo "operator command" > "$GIG/commands/my-own.md"
-echo "# operator hook" > "$GIG/hooks/my-hook.py"       # самописный хук рядом с форж-хуками
-
-if [ -d "$GIG/skills/zzz-temp" ] && [ -f "$GIG/commands/zzz-temp.md" ]; then
-  ok "первый деплой поставил временный скилл и команду"
+if [ -d "$EXT/skills/zzz-temp" ] && [ -f "$EXT/commands/zzz-temp.md" ] && [ -f "$EXT/hooks/zzz-temp-hook.py" ]; then
+  ok "установка положила временные скилл, команду и хук в extension"
 else
-  bad "первый деплой" "zzz-temp не встал"
+  bad "установка" "zzz-temp не встал в $EXT"
 fi
 
-if [ -f "$GIG/.forge-deployed" ] && grep -Fxq "skills/zzz-temp" "$GIG/.forge-deployed"; then
-  ok "реестр установки записан и содержит положенное"
-else
-  bad "реестр установки" "нет .forge-deployed или в нём нет skills/zzz-temp"
-fi
-
-if grep -Fxq "skills/my-own" "$GIG/.forge-deployed" 2>/dev/null; then
-  bad "реестр установки" "операторский my-own попал в реестр форжа"
-else
-  ok "операторское в реестр не попало"
-fi
-
-# ── 2. удаляем из исходника → повторный деплой обязан снять сироту ────────────
+# ── 2. удалили из исходника → переустановка снимает, конфиг и операторское целы ─
 rm -rf "$SRC/skills/zzz-temp" "$SRC/commands/zzz-temp.md" "$SRC/hooks/zzz-temp-hook.py"
-# Конфиг оператора minor-defect-fix — соответствие проект→спека с путями этой машины.
-printf '{\n  "projects": {"/work/proj": "docs/specs/orders.md"}\n}\n' \
-  > "$GIG/skills/minor-defect-fix/config.json"
-run_deploy
-
-if grep -q '/work/proj' "$GIG/skills/minor-defect-fix/config.json" 2>/dev/null; then
-  ok "редеплой сохранил конфиг оператора minor-defect-fix"
+printf '{\n  "projects": {"/work/proj": "docs/specs/orders.md"}\n}\n' > "$EXT/skills/minor-defect-fix/config.json"
+run_install
+if [ ! -e "$EXT/skills/zzz-temp" ] && [ ! -e "$EXT/commands/zzz-temp.md" ] && [ ! -e "$EXT/hooks/zzz-temp-hook.py" ]; then
+  ok "удалённое из репо снято переустановкой (каталог extension'а подменён целиком)"
 else
-  bad "конфиг оператора" "deploy обнулил minor-defect-fix/config.json (боевой прогон v0.4.6, A-F1)"
+  bad "переустановка" "zzz-temp пережил переустановку"
 fi
-
-if [ ! -e "$GIG/skills/zzz-temp" ]; then
-  ok "скилл, удалённый из репо, снят при апгрейде"
+if grep -q '/work/proj' "$EXT/skills/minor-defect-fix/config.json" 2>/dev/null; then
+  ok "переустановка сохранила конфиг оператора minor-defect-fix"
 else
-  bad "надгробие skills/" "zzz-temp пережил повторный деплой"
+  bad "конфиг оператора" "install обнулил minor-defect-fix/config.json (боевой прогон v0.4.6, A-F1)"
 fi
-
-if [ ! -e "$GIG/commands/zzz-temp.md" ]; then
-  ok "команда, удалённая из репо, снята при апгрейде"
-else
-  bad "надгробие commands/" "zzz-temp.md пережила повторный деплой"
-fi
-
 if [ -f "$GIG/skills/my-own/SKILL.md" ] && [ -f "$GIG/commands/my-own.md" ]; then
-  ok "операторское пережило апгрейд (снимаем своё, не всё лишнее)"
+  ok "операторское в .gigacode/{skills,commands} пережило переустановку"
 else
-  bad "операторское" "my-own снесён апгрейдом — регресс инцидента с rm -rf"
+  bad "операторское" "my-own снесён установкой"
 fi
 
-# Хук оператора: прунинг hooks/ раньше сносил ЛЮБОЙ top-level *.py/*.sh, которого нет в
-# исходнике, — включая самописный. Та же ошибка, что со скиллами, только с обратным знаком.
-if [ -f "$GIG/hooks/my-hook.py" ]; then
-  ok "самописный хук оператора пережил апгрейд"
-else
-  bad "операторский хук" "hooks/my-hook.py снесён прунингом — потеря данных"
-fi
-
-# И при этом форж-свой хук, удалённый из исходника, всё-таки снимается.
-if [ ! -e "$GIG/hooks/zzz-temp-hook.py" ]; then
-  ok "хук, удалённый из репо, снят при апгрейде"
-else
-  bad "надгробие hooks/" "zzz-temp-hook.py пережил повторный деплой"
-fi
-
-if ! grep -Fxq "skills/zzz-temp" "$GIG/.forge-deployed"; then
-  ok "реестр переписан под актуальный исходник"
-else
-  bad "реестр" "zzz-temp остался в реестре после удаления из исходника"
-fi
-
-# ── 3. bootstrap-список: работает БЕЗ реестра (установки старше механизма) ────
-rm -f "$GIG/.forge-deployed"
-mkdir -p "$GIG/skills/forgelite"
+# ── 3. миграция без реестра: tombstones.txt снимает снятую ветку ───────────────
+bash "$SRC/uninstall.sh" forge "$TGT" --no-link >/dev/null 2>&1
+mkdir -p "$GIG/hooks" "$GIG/skills/forgelite"
+cp "$SRC/hooks/gate-guard.py" "$GIG/hooks/gate-guard.py"     # признак старой раскладки
+echo "# operator hook" > "$GIG/hooks/my-hook.py"
 echo "снятая ветка" > "$GIG/skills/forgelite/SKILL.md"
 echo "снятая команда" > "$GIG/commands/forge-lite.md"
-run_deploy
-
+run_install
 if [ ! -e "$GIG/skills/forgelite" ] && [ ! -e "$GIG/commands/forge-lite.md" ]; then
-  ok "tombstones.txt снимает снятую ветку в установке без реестра"
+  ok "tombstones.txt снимает снятую ветку старой раскладки без реестра"
 else
-  bad "tombstones.txt" "forgelite пережил деплой при отсутствии реестра"
+  bad "tombstones.txt" "forgelite пережил миграцию"
+fi
+if [ ! -e "$GIG/hooks/gate-guard.py" ] && [ -f "$GIG/hooks/my-hook.py" ]; then
+  ok "форж-хук старой раскладки снят, самописный хук оператора остался"
+else
+  bad "миграция hooks/" "gate-guard.py остался или my-hook.py снесён"
 fi
 
-# ── 4. надгробие не трогает то, что в исходнике ЖИВО ──────────────────────────
-# Страховка от опечатки в tombstones.txt: живая запись игнорируется.
-echo "commands/forge.md" >> "$SRC/tombstones.txt"
-run_deploy
-if [ -f "$GIG/commands/forge.md" ]; then
-  ok "живая в исходнике запись из tombstones.txt проигнорирована"
+# ── 4. миграция по реестру: снятое, известное только реестру, уходит ───────────
+bash "$SRC/uninstall.sh" forge "$TGT" --no-link >/dev/null 2>&1
+mkdir -p "$GIG/skills/zzz-old"
+echo "старый форж-скилл" > "$GIG/skills/zzz-old/SKILL.md"
+printf '# forge deploy manifest v1\nskills/zzz-old\nskills/feature-pipeline\n' > "$GIG/.forge-deployed"
+run_install
+if [ ! -e "$GIG/skills/zzz-old" ] && [ ! -e "$GIG/.forge-deployed" ]; then
+  ok "скилл, известный только реестру старой установки, снят вместе с реестром"
 else
-  bad "страховка" "forge.md снесён, хотя есть в исходнике"
+  bad "миграция по реестру" "zzz-old или .forge-deployed пережили миграцию"
 fi
-sed -i.bak '$d' "$SRC/tombstones.txt" && rm -f "$SRC/tombstones.txt.bak"
-
-# ── 5. uninstall: снимает форж-своё по реестру, операторское оставляет ────────
-# Возвращаем временный скилл в исходник и деплоим, чтобы реестр его содержал; потом убираем
-# из исходника — на момент uninstall он ЕСТЬ только в реестре. Ровно тот случай, который
-# прежний предикат не снимал.
-mkdir -p "$SRC/skills/zzz-temp"
-echo "temp skill" > "$SRC/skills/zzz-temp/SKILL.md"
-run_deploy
-rm -rf "$SRC/skills/zzz-temp"
-
-bash "$SRC/uninstall.sh" "$TGT" >/dev/null 2>&1
-
-if [ ! -e "$GIG/skills/zzz-temp" ]; then
-  ok "uninstall снял скилл, известный только по реестру"
-else
-  bad "uninstall по реестру" "zzz-temp пережил uninstall"
-fi
-
 if [ -f "$GIG/skills/my-own/SKILL.md" ] && [ -f "$GIG/commands/my-own.md" ]; then
-  ok "uninstall оставил операторское"
+  ok "миграция оставила операторское"
 else
-  bad "uninstall" "снесено операторское — регресс инцидента"
+  bad "миграция" "снесено операторское — регресс инцидента с rm -rf"
 fi
 
-if [ ! -e "$GIG/.forge-deployed" ]; then
-  ok "uninstall снял и сам реестр"
+# ── 5. uninstall: extension целиком, операторское — на месте ───────────────────
+bash "$SRC/uninstall.sh" forge "$TGT" --no-link >/dev/null 2>&1
+if [ ! -e "$EXT" ] && [ -f "$GIG/skills/my-own/SKILL.md" ]; then
+  ok "uninstall снял extension и оставил операторское"
 else
-  bad "uninstall" ".forge-deployed остался в таргете"
+  bad "uninstall" "extension остался или операторское снесено"
 fi
 
 echo

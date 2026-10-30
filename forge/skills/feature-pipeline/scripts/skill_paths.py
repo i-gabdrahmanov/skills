@@ -112,7 +112,7 @@ def _bundle_path(rel: str) -> Optional[Path]:
         if r.startswith(prefix):
             r = r[len(prefix):]
             break
-    if not r.startswith(("skills/", "hooks/", "references/", "commands/")):
+    if r.rstrip("/").split("/", 1)[0] not in ("skills", "hooks", "references", "commands"):
         return None
     try:
         return code_base() / r

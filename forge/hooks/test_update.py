@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""test_update.py — e2e update.sh поверх deploy.sh на временном проекте.
+"""test_update.py — e2e update.sh поверх install.sh на временном проекте.
 
-update.sh оркеструет git pull + deploy (мягко) либо git pull + uninstall + deploy (--force).
-Тесты гоняют ТОЛЬКО --no-pull: настоящий git pull трогал бы состояние реального репо. Фиксируем
-контракт: после обновления форж-обвязка на месте (харнес вооружён), а данные оператора
-(самописные скиллы, ground/, permissions) целы — в обоих режимах.
+update.sh — git pull + install.sh (по --force сначала uninstall.sh). Тесты гоняют ТОЛЬКО --no-pull
+(настоящий git pull трогал бы реальный репо) и --no-link (рантайм не трогаем). Контракт: после
+обновления extension на месте и подключён (hooks/hooks.json), данные оператора целы, поставка
+определяется сама — по каталогу extension'а, а у старой раскладки — по её профилю (и мигрирует).
 """
 from __future__ import annotations
 
@@ -15,8 +15,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import test_uninstall as TU
+
 REPO = Path(__file__).resolve().parents[1]
-DEPLOY = REPO / "deploy.sh"
+INSTALL = REPO / "install.sh"
 UPDATE = REPO / "update.sh"
 
 _BASH = shutil.which("bash")
@@ -28,79 +30,65 @@ class UpdateRoundTrip(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.proj = Path(self._tmp.name)
         self.gig = self.proj / ".gigacode"
-        self.settings = self.gig / "settings.json"
-        self.assertEqual(self._sh(DEPLOY, str(self.proj)).returncode, 0, "deploy.sh упал")
-        # оператор дописал своё поверх деплоя
-        self.my_skill = self.gig / "skills" / "my-own-skill"
-        self.my_skill.mkdir(parents=True)
-        (self.my_skill / "SKILL.md").write_text("мой скилл", encoding="utf-8")
-        s = json.loads(self.settings.read_text(encoding="utf-8"))
-        s["permissions"] = {"allow": ["Bash(ls:*)"]}
-        self.settings.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
-        self.state = self.proj / "ground" / "statements" / "demo"
-        self.state.mkdir(parents=True)
-        (self.state / "manifest.json").write_text("{}", encoding="utf-8")
 
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _sh(self, script: Path, *args: str):
-        return subprocess.run([_BASH, str(script), *args],
-                              capture_output=True, text=True, timeout=180)
+    def armed(self, kind: str):
+        ext = self.gig / "extensions" / kind
+        hooks = json.loads((ext / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+        names = [h.get("name") for groups in hooks.values() for g in groups for h in g.get("hooks", [])]
+        self.assertIn("gate-guard", names, "после update харнес обязан быть подключён")
+        return ext
 
-    def _hook_names(self):
-        s = json.loads(self.settings.read_text(encoding="utf-8"))
-        return [h.get("name") for groups in s.get("hooks", {}).values()
-                for g in groups for h in g.get("hooks", [])]
+    def operator(self):
+        own = self.gig / "skills" / "my-own-skill" / "SKILL.md"
+        own.parent.mkdir(parents=True, exist_ok=True)
+        own.write_text("мой скилл", encoding="utf-8")
+        state = self.proj / "ground" / "statements" / "demo" / "manifest.json"
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text("{}", encoding="utf-8")
+        return own, state
 
-    def _assert_forge_armed_and_operator_intact(self):
-        self.assertIn("gate-guard", self._hook_names(), "после update харнес обязан быть вооружён")
-        self.assertTrue((self.gig / "skills" / "feature-pipeline").is_dir(), "форж-скилл должен стоять")
-        self.assertTrue((self.gig / "commands" / "forge-fix.md").exists(), "команда /forge-fix должна стоять")
-        self.assertTrue((self.my_skill / "SKILL.md").exists(), "самописный скилл оператора снесён — недопустимо")
-        self.assertTrue((self.state / "manifest.json").exists(), "ground/ трогать нельзя")
-        s = json.loads(self.settings.read_text(encoding="utf-8"))
-        self.assertEqual(s["permissions"], {"allow": ["Bash(ls:*)"]}, "чужие секции settings.json целы")
+    def test_soft_and_force_update_rearm_and_keep_operator(self):
+        self.assertEqual(TU.sh(INSTALL, "forge-ui", str(self.proj), "--no-link").returncode, 0)
+        own, state = self.operator()
+        for extra in ((), ("--force",)):
+            r = TU.sh(UPDATE, str(self.proj), "--no-pull", "--no-link", *extra)
+            self.assertEqual(r.returncode, 0, f"{r.stdout}{r.stderr}")
+            self.assertIn("update forge-ui", r.stdout, "поставка определилась по каталогу extension'а")
+            ext = self.armed("forge-ui")
+            self.assertTrue((ext / "skills" / "forgeui" / "SKILL.md").is_file())
+            self.assertTrue(own.exists(), "самописный скилл оператора снесён — недопустимо")
+            self.assertTrue(state.exists(), "ground/ трогать нельзя")
 
-    def test_soft_update_rearms_and_keeps_operator(self):
-        r = self._sh(UPDATE, str(self.proj), "--no-pull")
+    def test_update_migrates_a_legacy_install_by_its_profile(self):
+        TU.make_legacy(self.proj)
+        r = TU.sh(UPDATE, str(self.proj), "--no-pull", "--no-link")
         self.assertEqual(r.returncode, 0, f"{r.stdout}{r.stderr}")
-        self._assert_forge_armed_and_operator_intact()
-
-    def test_force_update_rearms_and_keeps_operator(self):
-        r = self._sh(UPDATE, str(self.proj), "--force", "--no-pull")
-        self.assertEqual(r.returncode, 0, f"{r.stdout}{r.stderr}")
-        self._assert_forge_armed_and_operator_intact()
+        self.armed("forge")
+        self.assertFalse((self.gig / "hooks" / "gate-guard.py").exists(), "старая раскладка снята")
 
     def test_dry_run_changes_nothing(self):
-        before = self.settings.read_text(encoding="utf-8")
-        r = self._sh(UPDATE, str(self.proj), "--force", "--dry-run")
+        self.assertEqual(TU.sh(INSTALL, "forge", str(self.proj), "--no-link").returncode, 0)
+        before = (self.gig / "extensions" / "forge" / "hooks" / "hooks.json").read_text(encoding="utf-8")
+        r = TU.sh(UPDATE, str(self.proj), "--force", "--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("DRY-RUN", r.stdout)
-        self.assertEqual(self.settings.read_text(encoding="utf-8"), before, "--dry-run не должен писать")
+        self.assertEqual((self.gig / "extensions" / "forge" / "hooks" / "hooks.json").read_text(encoding="utf-8"),
+                         before)
 
 
 @unittest.skipIf(_BASH is None, "нет bash в PATH")
 class UpdateArgs(unittest.TestCase):
-    def _sh(self, *args: str):
-        return subprocess.run([_BASH, str(UPDATE), *args],
-                              capture_output=True, text=True, timeout=60)
-
-    def test_no_target_exits_2(self):
-        r = self._sh()
+    def test_args(self):
+        r = TU.sh(UPDATE)
         self.assertEqual(r.returncode, 2)
-        self.assertIn("не указана целевая папка", r.stderr)
-
-    def test_missing_target_exits_2(self):
-        self.assertEqual(self._sh("/nonexistent/zzz").returncode, 2)
-
-    def test_self_target_refused(self):
-        r = self._sh(str(REPO))
-        self.assertEqual(r.returncode, 2)
-
-    def test_unknown_flag_exits_2(self):
+        self.assertIn("не указана папка проекта", r.stderr)
+        self.assertEqual(TU.sh(UPDATE, "/nonexistent/zzz").returncode, 2)
+        self.assertEqual(TU.sh(UPDATE, str(REPO)).returncode, 2)
         with tempfile.TemporaryDirectory() as td:
-            self.assertEqual(self._sh(td, "--wat").returncode, 2)
+            self.assertEqual(TU.sh(UPDATE, td, "--wat").returncode, 2)
 
 
 if __name__ == "__main__":

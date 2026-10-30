@@ -83,8 +83,8 @@ description: >
 ```
 python3 <forge>/hooks/preflight.py --project <toplevel>
 ```
-> **`<forge>` — корень кода форжа: каталог на два уровня выше этого SKILL.md** (`<project>/.gigacode`
-> при развёртывании через `deploy.sh`). preflight печатает его в `layout.base`; ниже любой путь
+> **`<forge>` — корень кода форжа: каталог на два уровня выше этого SKILL.md**
+> (`<project>/.gigacode/extensions/forge`, ставит `install.sh forge`). preflight печатает его в `layout.base`; ниже любой путь
 > `<project>/.gigacode/skills/...` читай как `<forge>/skills/...`.
 
 exit 0 — продолжаем; exit 1 — стоп, чинить деплой. **exit 2 — конфиг не инициализирован**:

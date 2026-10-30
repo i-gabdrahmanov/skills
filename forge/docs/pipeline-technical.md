@@ -17,7 +17,8 @@
   evidence, inline-phase, phase-gate). Блокировка = `exit 2` + причина в `stderr`.
 - **Судьи + execution-gates** — детерминированные проверки, которые закрывают шаг только при PASS.
 
-> Хуки рантайм читает из `<project>/.gigacode/settings.json` (gigacode 26.9 — без флагов;
+> Хуки рантайм берёт из extension'а forge проекта (`<project>/.gigacode/extensions/forge/hooks/hooks.json`,
+> ставит `install.sh forge`; gigacode 26.9 — без флагов;
 > `--experimental-hooks` и `-y` из CLI убраны). `[HOOK_REGISTRY] 0 hook entries` на старте —
 > control-plane молчит. Перед прогоном — `preflight.py` (exit 0 = харнес активен).
 > Запуск — **интерактивный** (`gigacode`, дальше `/forge <задача>`): в headless рантайм не даёт
@@ -336,10 +337,10 @@ flowchart TD
 
 ```bash
 # харнес активен ДО прогона:
-python3 .gigacode/hooks/preflight.py --project .
+python3 .gigacode/extensions/forge/hooks/preflight.py --project .
 
 # какие фичи в работе:
-python3 .gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
+python3 .gigacode/extensions/forge/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
 ```
 
 ---

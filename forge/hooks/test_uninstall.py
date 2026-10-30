@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""test_uninstall.py — e2e пары deploy.sh → uninstall.sh на временном проекте.
+"""test_uninstall.py — e2e install.sh → uninstall.sh и миграция старой раскладки.
 
-Почему e2e, а не юнит: деинсталляция ломается ровно на стыке двух половин — файлы удалены,
-а блок hooks в settings.json остался. Тогда рантайм зовёт несуществующие скрипты и падает на
-КАЖДОМ вызове инструмента (зеркало регрессии «0 hook entries»: там харнес молчал, тут — орёт).
-Юнит-тесты strip_forge_hooks (test_resolve_hook_paths.py) этот стык не покрывают.
+Почему e2e, а не юнит: установка ломается на стыках — файлы поставки, их подключение
+(hooks/hooks.json, ссылка в рантайме, в старой раскладке — блок hooks в settings.json) и данные
+оператора рядом. Юниты forge_extension / strip_forge_hooks стыки не покрывают.
 
-Фиксируем контракт: uninstall уносит ТОЛЬКО своё (hooks/skills/deploy-local.sh/доки +
-forge-записи блока hooks) и не трогает данные оператора (ground/, permissions/mcpServers,
-чужие хуки, git-история, бэкапы).
+Контракт:
+  • install кладёт extension в <repo>/.gigacode/extensions/<forge|forge-ui>/ и ничего — в
+    co-located .gigacode/{skills,hooks,commands}; uninstall сносит каталог extension'а целиком
+    (он весь форжевый) и не трогает данные оператора (ground/, свои скиллы, .gitignore-строки);
+  • старая раскладка (≤ 0.5) снимается install'ом перед установкой: форжевые хуки уходят из
+    settings.json, форж-скиллы — из .gigacode/skills, операторское остаётся, конфиг
+    minor-defect-fix переезжает в extension;
+  • --dry-run ничего не меняет, повтор — no-op, --purge-state сносит ground/ и refs/forge/*.
+Рантайм не трогается (--no-link): ссылки пинит test_forge_extension.Link на поддельном CLI.
 """
 from __future__ import annotations
 
@@ -21,186 +26,221 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-DEPLOY = REPO / "deploy.sh"
+INSTALL = REPO / "install.sh"
 UNINSTALL = REPO / "uninstall.sh"
+DEPLOY = REPO / "deploy.sh"
 
 _BASH = shutil.which("bash")
 _GIT = shutil.which("git")
 
 
+def sh(script: Path, *args: str, timeout=300):
+    return subprocess.run([_BASH, str(script), *args], capture_output=True, text=True, timeout=timeout)
+
+
+def make_legacy(proj: Path) -> Path:
+    """Старая project-раскладка (≤ 0.5), как её клал прежний deploy.sh (профиль back): код в
+    co-located .gigacode/{hooks,skills,commands}, реестр .forge-deployed, хуки и MCP в
+    settings.json (resolve_hook_paths.py — тот же владелец блока, что был тогда)."""
+    gig = proj / ".gigacode"
+    ign = shutil.ignore_patterns("__pycache__", "*.pyc")
+    shutil.copytree(REPO / "hooks", gig / "hooks", ignore=ign, dirs_exist_ok=True)
+    entries = [f"hooks/{p.name}" for p in (REPO / "hooks").iterdir()]
+    for d in (REPO / "skills").iterdir():
+        if d.is_dir() and d.name not in ("forgeui", "__pycache__"):
+            shutil.copytree(d, gig / "skills" / d.name, ignore=ign, dirs_exist_ok=True)
+            entries.append(f"skills/{d.name}")
+    (gig / "commands").mkdir(exist_ok=True)
+    for c in (REPO / "commands").glob("*.md"):
+        shutil.copy(c, gig / "commands" / c.name)
+        entries.append(f"commands/{c.name}")
+    (gig / ".forge-deployed").write_text("# forge deploy manifest v1\n" + "\n".join(sorted(entries)) + "\n",
+                                         encoding="utf-8")
+    (gig / ".forge-profile").write_text((REPO / "profiles" / "back.profile").read_text(encoding="utf-8"),
+                                        encoding="utf-8")
+    (gig / "deploy-local.sh").write_text("# старый фиксер путей\n", encoding="utf-8")
+    (gig / "skills" / "minor-defect-fix" / "config.json").write_text('{"projects":{"kid":"/real/spec"}}',
+                                                                     encoding="utf-8")
+    r = subprocess.run([sys.executable, "-X", "utf8", str(gig / "hooks" / "resolve_hook_paths.py"),
+                        "--project", str(proj)], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return gig
+
+
 @unittest.skipIf(_BASH is None, "нет bash в PATH")
-class DeployUninstallRoundTrip(unittest.TestCase):
+class InstallUninstallRoundTrip(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.proj = Path(self._tmp.name)
         self.gig = self.proj / ".gigacode"
-        self.settings = self.gig / "settings.json"
-        r = self._sh(DEPLOY, str(self.proj))
-        self.assertEqual(r.returncode, 0, f"deploy.sh упал: {r.stdout}{r.stderr}")
+        self.ext = self.gig / "extensions" / "forge"
+        r = sh(INSTALL, "forge", str(self.proj), "--no-link")
+        self.assertEqual(r.returncode, 0, f"install.sh упал: {r.stdout}{r.stderr}")
 
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _sh(self, script: Path, *args: str):
-        return subprocess.run([_BASH, str(script), *args],
-                              capture_output=True, text=True, timeout=180)
+    def hook_names(self) -> list:
+        h = json.loads((self.ext / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+        return [x.get("name") for groups in h.values() for g in groups for x in g.get("hooks", [])]
 
-    def _read_settings(self) -> dict:
-        return json.loads(self.settings.read_text(encoding="utf-8"))
+    def test_install_lays_the_extension_and_nothing_co_located(self):
+        self.assertIn("gate-guard", self.hook_names())
+        self.assertTrue((self.ext / "gigacode-extension.json").is_file())
+        self.assertTrue((self.ext / "skills" / "feature-pipeline" / "SKILL.md").is_file())
+        self.assertTrue((self.ext / "commands" / "forge.md").is_file())
+        self.assertTrue((self.ext / "commands" / "forge-fix.md").is_file())
+        self.assertFalse(list((self.ext / "commands").glob("*.toml")), "TOML-команды — окно миграции рантайма")
+        self.assertTrue((self.ext / "deploy-local.sh").is_file())
+        for co in ("skills", "hooks", "commands", "settings.json"):
+            self.assertFalse((self.gig / co).exists(), f".gigacode/{co} — не место поставки")
 
-    def _hook_names(self) -> list[str]:
-        s = self._read_settings()
-        return [h.get("name") for groups in s.get("hooks", {}).values()
-                for g in groups for h in g.get("hooks", [])]
-
-    def _add_operator_data(self):
-        """Оператор дописал своё поверх деплоя: секции, свой хук, конфиг, рабочие данные."""
-        s = self._read_settings()
-        s["permissions"] = {"allow": ["Bash(ls:*)"]}
-        s["mcpServers"] = {"atlassian": {"command": "mcp-atlassian"}}
-        s["hooks"]["PreToolUse"][0]["hooks"].append(
-            {"type": "command", "command": "python3 /opt/corp/audit.py", "name": "corp-audit"})
-        self.settings.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        mdf = self.gig / "skills" / "minor-defect-fix" / "config.json"
-        if mdf.parent.is_dir():
-            mdf.write_text('{"projects":{"kid":"/real/spec"}}', encoding="utf-8")
-
-        state = self.proj / "ground" / "statements" / "feature-pipeline" / "demo"
-        state.mkdir(parents=True)
-        (state / "manifest.json").write_text('{"steps":[]}', encoding="utf-8")
-
-    def test_deploy_arms_hooks(self):
-        # предусловие теста: деплой реально ставит хуки (иначе снятие нечего проверять)
-        self.assertTrue((self.gig / "hooks").is_dir())
-        self.assertTrue((self.gig / "skills").is_dir())
-        self.assertIn("gate-guard", self._hook_names())
-
-    def test_deploy_installs_slash_commands_as_markdown(self):
-        # обе слэш-команды едут в .gigacode/commands/ как .md (не TOML — иначе окно миграции qwen)
-        self.assertTrue((self.gig / "commands" / "forge.md").exists(), "/forge не задеплоен")
-        self.assertTrue((self.gig / "commands" / "forge-fix.md").exists(), "/forge-fix не задеплоен")
-        self.assertFalse((self.gig / "commands" / "forge.toml").exists(), "TOML-команда не должна деплоиться")
-
-    def test_uninstall_removes_forge_and_keeps_operator_data(self):
-        self._add_operator_data()
-        r = self._sh(UNINSTALL, str(self.proj))
-        self.assertEqual(r.returncode, 0, f"uninstall.sh упал: {r.stdout}{r.stderr}")
-
-        # 1. файлы деплоя ушли
-        for gone in ("hooks", "skills", "deploy-local.sh", "FORGE.md", "SKILLS-REGISTRY.md"):
-            self.assertFalse((self.gig / gone).exists(), f"{gone} должен быть удалён")
-
-        # 2. ГЛАВНОЕ: в settings.json не осталось ни одного хука на удалённые файлы
-        raw = self.settings.read_text(encoding="utf-8")
-        self.assertNotIn(".gigacode/hooks", raw,
-                         "в settings.json остался хук на удалённый файл — рантайм будет падать "
-                         "на каждом вызове инструмента")
-
-        # 3. данные оператора целы
-        s = self._read_settings()
-        self.assertEqual(s["permissions"], {"allow": ["Bash(ls:*)"]})
-        self.assertIn("mcpServers", s)
-        self.assertIn("corp-audit", self._hook_names(), "чужой хук снимать не наше дело")
-
-        # 4. рабочие данные и бэкапы на месте
-        self.assertTrue((self.proj / "ground/statements/feature-pipeline/demo/manifest.json").exists(),
-                        "ground/ без --purge-state трогать нельзя")
-        self.assertTrue((self.settings.parent / "settings.json.bak").exists(), "нет бэкапа settings.json")
-        self.assertTrue((self.gig / "minor-defect-fix-config.json.bak").exists(),
-                        "конфиг оператора должен быть отставлен в сторону, а не унесён вместе со skills/")
-
-    def test_uninstall_keeps_operator_own_skills_and_hooks(self):
-        """Регрессия (реальный инцидент): uninstall делал rm -rf .gigacode/skills целиком и
-        уносил самописные скиллы оператора, co-located с форж-скиллами. Снимать можно только
-        форж-своё; чужое рядом — не наше, каталог убираем лишь когда опустел."""
-        my_skill = self.gig / "skills" / "my-custom-skill"
-        my_skill.mkdir(parents=True)
-        (my_skill / "SKILL.md").write_text("мой скилл", encoding="utf-8")
-        my_hook = self.gig / "hooks" / "my-custom-hook.py"
-        my_hook.write_text("# мой хук\n", encoding="utf-8")
-        my_cmd = self.gig / "commands" / "my-cmd.md"
-        my_cmd.parent.mkdir(parents=True, exist_ok=True)
-        my_cmd.write_text("---\ndescription: моя команда\n---\nтело\n", encoding="utf-8")
-
-        r = self._sh(UNINSTALL, str(self.proj))
+    def test_uninstall_removes_the_extension_and_keeps_operator_data(self):
+        (self.ext / "skills" / "minor-defect-fix" / "config.json").write_text('{"projects":{"k":"/s"}}',
+                                                                               encoding="utf-8")
+        own = self.gig / "skills" / "my-own" / "SKILL.md"
+        own.parent.mkdir(parents=True)
+        own.write_text("моё", encoding="utf-8")
+        state = self.proj / "ground" / "statements" / "feature-pipeline" / "demo" / "manifest.json"
+        state.parent.mkdir(parents=True)
+        state.write_text("{}", encoding="utf-8")
+        r = sh(UNINSTALL, "forge", str(self.proj), "--no-link")
         self.assertEqual(r.returncode, 0, f"{r.stdout}{r.stderr}")
+        self.assertFalse(self.ext.exists())
+        self.assertFalse((self.gig / "extensions").exists(), "пустой extensions/ убирается")
+        self.assertTrue(own.exists(), "своё оператора uninstall трогать не смеет")
+        self.assertTrue(state.exists(), "ground/ без --purge-state трогать нельзя")
+        self.assertIn('"/s"', (self.gig / "minor-defect-fix-config.json.bak").read_text(encoding="utf-8"))
 
-        # операторское — на месте (главная проверка инцидента)
-        self.assertTrue((my_skill / "SKILL.md").exists(), "самописный скилл оператора снесён — недопустимо")
-        self.assertTrue(my_hook.exists(), "самописный хук оператора снесён")
-        self.assertTrue(my_cmd.exists(), "самописная команда оператора снесена")
-        # каталоги сохранены, раз в них осталось чужое
-        self.assertTrue((self.gig / "skills").is_dir())
-        self.assertTrue((self.gig / "hooks").is_dir())
-        # а форж-своё — снято
-        self.assertFalse((self.gig / "skills" / "feature-pipeline").exists(), "форж-скилл должен быть снят")
-        self.assertFalse((self.gig / "hooks" / "gate-guard.py").exists(), "форж-хук должен быть снят")
-        self.assertFalse((self.gig / "commands" / "forge.md").exists(), "форж-команда должна быть снята")
-        # и в settings.json не осталось хуков на удалённые форж-файлы
-        self.assertNotIn(".gigacode/hooks", self.settings.read_text(encoding="utf-8"))
-
-    def test_uninstall_removes_legacy_toml_command(self):
-        """qwen-code депрекейтнул TOML-команды: при наличии forge.toml рантайм показывает
-        окно миграции на каждом старте. Прошлый деплой клал forge.toml — uninstall обязан
-        снять его по имени (в $SRC его уже нет, remove_forge_owned счёл бы «операторским»)."""
-        legacy = self.gig / "commands" / "forge.toml"
-        legacy.parent.mkdir(parents=True, exist_ok=True)
-        legacy.write_text('description = "x"\nprompt = "y"\n', encoding="utf-8")
-        r = self._sh(UNINSTALL, str(self.proj))
+    def test_uninstall_without_kind_removes_what_is_there(self):
+        r = sh(UNINSTALL, str(self.proj), "--no-link")
         self.assertEqual(r.returncode, 0, f"{r.stdout}{r.stderr}")
-        self.assertFalse(legacy.exists(), "устаревший forge.toml должен быть снят")
+        self.assertFalse(self.ext.exists())
 
-    def test_uninstall_is_idempotent(self):
-        self.assertEqual(self._sh(UNINSTALL, str(self.proj)).returncode, 0)
-        r = self._sh(UNINSTALL, str(self.proj))
-        self.assertEqual(r.returncode, 0, f"повторный запуск должен быть no-op: {r.stdout}{r.stderr}")
-
-    def test_dry_run_changes_nothing(self):
-        before = self.settings.read_text(encoding="utf-8")
-        r = self._sh(UNINSTALL, str(self.proj), "--dry-run")
+    def test_uninstall_is_idempotent_and_dry_run_changes_nothing(self):
+        r = sh(UNINSTALL, "forge", str(self.proj), "--no-link", "--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue((self.gig / "hooks").is_dir(), "--dry-run не должен удалять файлы")
-        self.assertEqual(self.settings.read_text(encoding="utf-8"), before)
+        self.assertTrue((self.ext / "hooks" / "hooks.json").is_file(), "--dry-run не удаляет")
+        self.assertEqual(sh(UNINSTALL, "forge", str(self.proj), "--no-link").returncode, 0)
+        r = sh(UNINSTALL, "forge", str(self.proj), "--no-link")
+        self.assertEqual(r.returncode, 0, f"повтор — no-op: {r.stdout}{r.stderr}")
 
-    def test_redeploy_after_uninstall_rearms(self):
-        self.assertEqual(self._sh(UNINSTALL, str(self.proj)).returncode, 0)
-        self.assertEqual(self._sh(DEPLOY, str(self.proj)).returncode, 0)
-        self.assertIn("gate-guard", self._hook_names(), "deploy после uninstall обязан вернуть харнес")
+    def test_reinstall_replaces_the_extension_whole_and_keeps_the_config(self):
+        (self.ext / "skills" / "zzz-stale").mkdir()
+        (self.ext / "skills" / "minor-defect-fix" / "config.json").write_text('{"projects":{"k":"/s"}}',
+                                                                               encoding="utf-8")
+        r = sh(INSTALL, "forge", str(self.proj), "--no-link")
+        self.assertEqual(r.returncode, 0, f"{r.stdout}{r.stderr}")
+        self.assertFalse((self.ext / "skills" / "zzz-stale").exists(), "снятое из репо не переживает обновление")
+        self.assertIn('"/s"', (self.ext / "skills" / "minor-defect-fix" / "config.json").read_text(encoding="utf-8"))
+        self.assertEqual(list((self.gig / "extensions").glob(".forge.*")), [], "временные каталоги убраны")
+
+    def test_second_kind_in_the_same_repo_is_refused(self):
+        r = sh(INSTALL, "forge-ui", str(self.proj), "--no-link")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("одна поставка на репо", r.stderr)
+        self.assertFalse((self.gig / "extensions" / "forge-ui").exists())
 
     @unittest.skipIf(_GIT is None, "нет git в PATH")
     def test_purge_state_removes_data_but_not_history(self):
-        self._add_operator_data()
+        (self.proj / "ground").mkdir()
+        (self.proj / "ground" / "policy.json").write_text("{}", encoding="utf-8")
         subprocess.run([_GIT, "init", "-q", str(self.proj)], check=True, timeout=30)
-        env_git = [_GIT, "-C", str(self.proj), "-c", "user.email=t@t", "-c", "user.name=t"]
-        subprocess.run(env_git + ["commit", "-q", "--allow-empty", "-m", "base"], check=True, timeout=30)
-        subprocess.run([_GIT, "-C", str(self.proj), "update-ref",
-                        "refs/forge/checkpoints/demo/00-baseline", "HEAD"], check=True, timeout=30)
-
-        r = self._sh(UNINSTALL, str(self.proj), "--purge-state")
+        g = [_GIT, "-C", str(self.proj), "-c", "user.email=t@t", "-c", "user.name=t"]
+        subprocess.run(g + ["commit", "-q", "--allow-empty", "-m", "base"], check=True, timeout=30)
+        subprocess.run([_GIT, "-C", str(self.proj), "update-ref", "refs/forge/checkpoints/demo/00", "HEAD"],
+                       check=True, timeout=30)
+        r = sh(UNINSTALL, "forge", str(self.proj), "--no-link", "--purge-state")
         self.assertEqual(r.returncode, 0, f"{r.stdout}{r.stderr}")
-
-        self.assertFalse((self.proj / "ground").exists(), "--purge-state обязан снести ground/")
-        refs = subprocess.run([_GIT, "-C", str(self.proj), "for-each-ref",
-                               "--format=%(refname)", "refs/forge/"],
+        self.assertFalse((self.proj / "ground").exists())
+        refs = subprocess.run([_GIT, "-C", str(self.proj), "for-each-ref", "refs/forge/"],
                               capture_output=True, text=True, timeout=30).stdout.strip()
-        self.assertEqual(refs, "", "--purge-state обязан снести git-чекпойнты refs/forge/*")
+        self.assertEqual(refs, "")
         log = subprocess.run([_GIT, "-C", str(self.proj), "log", "--oneline"],
-                             capture_output=True, text=True, timeout=30).stdout.strip()
-        self.assertIn("base", log, "коммиты пользователя откат обвязки трогать не смеет")
+                             capture_output=True, text=True, timeout=30).stdout
+        self.assertIn("base", log, "коммиты пользователя снятие обвязки трогать не смеет")
+
+
+@unittest.skipIf(_BASH is None, "нет bash в PATH")
+class LegacyMigration(unittest.TestCase):
+    """Старая раскладка (≤ 0.5) снимается перед установкой extension'а: иначе её хуки из
+    settings.json задвоятся с хуками extension'а, а проектные скиллы перекроют скиллы extension'а
+    (рантайм резолвит project > extension)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.proj = Path(self._tmp.name)
+        self.gig = make_legacy(self.proj)
+        s = json.loads((self.gig / "settings.json").read_text(encoding="utf-8"))
+        s["permissions"] = {"allow": ["Bash(ls:*)"]}
+        s.setdefault("mcpServers", {})["atlassian"] = {"command": "mcp-atlassian"}
+        s["hooks"]["PreToolUse"][0]["hooks"].append(
+            {"type": "command", "command": "python3 /opt/corp/audit.py", "name": "corp-audit"})
+        (self.gig / "settings.json").write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.own = self.gig / "skills" / "my-custom-skill" / "SKILL.md"
+        self.own.parent.mkdir(parents=True)
+        self.own.write_text("мой скилл", encoding="utf-8")
+        (self.gig / "hooks" / "my-hook.py").write_text("# мой хук\n", encoding="utf-8")
+        (self.gig / "commands" / "my-cmd.md").write_text("---\ndescription: моя\n---\nx\n", encoding="utf-8")
+        (self.gig / "commands" / "forge.toml").write_text('prompt = "y"\n', encoding="utf-8")
+        (self.gig / "skills" / "forgelite").mkdir()          # надгробие из tombstones.txt
+        (self.gig / "skills" / "forgelite" / "SKILL.md").write_text("lite", encoding="utf-8")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_install_migrates_and_keeps_operator(self):
+        r = sh(INSTALL, "forge", str(self.proj), "--no-link")
+        self.assertEqual(r.returncode, 0, f"{r.stdout}{r.stderr}")
+        self.assertIn("старая раскладка", r.stdout)
+        raw = (self.gig / "settings.json").read_text(encoding="utf-8")
+        self.assertNotIn(".gigacode/hooks/", raw, "хуки старой раскладки задвоились бы с extension'ом")
+        s = json.loads(raw)
+        self.assertEqual(s["permissions"], {"allow": ["Bash(ls:*)"]})
+        self.assertEqual(sorted(s.get("mcpServers") or {}), ["atlassian"], "свои MCP сняты, чужой на месте")
+        self.assertIn("corp-audit", raw, "чужой хук снимать не наше дело")
+        self.assertTrue((self.gig / "settings.json.bak").exists())
+        self.assertTrue(self.own.exists(), "самописный скилл оператора снесён — недопустимо")
+        self.assertTrue((self.gig / "hooks" / "my-hook.py").exists())
+        self.assertTrue((self.gig / "commands" / "my-cmd.md").exists())
+        for gone in ("skills/feature-pipeline", "skills/forgelite", "hooks/gate-guard.py", "commands/forge.md",
+                     "commands/forge.toml", ".forge-deployed", ".forge-profile", "deploy-local.sh"):
+            self.assertFalse((self.gig / gone).exists(), f"{gone} старой раскладки должен быть снят")
+        ext = self.gig / "extensions" / "forge"
+        self.assertIn("/real/spec", (ext / "skills" / "minor-defect-fix" / "config.json").read_text(encoding="utf-8"),
+                      "конфиг оператора переезжает в extension")
+        pf = subprocess.run([sys.executable, "-X", "utf8", str(ext / "hooks" / "preflight.py"), "--project",
+                             str(self.proj), "--json"], capture_output=True, text=True, timeout=120)
+        out = json.loads(pf.stdout)
+        self.assertEqual(out["layout"]["mode"], "extension")
+        self.assertFalse([e for e in out["errors"] if "старой раскладки" in e or "старые копии" in e], out["errors"])
+
+    def test_legacy_only_dry_run_changes_nothing(self):
+        before = (self.gig / "settings.json").read_text(encoding="utf-8")
+        r = sh(UNINSTALL, "--legacy-only", str(self.proj), "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.gig / "settings.json").read_text(encoding="utf-8"), before)
+        self.assertTrue((self.gig / "hooks" / "gate-guard.py").exists())
+
+    def test_preflight_flags_leftovers_next_to_an_extension(self):
+        r = sh(INSTALL, "forge", str(self.proj), "--no-link")
+        self.assertEqual(r.returncode, 0, f"{r.stdout}{r.stderr}")
+        make_legacy(self.proj)                      # кто-то вернул старую раскладку рядом
+        ext = self.gig / "extensions" / "forge"
+        pf = subprocess.run([sys.executable, "-X", "utf8", str(ext / "hooks" / "preflight.py"), "--project",
+                             str(self.proj), "--json"], capture_output=True, text=True, timeout=120)
+        errs = json.loads(pf.stdout)["errors"]
+        self.assertTrue(any("выполнится дважды" in e for e in errs), errs)
+        self.assertTrue(any("старые копии скиллов" in e for e in errs), errs)
 
 
 @unittest.skipIf(_BASH is None or _GIT is None, "нужны bash и git")
 class GitignoreBlock(unittest.TestCase):
-    """deploy кладёт ground/ в .gitignore, uninstall снимает РОВНО свой блок.
+    """install кладёт ground/ и .gigacode/ в .gitignore, uninstall снимает РОВНО свой блок.
 
-    Почему это вообще нужно: ground/ — стейт прогонов, evidence и журналы, производное от кода
-    и переписываемое на каждом шаге. Без правила оно уезжает в историю пользовательского репо
-    и конфликтует на каждый merge. policy.json — исключение: это конфигурация проекта.
-
-    Почему блок размечен маркерами: .gitignore принадлежит оператору. Снос файла целиком или
-    перезапись «своей» версией унесли бы его строки — тот же класс, что инцидент со сметённым
-    rm -rf каталогом самописных скиллов."""
+    ground/ — стейт прогонов, производное и переписываемое на каждом шаге; policy.json —
+    исключение: это конфигурация проекта. Блок размечен маркерами: .gitignore принадлежит
+    оператору, его строки — не наши."""
 
     BEGIN = "# >>> forge: рабочие данные пайплайна >>>"
     END = "# <<< forge <<<"
@@ -214,134 +254,94 @@ class GitignoreBlock(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _sh(self, script: Path, *args: str):
-        return subprocess.run([_BASH, str(script), *args],
-                              capture_output=True, text=True, timeout=180)
-
-    def _deploy(self):
-        r = self._sh(DEPLOY, str(self.proj))
-        self.assertEqual(r.returncode, 0, f"deploy.sh упал: {r.stdout}{r.stderr}")
+    def install(self, proj=None):
+        r = sh(INSTALL, "forge", str(proj or self.proj), "--no-link")
+        self.assertEqual(r.returncode, 0, f"install.sh упал: {r.stdout}{r.stderr}")
         return r
 
-    def test_deploy_adds_block(self):
-        self._deploy()
+    def test_install_adds_block(self):
+        self.install()
         text = self.gi.read_text(encoding="utf-8")
-        self.assertIn(self.BEGIN, text)
-        self.assertIn("ground/*", text)
-        self.assertIn("!ground/policy.json", text)
-        self.assertIn(".gigacode/", text)
-        self.assertIn(self.END, text)
+        for part in (self.BEGIN, "ground/*", "!ground/policy.json", ".gigacode/", self.END):
+            self.assertIn(part, text)
 
-    def test_deployed_harness_is_not_git_noise(self):
-        """286 untracked-записей сразу после установки — это не «шум», а рабочий инструмент:
-        в таком статусе не видно собственных изменений проекта. Плюс settings.json внутри
-        держит абсолютные пути этой машины — у коллеги он зовёт несуществующие скрипты."""
-        self._deploy()
-        out = subprocess.run([_GIT, "-C", str(self.proj), "status", "--porcelain",
-                              "--untracked-files=all"],
+    def test_installed_extension_is_not_git_noise(self):
+        self.install()
+        out = subprocess.run([_GIT, "-C", str(self.proj), "status", "--porcelain", "--untracked-files=all"],
                              capture_output=True, text=True, timeout=60).stdout
-        self.assertNotIn(".gigacode", out, "задеплоенный харнес не должен светиться в git")
-
-    def test_operator_can_force_add_own_skill(self):
-        """Игнор каталога не запирает co-located: своё оператор версионирует точечно."""
-        self._deploy()
-        own = self.proj / ".gigacode" / "skills" / "my-own" / "SKILL.md"
-        own.parent.mkdir(parents=True, exist_ok=True)
-        own.write_text("# моё\n", encoding="utf-8")
-        r = subprocess.run([_GIT, "-C", str(self.proj), "add", "-f", str(own)],
-                           capture_output=True, text=True, timeout=30)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        tracked = subprocess.run([_GIT, "-C", str(self.proj), "ls-files"],
-                                 capture_output=True, text=True, timeout=30).stdout
-        self.assertIn("my-own/SKILL.md", tracked)
+        self.assertNotIn(".gigacode", out, "установленный forge не должен светиться в git")
 
     def test_rule_actually_ignores_state_but_not_policy(self):
-        """Проверяем не текст, а поведение git: форма `ground/` re-include не даёт."""
-        self._deploy()
-        (self.proj / "ground" / "statements" / "feature-pipeline" / "F").mkdir(parents=True)
-        (self.proj / "ground" / "statements" / "feature-pipeline" / "F"
-         / "manifest.json").write_text("{}", encoding="utf-8")
+        self.install()
+        f = self.proj / "ground" / "statements" / "feature-pipeline" / "F" / "manifest.json"
+        f.parent.mkdir(parents=True)
+        f.write_text("{}", encoding="utf-8")
         (self.proj / "ground" / "policy.json").write_text("{}", encoding="utf-8")
-        out = subprocess.run([_GIT, "-C", str(self.proj), "status", "--porcelain",
-                              "--untracked-files=all"],
+        out = subprocess.run([_GIT, "-C", str(self.proj), "status", "--porcelain", "--untracked-files=all"],
                              capture_output=True, text=True, timeout=30).stdout
-        self.assertIn("ground/policy.json", out, "конфигурация проекта обязана остаться видимой")
-        self.assertNotIn("manifest.json", out, "стейт прогона обязан быть проигнорирован")
+        self.assertIn("ground/policy.json", out)
+        self.assertNotIn("manifest.json", out)
 
-    def test_deploy_is_idempotent(self):
-        self._deploy()
-        self._deploy()
+    def test_install_is_idempotent_and_operator_lines_survive_both_ways(self):
+        self.gi.write_text("# моё\nbuild/\n*.iml", encoding="utf-8")     # без \\n в конце
+        self.install()
+        self.install()
         text = self.gi.read_text(encoding="utf-8")
-        self.assertEqual(text.count(self.BEGIN), 1, "повторный деплой не должен дублировать блок")
-
-    def test_operator_lines_survive_both_ways(self):
-        self.gi.write_text("# моё\nbuild/\n*.iml\n", encoding="utf-8")
-        self._deploy()
-        text = self.gi.read_text(encoding="utf-8")
-        self.assertIn("build/", text)
-        self.assertIn("*.iml", text)
-        r = self._sh(UNINSTALL, str(self.proj))
-        self.assertEqual(r.returncode, 0, f"uninstall.sh упал: {r.stdout}{r.stderr}")
+        self.assertEqual(text.count(self.BEGIN), 1)
+        self.assertIn("*.iml", text.split("\n"), "последняя строка оператора склеилась с блоком forge")
+        r = sh(UNINSTALL, "forge", str(self.proj), "--no-link")
+        self.assertEqual(r.returncode, 0, f"{r.stdout}{r.stderr}")
         text = self.gi.read_text(encoding="utf-8")
         self.assertNotIn(self.BEGIN, text)
-        self.assertNotIn("ground/*", text)
         self.assertNotIn(".gigacode/", text)
-        self.assertIn("build/", text, "строки оператора uninstall трогать не смеет")
-        self.assertIn("*.iml", text)
-
-    def test_no_trailing_newline_does_not_glue_lines(self):
-        self.gi.write_text("build/", encoding="utf-8")       # без \n в конце
-        self._deploy()
-        lines = self.gi.read_text(encoding="utf-8").split("\n")
-        self.assertIn("build/", lines, "последняя строка оператора склеилась с блоком forge")
-
-    def test_uninstall_without_block_is_noop(self):
-        self.gi.write_text("build/\n", encoding="utf-8")
-        r = self._sh(UNINSTALL, str(self.proj))
-        self.assertEqual(r.returncode, 0)
-        self.assertEqual(self.gi.read_text(encoding="utf-8"), "build/\n")
+        self.assertIn("build/", text)
 
     def test_non_git_project_is_left_alone(self):
         with tempfile.TemporaryDirectory() as td:
-            plain = Path(td)
-            r = self._sh(DEPLOY, str(plain))
-            self.assertEqual(r.returncode, 0, f"deploy.sh упал: {r.stdout}{r.stderr}")
-            self.assertFalse((plain / ".gitignore").exists(),
-                             "вне git-репо .gitignore заводить незачем")
+            r = self.install(Path(td))
+            self.assertFalse((Path(td) / ".gitignore").exists())
             self.assertIn("не git-репозиторий", r.stdout)
 
 
 @unittest.skipIf(_BASH is None, "нет bash в PATH")
-class UninstallArgs(unittest.TestCase):
-    """Интерфейс — зеркало deploy.sh: цель обязательна, деплой в себя запрещён."""
+class Args(unittest.TestCase):
+    """Цель обязательна, установка «в себя» запрещена, неизвестное — 2."""
 
-    def _sh(self, *args: str):
-        return subprocess.run([_BASH, str(UNINSTALL), *args],
-                              capture_output=True, text=True, timeout=60)
-
-    def test_no_target_exits_2(self):
-        r = self._sh()
+    def test_install_needs_a_kind_and_a_target(self):
+        r = sh(INSTALL)
         self.assertEqual(r.returncode, 2)
-        self.assertIn("не указана целевая папка", r.stderr)
-
-    def test_missing_target_exits_2(self):
-        r = self._sh("/nonexistent/path/zzz")
+        self.assertIn("forge (бэк-репо) или forge-ui", r.stderr)
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(sh(INSTALL, "mobile", td).returncode, 2)
+            r = sh(INSTALL, "forge")
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("не указана папка проекта", r.stderr)
+            self.assertEqual(sh(INSTALL, "forge", td, "--wat").returncode, 2)
+            self.assertFalse((Path(td) / ".gigacode").exists(), "на отказе ничего не положено")
+        self.assertEqual(sh(INSTALL, "forge", "/nonexistent/zzz").returncode, 2)
+        r = sh(INSTALL, "forge", str(REPO))
         self.assertEqual(r.returncode, 2)
+        self.assertIn("в себя", r.stderr)
 
-    def test_self_target_refused(self):
-        r = self._sh(str(REPO))
+    def test_uninstall_args(self):
+        r = sh(UNINSTALL)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("не указана папка проекта", r.stderr)
+        self.assertEqual(sh(UNINSTALL, "/nonexistent/zzz").returncode, 2)
+        r = sh(UNINSTALL, str(REPO))
         self.assertEqual(r.returncode, 2)
         self.assertIn("сам Forge", r.stderr)
-
-    def test_unknown_flag_exits_2(self):
         with tempfile.TemporaryDirectory() as td:
-            r = self._sh(td, "--wat")
-            self.assertEqual(r.returncode, 2)
+            self.assertEqual(sh(UNINSTALL, td, "--wat").returncode, 2)
+            self.assertEqual(sh(UNINSTALL, td).returncode, 0, "нечего снимать — не ошибка")
 
-    def test_no_gigacode_is_noop(self):
+    def test_deploy_sh_is_a_compat_wrapper(self):
         with tempfile.TemporaryDirectory() as td:
-            r = self._sh(td)
-            self.assertEqual(r.returncode, 0, "нечего снимать — не ошибка (идемпотентность)")
+            r = sh(DEPLOY, "--profile", "ui", td, "--no-link")
+            self.assertEqual(r.returncode, 0, f"{r.stdout}{r.stderr}")
+            self.assertIn("install.sh forge-ui", r.stderr)
+            self.assertTrue((Path(td) / ".gigacode" / "extensions" / "forge-ui" / "hooks" / "hooks.json").is_file())
+            self.assertEqual(sh(DEPLOY, "--profile", "mobile", td).returncode, 2)
 
 
 if __name__ == "__main__":

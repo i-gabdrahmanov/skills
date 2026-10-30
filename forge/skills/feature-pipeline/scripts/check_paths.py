@@ -116,6 +116,13 @@ def check_paths(project_root: Path, config_path: Path,
             inside = False
         if inside and full_path.exists():
             valid.append(path)
+            continue
+        # Путь кода харнеса (`.gigacode/skills|hooks/…`) в extension-раскладке живёт внутри
+        # поставки (`.gigacode/extensions/<forge|forge-ui>/…`) — то же правило, что у
+        # skill_paths.resolve, которым скрипты эти пути и открывают.
+        b = skill_paths._bundle_path(path)
+        if b is not None and b.exists():
+            valid.append(path)
         else:
             invalid.append(path)
 

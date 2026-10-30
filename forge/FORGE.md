@@ -11,9 +11,11 @@
 `SKILLS-REGISTRY.md` — реестр скиллов (owner/validity/evals). **FORGE.md — архитектура и
 история решений**, не дубль остальных. Ростер хуков тут не дублируется (полный — в DEPLOY.md).
 
-Канон установки — единственный: `deploy.sh <project>` (project-модель). Прежняя раскладка
-через манифесты и плейсхолдеры плагин-рута снята 2026-08-22; артефактов прежней модели в
-репо нет. Решения фиксируются в формате «[ID] Одной строкой (YYYY-MM-DD)»; детали —
+Канон установки — `install.sh forge|forge-ui <project>`: extension ВНУТРИ проекта
+(`<project>/.gigacode/extensions/<kind>/`) плюс ссылка на него в рантайме ([BR-22], 2026-10-30).
+Прежние раскладки: extension в `~/.gigacode/extensions` (снят 2026-08-28 — shell вне проекта) и
+project-модель `deploy.sh` → `.gigacode/{hooks,skills}` + `settings.json` (до 0.5; `install.sh`
+снимает её сам). Решения фиксируются в формате «[ID] Одной строкой (YYYY-MM-DD)»; детали —
 git-история и `tasks/`.
 
 ## Принципы
@@ -41,8 +43,8 @@ git-история и `tasks/`.
    (конфиг, карта компонентов, трек, канон, резолв, план, прогресс сборки и проверки — их пишет только движок
    forge-ui). Approval-маркеры пишет только `record_approval.py`.
 6. **Совместное размещение `hooks/` и `skills/` обязательно.** Гейты вызываются по
-   `../skills/`. `deploy.sh` копирует оба каталога одним пакетом (исключает класс ошибок
-   «0 hook entries»).
+   `../skills/`. `install.sh` кладёт оба каталога одним пакетом в каталог extension'а (исключает
+   класс ошибок «0 hook entries»).
 
 ## Архитектура PDLC v3.5
 
@@ -55,18 +57,19 @@ risk ladder, evidence bundle и security-гейты; доставка (commit/pu
 
 | Слой | Расположение | Зачем |
 |---|---|---|
-| Source | исходный репо (родитель `hooks/`) | source-of-truth; отсюда `deploy.sh` копирует файлы |
-| Deploy | `<project>/.gigacode/` | co-located `hooks/` + `skills/` + `commands/` + сгенерированный `settings.json` |
+| Source | исходный репо (родитель `hooks/`) | source-of-truth; отсюда `install.sh` собирает поставку |
+| Install | `<project>/.gigacode/extensions/<forge\|forge-ui>/` | extension целиком: манифест, `hooks/` + `hooks/hooks.json`, `skills/`, `commands/`, `deploy-local.sh` |
+| Link | `~/.gigacode/extensions/<forge-…-хеш>/` | только ссылка рантайма (`{type: link, source}`) на каталог выше |
 
-`deploy.sh <project>` раскладывает `hooks/` + `skills/` + `commands/` + `deploy-local.sh`
-в `<project>/.gigacode/`. Состав решает **профиль поставки** (`profiles/<имя>.profile`): `back`
-(по умолчанию — бэк-репо, все скиллы кроме `forgeui`) или `ui` (фронт-репо — forge-ui: `forgeui` +
-общий control-plane, без Java-скиллов). Копия профиля — `.gigacode/.forge-profile`: по ней
-регистрируются MCP-серверы и проверяются пути реестра. `deploy-local.sh` подставляет в `settings.json` абсолютные пути
-из `settings.hooks.json` (плейсхолдеры `${PROJECT_ROOT}` и `${PYTHON}`). `preflight.py`
-(advisory) проверяет готовность; exit 1 = ENFORCEMENT OFF. Артефакты фаз — в
-`<project>/docs/feature-pipeline/...`; `state-write-guard` блокирует запись в каталог
-харнеса, пока идёт прогон.
+`install.sh forge|forge-ui <project>` собирает поставку по **профилю** (`profiles/back.profile` —
+бэк-репо, все скиллы кроме `forgeui`; `profiles/ui.profile` — фронт-репо, `forgeui` + общий
+control-plane, без Java-скиллов) и подменяет ею каталог extension'а целиком. Одна поставка на репо.
+`hooks/forge_extension.py` пишет манифест (MCP профиля) и `hooks/hooks.json` из `settings.hooks.json`
+с абсолютными путями и здоровым интерпретатором; каждый хук идёт через `_run_hook.py` (вне своего
+проекта — молча 0), ставит ссылку и включает extension только для этого workspace. Тексты брифов
+при установке называют пути поставки. `preflight.py` (advisory) проверяет готовность; exit 1 =
+ENFORCEMENT OFF. Артефакты фаз — в `<project>/docs/feature-pipeline/...`; `state-write-guard`
+блокирует запись в каталог харнеса, пока идёт прогон.
 
 ### Risk ladder R0–R5
 
@@ -116,7 +119,7 @@ approval-маркером (см. §Approval markers). **R5** — деструк�
   Шаги плоские `ui-*`, четыре решения человека: утверждение спеки (`ui-spec-approved-<KEY>`),
   подпись плана (согласие `ui-plan-<KEY>`), «чинить/стоп» по итерациям (`ui-accept-<KEY>`).
   Детерминированное ядро — движок по спеке daiver (Python stdlib, MCP `forge-ui`). Ставится в
-  ФРОНТ-репо профилем `deploy.sh --profile ui`; в бэк-репо ветки нет. Стори из двух частей —
+  ФРОНТ-репо поставкой `install.sh forge-ui`; в бэк-репо ветки нет. Стори из двух частей —
   два прогона с одним ключом, связь — поля `**Фронт-часть:**` (`sdd.md`) / `**Бэк-часть:**`
   (`ui-spec.md`). Состояние (2026-10-19): `ui-design` исполняется целиком — до подписи плана (гейт
   `ui_gate.py design`: exit 0 только при готовом контракте плана и валидной подписи); `ui-build` —
@@ -150,8 +153,8 @@ resolve_phases; копий кортежей `fix-*`/`tech-*` по коду не�
 
 | Слой | Где | Что делает |
 |---|---|---|
-| Control plane (хуки) | `<project>/.gigacode/hooks/` | Блоки (`exit 2`) + логирование. Полный ростер → `hooks/DEPLOY.md`. |
-| Guidance (скиллы) | `<project>/.gigacode/skills/` | SKILL.md, брифы `references/phases/*.md`, скрипты фаз. Реестр → `SKILLS-REGISTRY.md`. |
+| Control plane (хуки) | `<project>/.gigacode/extensions/<kind>/hooks/` | Блоки (`exit 2`) + логирование. Полный ростер → `hooks/DEPLOY.md`. |
+| Guidance (скиллы) | `<project>/.gigacode/extensions/<kind>/skills/` | SKILL.md, брифы `references/phases/*.md`, скрипты фаз. Реестр → `SKILLS-REGISTRY.md`. |
 
 Тяжёлые гейты (`check_taskplan`, `check_coverage`, coverage-judge) запускает **оркестратор**
 как execution-gate (`record_gate.py`), а хуки — лёгкие file-reads. Это закрывает
@@ -490,7 +493,7 @@ git-история и связанные `tasks/`.
   `archive.py` тем самым встаёт в ряд санкционированных писателей стейта рядом с
   `init.py`/`rollback.py` (BLOCKER-1). «Готово» вычисляется (`read.summarize` + финальный шаг
   фазы закрыт `completed`): persisted-поля «прогон завершён» в манифесте нет.
-- [BR-18] `deploy.sh` кладёт в `<target>/.gitignore` блок между маркерами: `ground/*` +
+- [BR-18] Установщик (`deploy.sh`, с [BR-22] — `install.sh`) кладёт в `<target>/.gitignore` блок между маркерами: `ground/*` +
   `!ground/policy.json` + `.gigacode/`; `uninstall.sh` снимает ровно его. Стейт прогонов и
   задеплоенный харнес в историю проекта не едут, конфигурация проекта — едет. Форма
   `ground/*`, а не `ground/`: re-include внутри исключённого каталога git не выполняет.
@@ -507,8 +510,23 @@ git-история и связанные `tasks/`.
   обязательные поля шапок (`**Фронт-часть:**` в `sdd.md` проверяет `check_sdd_doc.py`,
   `**Бэк-часть:**` в `ui-spec.md` — `check_ui_spec.py`): отсутствие поля не значит «нет».
   Реестр веток получил поле `doc_approval` — `update.py` больше не держит копию «какие шаги
-  требуют утверждённого документа». Пины: `test_deploy_profiles.py`, `test_branches_registry.py`,
+  требуют утверждённого документа». Пины: `test_install_kinds.py`, `test_branches_registry.py`,
   `test_check_ui_spec.py`. Дизайн и этапы — `tasks/019-forge-ui.md`.
+- [BR-22] forge и forge-ui — РАЗДЕЛЬНЫЕ extension'ы ВНУТРИ проекта (2026-10-30):
+  `<project>/.gigacode/extensions/<forge|forge-ui>/`, одна поставка на репо (общие хуки дважды не
+  гоняются). Файлы в проекте — GigaCode режет shell вне каталога проекта (почему откатили
+  2026-08-28); рантайм грузит extensions только из `~/.gigacode/extensions` (загрузка из проекта в
+  коде qwen-code 0.21.14/0.22.2 есть, но не вызывается) — туда кладётся ССЫЛКА (`extensions link`),
+  рантайм читает по ней манифест, `hooks/hooks.json`, скиллы, команды. Имя уникально на проект
+  (`forge-<каталог>-<хеш пути>`): реестр ссылок общий. Включение — `disable --scope user` +
+  `enable --scope workspace`, с другими forge-проектами — взаимно; правила рантайма не покрывают
+  проекты вне `$HOME`, поэтому хук идёт через `_run_hook.py` и вне своего проекта молчит. Пути и
+  интерпретатор зашиты при установке (без `${CLAUDE_PLUGIN_ROOT}`); переезд проекта —
+  `deploy-local.sh` extension'а. Каталог extension'а целиком форжевый: install подменяет его,
+  uninstall сносит — надгробия и реестр нужны теперь только для снятия старой co-located раскладки
+  (её `install.sh` снимает сам). Проверено на стоковом qwen 0.22.2, на GigaCode — нет. Пины:
+  `hooks/test_forge_extension.py`, `hooks/test_uninstall.py`, `test_install_kinds.py`,
+  `test_tombstones.sh`.
 
 ### BLOCKER и Thrust (компактно)
 
@@ -620,6 +638,9 @@ git-история и связанные `tasks/`.
   inline-phase-guard различает «actor-сигнал работает» и «`SubagentStart` не приходил вовсе»,
   чтобы вторая причина не читалась как первая и не уводила в цикл перезапусков (tasks/008).
 - **Гейт-хуки fail-OPEN при таймауте/краше** (>60с). Тяжёлые гейты запускает оркестратор.
+- **Extensions — только из `~/.gigacode/extensions`, включение — правилами путей.** `disable --scope
+  user` = «выключен под `$HOME`»: в проекте вне `$HOME` без forge extension другого проекта остаётся
+  включённым — хуки там молчат (`_run_hook.py`), но `/forge` и MCP-серверы видны ([BR-22]).
 - **`$(...)`/backticks/`find -exec`/`ls -R` РЕЖЕТСЯ** → в SKILL.md/доках заменены на
   `Glob`/`Grep`/`Read`. `fork-syntax-guard.py` объясняет замену.
 - **Вход через `router` не форсится** (нет события «скилл выбран»). Смягчения: `gate-guard`
@@ -662,7 +683,7 @@ git-история и связанные `tasks/`.
 Два внешних отчёта. Первый (`FORGE_WRAPPERS_AUDIT_2026-09-25`) **признан негодным**: он
 сравнивал `forge/skills/` с плоским legacy-каталогом оператора `.gigacode/` рядом с репо и
 на этом основании объявил «22 пропущенных компонента» и «пайплайн не стартует». Это не цель
-деплоя — `deploy.sh` требует явный `<target>` и разворачивает `<target>/.gigacode/`,
+деплоя — установщик требует явный `<target>` и ставит в `<target>/.gigacode/`,
 деплой в себя запрещён. Половина его находок вообще про скиллы, которых в forge нет
 (`pdf`, `pptx`, `plantuml-to-png`, `java-uml-spec`, …). Не опираться на него.
 
