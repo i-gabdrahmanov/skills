@@ -3,7 +3,7 @@ name: config-helper
 description: >
   Скилл-сопроводитель для настройки параметров forge: покрытие тестами, режим автономии и
   порог авто-аппрува (R0–R5), фиче-флаги (TDD, eval-driven, security-review), расположение
-  доков (in-repo/separate-repo), Jira/Bitbucket, инструмент миграций, фазы пайплайна и
+  доков (in-repo/separate-repo), Jira, инструмент миграций, фазы пайплайна и
   политику рисков. Пользователь говорит словами («подними покрытие до 90%», «выключи TDD»,
   «разреши авто-аппрув до R2», «куда класть доки», «включи security review», «настрой Jira»),
   а скилл находит нужный параметр и МЕНЯЕТ ЕГО ТОЛЬКО СКРИПТОМ — с валидацией, бэкапом и
@@ -30,7 +30,7 @@ description: >
 
 | Логический файл | Путь | Что внутри |
 |---|---|---|
-| `pipeline` | `ground/policy.json` (v2; legacy-имя `pipeline.json` всё ещё читается через dual-read для обратной совместимости, но deprecated — будет удалено в v3.0) | quality, docs, conventions, jira, bitbucket, delivery, phases_override |
+| `pipeline` | `ground/policy.json` (v2; legacy-имя `pipeline.json` всё ещё читается через dual-read для обратной совместимости, но deprecated — будет удалено в v3.0) | quality, project, sdd, autonomy, docs, master, spec, adr, conventions, jira, harness, phases_override |
 | `gates` | `ground/feature-gates.json` | bool-фиче-флаги рантайма (tdd_enforced, eval_driven_dev, security_review, …) |
 | `risk` 🔒 | `.gigacode/hooks/risk-policy.json` (в source-layout forge — фолбэк `hooks/risk-policy.json`) | autonomy_auto_max, default_level, destructive_blacklist, agent_caps (advanced, чувствительно) |
 
@@ -86,7 +86,8 @@ Exit-коды: `0` ок · `1` валидация/блок (sensitive без `--
 `2` ошибка аргументов либо R4 без approval-маркера · `3` файл/параметр не найден.
 `--confirm` — подтверждение намерения, а не согласие человека: ослабление политики
 (`risk list-remove`, `cap-set`, `phase disable` обязательной фазы) требует маркера
-`record_approval.py --key <ключ> --evidence "<дословная фраза пользователя>"`, одноразового.
+`python3 <project>/.gigacode/skills/pipeline-state/scripts/record_approval.py --key <ключ> --evidence "<дословная фраза пользователя>"`,
+одноразового.
 
 ### validate — конфиг проверяется на чтение, а не только на запись
 
@@ -149,7 +150,7 @@ python3 .../config.py validate --strict   # preflight: варнинги = оши
 | «какая у нас команда сборки» | `set quality.build_command './gradlew build'` — это ФАКТ о проекте, не гейт: свободно |
 | «применить настройку к идущему прогону» 🔒 | `repin --skill <S> --feature <F>` — **R4**: сначала `repin --dry-run` (покажи пользователю расхождение), затем после явного «да» `record_approval.py --key policy-repin-<feature> --approved-by user --reason "<почему>" --evidence "<его дословная фраза>"`, и только потом `repin`. Маркер одноразовый |
 | «включи security review» | `set security_review true` |
-| «разреши авто-аппрув до R2» 🔒 | `python3 skills/feature-pipeline/scripts/set_criticality.py --criticality low --skill <skill> --feature <feature>` (фича-уровень; порог R2) — для project-wide уровня: `set risk.autonomy_auto_max R2 --confirm` |
+| «разреши авто-аппрув до R2» 🔒 | `python3 <project>/.gigacode/skills/feature-pipeline/scripts/set_criticality.py --criticality low --skill <skill> --feature <feature>` (фича-уровень; порог R2) — для project-wide уровня: `set risk.autonomy_auto_max R2 --confirm` |
 | «доки клади в отдельный репо /abs/spec» | `set docs.mode separate-repo` + `set docs.repo_path /abs/spec` |
 | «настрой Jira, ключ NPF» | `set jira.enabled true` + `set jira.project_key NPF` |
 | «отключи фазу tdd в пайплайне» 🔒 | `phase disable 04-tdd` — **R4** (обязательная фаза): после явного «да» `record_approval.py --key policy-downgrade-phase.04-tdd --approved-by user --reason "<почему>" --evidence "<его фраза>"`, затем команда. Опциональные (`03-jira`, `02-eval-plan`) выключаются свободно |

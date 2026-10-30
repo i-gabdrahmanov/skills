@@ -141,6 +141,18 @@ class InstallKinds(unittest.TestCase):
         self.assertNotIn("skills/forgeui", (ext / ".forge-deployed").read_text(encoding="utf-8"))
         self._named_paths_exist(tgt, ext, "forge")
 
+        # config-helper правит ту risk-policy, которую читают хуки поставки (v0.5.1 искал её в
+        # .gigacode/hooks/ и отвечал exit 3 на любую правку risk.*)
+        cfg = [sys.executable, "-X", "utf8", str(ext / "skills/config-helper/scripts/config.py"),
+               "--project", str(tgt)]
+        r = _run([*cfg, "get", "risk.autonomy_auto_max"])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(json.loads(r.stdout)["source"], "file:risk-policy.json")
+        r = _run([*cfg, "risk", "list-add", "destructive_blacklist", "DROP SCHEMA", "--confirm"])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        policy = json.loads((ext / "hooks" / "risk-policy.json").read_text(encoding="utf-8"))
+        self.assertIn("DROP SCHEMA", policy["destructive_blacklist"])
+
     def test_unknown_kind_refused(self):
         tgt = self.root / "x"
         tgt.mkdir()

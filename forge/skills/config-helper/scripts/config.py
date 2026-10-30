@@ -146,13 +146,22 @@ def resolve_file(project: Path, file_key: str) -> Path:
     if file_key == "gates":
         return project / "ground" / "feature-gates.json"
     if file_key == "risk":
-        cand = project / ".gigacode" / "hooks" / "risk-policy.json"
-        if cand.exists():
-            return cand
-        alt = project / "hooks" / "risk-policy.json"  # source-layout forge
-        if alt.exists():
-            return alt
-        return cand
+        # Политику читают хуки той установки, рядом с которыми она лежит (risk_ladder:
+        # gigacode_dir()/hooks): extension — .gigacode/extensions/<kind>/hooks, старая
+        # раскладка — .gigacode/hooks, source-layout forge — hooks/.
+        cands = [project / ".gigacode" / "extensions" / k / "hooks" / "risk-policy.json"
+                 for k in ("forge", "forge-ui")]
+        cands += [project / ".gigacode" / "hooks" / "risk-policy.json",
+                  project / "hooks" / "risk-policy.json"]
+        for cand in cands:
+            if cand.exists():
+                return cand
+        own = Path(_HOOKS) / "risk-policy.json"  # для текста ошибки — путь своей установки
+        try:
+            own.resolve().relative_to(project.resolve())
+            return own
+        except ValueError:
+            return cands[2]
     raise ValueError(f"неизвестный file-key: {file_key}")
 
 
