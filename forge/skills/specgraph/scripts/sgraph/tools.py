@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -26,6 +26,7 @@ from . import assign as AS
 from . import blocks as B
 from . import catalog as CT
 from . import config as C
+from . import edges as ED
 from . import metrics as M
 from . import profile as PF
 from . import queue as Q
@@ -210,6 +211,11 @@ def _resolve(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return {"results": [dict(RS.resolve(idx, m, cfg, args.get("service")), mention=m) for m in args["mentions"][:30]]}
 
 
+def _mechanical(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    return dict(ED.run_mechanical(root, _need_cfg(root)),
+                next="механические рёбра предложены (status proposed); дальше — предложения модели по заметкам")
+
+
 _QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
 
 TOOLS: Dict[str, Dict[str, Any]] = {
@@ -325,6 +331,12 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                    "properties": {"mentions": {"type": "array", "items": {"type": "string"}},
                                   "service": {"type": "string", "description": "сервис-контекст для неоднозначных путей"}},
                    "required": ["mentions"], "additionalProperties": False},
+    },
+    "graph_edges_mechanical": {
+        "fn": _mechanical,
+        "description": "Механические рёбра по форме текста (обработчик → топик, «публикуется в топик», METHOD /path "
+                       "чужого сервиса, имя узла данных) с цитатой-основанием; проходят ту же проверку, что и рёбра модели.",
+        "schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     "graph_queue_status": {
         "fn": _queue_status,

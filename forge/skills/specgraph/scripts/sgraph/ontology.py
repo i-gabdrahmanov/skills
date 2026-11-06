@@ -193,6 +193,14 @@ class Ontology:
     def allowed_edges(self, src: Dict[str, Any], dst: Dict[str, Any]) -> List[str]:
         return [n for n in self.edges if self.edge_allowed(n, src, dst)[0]]
 
+    def can_start(self, edge: str, src: Dict[str, Any]) -> bool:
+        """Может ли узел быть началом ребра (концы-цели — любые допустимые)."""
+        e = self.edges.get(edge)
+        return bool(e) and self._match(_ends(e["from"]), src)
+
+    def target_kinds(self, edge: str) -> List[str]:
+        return sorted({k for k, _ in _ends(self.edges[edge]["to"])})
+
     def edges_from(self, src: Dict[str, Any]) -> List[str]:
         return [n for n, e in self.edges.items() if self._match(_ends(e["from"]), src)]
 
