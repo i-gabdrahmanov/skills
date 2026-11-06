@@ -77,7 +77,7 @@
 | М1 | 0 | [0.6 Очередь работ](tasks/0.6-work-queue.md) | 0.1, 4.1 |  done |
 | М1 | X | [X.1 Матрица уроков прототипа](tasks/X.1-prototype-lessons.md) | 0.2 |  done |
 | М1 | 1 graph-map | [1.1 Блоки исходника](tasks/1.1-md-blocks.md) | 0.1 |  done |
-| М1 | 4 | [4.2 Профайлер входа](tasks/4.2-source-profiler.md) | 1.1 | todo |
+| М1 | 4 | [4.2 Профайлер входа](tasks/4.2-source-profiler.md) | 1.1 |  done |
 | М1 | 1 | [1.2 Экстракторы кандидатов](tasks/1.2-extractors.md) | 1.1, 0.5 | todo |
 | М1 | 1 | [1.3 Разведка: обзор спеки и черновой каталог](tasks/1.3-survey.md) | 1.2, 4.2, 0.6 | todo |
 | М1 | 1 | [1.4 Дедуп и каталог — решение до нарезки](tasks/1.4-catalog-dedup.md) | 1.3 | todo |

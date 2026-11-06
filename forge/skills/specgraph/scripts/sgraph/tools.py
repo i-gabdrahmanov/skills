@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, List, Optional
 from . import blocks as B
 from . import config as C
 from . import metrics as M
+from . import profile as PF
 from . import queue as Q
 from . import status as ST
 
@@ -106,12 +107,23 @@ def _queue_status(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return Q.status(root, _queue_arg(args))
 
 
-def _scan(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+def _need_cfg(root: Path) -> Dict[str, Any]:
     cfg, errors = C.load(root)
     if cfg is None:
         raise ToolError("проект не инициализирован или конфиг с ошибками — сначала graph_status / graph_init"
                         + (": " + "; ".join(errors) if errors else ""), ["E-config-missing"])
-    return B.scan(root, cfg, args.get("scope"))
+    return cfg
+
+
+def _scan(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    return B.scan(root, _need_cfg(root), args.get("scope"))
+
+
+def _profile(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = _need_cfg(root)
+    if args.get("reveal"):
+        return PF.reveal(root, cfg, args["reveal"])
+    return PF.profile(root, cfg, args.get("scope"))
 
 
 _QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
@@ -153,6 +165,16 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                        "файлам: число блоков, размер, оглавление, предупреждения (незакрытый фенс).",
         "schema": {"type": "object",
                    "properties": {"scope": {"type": "string", "description": "all | каталог | файл; пусто — all"}},
+                   "additionalProperties": False},
+    },
+    "graph_profile": {
+        "fn": _profile,
+        "description": "Профиль ФОРМЫ исходников без содержимого: заголовки (глубина, нумерация, слова — общие как есть, "
+                       "прочие хешем w#…), таблицы, фенсы, ссылки, попадания шаблонов. reveal=<хеш> — только локально: "
+                       "какое слово стоит за хешем.",
+        "schema": {"type": "object",
+                   "properties": {"scope": {"type": "string", "description": "all | каталог | файл; пусто — all"},
+                                  "reveal": {"type": "string", "description": "w#xxxxxx или f#xxxxxx — раскрыть хеш"}},
                    "additionalProperties": False},
     },
     "graph_queue_status": {
