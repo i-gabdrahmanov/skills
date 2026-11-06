@@ -99,7 +99,7 @@
 | М1 | 4 диагностика | [4.3 Пакет диагностики `/graph diag`](tasks/4.3-diag-bundle.md) | 4.1, 4.2, 3.1, 3.2 | done |
 | М1 | 4 | [4.4 Разбор обратной связи](tasks/4.4-feedback-triage.md) | 4.3 | done |
 | М1 | X | [X.2 Упаковка и установка](tasks/X.2-packaging.md) | 3.6 | done |
-| М1 | X | [X.3 Руководство аналитика](tasks/X.3-user-guide.md) | 3.6 | todo |
+| М1 | X | [X.3 Руководство аналитика](tasks/X.3-user-guide.md) | 3.6 | done |
 | М2 | 4 самоулучшение | [4.5 Самопроверка вопросами](tasks/4.5-self-check.md) | 3.4 | todo |
 | М2 | 4 | [4.6 Цикл самоулучшения графа](tasks/4.6-improve-loop.md) | 4.1, 3.5 | todo |
 | М2 | 4 | [4.7 Самонастройка правил и подсказки](tasks/4.7-rule-tuning.md) | 1.7, 2.6, 4.1 | todo |

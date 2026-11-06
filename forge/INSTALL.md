@@ -128,7 +128,8 @@ UI, эндпойнты, Kafka, данные, сервисы. Связи типи
 **Где граф и как открыть.** Vault по умолчанию — `docs/graph/`. В Obsidian: *Open folder as vault* →
 `<репо>/docs/graph`. Точка входа — `_graph/Начало.md`. Отчёты: `_graph/catalog.md` (каталог узлов),
 `_graph/edges-review.md` (связи), `_graph/report.md` (проверка и перенос исходников),
-`_graph/open-questions.md` (вопросы аналитику). Цвета видов пишутся в `.obsidian/graph.json`, ваши
+`_graph/open-questions.md` (вопросы аналитику). Руководство аналитика лежит прямо в vault —
+`_graph/Руководство аналитика.md` (источник: `docs/specgraph/guide-analyst.md`). Цвета видов пишутся в `.obsidian/graph.json`, ваши
 настройки и группы сохраняются. Виды-таблицы — `_graph/views/`: Bases, если плагин включён, иначе
 Markdown.
 

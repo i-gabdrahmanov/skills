@@ -23,6 +23,8 @@ from . import ontology as O
 from . import resolve as RS
 
 LAYER = Path(__file__).resolve().parents[2] / "references" / "obsidian.json"
+GUIDE = Path(__file__).resolve().parents[2] / "references" / "guide-analyst.md"
+GUIDE_NAME = "Руководство аналитика.md"
 STATE_REL = ".spec-graph/obsidian.json"
 START_NAME = "Начало.md"
 
@@ -131,7 +133,8 @@ def _hex(rgb: int) -> str:
 def _start(ont: O.Ontology, layer: Dict[str, Any], nodes: List[Dict[str, Any]], groups: List[Dict[str, Any]],
            mode: str) -> str:
     lines = ["# Начало", "", "Точка входа в граф спецификации. Заметки и связи строит движок spec-graph; правки "
-             "человека — проза вне маркеров и свойства в Properties.", ""]
+             "человека — проза вне маркеров и свойства в Properties.",
+             f"Как ходить по графу и что можно править — [[_graph/{GUIDE_NAME[:-3]}|{GUIDE_NAME[:-3]}]].", ""]
     for e in layer["entries"]:
         kind = e["kind"]
         mine = sorted((n for n in nodes if n["kind"] == kind), key=lambda n: n["name"])
@@ -240,6 +243,9 @@ def build(root: Path, cfg: Dict[str, Any], dry: bool = False) -> Dict[str, Any]:
             if not dry:
                 p.unlink()
             changed.append(p.relative_to(root).as_posix())
+    gp2 = vault / "_graph" / GUIDE_NAME
+    if _write(gp2, GUIDE.read_text(encoding="utf-8"), dry):
+        changed.append(gp2.relative_to(root).as_posix())
     sp = vault / "_graph" / START_NAME
     if _write(sp, _start(ont, layer, nodes, ours, mode), dry):
         changed.append(sp.relative_to(root).as_posix())
