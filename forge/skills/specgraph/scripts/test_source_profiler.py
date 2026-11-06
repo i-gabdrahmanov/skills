@@ -119,7 +119,7 @@ class Shapes(_Proj):
         unclosed = self.prof("unclosed-fence")["per_file"]
         self.assertEqual(sum(p["warnings"].get("W-fence-unclosed", 0) for p in unclosed), 1)
         self.assertGreater(self.prof("html-tables")["totals"]["blocks"].get("html", 0), 0)
-        ts = next(p for p in base["per_file"] if p["hits"]["topic"])
+        ts = next(p for p in base["per_file"] if p["hits"]["topic_like"])
         self.assertGreaterEqual(ts["hits"]["http"], 4)
         self.assertEqual(ts["fences"], {"json": 3, "sql": 1})
         self.assertEqual(ts["links"]["anchor"], 1)

@@ -117,9 +117,9 @@ def profile_md(root: Path, rel: str, masker: Masker) -> Dict[str, Any]:
         "heading_words": _top(hwords, 30),
         "tables": {"cols": dict(sorted(cols.items())), "header_words": _top(hdr, 10)},
         "fences": dict(sorted(fences.items())),
-        "links": {"anchor": len(re.findall(r"\]\(#", prose)), "external": len(re.findall(r"\]\(https?:", prose)),
+        "links": {"anchor": len(re.findall(r"\]\(#", prose)), "web": len(re.findall(r"\]\(https?:", prose)),
                   "relative": len(re.findall(r"\]\((?!#|https?:)", prose)), "wiki": prose.count("[[")},
-        "hits": {"http": len(_HTTP.findall(prose)), "topic": len(_TOPIC.findall(text)), "cron": len(_CRON.findall(prose))},
+        "hits": {"http": len(_HTTP.findall(prose)), "topic_like": len(_TOPIC.findall(text)), "cron": len(_CRON.findall(prose))},
         "warnings": dict(Counter(w["code"] for w in warnings)),
     }
 
