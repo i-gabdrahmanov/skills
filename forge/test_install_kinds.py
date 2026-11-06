@@ -14,8 +14,11 @@
     control-plane, скрипты feature-pipeline без SKILL.md; /graph; MCP spec-graph (отвечает на
     initialize); сборки в репо нет — init ставит build_system none и не спрашивает корневой пакет,
     preflight проходит; вторая поставка в тот же репо — отказ;
+  • спека в репо кода (`install.sh forge --with-graph`, X.2/D2): к бэк-поставке добавлены скилл specgraph,
+    /graph и MCP spec-graph (отвечает), метка «with graph» в профиле; update.sh переставляет с тем же флагом;
+    к другим поставкам флаг — отказ; доктор graph_doctor.py видит MCP, команду и хук без рантайма;
   • тексты для модели называют пути своей поставки, и каждый названный путь существует;
-  • uninstall снимает каталог поставки целиком.
+  • uninstall снимает каталог поставки целиком и не трогает чужое в .gigacode/.
 """
 from __future__ import annotations
 
@@ -206,9 +209,57 @@ class InstallKinds(unittest.TestCase):
         self.assertIn("уже стоит spec-graph", r.stderr)
         self.assertFalse((tgt / ".gigacode" / "extensions" / "forge").exists())
 
+        r = _run([py, "-X", "utf8", str(ext / "hooks" / "graph_doctor.py"), "--project", str(tgt)])
+        self.assertIn("- MCP spec-graph: в манифесте, отвечает", r.stdout, r.stdout + r.stderr)
+        self.assertIn("- поставка: spec-graph; профиль: graph; граф спеки: True", r.stdout)
+        self.assertNotIn(str(tgt), r.stdout, "вывод доктора — без путей машины")
+
+        own = tgt / ".gigacode" / "skills" / "my-own" / "SKILL.md"
+        own.parent.mkdir(parents=True)
+        own.write_text("# своё\n", encoding="utf-8")
         r = _run(["bash", str(REPO / "uninstall.sh"), "spec-graph", str(tgt), "--no-link"])
         self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
         self.assertFalse(ext.exists())
+        self.assertTrue(own.is_file(), "чужое в .gigacode/ не трогаем")
+
+    def test_forge_with_graph(self):
+        tgt = self.root / "code-with-spec"
+        tgt.mkdir()
+        (tgt / "build.gradle").write_text("group = 'com.example'\n", encoding="utf-8")
+        _git_init(tgt)
+        r = _run(["bash", str(REPO / "install.sh"), "forge-ui", str(tgt), "--no-link", "--with-graph"])
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("--with-graph — только к forge", r.stderr)
+        r = _run(["bash", str(REPO / "install.sh"), "forge", str(tgt), "--no-link", "--with-graph"])
+        self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
+        ext = tgt / ".gigacode" / "extensions" / "forge"
+        self.assertTrue((ext / "skills" / "specgraph" / "SKILL.md").is_file())
+        self.assertTrue((ext / "skills" / "feature-pipeline" / "SKILL.md").is_file(), "forge целиком")
+        self.assertFalse((ext / "skills" / "forgeui").exists())
+        self.assertTrue((ext / "commands" / "graph.md").is_file())
+        self.assertTrue((ext / "commands" / "forge.md").is_file())
+        prof = (ext / ".forge-profile").read_text(encoding="utf-8").splitlines()
+        self.assertIn("with graph", prof)
+        self.assertNotIn("exclude-skill specgraph", prof)
+        mcp = self._manifest(ext)["mcpServers"]
+        self.assertEqual(sorted(mcp), ["forge-master", "spec-graph"])
+        init = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        r = _run([mcp["spec-graph"]["command"], *mcp["spec-graph"]["args"]], cwd=mcp["spec-graph"]["cwd"],
+                 inp=init + "\n", timeout=60)
+        self.assertIn('"spec-graph"', r.stdout, r.stderr)
+        r = _run([sys.executable, "-X", "utf8", str(ext / "hooks" / "graph_doctor.py"), "--project", str(tgt)])
+        self.assertIn("- поставка: forge; профиль: back; граф спеки: True", r.stdout)
+        self.assertIn("- хук graph-guard: зарегистрирован", r.stdout)
+        self._named_paths_exist(tgt, ext, "forge")
+
+        r = _run(["bash", str(REPO / "update.sh"), str(tgt), "--no-pull", "--no-link"])
+        self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
+        self.assertTrue((ext / "commands" / "graph.md").is_file(), "update.sh сохранил граф")
+        self.assertIn("with graph", (ext / ".forge-profile").read_text(encoding="utf-8").splitlines())
+        r = _run(["bash", str(REPO / "install.sh"), "forge", str(tgt), "--no-link"])
+        self.assertEqual(r.returncode, 0)
+        self.assertFalse((ext / "skills" / "specgraph").exists(), "без флага — без графа")
+        self.assertEqual(sorted(self._manifest(ext)["mcpServers"]), ["forge-master"])
 
     def test_unknown_kind_refused(self):
         tgt = self.root / "x"

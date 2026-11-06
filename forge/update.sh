@@ -79,6 +79,12 @@ if [ -z "$KIND" ]; then
   fi
 fi
 
+# граф спеки в бэк-поставке (install.sh forge --with-graph) — переставляем с тем же флагом
+if [ "$KIND" = "forge" ] && [ -f "$GIG/extensions/forge/.forge-profile" ] \
+   && grep -qx 'with graph' "$GIG/extensions/forge/.forge-profile"; then
+  PASS+=(--with-graph)
+fi
+
 MODE="git pull + install.sh $KIND"
 [ "$FORCE" -eq 1 ] && MODE="git pull + uninstall.sh + install.sh $KIND (--force)"
 [ "$NO_PULL" -eq 1 ] && MODE="${MODE/git pull + /}"

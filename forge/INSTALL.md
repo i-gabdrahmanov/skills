@@ -55,8 +55,10 @@ Forge ставится в проект **extension'ом GigaCode**, и пост�
 ## 1. Установка
 
 ```bash
-bash install.sh forge    /path/to/back-repo      # бэк-репо
-bash install.sh forge-ui /path/to/front-repo     # фронт-репо
+bash install.sh forge      /path/to/back-repo                # бэк-репо
+bash install.sh forge-ui   /path/to/front-repo               # фронт-репо
+bash install.sh spec-graph /path/to/spec-repo                # репо спеки: граф спецификации для Obsidian
+bash install.sh forge      /path/to/back-repo --with-graph   # спека лежит в репо кода: forge + граф спеки
 ```
 
 Что делает `install.sh`:
@@ -103,6 +105,38 @@ bash install.sh forge-ui /path/to/front-repo     # фронт-репо
 (запускает `forgeui` напрямую). В манифесте — MCP **`forge-ui`**. `init_pipeline_config.py`
 распознаёт `npm|pnpm|yarn` по lock-файлу. Первый `/forge` один раз спрашивает настройки фронта и
 пишет `.daiver/config.yaml`.
+
+### Граф спецификации: spec-graph
+
+Плоская Markdown-спека микросервисов превращается в граф заметок Obsidian: бизнес-операции, шедулеры,
+UI, эндпойнты, Kafka, данные, сервисы. Связи типизированы и подтверждены цитатой из спеки. По этому графу
+ходит и аналитик (graph view, бэклинки, свойства), и агент (инструменты `graph_*`).
+
+**Два сценария размещения.**
+- **Репо спеки** (основной): `bash install.sh spec-graph <репо спеки>`. Едут скилл `specgraph`,
+  `pipeline-state`, `config-helper` и скрипты `feature-pipeline` без её SKILL.md; команда `/graph`; MCP
+  **`spec-graph`**. Сборки в репо нет — `init_pipeline_config.py` ставит `build_system: none`. Вторая
+  поставка в тот же репо — отказ.
+- **Спека в репо кода**, где стоит forge: `bash install.sh forge <репо> --with-graph`. К бэк-поставке
+  добавляются скилл `specgraph`, `/graph` и MCP `spec-graph`. Метка `with graph` в профиле поставки —
+  `update.sh` переставляет поставку с тем же флагом. Без флага при переустановке граф снимается.
+
+**Первый запуск.** В корне репо: `/graph` (scope — `all`, имя сервиса или файл). Первым ходом агент
+спросит, где лежит спека, что исключить и куда писать граф. Кандидаты он покажет сам, решаете вы. Конфиг —
+`.spec-graph/config.json` (под git). Рабочие производные `.spec-graph/*` вне git.
+
+**Где граф и как открыть.** Vault по умолчанию — `docs/graph/`. В Obsidian: *Open folder as vault* →
+`<репо>/docs/graph`. Точка входа — `_graph/Начало.md`. Отчёты: `_graph/catalog.md` (каталог узлов),
+`_graph/edges-review.md` (связи), `_graph/report.md` (проверка и перенос исходников),
+`_graph/open-questions.md` (вопросы аналитику). Цвета видов пишутся в `.obsidian/graph.json`, ваши
+настройки и группы сохраняются. Виды-таблицы — `_graph/views/`: Bases, если плагин включён, иначе
+Markdown.
+
+**Проверка без рантайма** (MCP не поднялся, `graph_status` недоступен):
+`python3 .gigacode/extensions/<spec-graph|forge>/hooks/graph_doctor.py --project .`. Он проверяет MCP
+(живой `initialize`), команду, хук `graph-guard`, ссылку в рантайме и движок. Вывод без путей машины —
+его можно вынести из окружения. **Пакет для разработчиков** — `/graph diag` → `_graph/diag/…`. В пакете
+только форма (коды, числа, хеши), текста спеки нет: до записи его проверяет самопроверка утечки.
 
 ## 2. Проверка готовности
 

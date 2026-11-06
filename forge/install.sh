@@ -5,6 +5,7 @@
 #   bash install.sh forge    /path/to/back-repo     # бэк-репо: полный forge (профиль back)
 #   bash install.sh forge-ui /path/to/front-repo    # фронт-репо: forge-ui (профиль ui)
 #   bash install.sh spec-graph /path/to/spec-repo   # репо спеки: spec-graph (профиль graph)
+#   bash install.sh forge /path/to/repo --with-graph # спека лежит в репо кода: forge + граф спеки (/graph)
 #
 # Установки раздельные: одна поставка на репо (хуки control-plane у них общие — две поставки в
 # одном репо гоняли бы каждый хук дважды), вторая — отказ с подсказкой, как снять первую.
@@ -41,17 +42,19 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # корень репо Fo
 # shellcheck source=_deployed_manifest.sh
 . "$SRC/_deployed_manifest.sh"
 
-usage() { echo "Usage: bash install.sh <forge|forge-ui|spec-graph> /path/to/project [--runtime gigacode|qwen] [--no-link]" >&2; }
+usage() { echo "Usage: bash install.sh <forge|forge-ui|spec-graph> /path/to/project [--runtime gigacode|qwen] [--no-link] [--with-graph]" >&2; }
 
 KIND=""
 TARGET=""
 RUNTIME="${FORGE_RUNTIME:-}"
 NO_LINK=0
+WITH_GRAPH=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --runtime) RUNTIME="${2:-}"; shift 2 || { echo "install.sh: --runtime без значения" >&2; exit 2; } ;;
     --runtime=*) RUNTIME="${1#--runtime=}"; shift ;;
     --no-link) NO_LINK=1; shift ;;
+    --with-graph) WITH_GRAPH=1; shift ;;
     -h|--help) sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "install.sh: неизвестный флаг: $1" >&2; usage; exit 2 ;;
     *)
@@ -71,6 +74,10 @@ case "$KIND" in
   *) echo "install.sh: неизвестная поставка '$KIND' — есть forge, forge-ui и spec-graph." >&2; usage; exit 2 ;;
 esac
 PROFILE_FILE="$SRC/profiles/$PROFILE.profile"
+if [ "$WITH_GRAPH" -eq 1 ] && [ "$KIND" != "forge" ]; then
+  echo "install.sh: --with-graph — только к forge (спека в репо кода, D2); репо спеки — install.sh spec-graph." >&2
+  exit 2
+fi
 
 if [ -z "$TARGET" ]; then
   echo "install.sh: не указана папка проекта — без пути ничего не ставится (проектов может быть несколько)." >&2
@@ -107,7 +114,7 @@ fi
 profile_values() { forge_strip_comments "$PROFILE_FILE" | awk -v k="$1" '$1 == k { print $2 }'; }
 profile_has() { forge_strip_comments "$PROFILE_FILE" | awk '{ print $1 }' | grep -Fxq "$1"; }
 
-echo "== install $KIND (профиль $PROFILE) → $EXT =="
+echo "== install $KIND (профиль $PROFILE$([ "$WITH_GRAPH" -eq 1 ] && echo ' + граф спеки')) → $EXT =="
 
 # 0. старая раскладка (project-модель ≤ 0.5)
 if [ -f "$GIG/.forge-deployed" ] || [ -f "$GIG/hooks/gate-guard.py" ] || [ -f "$GIG/hooks/settings.hooks.json" ] \
@@ -120,6 +127,16 @@ fi
 mkdir -p "$EXT_ROOT"
 STAGE="$(mktemp -d "$EXT_ROOT/.$KIND.new.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
+if [ "$WITH_GRAPH" -eq 1 ]; then
+  # граф спеки в бэк-поставку (X.2, D2): профиль back без исключения specgraph + /graph + MCP spec-graph;
+  # метка «with graph» — по ней update.sh переставит поставку с тем же флагом
+  {
+    forge_strip_comments "$PROFILE_FILE" | grep -vx 'exclude-skill specgraph'
+    printf '%s\n' "# --with-graph: спека в репо кода — скилл specgraph, команда /graph, MCP spec-graph" \
+      "with graph" "commands spec-graph/commands" "mcp spec-graph"
+  } > "$STAGE/.forge-profile"
+  PROFILE_FILE="$STAGE/.forge-profile"
+fi
 copy_tree() {  # $1=src-dir  $2=dst-dir (cp -a, не tar: см. память deploy-copy-tar-eperm)
   mkdir -p "$2"
   cp -a "$1/." "$2/"
@@ -171,7 +188,7 @@ for cdir in $(profile_values commands); do
 done
 for d in FORGE.md SKILLS-REGISTRY.md; do [ -f "$SRC/$d" ] && cp "$SRC/$d" "$STAGE/$d"; done
 cp "$SRC/deploy-local.sh" "$STAGE/deploy-local.sh"
-cp "$PROFILE_FILE" "$STAGE/.forge-profile"
+[ "$PROFILE_FILE" = "$STAGE/.forge-profile" ] || cp "$PROFILE_FILE" "$STAGE/.forge-profile"
 FORGE_REV="$(git -C "$SRC" describe --tags --match 'forge/v*' --always --dirty 2>/dev/null || echo unknown)"
 {
   printf '# forge: реестр установки (kind=%s rev=%s)\n' "$KIND" "$FORGE_REV"
