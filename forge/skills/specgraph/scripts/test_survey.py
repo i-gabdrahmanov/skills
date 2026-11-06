@@ -142,5 +142,57 @@ class Drafts(_Proj):
         self.assertEqual(st["leased"] + st["pending"] + st["done"], 8)
 
 
+class Similar(unittest.TestCase):
+    """Ближайшие имена корпуса: индекс по наборам слов даёт ровно то же, что наивный перебор, но без квадрата."""
+
+    @staticmethod
+    def naive(names, probes, limit=SV._KNOWN_MAX):
+        pt = [SV._tokens(p) for p in probes]
+        scored = []
+        for n in names:
+            nt = SV._tokens(n)
+            best = max((len(nt & t) / max(1, len(nt | t)) for t in pt), default=0.0)
+            if best > 0:
+                scored.append((-best, n))
+        return [n for _, n in sorted(scored)[:limit]]
+
+    def test_matches_naive(self):
+        names = sorted({g["name"] for g in json.loads((K.FIX / "expected" / "graph.json").read_text(encoding="utf-8"))["nodes"]})
+        names += [f"{n} {i}" for n in names[:10] for i in range(3)] + ["Шедулер", "шедулер закрытия"]
+        index = SV._NameIndex(names)
+        for probes in (["Шедулер закрытия регулярных задач"], ["UI регистрации", "задачи ВСП"], ["нет совпадений xyz"],
+                       ["Передача упаковок", "Укомплектование", "передача"]):
+            for subset in (names, names[::2]):
+                with self.subTest(probes=probes, n=len(subset)):
+                    self.assertEqual(SV._similar(subset, probes, index=index), self.naive(subset, probes))
+                    self.assertEqual(SV._similar(subset, probes, limit=3), self.naive(subset, probes, limit=3))
+
+    def test_matches_naive_on_random_corpus(self):
+        import random
+        rnd = random.Random(7)
+        vocab = ["шедулер", "закрытия", "задачи", "передачи", "упаковок", "регистрации", "приёма", "сервис", "архив",
+                 "алгоритм", "балансировки", "обработка", "ответа", "события"]
+        names = sorted({" ".join(rnd.sample(vocab, rnd.randint(1, 5))) for _ in range(300)})
+        index = SV._NameIndex(names)
+        for _ in range(40):
+            probes = [" ".join(rnd.sample(vocab, rnd.randint(1, 4))) for _ in range(rnd.randint(1, 4))]
+            subset = [n for n in names if rnd.random() < 0.7]
+            for limit in (1, 5, 60):
+                self.assertEqual(SV._similar(subset, probes, limit=limit, index=index), self.naive(subset, probes, limit))
+
+    def test_bloated_survey_is_fast(self):
+        import shutil
+        import time
+        with tempfile.TemporaryDirectory() as td:
+            d = GV.bloated(Path(td) / "big")
+            root = Path(td) / "repo"
+            shutil.copytree(d, root / "docs" / "spec")
+            T.call("graph_init", root, {"sources": ["docs/spec"]})
+            t0 = time.perf_counter()
+            T.call("graph_survey", root, {})
+            took = time.perf_counter() - t0
+            self.assertLess(took, 15.0, f"разведка «раздутого» корпуса — {took:.1f} с (было 40+ с до индекса имён)")
+
+
 if __name__ == "__main__":
     unittest.main()

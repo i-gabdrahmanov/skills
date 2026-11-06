@@ -84,16 +84,43 @@ def _tokens(s: str) -> set:
     return {w for w in re.findall(r"[^\W\d_]{3,}", s.lower())}
 
 
-def _similar(names: List[str], probes: List[str], limit: int = _KNOWN_MAX) -> List[str]:
-    """Имена корпуса, ближайшие к кандидатам единицы (по общим словам): общий узел назовут так же,
-    а список не раздувает вход на большом корпусе."""
-    pt = [_tokens(p) for p in probes]
-    scored = []
-    for n in names:
-        nt = _tokens(n)
-        best = max((len(nt & t) / max(1, len(nt | t)) for t in pt), default=0.0)
-        if best > 0:
-            scored.append((-best, n))
+class _NameIndex:
+    """Имена корпуса, сгруппированные по набору слов, и обратный индекс «слово → наборы». Сходство считается
+    по различным наборам слов и кэшируется по набору слов пробы на всю разведку: в спеке заголовки и имена
+    повторяются, а сравнение каждого имени с каждой пробой на каждой единице — квадрат по корпусу (40 с на
+    «раздутом» варианте)."""
+
+    def __init__(self, names: List[str]):
+        self.groups: Dict[frozenset, List[str]] = {}
+        for n in names:
+            self.groups.setdefault(frozenset(_tokens(n)), []).append(n)
+        self.inv: Dict[str, List[frozenset]] = {}
+        for g in self.groups:
+            for w in g:
+                self.inv.setdefault(w, []).append(g)
+        self._memo: Dict[frozenset, Dict[frozenset, float]] = {}
+
+    def scores(self, probe: frozenset) -> Dict[frozenset, float]:
+        if probe not in self._memo:
+            inter: Dict[frozenset, int] = {}
+            for w in probe:
+                for g in self.inv.get(w, ()):
+                    inter[g] = inter.get(g, 0) + 1
+            self._memo[probe] = {g: c / max(1, len(g) + len(probe) - c) for g, c in inter.items()}
+        return self._memo[probe]
+
+
+def _similar(names: List[str], probes: List[str], limit: int = _KNOWN_MAX, index: Optional[_NameIndex] = None) -> List[str]:
+    """Имена корпуса, ближайшие к кандидатам единицы (по общим словам, мера Жаккара): общий узел назовут
+    так же, а список не раздувает вход на большом корпусе."""
+    index = index or _NameIndex(names)
+    allowed = set(names)
+    best: Dict[frozenset, float] = {}
+    for probe in {frozenset(_tokens(p)) for p in probes}:
+        for g, s in index.scores(probe).items():
+            if s > best.get(g, 0.0):
+                best[g] = s
+    scored = [(-s, n) for g, s in best.items() if s > 0 for n in index.groups[g] if n in allowed]
     return [n for _, n in sorted(scored)[:limit]]
 
 
@@ -138,12 +165,20 @@ def survey(root: Path, cfg: Dict[str, Any], scope: Optional[str] = None) -> Dict
     bchars = brief_chars()
     specs, anomalies = [], []
     shas = Counter(pf["data"]["sha1"] for pf in per_file)
+    index = _NameIndex(sorted({c["name_hint"] for c in all_cands}))
+    by_file_names: Dict[str, Counter] = {}
+    for pf in per_file:
+        by_file_names[pf["file"]] = Counter(c["name_hint"] for c in pf["cands"])
+    total_names = Counter(c["name_hint"] for c in all_cands)
     for pf in per_file:
         rel, rows, cands = pf["file"], pf["rows"], pf["cands"]
-        others = sorted({c["name_hint"] for c in all_cands if c not in cands} - {c["name_hint"] for c in cands})
-        for k, (chunk, cc) in enumerate(_chunks(rows, cands, budget - bchars, rel, pf["service"], others), 1):
-            known = _similar(others, [c["name_hint"] for c in cc] + [r["title"] for r in chunk])
-            single = len(_chunks(rows, cands, budget - bchars, rel, pf["service"], others)) == 1
+        own = by_file_names[rel]
+        # имена кандидатов других файлов, кроме своих (как раньше: «не мой кандидат» минус «мои имена»)
+        others = sorted(n for n, k in total_names.items() if n not in own and k > 0)
+        chunks = _chunks(rows, cands, budget - bchars, rel, pf["service"], others)
+        single = len(chunks) == 1
+        for k, (chunk, cc) in enumerate(chunks, 1):
+            known = _similar(others, [c["name_hint"] for c in cc] + [r["title"] for r in chunk], index=index)
             text = _input_text(rel, pf["service"], chunk, cc, known, part="" if single else f" — часть {k}")
             specs.append({"id": unit_id(rel, 0 if single else k), "brief": BRIEF, "tool": TOOL, "input": text,
                           "refs": {"file": rel, "sections": [r["id"] for r in chunk],
