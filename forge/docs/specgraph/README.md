@@ -95,7 +95,7 @@
 | М1 | 3 | [3.3 Obsidian-слой](tasks/3.3-obsidian-layer.md) | 3.1 | done |
 | М1 | 3 | [3.4 MCP обхода](tasks/3.4-traversal-mcp.md) | 3.1 | done |
 | М1 | 3 | [3.5 Шаг graph-check и приёмка](tasks/3.5-check-step.md) | 3.2, 3.3, 3.4 | done |
-| М1 | 3 | [3.6 E2E на фикстуре ТЗ](tasks/3.6-e2e.md) | 3.5, 2.6, 1.7 | todo |
+| М1 | 3 | [3.6 E2E на фикстуре ТЗ](tasks/3.6-e2e.md) | 3.5, 2.6, 1.7 | done |
 | М1 | 4 диагностика | [4.3 Пакет диагностики `/graph diag`](tasks/4.3-diag-bundle.md) | 4.1, 4.2, 3.1, 3.2 | todo |
 | М1 | 4 | [4.4 Разбор обратной связи](tasks/4.4-feedback-triage.md) | 4.3 | todo |
 | М1 | X | [X.2 Упаковка и установка](tasks/X.2-packaging.md) | 3.6 | todo |
