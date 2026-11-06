@@ -160,6 +160,19 @@ def check_check(root: Path) -> Tuple[List[str], List[str]]:
     return bad, notes
 
 
+def _diag(root: Path) -> str:
+    """Остановка гейта — свежий пакет диагностики (4.3): у пользователя всегда есть что вынести."""
+    try:
+        from sgraph import config as C
+        from sgraph import diag as DG
+        cfg, _ = C.load(root)
+        if cfg is None:
+            return "нет — проект не инициализирован"
+        return DG.build(root, cfg)["file"]
+    except Exception as e:  # noqa: BLE001 — пакет не важнее ответа гейта
+        return f"не записан ({getattr(e, 'code', type(e).__name__)})"
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Гейт шага ветки specgraph.")
     ap.add_argument("step", choices=sorted(STEPS))
@@ -176,6 +189,7 @@ def main(argv=None) -> int:
         print(f"✗ {STEPS[args.step]}: шаг не закрывается:")
         for b in bad[:15]:
             print(f"  - {b}")
+        print(f"• пакет диагностики: {_diag(root)}")
         return 1
     print(f"✓ {STEPS[args.step]}: {_OK[args.step]}")
     return 0

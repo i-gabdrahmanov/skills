@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put, graph_edges_review, graph_edges_decide, graph_delta_decide, graph_validate, graph_obsidian, graph_find, graph_node, graph_neighbors, graph_path, graph_impact, graph_service_links, graph_check. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put, graph_edges_review, graph_edges_decide, graph_delta_decide, graph_validate, graph_obsidian, graph_find, graph_node, graph_neighbors, graph_path, graph_impact, graph_service_links, graph_check, graph_diag. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -28,6 +28,7 @@ from . import blocks as B
 from . import card as CD
 from . import catalog as CT
 from . import config as C
+from . import diag as DG
 from . import edges as ED
 from . import link as LK
 from . import metrics as M
@@ -308,6 +309,13 @@ def _check(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError(str(e), ["E-check"])
 
 
+def _diag(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return DG.build(root, _need_cfg(root), level=args.get("level") or "form", excerpt_blocks=args.get("blocks"))
+    except DG.DiagError as e:
+        raise ToolError(str(e), [e.code])
+
+
 _QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
 
 TOOLS: Dict[str, Dict[str, Any]] = {
@@ -544,6 +552,15 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "description": "Шаг graph-check: проверка графа (ошибки, дыры, перенос исходников), Obsidian-слой, смоук обхода; "
                        "сводка для пользователя и состояние согласия на приёмку.",
         "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "graph_diag": {
+        "fn": _diag,
+        "description": "Пакет диагностики для выноса из окружения (_graph/diag/): версии, окружение, прогоны, здоровье, "
+                       "где буксовала модель, правила — без текста спеки, с самопроверкой утечки (E-diag-leak — пакет "
+                       "не записан). level excerpt + blocks — только по явному решению пользователя.",
+        "schema": {"type": "object", "properties": {"level": {"type": "string", "enum": ["form", "excerpt"]},
+                                                    "blocks": {"type": "array", "items": {"type": "string"}}},
+                   "additionalProperties": False},
     },
     "graph_queue_status": {
         "fn": _queue_status,
