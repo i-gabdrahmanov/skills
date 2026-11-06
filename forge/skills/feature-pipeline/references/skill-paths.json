@@ -133,6 +133,17 @@
       }
     },
 
+    "specgraph": {
+      "dir": ".gigacode/skills/specgraph",
+      "skill_md": ".gigacode/skills/specgraph/SKILL.md",
+      "references": {
+        "manifest_steps_json": ".gigacode/skills/specgraph/references/manifest-steps.json"
+      },
+      "scripts": {
+        "graph_gate": ".gigacode/skills/specgraph/scripts/graph_gate.py"
+      }
+    },
+
     "minor-defect-fix": {
       "dir": ".gigacode/skills/minor-defect-fix",
       "skill_md": ".gigacode/skills/minor-defect-fix/SKILL.md",

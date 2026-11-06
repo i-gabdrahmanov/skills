@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# uninstall.sh — снимает forge / forge-ui с проекта (зеркало install.sh).
+# uninstall.sh — снимает forge / forge-ui / spec-graph с проекта (зеркало install.sh).
 #
 #   bash uninstall.sh forge    /path/to/project            # снять extension forge
 #   bash uninstall.sh forge-ui /path/to/project            # снять extension forge-ui
@@ -8,7 +8,7 @@
 #   bash uninstall.sh --legacy-only /path/to/project       # только старая раскладка (зовёт install.sh)
 #
 # Что делает:
-#   1. Extension (<repo>/.gigacode/extensions/<forge|forge-ui>/): снимает ссылку в рантайме
+#   1. Extension (<repo>/.gigacode/extensions/<forge|forge-ui|spec-graph>/): снимает ссылку в рантайме
 #      (`gigacode extensions uninstall <имя>` — у link-установки исходники не трогаются) и
 #      удаляет каталог extension'а ЦЕЛИКОМ: он весь форжевый. Локальный конфиг
 #      minor-defect-fix/config.json уходит в .gigacode/minor-defect-fix-config.json.bak.
@@ -42,7 +42,7 @@ elif command -v python >/dev/null 2>&1; then PY=(python)
 elif command -v py >/dev/null 2>&1; then PY=(py -3)
 fi
 
-usage() { echo "Usage: bash uninstall.sh [forge|forge-ui|--legacy-only] /path/to/project [--dry-run] [--purge-state] [--runtime R] [--no-link]" >&2; }
+usage() { echo "Usage: bash uninstall.sh [forge|forge-ui|spec-graph|--legacy-only] /path/to/project [--dry-run] [--purge-state] [--runtime R] [--no-link]" >&2; }
 
 KIND=""
 TARGET=""
@@ -61,7 +61,7 @@ while [ $# -gt 0 ]; do
     --runtime=*) RUNTIME="${1#--runtime=}"; shift ;;
     -h|--help) sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "uninstall.sh: неизвестный аргумент: $1" >&2; usage; exit 2 ;;
-    forge|forge-ui)
+    forge|forge-ui|spec-graph)
       if [ -z "$KIND" ] && [ -z "$TARGET" ]; then KIND="$1"
       elif [ -z "$TARGET" ]; then TARGET="$1"
       else echo "uninstall.sh: лишний аргумент: $1" >&2; exit 2
@@ -127,7 +127,7 @@ save_mdf_config() {  # $1=путь к config.json — конфиг операт�
 KINDS=""
 if [ "$LEGACY_ONLY" -eq 0 ]; then
   if [ -n "$KIND" ]; then KINDS="$KIND"; else
-    for k in forge forge-ui; do [ -d "$EXT_ROOT/$k" ] && KINDS="$KINDS $k"; done
+    for k in forge forge-ui spec-graph; do [ -d "$EXT_ROOT/$k" ] && KINDS="$KINDS $k"; done
   fi
 fi
 REMOVED_EXT=0
@@ -315,4 +315,4 @@ fi
 [ -d "$TARGET/ground" ] && echo "  осталось: ground/ — рабочие данные пайплайна"
 [ -f "$GIG/minor-defect-fix-config.json.bak" ] && echo "  осталось: minor-defect-fix-config.json.bak — конфиг оператора"
 echo
-echo "  Вернуть: bash install.sh <forge|forge-ui> $TARGET"
+echo "  Вернуть: bash install.sh <forge|forge-ui|spec-graph> $TARGET"

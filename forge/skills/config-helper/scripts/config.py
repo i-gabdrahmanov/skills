@@ -556,8 +556,12 @@ def cmd_set(project: Path, params: list, args) -> int:
     if file_key in ("pipeline", "policy") and new_val is not None:
         inc = data.get("_incomplete")
         if isinstance(inc, list):
+            answered = {sub_path}
+            # репо спеки (spec-graph): «сборки нет» отвечает и на вопрос о корневом пакете Java
+            if sub_path == "project.build_system" and new_val == "none":
+                answered.add("conventions.package_root")
             keep = [i for i in inc
-                    if not (i == sub_path or str(i).startswith(sub_path + " "))]
+                    if not any(i == a or str(i).startswith(a + " ") for a in answered)]
             if not keep:
                 data.pop("_incomplete", None)
             elif keep != inc:

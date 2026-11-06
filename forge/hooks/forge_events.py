@@ -382,6 +382,12 @@ CONSENT_PREFIXES = ("gate-override", "rollback", "skip-judges", "policy-repin",
                     # (привязано к sha256 resolution-report.md). Все четыре — решения, которые
                     # модель не вправе выписать себе сама.
                     "ui-plan", "ui-map", "ui-resolve", "ui-accept",
+                    # spec-graph: graph-catalog-<K> — каталог узлов и scope (что вообще станет
+                    # заметками; до нарезки); graph-edges-<K> — отчёт связей (какие рёбра граф
+                    # утверждает); graph-accept-<K> — приёмка графа (после неё пользователь решает
+                    # судьбу плоской спеки); graph-ontology-<K> — локальное расширение онтологии
+                    # (меняет схему всего vault). Решения человека — модель их себе не выписывает.
+                    "graph-catalog", "graph-edges", "graph-accept", "graph-ontology",
                     # spec-entity-<Имя> — аналитик утвердил имя в форме класса сущностью
                     # предметной области: линтер имён (sdd/impl_names) его больше не валит.
                     # Самовыписанное = модель сама сняла гейт с любого `ClaimService`.

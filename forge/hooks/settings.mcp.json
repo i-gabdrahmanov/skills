@@ -14,6 +14,13 @@
       "cwd": "${PROJECT_ROOT}",
       "timeout": 600000,
       "trust": false
+    },
+    "spec-graph": {
+      "command": "${PYTHON_EXE}",
+      "args": ["-X", "utf8", "${PROJECT_ROOT}/.gigacode/hooks/specgraph_mcp.py", "--project-root", "${PROJECT_ROOT}"],
+      "cwd": "${PROJECT_ROOT}",
+      "timeout": 600000,
+      "trust": false
     }
   }
 }

@@ -98,6 +98,23 @@ class TestDetectBuildSystem(unittest.TestCase):
         self.assertEqual(cfg["quality"]["build_command"], "pnpm run build")
         self.assertIsNone(cfg["quality"]["coverage_report"])
 
+    def test_spec_repo_has_no_build_and_no_package_root(self):
+        """Репо спеки (поставка spec-graph): сборки нет — это ответ, а не «не нашли»; Java-вопросов нет."""
+        (self.root / ".gigacode" / "extensions" / "spec-graph").mkdir(parents=True)
+        _touch(self.root / "docs" / "spec" / "task-service.md", "# task-service\n")
+        cfg = ipc.build_config(str(self.root))
+        self.assertEqual(cfg["project"]["build_system"], "none")
+        self.assertNotIn("project.build_system", cfg["_incomplete"])
+        self.assertNotIn("conventions.package_root", cfg["_incomplete"])
+        for key in ("build_command", "test_command", "coverage_report", "compile_test_command"):
+            self.assertIsNone(cfg["quality"][key], key)
+
+    def test_empty_repo_without_spec_graph_still_asks(self):
+        """Пустой репо без маркеров и без spec-graph не становится «без сборки» молча."""
+        self.assertIsNone(ipc.detect_build_system(str(self.root)))
+        cfg = ipc.build_config(str(self.root))
+        self.assertIn("project.build_system", cfg["_incomplete"])
+
 
 class TestDetectDefaultBranch(unittest.TestCase):
     """Тесты детекта дефолтной ветки."""

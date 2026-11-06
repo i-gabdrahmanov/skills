@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""forge_extension.py — сборка extension forge / forge-ui ВНУТРИ проекта.
+"""forge_extension.py — сборка extension forge / forge-ui / spec-graph ВНУТРИ проекта.
 
 Раскладка (одна поставка на репо):
 
     <repo>/.gigacode/extensions/forge/       бэк-репо (профиль back)
     <repo>/.gigacode/extensions/forge-ui/    фронт-репо (профиль ui)
+    <repo>/.gigacode/extensions/spec-graph/  репо спеки (профиль graph)
         gigacode-extension.json  qwen-extension.json   манифест (одинаковый; второй — дев-машина)
         hooks/  hooks/hooks.json                        control-plane и его подключение
         skills/<скилл>/…  commands/*.md                 скиллы и слэш-команды поставки
@@ -20,7 +21,7 @@ extension-модели 2026-08-28: extension в ~/.gigacode/extensions, и ге�
 
 Имя extension'а уникально на проект (`forge-<каталог>-<хеш пути>`): реестр ссылок общий на
 пользователя, и второй проект с именем `forge` получил бы «already installed». Каталог в
-проекте при этом всегда `forge` / `forge-ui` — его и называют брифы.
+проекте при этом всегда `forge` / `forge-ui` / `spec-graph` — его и называют брифы.
 
 Что делает этот модуль (его зовут install.sh и deploy-local.sh; stdlib-only, Python 3.9):
   • манифест: имя, версия, MCP-серверы профиля (`mcp <имя>` в .forge-profile) с зашитым
@@ -36,9 +37,9 @@ extension-модели 2026-08-28: extension в ~/.gigacode/extensions, и ге�
     (_project.gigacode_dir), а подсказки строит через _project.install_rel.
 
 Usage:
-    python3 forge_extension.py build  --ext <dir> --project <repo> --kind forge|forge-ui [--version V]
+    python3 forge_extension.py build  --ext <dir> --project <repo> --kind forge|forge-ui|spec-graph [--version V]
     python3 forge_extension.py check  --ext <dir> --project <repo>      # exit 0 / 1 + список
-    python3 forge_extension.py name   --project <repo> --kind forge|forge-ui
+    python3 forge_extension.py name   --project <repo> --kind forge|forge-ui|spec-graph
     python3 forge_extension.py link   --ext <dir> --project <repo> [--runtime gigacode|qwen]
     python3 forge_extension.py unlink --ext <dir> --project <repo> [--runtime gigacode|qwen]
 """
@@ -60,7 +61,7 @@ sys.path.insert(0, str(HERE))
 
 import resolve_hook_paths as RHP  # noqa: E402
 
-KINDS = {"forge": "back", "forge-ui": "ui"}
+KINDS = {"forge": "back", "forge-ui": "ui", "spec-graph": "graph"}
 MANIFESTS = ("gigacode-extension.json", "qwen-extension.json")
 HOOKS_FILE = "hooks.json"
 RUNNER = "_run_hook.py"
@@ -68,6 +69,7 @@ PROFILE_FILE = ".forge-profile"
 DESCRIPTIONS = {
     "forge": "Forge — PDLC control-plane бэк-репо (Java/Spring): спека → дизайн → TDD с гейтами на хуках; /forge.",
     "forge-ui": "forge-ui — фронт-часть стори во фронт-репо: макет → UI-код на библиотеке проекта → проверка против макета; /forge.",
+    "spec-graph": "spec-graph — граф спецификации в репо спеки: плоская спека → заметки Obsidian для аналитика и агента; /graph.",
 }
 # Пути, которые тексты для модели называют от корня проекта (старая раскладка) → под extension.
 # `~/.gigacode/…` (запреты вида «не используй ~/.gigacode/skills») не трогаем: это не путь установки.
@@ -205,7 +207,7 @@ def check(ext: Path, project_root) -> list:
     problems = []
     kind = ext.name
     if kind not in KINDS:
-        return [f"{ext}: каталог не forge/forge-ui"]
+        return [f"{ext}: каталог не forge/forge-ui/spec-graph"]
     texts = {}
     for m in MANIFESTS:
         try:

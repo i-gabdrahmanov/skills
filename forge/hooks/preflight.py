@@ -71,7 +71,7 @@ def _self_base() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-EXTENSION_KINDS = ("forge", "forge-ui")
+EXTENSION_KINDS = ("forge", "forge-ui", "spec-graph")
 
 
 def _is_extension_base(base: Path) -> bool:
@@ -702,6 +702,8 @@ _FORGE_MCP = {
     "forge-ui": ("daiver_mcp.py",
                  "у forge-ui не будет движка (daiver_status/daiver_init/daiver_spec) — конвейер "
                  "фронт-репо не стартует"),
+    "spec-graph": ("specgraph_mcp.py",
+                   "у spec-graph не будет движка (graph_status/graph_init) — /graph не стартует"),
 }
 
 

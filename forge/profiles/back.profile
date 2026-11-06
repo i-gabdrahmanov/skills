@@ -6,6 +6,8 @@ profile back
 # все скиллы исходника, кроме фронтовой ветки (она живёт во фронт-репо, профиль ui)
 skills-all
 exclude-skill forgeui
+# граф спеки живёт в репо спеки (профиль graph); в бэк-поставку — только явно (X.2, D2)
+exclude-skill specgraph
 # слэш-команды: /forge, /forge-fix, /forge-tech, /forge-spec, /forge-merge, /forge-archive
 commands commands
 mcp forge-master

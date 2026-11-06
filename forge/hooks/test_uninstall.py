@@ -310,7 +310,7 @@ class Args(unittest.TestCase):
     def test_install_needs_a_kind_and_a_target(self):
         r = sh(INSTALL)
         self.assertEqual(r.returncode, 2)
-        self.assertIn("forge (бэк-репо) или forge-ui", r.stderr)
+        self.assertIn("forge (бэк-репо), forge-ui (фронт-репо) или spec-graph (репо спеки)", r.stderr)
         with tempfile.TemporaryDirectory() as td:
             self.assertEqual(sh(INSTALL, "mobile", td).returncode, 2)
             r = sh(INSTALL, "forge")

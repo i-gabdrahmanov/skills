@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# update.sh — обновляет установленный forge / forge-ui в проекте до последней версии репо.
+# update.sh — обновляет установленный forge / forge-ui / spec-graph в проекте до последней версии репо.
 #
 # Запускается из склонированного репо Forge. Папка проекта ОБЯЗАТЕЛЬНА. Тянет свежий Forge
 # (git pull --ff-only в этом клоне) и переставляет поставку: install.sh подменяет каталог
@@ -8,7 +8,7 @@
 # оператора и конфиг minor-defect-fix переживают обновление.
 #
 # Какую поставку обновлять, скрипт понимает сам: стоит .gigacode/extensions/forge-ui — forge-ui,
-# стоит forge — forge; старая раскладка (≤ 0.5) — по её профилю (.gigacode/.forge-profile: ui →
+# spec-graph — spec-graph, стоит forge — forge; старая раскладка (≤ 0.5) — по её профилю (.gigacode/.forge-profile: ui →
 # forge-ui, иначе forge), и install.sh мигрирует её в extension. Можно назвать явно.
 #
 #   bash update.sh /path/to/project                 # git pull + install.sh <как стоит>
@@ -39,7 +39,7 @@ while [ $# -gt 0 ]; do
     --runtime)  PASS+=("--runtime" "${2:-}"); shift 2 || { echo "update.sh: --runtime без значения" >&2; exit 2; } ;;
     -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "update.sh: неизвестный аргумент: $1" >&2; exit 2 ;;
-    forge|forge-ui)
+    forge|forge-ui|spec-graph)
       if [ -z "$KIND" ] && [ -z "$TARGET" ]; then KIND="$1"; else TARGET="$1"; fi
       shift ;;
     *)
@@ -53,7 +53,7 @@ done
 
 if [ -z "$TARGET" ]; then
   echo "update.sh: не указана папка проекта." >&2
-  echo "Usage: bash update.sh [forge|forge-ui] /path/to/project [--force] [--no-pull] [--dry-run]" >&2
+  echo "Usage: bash update.sh [forge|forge-ui|spec-graph] /path/to/project [--force] [--no-pull] [--dry-run]" >&2
   exit 2
 fi
 if [ ! -d "$TARGET" ]; then
@@ -72,6 +72,7 @@ done
 GIG="$TARGET/.gigacode"
 if [ -z "$KIND" ]; then
   if [ -d "$GIG/extensions/forge-ui" ]; then KIND=forge-ui
+  elif [ -d "$GIG/extensions/spec-graph" ]; then KIND=spec-graph
   elif [ -d "$GIG/extensions/forge" ]; then KIND=forge
   elif [ -f "$GIG/.forge-profile" ] && grep -q '^profile ui' "$GIG/.forge-profile"; then KIND=forge-ui
   else KIND=forge

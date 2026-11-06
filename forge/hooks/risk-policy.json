@@ -179,6 +179,15 @@
     "ui-verify": [
       "ui_gate.py verify"
     ],
+    "graph-map": [
+      "graph_gate.py map"
+    ],
+    "graph-link": [
+      "graph_gate.py link"
+    ],
+    "graph-check": [
+      "graph_gate.py check"
+    ],
     "04-test": [
       "check_tests_red.py",
       "gradlew",
@@ -254,7 +263,9 @@
     "03-jira": "jira-plan-{feature}",
     "tech-apply": "tech-plan-{feature}",
     "ui-build": "ui-plan-{feature}",
-    "ui-verify": "ui-plan-{feature}"
+    "ui-verify": "ui-plan-{feature}",
+    "graph-link": "graph-catalog-{feature}",
+    "graph-check": "graph-edges-{feature}"
   },
   "level_requirements": {
     "_comment": "Что должно быть выполнено, чтобы действие уровня прошло. step = completed-шаг manifest; approval = файл <key> (журнал ground/approvals.jsonl). Доставки (commit/push/PR) в пайплайне нет — её делает пользователь сам, поэтому evidence-требований и commit/push_needs больше нет. SoD форсит sod-enforcer (не ключи политики); audit — лог-агент.",

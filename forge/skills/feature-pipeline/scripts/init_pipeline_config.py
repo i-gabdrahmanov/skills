@@ -48,6 +48,12 @@ FRONT_BUILD_SYSTEMS = ("npm", "pnpm", "yarn")
 _FRONT_LOCKFILES = (("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("package-lock.json", "npm"))
 
 
+# Репо спеки (spec-graph): сборки нет вовсе — это не «не нашли», а честный ответ. Признак — установленная
+# поставка spec-graph, а не отсутствие маркеров: пустой бэк-репо без build.gradle должен по-прежнему
+# спросить пользователя, а не молча стать «без сборки».
+DOCS_BUILD_SYSTEM = "none"
+
+
 def detect_build_system(root):
     if glob.glob(os.path.join(root, "settings.gradle*")) or glob.glob(os.path.join(root, "build.gradle*")):
         return "gradle"
@@ -58,6 +64,8 @@ def detect_build_system(root):
             if os.path.exists(os.path.join(root, lock)):
                 return pm
         return "npm"
+    if os.path.isdir(os.path.join(root, ".gigacode", "extensions", "spec-graph")):
+        return DOCS_BUILD_SYSTEM
     return None
 
 
@@ -506,6 +514,7 @@ def build_config(root):
 
     gradle = bs == "gradle"
     front = bs in FRONT_BUILD_SYSTEMS
+    docs = bs == DOCS_BUILD_SYSTEM                # репо спеки: ни сборки, ни тестов, ни пакета
     run = "yarn" if bs == "yarn" else f"{bs} run"
     cfg = {
         "$schema": SCHEMA_VERSION,
@@ -530,17 +539,18 @@ def build_config(root):
         },
         "quality": {
             "coverage_threshold": 0.80,
-            "build_command": (f"{run} build" if front else
+            "build_command": (None if docs else f"{run} build" if front else
                               f"{_GRADLEW} clean build" if gradle else "mvn -q clean verify"),
-            "test_command": (f"{bs} test" if front else
+            "test_command": (None if docs else f"{bs} test" if front else
                              f"{_GRADLEW} test jacocoTestReport" if gradle else "mvn -q test jacoco:report"),
-            "coverage_report": (None if front else
+            "coverage_report": (None if front or docs else
                                 "build/reports/jacoco/test/jacocoTestReport.xml" if gradle else "target/site/jacoco/jacoco.xml"),
             "jacoco_configured": has_jacoco,
             "tdd": True,                      # TDD по умолчанию: тесты (RED) → код (GREEN); см. check_tests_red.py
             "eval_enabled": True,             # Eval-Driven Development: фаза 02-eval-plan + eval-guard (resolve_phases.enabled_by)
             "eval_threshold": 0.95,           # min доля зелёных eval'ов задачи (см. build_evals_from_design.py)
-            "compile_test_command": f"{_GRADLEW} compileTestJava" if gradle else "mvn -q test-compile",
+            "compile_test_command": (None if docs else
+                                     f"{_GRADLEW} compileTestJava" if gradle else "mvn -q test-compile"),
             "test_layer": "service-unit",     # по умолчанию ТОЛЬКО Mockito unit; НЕ писать JPA/@DataJpaTest/@SpringBootTest (red-judge блокирует)
             "charset_gate": {                 # чистота текста спеки (charset_hygiene): китайские/CJK → блок; мусор → warn
                 "enabled": True,
@@ -624,7 +634,7 @@ def build_config(root):
     incomplete = []
     if not bs:
         incomplete.append("project.build_system")
-    if not group and not front:           # корневой пакет — понятие Java-стека
+    if not group and not front and not docs:   # корневой пакет — понятие Java-стека
         incomplete.append("conventions.package_root")
     if not is_git:
         incomplete.append("project.is_git (нужен git для чекпойнтов rollback и pipeline-state)")

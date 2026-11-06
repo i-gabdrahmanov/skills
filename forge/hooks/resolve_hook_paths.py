@@ -35,7 +35,7 @@ PYTHON_EXE_PLACEHOLDER = "${PYTHON_EXE}"
 # Имена MCP-серверов, которыми владеет forge. Хардкод, а не чтение эталона: снимать их нужно и
 # тогда, когда .gigacode/hooks уже удалён (повторный/прерванный uninstall). Имя отсюда не
 # удаляется никогда — у MCP нет надгробий, и снятое имя осталось бы в settings.json навсегда.
-FORGE_MCP_SERVERS = ("forge-master", "forge-ui")
+FORGE_MCP_SERVERS = ("forge-master", "forge-ui", "spec-graph")
 # Профиль поставки по умолчанию (нет .gigacode/.forge-profile — установка бэк-репо или старая).
 DEFAULT_PROFILE_MCP = ("forge-master",)
 

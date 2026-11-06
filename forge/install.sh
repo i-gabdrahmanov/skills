@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 #
-# install.sh — ставит forge ИЛИ forge-ui в проект extension'ом GigaCode.
+# install.sh — ставит forge, forge-ui ИЛИ spec-graph в проект extension'ом GigaCode.
 #
 #   bash install.sh forge    /path/to/back-repo     # бэк-репо: полный forge (профиль back)
 #   bash install.sh forge-ui /path/to/front-repo    # фронт-репо: forge-ui (профиль ui)
+#   bash install.sh spec-graph /path/to/spec-repo   # репо спеки: spec-graph (профиль graph)
 #
 # Установки раздельные: одна поставка на репо (хуки control-plane у них общие — две поставки в
 # одном репо гоняли бы каждый хук дважды), вторая — отказ с подсказкой, как снять первую.
 #
-# Раскладка: <repo>/.gigacode/extensions/<forge|forge-ui>/ — каталог ЦЕЛИКОМ форжевый
+# Раскладка: <repo>/.gigacode/extensions/<forge|forge-ui|spec-graph>/ — каталог ЦЕЛИКОМ форжевый
 # (манифест, hooks/ + hooks/hooks.json, skills/, commands/, deploy-local.sh). Файлы лежат в
 # проекте: GigaCode режет shell к скриптам вне каталога проекта, а гейты зовут свои скрипты
 # шеллом. В ~/.gigacode/extensions кладётся только ССЫЛКА (`gigacode extensions link`), и
@@ -40,7 +41,7 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # корень репо Fo
 # shellcheck source=_deployed_manifest.sh
 . "$SRC/_deployed_manifest.sh"
 
-usage() { echo "Usage: bash install.sh <forge|forge-ui> /path/to/project [--runtime gigacode|qwen] [--no-link]" >&2; }
+usage() { echo "Usage: bash install.sh <forge|forge-ui|spec-graph> /path/to/project [--runtime gigacode|qwen] [--no-link]" >&2; }
 
 KIND=""
 TARGET=""
@@ -63,10 +64,11 @@ while [ $# -gt 0 ]; do
 done
 
 case "$KIND" in
-  forge) PROFILE=back; OTHER=forge-ui ;;
-  forge-ui) PROFILE=ui; OTHER=forge ;;
-  "") echo "install.sh: не указано, что ставить: forge (бэк-репо) или forge-ui (фронт-репо)." >&2; usage; exit 2 ;;
-  *) echo "install.sh: неизвестная поставка '$KIND' — есть forge и forge-ui." >&2; usage; exit 2 ;;
+  forge) PROFILE=back ;;
+  forge-ui) PROFILE=ui ;;
+  spec-graph) PROFILE=graph ;;
+  "") echo "install.sh: не указано, что ставить: forge (бэк-репо), forge-ui (фронт-репо) или spec-graph (репо спеки)." >&2; usage; exit 2 ;;
+  *) echo "install.sh: неизвестная поставка '$KIND' — есть forge, forge-ui и spec-graph." >&2; usage; exit 2 ;;
 esac
 PROFILE_FILE="$SRC/profiles/$PROFILE.profile"
 
@@ -87,11 +89,14 @@ fi
 GIG="$TARGET/.gigacode"
 EXT_ROOT="$GIG/extensions"
 EXT="$EXT_ROOT/$KIND"
-if [ -d "$EXT_ROOT/$OTHER" ]; then
-  echo "install.sh: в проекте уже стоит $OTHER ($EXT_ROOT/$OTHER) — одна поставка на репо." >&2
-  echo "  Снять её: bash $SRC/uninstall.sh $OTHER $TARGET" >&2
-  exit 2
-fi
+for OTHER in forge forge-ui spec-graph; do
+  [ "$OTHER" = "$KIND" ] && continue
+  if [ -d "$EXT_ROOT/$OTHER" ]; then
+    echo "install.sh: в проекте уже стоит $OTHER ($EXT_ROOT/$OTHER) — одна поставка на репо." >&2
+    echo "  Снять её: bash $SRC/uninstall.sh $OTHER $TARGET" >&2
+    exit 2
+  fi
+done
 
 forge_pick_python || true
 if [ "${#PY[@]}" -eq 0 ]; then

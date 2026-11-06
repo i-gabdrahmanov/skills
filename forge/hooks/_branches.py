@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""_branches.py — реестр ПЛОСКИХ веток forge (fix, tech, ui): единый источник истины.
+"""_branches.py — реестр ПЛОСКИХ веток forge (fix, tech, ui, graph): единый источник истины.
 
 Зачем. Плоская ветка — это namespace стейта (`ground/statements/<skill>/…`) с фиксированным
 списком шагов `<prefix>*`. Fix-ветка жила кортежами `("fix-diag", "fix-red", …)`, раскиданными
@@ -21,7 +21,7 @@ import fnmatch
 from typing import Optional
 
 # Поля ветки:
-#   mode            — пользовательский словарь router/inputs.mode (fix|tech|ui)
+#   mode            — пользовательский словарь router/inputs.mode (fix|tech|ui|graph)
 #   prefix          — префикс id всех шагов ветки
 #   steps           — шаги в порядке (источник истины для манифеста — references/manifest-steps.json
 #                     скилла; совпадение пинит тест)
@@ -151,6 +151,42 @@ BRANCHES = {
         },
         "docs_target": "feature-docs",
         "doc_approval": {"ui-spec": "ui-spec"},
+    },
+    # Граф спецификации (specgraph = spec-graph в репо спеки): плоская Markdown-спека → граф
+    # заметок Obsidian для аналитика и агента. Детерминированное ядро — движок
+    # (skills/specgraph/scripts/sgraph/, MCP spec-graph). Три шага = три решения человека:
+    # утвердить каталог узлов и scope (до нарезки), утвердить отчёт связей, принять граф.
+    # Код проекта ветка не пишет и не собирает — роль spec у всех шагов (src/ и сборка закрыты).
+    # Ключ прогона — GRAPH-<N>. См. tasks/020-spec-graph.md.
+    "specgraph": {
+        "mode": "graph",
+        "prefix": "graph-",
+        "steps": ("graph-map", "graph-link", "graph-check"),
+        "subagent_steps": ("graph-map", "graph-link", "graph-check"),
+        "gate_steps": ("graph-map", "graph-link", "graph-check"),
+        "build_steps": (),
+        "red_step": None,
+        # каталог узлов — «план» графа: после его утверждения идёт нарезка
+        "design_step": "graph-map",
+        "final_step": "graph-check",
+        "roles": {"graph-map": "spec", "graph-link": "spec", "graph-check": "spec"},
+        # проверка находит дыры связей → переоткрывается шаг связей (цикл самоулучшения, задача 4.6)
+        "verify_to_impl": {"graph-check": "graph-link"},
+        # артефакты живут в vault (_graph/) и .spec-graph/, а не в docs-каталоге задачи: их
+        # наличие проверяет graph_gate.py, а не update._check_step_artifacts
+        "artifacts": {},
+        "phase_work": {
+            "graph-map": (r"(^|/)\.spec-graph/(blocks|candidates|drafts|plan|catalog)|(^|/)_graph/(catalog|survey)\.md$",
+                          "запись разведки / каталога / плана нарезки (.spec-graph/…, _graph/catalog.md)"),
+            "graph-link": (r"(^|/)\.spec-graph/edges/|(^|/)_graph/edges-review\.md$",
+                           "запись предложений рёбер / отчёта связей"),
+            "graph-check": (r"(^|/)_graph/(report|Начало)\.md$|(^|/)\.obsidian/graph\.json$",
+                            "запись отчёта проверки / Obsidian-слоя"),
+        },
+        # продуктивные инструменты появятся задачами этапов 1–3 (graph_assign_put, graph_link_put, …)
+        "phase_tools": {},
+        "docs_target": "feature-docs",
+        "doc_approval": {},
     },
 }
 
