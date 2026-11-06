@@ -4,11 +4,16 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
 названные в `x-ref-args` схемы), длительность, размер ответа. Аргументы и тексты не пишутся.
+
+Инструмент результата единицы работы объявляет в схеме `x-queue: <имя очереди>` и аргумент
+`item_id` (задача 0.6): `call` до работы проверяет, что единица этой очереди в аренде, после —
+закрывает её (принято) или возвращает с попыткой + 1 (ToolError). Сбой движка единицу не трогает:
+вина не модели, аренда истечёт сама.
 """
 from __future__ import annotations
 
@@ -19,6 +24,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from . import config as C
 from . import metrics as M
+from . import queue as Q
 from . import status as ST
 
 
@@ -73,6 +79,34 @@ def _init(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return res
 
 
+def _queue_arg(args: Dict[str, Any]) -> str:
+    name = args.get("queue")
+    if name not in Q.QUEUES:
+        raise ToolError(f"queue: одна из {', '.join(Q.QUEUES)}", ["E-queue-name"])
+    return name
+
+
+def _cfg(root: Path) -> Optional[Dict[str, Any]]:
+    cfg, _ = C.load(root)
+    return cfg
+
+
+def _next(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    res = Q.lease(root, _queue_arg(args), _cfg(root))
+    if res.get("status") == Q.EMPTY:
+        res["next"] = "очередь пуста — переходи к гейту шага"
+    elif res.get("status") == "единица":
+        res["next"] = (f"запусти субагента: бриф {res['brief']}, вход {res['input']}; результат он сдаёт "
+                       f"инструментом {res['tool']} с item_id «{res['item_id']}»")
+    return res
+
+
+def _queue_status(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    return Q.status(root, _queue_arg(args))
+
+
+_QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
+
 TOOLS: Dict[str, Dict[str, Any]] = {
     "graph_status": {
         "fn": _status,
@@ -96,12 +130,30 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                    },
                    "required": ["sources"], "additionalProperties": False},
     },
+    "graph_next": {
+        "fn": _next,
+        "description": "Следующая единица работы очереди (в аренду): бриф, путь к готовому входу, инструмент "
+                       "результата, прогресс. «пусто» — очередь закрыта, дальше гейт. Вызывает оркестратор; "
+                       "единицу исполняет субагент.",
+        "schema": {"type": "object", "properties": {"queue": _QUEUE_PROP},
+                   "required": ["queue"], "additionalProperties": False},
+    },
+    "graph_queue_status": {
+        "fn": _queue_status,
+        "description": "Сводка очереди: сколько единиц в каждом статусе, брошенные единицы и топ кодов отказа.",
+        "schema": {"type": "object", "properties": {"queue": _QUEUE_PROP},
+                   "required": ["queue"], "additionalProperties": False},
+    },
 }
 
 
 def _refs(args: Dict[str, Any], schema: Dict[str, Any]) -> List[str]:
-    """id единиц работы из аргументов, которые схема объявила ссылками (`x-ref-args`)."""
-    return [args[k] for k in schema.get("x-ref-args", ()) if isinstance(args.get(k), str)]
+    """id единиц работы из аргументов, которые схема объявила ссылками (`x-ref-args`); у инструмента
+    результата очереди (`x-queue`) ссылка — всегда его `item_id`."""
+    names = list(schema.get("x-ref-args", ()))
+    if schema.get("x-queue") and "item_id" not in names:
+        names.insert(0, "item_id")
+    return [args[k] for k in names if isinstance(args.get(k), str)]
 
 
 def call(name: str, root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -113,16 +165,34 @@ def call(name: str, root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     started = time.monotonic()
     refs = _refs(args, tool["schema"]) if isinstance(args, dict) else []
     elapsed = lambda: int((time.monotonic() - started) * 1000)  # noqa: E731
+    queue = tool["schema"].get("x-queue")
+    leased = False
     try:
         _check_args(args, tool["schema"])
+        if queue:
+            try:
+                Q.check_leased(root, queue, args.get("item_id"))
+            except Q.QueueError as qe:
+                raise ToolError(str(qe), [qe.code])
+            leased = True
         fn: Callable[[Path, Dict[str, Any]], Dict[str, Any]] = tool["fn"]
         res = fn(root, args)
     except ToolError as e:
+        if leased:
+            st = Q.settle(root, queue, args["item_id"], False, e.codes, _cfg(root))
+            if st["status"] == "abandoned":
+                M.bump(root, f"queue.{queue}.abandoned")
         M.record_call(root, name, "rejected", codes=e.codes, refs=refs, duration_ms=elapsed())
         raise
+    except Q.QueueError as qe:
+        M.record_call(root, name, "rejected", codes=[qe.code], refs=refs, duration_ms=elapsed())
+        raise ToolError(str(qe), [qe.code])
     except Exception as e:  # noqa: BLE001 — сбой движка считается и пробрасывается дальше серверу
         M.record_call(root, name, "error", refs=refs, duration_ms=elapsed(), error_type=type(e).__name__)
         raise
+    if leased:
+        res = dict(res)
+        res["queue_item"] = Q.settle(root, queue, args["item_id"], True, None, _cfg(root))
     size = len(json.dumps(res, ensure_ascii=False, default=str))
     M.record_call(root, name, "ok", refs=refs, duration_ms=elapsed(), size=size)
     return res

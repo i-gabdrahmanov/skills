@@ -23,7 +23,8 @@ ADAPTERS = ("md",)
 # Каталоги, которые никогда не исходники спеки: служебные forge/рантайма, зависимости, VCS.
 _SKIP_DIRS = {".git", ".gigacode", ".spec-graph", "ground", "node_modules", ".obsidian", ".idea",
               ".vscode", "__pycache__", "build", "target", "dist"}
-_TOP_LEVEL_KEYS = {"version", "vault", "sources", "exclude", "services", "ontology_version"}
+_TOP_LEVEL_KEYS = {"version", "vault", "sources", "exclude", "services", "ontology_version", "queue"}
+_QUEUE_KEYS = {"parallel", "max_attempts", "budget_chars", "lease_s"}
 _SOURCE_KEYS = {"root", "adapter", "kind_hint"}
 
 
@@ -88,6 +89,16 @@ def validate(cfg: Any) -> List[str]:
         errors.append("services: объект «путь каталога или файла → имя сервиса»")
     if not isinstance(cfg.get("ontology_version", 1), int):
         errors.append("ontology_version: целое")
+    queue = cfg.get("queue", {})
+    if not isinstance(queue, dict):
+        errors.append("queue: объект {parallel, max_attempts, budget_chars, lease_s}")
+    else:
+        for k in sorted(set(queue) - _QUEUE_KEYS):
+            errors.append(f"queue: неизвестный ключ «{k}»")
+        for k in sorted(set(queue) & _QUEUE_KEYS):
+            v = queue[k]
+            if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
+                errors.append(f"queue.{k}: целое > 0")
     return errors
 
 
