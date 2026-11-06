@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from . import blocks as B
+from . import catalog as CT
 from . import config as C
 from . import metrics as M
 from . import profile as PF
@@ -144,6 +145,29 @@ def _draft_put(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return {"accepted": True, "nodes": len(nodes), "not_nodes": len(not_nodes), "file": draft["file"]}
 
 
+def _catalog(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = _need_cfg(root)
+    cat = CT.build(root, cfg)
+    st = CT.approval(root)
+    res = {"nodes": len(cat["nodes"]), "review": len(cat["review"]), "conflicts": len(cat["conflicts"]),
+           "collisions": len(cat["collisions"]), "not_nodes": len(cat["not_nodes"]), "scope": cat["scope"],
+           "report": f"{cfg['vault']}/_graph/catalog.md", "consent": st["state"], "key": st["key"]}
+    if st["state"] == "ok":
+        res["next"] = "каталог утверждён (снимок catalog.approved.json) — дальше цикл очереди assign-section"
+    else:
+        res["next"] = ("покажи пользователю отчёт и спроси: утвердить каталог и scope или что поменять. Правки — "
+                       "graph_catalog_decide, затем снова graph_catalog. Согласие: " + st["how"])
+    return res
+
+
+def _catalog_decide(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = _need_cfg(root)
+    res = CT.decide(root, args["actions"], cfg["vault"])
+    if res.get("errors"):
+        raise ToolError("решения не приняты: " + "; ".join(res["errors"]), ["E-catalog-action"])
+    return dict(res, next="graph_catalog — пересобрать каталог с решениями")
+
+
 _QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
 
 TOOLS: Dict[str, Dict[str, Any]] = {
@@ -212,6 +236,19 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                                   "nodes": {"type": "array", "items": {"type": "object"}},
                                   "not_nodes": {"type": "array", "items": {"type": "object"}}},
                    "required": ["item_id", "nodes"], "x-queue": "draft-file", "additionalProperties": False},
+    },
+    "graph_catalog": {
+        "fn": _catalog,
+        "description": "Собрать каталог узлов из черновиков разведки и решений человека: _graph/catalog.md для "
+                       "человека, состояние согласия graph-catalog; при действующем согласии — снимок утверждённого каталога.",
+        "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "graph_catalog_decide": {
+        "fn": _catalog_decide,
+        "description": "Записать решения ЧЕЛОВЕКА по каталогу (после его ответа): merge {into, names}, split {node, file, "
+                       "name}, rename {node, name}, move {node, service}, drop {node}, scope {include}; у каждого — why.",
+        "schema": {"type": "object", "properties": {"actions": {"type": "array", "items": {"type": "object"}}},
+                   "required": ["actions"], "additionalProperties": False},
     },
     "graph_queue_status": {
         "fn": _queue_status,
