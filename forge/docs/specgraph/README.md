@@ -71,7 +71,7 @@
 | М1 | 0 Каркас | [0.1 Ветка, профиль, команда, скелет](tasks/0.1-branch-and-profile.md) | — |  done |
 | М1 | 4 | [4.1 Счётчики прогона и история здоровья](tasks/4.1-run-metrics.md) | 0.1 |  done |
 | М1 | 0 | [0.2 Онтология как данные](tasks/0.2-ontology.md) | 0.1 |  done |
-| М1 | 0 | [0.3 FM-кодек](tasks/0.3-frontmatter-codec.md) | 0.2 | todo |
+| М1 | 0 | [0.3 FM-кодек](tasks/0.3-frontmatter-codec.md) | 0.2 |  done |
 | М1 | 0 | [0.4 Синтетическая фикстура по ТЗ](tasks/0.4-tz-fixture.md) | 0.2 | todo |
 | М1 | 0 | [0.5 Стресс-корпус](tasks/0.5-stress-corpus.md) | 0.4 | todo |
 | М1 | 0 | [0.6 Очередь работ](tasks/0.6-work-queue.md) | 0.1, 4.1 |  done |
