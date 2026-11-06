@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from . import assign as AS
 from . import blocks as B
 from . import catalog as CT
 from . import config as C
@@ -168,6 +169,26 @@ def _catalog_decide(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return dict(res, next="graph_catalog — пересобрать каталог с решениями")
 
 
+def _assign_start(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = _need_cfg(root)
+    try:
+        return AS.start(root, cfg)
+    except AS.AssignError as e:
+        raise ToolError(str(e), [e.code])
+
+
+def _assign_put(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    ok, why = CT.approved(root)
+    if not ok:
+        raise ToolError(why, ["E-catalog-unapproved"])
+    plan, errs = AS.put(root, args["item_id"], args)
+    if errs:
+        raise ToolError("раскладка не принята:\n" + "\n".join(f"- [{c}] {m}" for c, m in errs),
+                        sorted({c for c, _ in errs}))
+    return {"accepted": True, "file": plan["file"], "assigned": sum(len(a["blocks"]) for a in plan["assign"]),
+            "new_nodes": len(args.get("new_nodes") or [])}
+
+
 _QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
 
 TOOLS: Dict[str, Dict[str, Any]] = {
@@ -249,6 +270,25 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                        "name}, rename {node, name}, move {node, service}, drop {node}, scope {include}; у каждого — why.",
         "schema": {"type": "object", "properties": {"actions": {"type": "array", "items": {"type": "object"}}},
                    "required": ["actions"], "additionalProperties": False},
+    },
+    "graph_assign_start": {
+        "fn": _assign_start,
+        "description": "Построить очередь assign-section из УТВЕРЖДЁННОГО каталога (без согласия graph-catalog — отказ): "
+                       "единица — непрерывный кусок файла в бюджете, каждый блок ровно в одной единице.",
+        "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "graph_assign_put": {
+        "fn": _assign_put,
+        "description": "Сдать раскладку блоков единицы assign-section: assign [{node, blocks}], skip [{blocks, reason: "
+                       "toc|boilerplate|duplicate-of, of?}], unplaced [{blocks, suggested_kind?}], new_nodes [{kind, name, "
+                       "service?, key?, why}].",
+        "schema": {"type": "object",
+                   "properties": {"item_id": {"type": "string"},
+                                  "assign": {"type": "array", "items": {"type": "object"}},
+                                  "skip": {"type": "array", "items": {"type": "object"}},
+                                  "unplaced": {"type": "array", "items": {"type": "object"}},
+                                  "new_nodes": {"type": "array", "items": {"type": "object"}}},
+                   "required": ["item_id", "assign"], "x-queue": "assign-section", "additionalProperties": False},
     },
     "graph_queue_status": {
         "fn": _queue_status,

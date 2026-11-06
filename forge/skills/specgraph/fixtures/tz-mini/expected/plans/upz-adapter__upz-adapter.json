@@ -1,0 +1,25 @@
+{
+ "assign": [
+  {
+   "blocks": [
+    "upz-adapter/upz-adapter.md#1",
+    "upz-adapter/upz-adapter.md#2",
+    "upz-adapter/upz-adapter.md#3",
+    "upz-adapter/upz-adapter.md#4"
+   ],
+   "node": "upz-adapter"
+  },
+  {
+   "blocks": [
+    "upz-adapter/upz-adapter.md#5",
+    "upz-adapter/upz-adapter.md#6",
+    "upz-adapter/upz-adapter.md#7",
+    "upz-adapter/upz-adapter.md#8"
+   ],
+   "node": "upz-adapter POST api-v1-upz-tasks"
+  }
+ ],
+ "file": "upz-adapter/upz-adapter.md",
+ "skip": [],
+ "unplaced": []
+}
