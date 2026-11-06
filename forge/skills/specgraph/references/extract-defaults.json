@@ -8,7 +8,7 @@
     {"id": "R-endpoint-body", "match": "body_http_line", "kind": "endpoint", "confidence": "high"},
     {"id": "R-endpoint-openapi", "match": "openapi_fence", "kind": "endpoint", "confidence": "high"},
     {"id": "R-scheduler-heading", "match": "heading_markers", "kind": "scheduler", "confidence": "high",
-     "markers": ["шедулер", "планировщик", "scheduler", "job", "джоб"]},
+     "markers": ["шедулер", "планировщик", "scheduler", "job", "джоб", "регламентн", "cron", "крон", "фонов"]},
     {"id": "R-kafka-consume", "match": "heading_markers", "kind": "kafka-op", "role": "consume", "confidence": "high",
      "requires_topic": true, "markers": ["обработк", "обработчик", "получени", "чтени", "consumer", "listener", "слушател"]},
     {"id": "R-kafka-publish", "match": "heading_markers", "kind": "kafka-op", "role": "publish", "confidence": "high",

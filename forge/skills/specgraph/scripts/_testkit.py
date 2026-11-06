@@ -55,7 +55,8 @@ def run_queue(root: Path, queue: str, answer: Callable[[Dict], Optional[Dict]], 
     raise RuntimeError("очередь не закрылась за limit шагов")
 
 
-def draft_answer(root: Path) -> Callable[[Dict], Dict]:
+def draft_answer(root: Path, fn: Optional[Callable[[str], str]] = None) -> Callable[[Dict], Dict]:
+    """Черновики эталона; fn — трансформация имён варианта стресс-корпуса (модель называет узел, как видит)."""
     from sgraph import queue as Q
     answers = expected_drafts()
     data = json.loads((root / Q.QUEUE_REL / "draft-file.json").read_text(encoding="utf-8"))
@@ -67,6 +68,8 @@ def draft_answer(root: Path) -> Callable[[Dict], Dict]:
         sections = set(by_id[unit["item_id"]]["refs"]["sections"])
         nodes = [_prefixed(n) for n in exp["nodes"]]
         nodes = [n for n in nodes if not n.get("sections") or set(n["sections"]) <= sections]
+        if fn:
+            nodes = [dict(n, name=" ".join(fn(n["name"]).split())) for n in nodes]
         return {"nodes": nodes, "not_nodes": exp["not_nodes"]}
     return answer
 

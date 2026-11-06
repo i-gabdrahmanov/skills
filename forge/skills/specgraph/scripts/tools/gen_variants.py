@@ -164,6 +164,14 @@ def yo_to_e(t: str) -> str:
     return t.replace("ё", "е").replace("Ё", "Е")
 
 
+def sched_reglament(t: str) -> str:
+    """Шедулер называется «регламентным заданием» (частое в банковских спеках; пробный цикл 4.4)."""
+    for a, b in (("Шедулеры", "Регламентные задания"), ("шедулеры", "регламентные задания"),
+                 ("Шедулер", "Регламентное задание"), ("шедулер", "регламентное задание")):
+        t = t.replace(a, b)
+    return t
+
+
 def unclosed_fence(t: str) -> str:
     """Первый json-фенс раздела «Kafka» теряет закрывающую строку (как task-service.md#1748 прототипа)."""
     head = t.find("### 3.1")
@@ -181,10 +189,11 @@ def prose_in_fence(t: str) -> str:
 
 TRANSFORMS: Dict[str, Callable[[str], str]] = {f.__name__: f for f in (
     num_trailing_dot, num_none, num_razdel, setext, bold_h3, code_prefix, english_groups, api_in_body,
-    api_openapi, html_tables, paren_lists, tab_indent, crlf, bom, nbsp, yo_to_e, unclosed_fence, prose_in_fence)}
+    api_openapi, html_tables, paren_lists, tab_indent, crlf, bom, nbsp, yo_to_e, unclosed_fence, prose_in_fence,
+    sched_reglament)}
 
 # Трансформации, меняющие текст ИМЁН и цитат: та же функция применяется к именам и цитатам эталона.
-TEXT_TRANSFORMS = {"yo_to_e", "nbsp"}
+TEXT_TRANSFORMS = {"yo_to_e", "nbsp", "sched_reglament"}
 
 VARIANTS: Dict[str, List[str]] = {
     "num-trailing-dot": ["num_trailing_dot"],
@@ -202,6 +211,7 @@ VARIANTS: Dict[str, List[str]] = {
     "nbsp-yo": ["nbsp", "yo_to_e"],
     "unclosed-fence": ["unclosed_fence"],
     "prose-in-fence": ["prose_in_fence"],
+    "sched-reglament": ["sched_reglament"],
     "mixed": ["num_none", "bold_h3", "api_in_body", "html_tables", "crlf"],
 }
 

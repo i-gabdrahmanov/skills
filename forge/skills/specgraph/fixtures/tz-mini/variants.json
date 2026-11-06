@@ -22,6 +22,7 @@
     "nbsp-yo":          {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "ok"},
     "unclosed-fence":   {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "ok"},
     "prose-in-fence":   {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "ok"},
+    "sched-reglament":  {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "ok"},
     "mixed":            {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "ok"}
   }
 }

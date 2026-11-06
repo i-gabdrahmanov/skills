@@ -141,9 +141,11 @@ class Rules(unittest.TestCase):
 
 class RulesAreData(unittest.TestCase):
     def test_markers_add_and_override(self):
-        text = "### Регламентное задание закрытия\n\nзапускается ночью\n"
+        self.assertEqual([c["kind"] for c in one("### Регламентное задание закрытия\n\nзапускается ночью\n")],
+                         ["scheduler"], "регламентное задание — шедулер (пробный цикл 4.4, вариант sched-reglament)")
+        text = "### Ночная процедура закрытия\n\nзапускается ночью\n"
         self.assertEqual(one(text), [])
-        learned = dict(CFG, extract={"markers_add": {"R-scheduler-heading": ["регламентное задание"]}})
+        learned = dict(CFG, extract={"markers_add": {"R-scheduler-heading": ["ночная процедура"]}})
         self.assertEqual([c["kind"] for c in one(text, cfg=learned)], ["scheduler"])
         off = dict(CFG, extract={"rules": [{"id": "R-topic-name", "kind": "topic", "match": "topic_regex",
                                             "confidence": "low"}], "kafka_topic_re": r"\bevt\.[a-z]+\b"})
