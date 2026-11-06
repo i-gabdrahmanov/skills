@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from . import blocks as B
+from . import fsutil as FS
 
 SALT_REL = ".spec-graph/salt"
 GENERIC = Path(__file__).resolve().parents[2] / "references" / "generic-words.txt"
@@ -47,7 +48,7 @@ def salt(root: Path) -> str:
         return p.read_text(encoding="utf-8").strip()
     p.parent.mkdir(parents=True, exist_ok=True)
     s = os.urandom(8).hex()
-    p.write_text(s + "\n", encoding="utf-8")
+    FS.write_text(p, s + "\n", encoding="utf-8")
     return s
 
 

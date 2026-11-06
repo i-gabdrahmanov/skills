@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from . import completeness as CM
 from . import edges as E
 from . import fm as F
+from . import fsutil as FS
 from . import ontology as O
 from . import split as SP
 
@@ -315,11 +316,11 @@ def validate(root: Path, cfg: Dict[str, Any], scope: Optional[str] = None, write
     if write:
         rp = Path(root) / RESULT_REL
         rp.parent.mkdir(parents=True, exist_ok=True)
-        rp.write_text(json.dumps(result, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        FS.write_text(rp, json.dumps(result, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
         p = report_path(root, cfg)
         if not p.is_file() or p.read_text(encoding="utf-8") != report:
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(report, encoding="utf-8")
+            FS.write_text(p, report, encoding="utf-8")
     top = [f"{i['code']} {i['path']}: {i['msg']}" if i["path"] else f"{i['code']}: {i['msg']}" for i in issues[:TOP]]
     out = {"notes": len(nodes), "errors": errors, "warnings": warnings, "counts": result["counts"], "top": top,
            "report": f"{cfg['vault']}/_graph/{REPORT_NAME}", "full": RESULT_REL,

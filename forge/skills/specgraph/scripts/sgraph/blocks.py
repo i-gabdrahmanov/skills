@@ -28,6 +28,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import fsutil as FS
+
 BLOCKS_REL = ".spec-graph/blocks"
 _ATX = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*#*[ \t]*$")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
@@ -221,7 +223,7 @@ def scan_file(root: Path, rel: str) -> Dict[str, Any]:
             "warnings": warnings}
     p = _out_path(root, rel)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    FS.write_text(p, json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     return data
 
 

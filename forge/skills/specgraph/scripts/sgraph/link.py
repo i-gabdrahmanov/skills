@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Tuple
 
 from . import catalog as CT
 from . import edges as E
+from . import fsutil as FS
 from . import keys as K
 from . import queue as Q
 from . import resolve as RS
@@ -166,6 +167,6 @@ def put(root: Path, cfg: Dict[str, Any], item_id: str, proposals: List[Dict[str,
         for q in questions:
             if q not in cur:
                 cur.append(q)
-        Path(root, QUESTIONS_REL).write_text(json.dumps(cur, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
+        FS.write_text(Path(root, QUESTIONS_REL), json.dumps(cur, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
                                              encoding="utf-8")
     return {"note": note, "accepted": len(ok), "questions": len(questions), **stats}, []

@@ -30,6 +30,7 @@ from . import blocks as B
 from . import catalog as CT
 from . import extract as X
 from . import fm as F
+from . import fsutil as FS
 from . import keys as K
 from . import ontology as O
 
@@ -242,7 +243,7 @@ def split(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
         new = _note_text(n, ont, old, per_node.get(n["name"], []), toc)
         if new != old:
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_bytes(new.encode("utf-8"))      # байты: дословность CRLF исходника не трогаем
+            FS.write_bytes(p, new.encode("utf-8"))      # байты: дословность CRLF исходника не трогаем
             written += 1
         else:
             unchanged += 1
@@ -251,7 +252,7 @@ def split(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     known = {Path(v) for v in paths}
     stray = sorted(str(q.relative_to(vault)) for q in vault.rglob("*.md")
                    if not str(q.relative_to(vault)).startswith("_graph/") and q.relative_to(vault) not in known)
-    (Path(root) / REWRITES_REL).write_text(json.dumps(rewrites, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
+    FS.write_text((Path(root) / REWRITES_REL), json.dumps(rewrites, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
                                           encoding="utf-8")
     cov = coverage(root, cfg, files_blocks, owner, skip, unplaced)
     return {"notes": len(nodes), "written": written, "unchanged": unchanged, "rewrites": len(rewrites),
@@ -273,7 +274,7 @@ def _write_unplaced(vault: Path, files_blocks, unplaced) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     text = "\n".join(lines) + "\n"
     if read_note(p) != text:
-        p.write_bytes(text.encode("utf-8"))     # дословно, как и заметки
+        FS.write_bytes(p, text.encode("utf-8"))     # дословно, как и заметки
 
 
 def _write_index(vault: Path, nodes, paths, ont) -> None:
@@ -286,7 +287,7 @@ def _write_index(vault: Path, nodes, paths, ont) -> None:
     p = vault / "_graph" / "index.md"
     p.parent.mkdir(parents=True, exist_ok=True)
     if not p.is_file() or p.read_text(encoding="utf-8") != text:
-        p.write_text(text, encoding="utf-8")
+        FS.write_text(p, text, encoding="utf-8")
 
 
 # ─── полнота и дословность ─────────────────────────────────────────────────
@@ -308,7 +309,7 @@ def coverage(root: Path, cfg: Dict[str, Any], files_blocks=None, owner=None, ski
                     "unassigned": sum(1 for b in ids if b not in owner and b not in skip and b not in unplaced),
                     "unassigned_ids": [b for b in ids if b not in owner and b not in skip and b not in unplaced][:20]}
     data = {"files": out}
-    (Path(root) / COVERAGE_REL).write_text(json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
+    FS.write_text((Path(root) / COVERAGE_REL), json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
                                           encoding="utf-8")
     return data
 

@@ -30,6 +30,7 @@ from . import catalog as CT
 from . import consent as CS
 from . import edges as E
 from . import fm as F
+from . import fsutil as FS
 from . import ontology as O
 from . import queue as Q
 from . import resolve as RS
@@ -205,7 +206,7 @@ def review(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     p = review_path(root, cfg)
     p.parent.mkdir(parents=True, exist_ok=True)
     if not p.is_file() or p.read_text(encoding="utf-8") != text:
-        p.write_text(text, encoding="utf-8")
+        FS.write_text(p, text, encoding="utf-8")
     st = CS.state(root, CONSENT, p)
     rel = p.relative_to(Path(root)).as_posix()
     out = dict(summary, report=rel, consent=st["state"], key=st["key"])
@@ -268,7 +269,7 @@ def edges_decide(root: Path, cfg: Dict[str, Any], accept: List[Any], reject: Lis
     for name in touched:
         E.save(root, name, stores[name])
     log_p.parent.mkdir(parents=True, exist_ok=True)
-    log_p.write_text(json.dumps(log, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    FS.write_text(log_p, json.dumps(log, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     CT.write_decisions_md(root, cfg["vault"])
     return {"accepted": sum(1 for v, _ in hits if v == "accept"), "rejected": sum(1 for v, _ in hits if v == "reject"),
             "next": "graph_sync, затем graph_edges_review — и снова вопрос пользователю по обновлённому отчёту"}
@@ -345,7 +346,7 @@ def delta_decide(root: Path, cfg: Dict[str, Any], decisions: List[Dict[str, Any]
     for d in decisions:
         dec[d["node"]] = {k: d[k] for k in ("action", "into", "name", "why") if d.get(k)}
     p = Path(root) / AS.DELTA_DECISIONS_REL
-    p.write_text(json.dumps(dec, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    FS.write_text(p, json.dumps(dec, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     _, remap = AS.delta_resolution(root)
     vault = Path(root) / cfg["vault"]
     for old in remap:

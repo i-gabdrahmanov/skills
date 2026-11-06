@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from . import fm as F
+from . import fsutil as FS
 from . import ontology as O
 
 INDEX_REL = ".spec-graph/index.json"
@@ -125,7 +126,7 @@ def build_index(root: Path, cfg: Dict[str, Any], use_cache: bool = True) -> Inde
                         edges.add((t, e, name))
     idx = Index(ont, nodes, sorted(edges))
     cache_p.parent.mkdir(parents=True, exist_ok=True)
-    cache_p.write_text(json.dumps({"signature": sig, "ontology": ont.version, "nodes": nodes, "edges": sorted(edges)},
+    FS.write_text(cache_p, json.dumps({"signature": sig, "ontology": ont.version, "nodes": nodes, "edges": sorted(edges)},
                                   ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
     return idx
 

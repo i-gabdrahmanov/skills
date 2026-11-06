@@ -142,10 +142,28 @@ class Lease(_Repo):
         (self.root / "docs").mkdir()
         cfg_path.write_text(json.dumps({"version": 1, "vault": "graph", "sources": [{"root": "docs"}],
                                         "queue": {"parallel": 2}}), encoding="utf-8")
-        Q.build(self.root, "assign-section", _specs(3))
-        ids = {self.next()["item_id"], self.next()["item_id"]}
-        self.assertEqual(len(ids), 2)
-        self.assertTrue(self.next()["repeat"])
+        Q.build(self.root, "assign-section", _specs(5))
+        batch = lambda: T.call("graph_next", self.root, {"queue": "assign-section", "batch": True})  # noqa: E731
+        first = batch()
+        ids = [u["item_id"] for u in first["units"]]
+        self.assertEqual((first["status"], len(ids), len(set(ids))), ("единицы", 2, 2))
+        self.assertIn("ОДНИМ ходом", first["next"])
+        again = batch()
+        self.assertEqual([u["item_id"] for u in again["units"]], ids, "до сдачи — те же единицы (обрыв)")
+        self.assertTrue(all(u["repeat"] for u in again["units"]))
+        Q.settle(self.root, "assign-section", ids[0], True)
+        third = [u["item_id"] for u in batch()["units"]]
+        self.assertEqual(third[0], ids[1])
+        self.assertEqual(len(third), 2)
+        self.assertNotIn(ids[0], third)
+        self.assertEqual(self.next()["item_id"], third[0], "одиночный graph_next продолжает висящую")
+        for _ in range(10):
+            res = batch()
+            for u in res["units"]:
+                Q.settle(self.root, "assign-section", u["item_id"], True)
+            if res["status"] == Q.EMPTY:
+                break
+        self.assertEqual(Q.status(self.root, "assign-section")["done"], 5)
 
 
 class Results(_Repo):

@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import extract as X
 from . import fm as F
+from . import fsutil as FS
 from . import keys as K
 from . import ontology as O
 from . import resolve as RS
@@ -129,7 +130,7 @@ def save(root: Path, name: str, proposals: List[Dict[str, Any]]) -> None:
     p = _path(root, name)
     p.parent.mkdir(parents=True, exist_ok=True)
     proposals = sorted(proposals, key=lambda x: (x["edge"], x["to"], x["origin"]))
-    p.write_text(json.dumps({"note": name, "proposals": proposals}, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
+    FS.write_text(p, json.dumps({"note": name, "proposals": proposals}, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
                  encoding="utf-8")
 
 

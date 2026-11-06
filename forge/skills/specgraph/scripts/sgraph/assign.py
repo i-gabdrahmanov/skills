@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import blocks as B
 from . import catalog as CT
 from . import extract as X
+from . import fsutil as FS
 from . import ontology as O
 from . import queue as Q
 
@@ -288,7 +289,7 @@ def put(root: Path, item_id: str, args: Dict[str, Any]) -> Tuple[Dict[str, Any],
     plan = {"item_id": item_id, "file": rel, "assign": assign, "skip": skip, "unplaced": unplaced}
     p = Path(root) / PLAN_REL / f"{item_id}.json"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(plan, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    FS.write_text(p, json.dumps(plan, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     if new_nodes:
         delta = load_delta(root)
         names = {n["name"] for n in delta}
@@ -299,7 +300,7 @@ def put(root: Path, item_id: str, args: Dict[str, Any]) -> Tuple[Dict[str, Any],
                            proposed_by=item_id)
                 delta.append(rec)
         dp = Path(root) / DELTA_REL
-        dp.write_text(json.dumps(delta, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        FS.write_text(dp, json.dumps(delta, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     return plan, []
 
 

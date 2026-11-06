@@ -13,9 +13,10 @@ selfcheck, improve). Единицы строит КОД движка (`build`) �
 
 Жизненный цикл: pending → leased (аренда, `graph_next`) → done (результат принят) | pending (отказ,
 попытка + 1) → abandoned (после `max_attempts` отказов, с последними кодами — в отчёт человеку).
-Аренда истекает (субагент оборвался) — единица снова pending. При `parallel` = 1 повторный
-`graph_next` до сдачи результата возвращает ту же единицу: после обрыва сессии работа продолжается
-с того же места, без повторов и пропусков.
+Аренда истекает (субагент оборвался) — единица снова pending. Повторный `graph_next` до сдачи результата
+возвращает ту же единицу: после обрыва сессии работа продолжается с того же места, без повторов и пропусков.
+Параллельные субагенты — `graph_next batch`: пачка до `queue.parallel` (по умолчанию 4) единиц, висящие в
+аренде первыми; одновременные вызовы инструментов сериализует блокировка проекта (fsutil).
 
 Результат принимает инструмент, объявивший в схеме `x-queue: <имя очереди>`: `tools.call` сверяет
 `item_id` (своя очередь, единица в аренде) ДО работы инструмента и закрывает или возвращает её ПОСЛЕ.
@@ -29,9 +30,11 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from . import fsutil as FS
+
 QUEUE_REL = ".spec-graph/queue"
 QUEUES = ("draft-file", "assign-section", "link-note", "card", "selfcheck", "improve")
-DEFAULTS = {"parallel": 1, "max_attempts": 3, "budget_chars": 24000, "lease_s": 1800}
+DEFAULTS = {"parallel": 4, "max_attempts": 3, "budget_chars": 24000, "lease_s": 1800}
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:#@-]{0,159}$")
 EMPTY = "пусто"
 
@@ -76,10 +79,7 @@ def _load(root: Path, name: str) -> Dict[str, Any]:
 
 def _save(root: Path, name: str, data: Dict[str, Any]) -> None:
     p = _path(root, name)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(p)
+    FS.write_text(p, json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def build(root: Path, name: str, specs: List[Dict[str, Any]], cfg: Optional[Dict[str, Any]] = None,
@@ -119,7 +119,7 @@ def build(root: Path, name: str, specs: List[Dict[str, Any]], cfg: Optional[Dict
         p = _input_path(root, s["id"])
         p.parent.mkdir(parents=True, exist_ok=True)
         if not p.is_file() or p.read_text(encoding="utf-8") != (s.get("input") or ""):
-            p.write_text(s.get("input") or "", encoding="utf-8")
+            FS.write_text(p, s.get("input") or "", encoding="utf-8")
         items.append(item)
     data = {"queue": name, "version": 1, "items": items}
     _save(root, name, data)
@@ -142,7 +142,8 @@ def _expire(data: Dict[str, Any], now: float) -> None:
 
 
 def lease(root: Path, name: str, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Следующая единица в аренду (или та же, если лимит параллельности исчерпан)."""
+    """Следующая единица в аренду — последовательный протокол: есть висящая в аренде — она же (продолжение
+    после обрыва без пропусков). Параллельность (`parallel`) — только пачкой: `lease_batch`."""
     st = settings(cfg)
     data = _load(root, name)
     now = _clock()
@@ -151,7 +152,7 @@ def lease(root: Path, name: str, cfg: Optional[Dict[str, Any]] = None) -> Dict[s
     total = len(items)
     done = sum(1 for it in items if it["status"] in ("done", "abandoned"))
     leased = [it for it in items if it["status"] == "leased"]
-    if len(leased) >= st["parallel"]:
+    if leased:
         it = min(leased, key=lambda x: x.get("lease_until", 0))
         repeat = True
     else:
@@ -167,6 +168,41 @@ def lease(root: Path, name: str, cfg: Optional[Dict[str, Any]] = None) -> Dict[s
     return {"status": "единица", "queue": name, "item_id": it["id"], "brief": it["brief"], "tool": it["tool"],
             "input": str(_input_path(root, it["id"]).relative_to(root)).replace("\\", "/"),
             "attempt": it["attempts"] + 1, "progress": f"{done + 1} из {total}", "repeat": repeat}
+
+
+def _unit(root: Path, name: str, it: Dict[str, Any], done: int, total: int, k: int, repeat: bool) -> Dict[str, Any]:
+    return {"queue": name, "item_id": it["id"], "brief": it["brief"], "tool": it["tool"],
+            "input": str(_input_path(root, it["id"]).relative_to(root)).replace("\\", "/"),
+            "attempt": it["attempts"] + 1, "progress": f"{done + k} из {total}", "repeat": repeat}
+
+
+def lease_batch(root: Path, name: str, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Пачка для параллельных субагентов: до `parallel` единиц. Висящие в аренде идут первыми (их субагент
+    оборвался — пачка выдаётся, когда прошлая сдана), остальное — новые pending. Одна единица в пачке один раз:
+    два субагента на одну единицу не получат её никогда."""
+    st = settings(cfg)
+    data = _load(root, name)
+    now = _clock()
+    _expire(data, now)
+    items = data["items"]
+    total = len(items)
+    done = sum(1 for it in items if it["status"] in ("done", "abandoned"))
+    picked = sorted((it for it in items if it["status"] == "leased"), key=lambda x: x.get("lease_until", 0))
+    resumed = {it["id"] for it in picked}
+    picked = picked[:st["parallel"]]
+    for it in items:
+        if len(picked) >= st["parallel"]:
+            break
+        if it["status"] == "pending":
+            picked.append(it)
+    for it in picked:
+        it["status"] = "leased"
+        it["lease_until"] = now + st["lease_s"]
+    _save(root, name, data)
+    if not picked:
+        return {"status": EMPTY, "queue": name, "progress": f"{done} из {total}", "units": []}
+    return {"status": "единицы", "queue": name, "progress": f"{done} из {total}", "parallel": st["parallel"],
+            "units": [_unit(root, name, it, done, total, k, it["id"] in resumed) for k, it in enumerate(picked, 1)]}
 
 
 def check_leased(root: Path, name: str, item_id: Any) -> None:

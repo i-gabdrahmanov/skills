@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from . import fm as F
+from . import fsutil as FS
 from . import ontology as O
 
 RULES = Path(__file__).resolve().parents[2] / "references" / "completeness.json"
@@ -119,5 +120,5 @@ def write_questions(root: Path, cfg: Dict[str, Any], holes: List[Dict[str, Any]]
     text = "\n".join(lines)
     if write and (not p.is_file() or p.read_text(encoding="utf-8") != text):
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text, encoding="utf-8")
+        FS.write_text(p, text, encoding="utf-8")
     return text

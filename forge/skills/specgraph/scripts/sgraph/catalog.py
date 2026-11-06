@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import consent as CS
+from . import fsutil as FS
 from . import ontology as O
 from . import profile as PF
 from . import survey as SV
@@ -94,7 +95,7 @@ def decide(root: Path, actions: List[Dict[str, Any]], vault: str) -> Dict[str, A
             added += 1
     p = Path(root) / DECISIONS_REL
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(log, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    FS.write_text(p, json.dumps(log, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     write_decisions_md(root, vault)
     return {"added": added, "total": len(log)}
 
@@ -124,7 +125,7 @@ def write_decisions_md(root: Path, vault: str) -> None:
             lines.append(f"- «{e['from']}» —{e['edge']}→ «{e['to']}» → {e.get('why', '')}")
     md = Path(root) / vault / "_graph" / "decisions.md"
     md.parent.mkdir(parents=True, exist_ok=True)
-    md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    FS.write_text(md, "\n".join(lines) + "\n", encoding="utf-8")
 
 
 # ─── сборка ────────────────────────────────────────────────────────────────
@@ -224,7 +225,7 @@ def build(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
            "not_nodes": sorted(not_nodes, key=lambda x: (x["file"], x.get("candidate", ""))), "scope": scope}
     p = Path(root) / CATALOG_REL
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(cat, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    FS.write_text(p, json.dumps(cat, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     _write_md(root, cfg, cat, ont)
     return cat
 
@@ -268,7 +269,7 @@ def _write_md(root: Path, cfg: Dict[str, Any], cat: Dict[str, Any], ont: O.Ontol
     lines += ["## Кандидаты в новые виды", ""] + ([f"- {k}" for k in kinds_new] or ["- нет"]) + [""]
     p = Path(root) / cfg["vault"] / "_graph" / "catalog.md"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("\n".join(lines), encoding="utf-8")
+    FS.write_text(p, "\n".join(lines), encoding="utf-8")
 
 
 # ─── утверждение ───────────────────────────────────────────────────────────

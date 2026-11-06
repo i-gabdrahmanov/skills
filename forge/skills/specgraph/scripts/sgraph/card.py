@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Tuple
 from . import blocks as B
 from . import catalog as CT
 from . import fm as F
+from . import fsutil as FS
 from . import queue as Q
 from . import resolve as RS
 
@@ -144,8 +145,8 @@ def put(root: Path, cfg: Dict[str, Any], item_id: str, fields: Dict[str, Any]) -
         q = {"note": note, "edge": "card", "target": "", "reason": "у бизнес-операции нет описания в спеке (ТЗ §4)", "quote": ""}
         if q not in qs:
             qs.append(q)
-            qs_p.write_text(json.dumps(qs, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+            FS.write_text(qs_p, json.dumps(qs, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     from . import ontology as O
     ont = O.load(root)
-    p.write_bytes(F.write(data, body, ont.fm_keys(index[note]["kind"])).encode("utf-8"))
+    FS.write_bytes(p, F.write(data, body, ont.fm_keys(index[note]["kind"])).encode("utf-8"))
     return {"note": note, "stub": stub}, []

@@ -15,6 +15,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import fsutil as FS
+
 CONFIG_REL = ".spec-graph/config.json"
 CONFIG_VERSION = 1
 DEFAULT_VAULT = "docs/graph"
@@ -183,6 +185,6 @@ def init(root: Path, answers: Dict[str, Any]) -> Dict[str, Any]:
     if errors:
         return {"status": "invalid", "errors": errors}
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    FS.write_text(p, json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return {"status": "written", "config": CONFIG_REL, "vault": cfg["vault"],
             "sources": [s["root"] for s in cfg["sources"]]}

@@ -30,6 +30,7 @@ from . import catalog as CT
 from . import config as C
 from . import diag as DG
 from . import edges as ED
+from . import fsutil as FS
 from . import link as LK
 from . import metrics as M
 from . import obsidian as OB
@@ -113,13 +114,25 @@ def _cfg(root: Path) -> Optional[Dict[str, Any]]:
     return cfg
 
 
+def _unit_next(u: Dict[str, Any]) -> str:
+    return (f"запусти субагента: бриф {u['brief']}, вход {u['input']}; результат он сдаёт инструментом {u['tool']} "
+            f"с item_id «{u['item_id']}»")
+
+
 def _next(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    if args.get("batch"):
+        res = Q.lease_batch(root, _queue_arg(args), _cfg(root))
+        for u in res.get("units", []):
+            u["next"] = _unit_next(u)
+        res["next"] = ("очередь пуста — переходи к гейту шага" if res["status"] == Q.EMPTY else
+                       f"запусти {len(res['units'])} субагентов ОДНИМ ходом (каждому — свою единицу), дождись, пока "
+                       f"все сдадут результат, затем снова graph_next batch")
+        return res
     res = Q.lease(root, _queue_arg(args), _cfg(root))
     if res.get("status") == Q.EMPTY:
         res["next"] = "очередь пуста — переходи к гейту шага"
     elif res.get("status") == "единица":
-        res["next"] = (f"запусти субагента: бриф {res['brief']}, вход {res['input']}; результат он сдаёт "
-                       f"инструментом {res['tool']} с item_id «{res['item_id']}»")
+        res["next"] = _unit_next(res)
     return res
 
 
@@ -346,7 +359,10 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "description": "Следующая единица работы очереди (в аренду): бриф, путь к готовому входу, инструмент "
                        "результата, прогресс. «пусто» — очередь закрыта, дальше гейт. Вызывает оркестратор; "
                        "единицу исполняет субагент.",
-        "schema": {"type": "object", "properties": {"queue": _QUEUE_PROP},
+        "schema": {"type": "object",
+                   "properties": {"queue": _QUEUE_PROP,
+                                  "batch": {"type": "boolean", "description": "пачка до queue.parallel единиц для "
+                                            "параллельных субагентов (висящие в аренде — первыми)"}},
                    "required": ["queue"], "additionalProperties": False},
     },
     "graph_scan": {
@@ -581,11 +597,20 @@ def _refs(args: Dict[str, Any], schema: Dict[str, Any]) -> List[str]:
 
 
 def call(name: str, root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
-    tool = TOOLS.get(name)
-    if tool is None:
+    """Вызов инструмента под блокировкой проекта: параллельные субагенты (и разные процессы MCP) не теряют
+    записи друг друга. Под блокировкой — только работа инструмента; рассуждение модели идёт вне её."""
+    if name not in TOOLS:
         raise KeyError(name)
+    try:
+        with FS.project_lock(root):
+            return _call(name, Path(root), args)
+    except FS.LockTimeout as e:
+        raise ToolError(f"{e}; повтори вызов позже", ["E-busy"])
+
+
+def _call(name: str, root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    tool = TOOLS[name]
     args = args or {}
-    root = Path(root)
     started = time.monotonic()
     refs = _refs(args, tool["schema"]) if isinstance(args, dict) else []
     elapsed = lambda: int((time.monotonic() - started) * 1000)  # noqa: E731

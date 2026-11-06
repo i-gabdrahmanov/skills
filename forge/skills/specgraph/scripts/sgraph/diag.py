@@ -27,6 +27,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from . import VERSION
 from . import blocks as B
+from . import fsutil as FS
 from . import metrics as M
 from . import ontology as O
 from . import profile as PF
@@ -402,7 +403,7 @@ def build(root: Path, cfg: Dict[str, Any], key: Optional[str] = None, level: str
     out_dir = Path(root) / cfg["vault"] / DIAG_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     name = f"diag-{time.strftime('%Y%m%d-%H%M%S', t)}-{key}.md"
-    (out_dir / name).write_text(text, encoding="utf-8")
+    FS.write_text((out_dir / name), text, encoding="utf-8")
     old = sorted(out_dir.glob("diag-*.md"))
     for p in old[:-KEEP]:
         p.unlink()

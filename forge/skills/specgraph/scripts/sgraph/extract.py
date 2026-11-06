@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import blocks as B
+from . import fsutil as FS
 from . import keys as K
 from . import ontology as O
 
@@ -311,7 +312,7 @@ def extract_file(root: Path, rel: str, cfg: Dict[str, Any], rules: Optional[Dict
     res = extract_blocks(data["blocks"], rel, cfg, rules)
     p = Path(root) / CANDIDATES_REL / (rel + ".json")
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(res, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    FS.write_text(p, json.dumps(res, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     return res
 
 

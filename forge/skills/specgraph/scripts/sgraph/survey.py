@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import blocks as B
 from . import extract as X
+from . import fsutil as FS
 from . import ontology as O
 from . import queue as Q
 
@@ -205,7 +206,7 @@ def survey(root: Path, cfg: Dict[str, Any], scope: Optional[str] = None) -> Dict
     md = _survey_md(per_file, anomalies, excluded, work, scope_hint)
     vault = Path(root) / cfg["vault"] / "_graph"
     vault.mkdir(parents=True, exist_ok=True)
-    (vault / "survey.md").write_text(md, encoding="utf-8")
+    FS.write_text((vault / "survey.md"), md, encoding="utf-8")
     return {"files": len(per_file), "candidates": len(all_cands), "work": work, "anomalies": anomalies[:15],
             "excluded": excluded[:10], "scope_hint": scope_hint, "survey": f"{cfg['vault']}/_graph/survey.md",
             "queue": counts, "next": "цикл очереди draft-file: graph_next queue=draft-file"}
@@ -313,7 +314,7 @@ def put_draft(root: Path, item_id: str, nodes: List[Dict[str, Any]], not_nodes: 
     draft = {"item_id": item_id, "file": rel, "nodes": nodes, "not_nodes": not_nodes}
     p = Path(root) / DRAFTS_REL / f"{item_id}.json"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(draft, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    FS.write_text(p, json.dumps(draft, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     return draft, []
 
 

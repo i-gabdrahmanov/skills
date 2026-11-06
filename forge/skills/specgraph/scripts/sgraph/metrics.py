@@ -27,6 +27,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from . import fsutil as FS
+
 RUNS_REL = ".spec-graph/runs"
 HEALTH_REL = ".spec-graph/health.json"
 HEALTH_KEEP = 30
@@ -109,7 +111,7 @@ def bump(root: Path, counter: str, n: int = 1, key: Optional[str] = None) -> int
         data = {}
     data[counter] = int(data.get(counter, 0)) + int(n)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    FS.write_text(p, json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     return data[counter]
 
 
@@ -181,7 +183,7 @@ def record_health(root: Path, snapshot: Dict[str, Any], findings: Iterable[str] 
         streak += 1
     out = {"runs": runs, "stable_streak": streak, "stable": streak >= stable_runs}
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(out, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    FS.write_text(p, json.dumps(out, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     return {"new_findings": len(new), "stable_streak": streak, "stable": out["stable"], "kept": len(runs)}
 
 

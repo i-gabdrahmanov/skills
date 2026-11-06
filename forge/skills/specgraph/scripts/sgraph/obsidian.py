@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import fm as F
+from . import fsutil as FS
 from . import ontology as O
 from . import resolve as RS
 
@@ -67,7 +68,7 @@ def _write(p: Path, text: str, dry: bool = False) -> bool:
         return False
     if not dry:
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text, encoding="utf-8")
+        FS.write_text(p, text, encoding="utf-8")
     return True
 
 
@@ -252,6 +253,6 @@ def build(root: Path, cfg: Dict[str, Any], dry: bool = False) -> Dict[str, Any]:
     new_state = {"queries": [g["query"] for g in ours], "views": sorted(wanted), "mode": mode}
     if new_state != state and not dry:
         state_p.parent.mkdir(parents=True, exist_ok=True)
-        state_p.write_text(json.dumps(new_state, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        FS.write_text(state_p, json.dumps(new_state, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     return {"mode": mode, "changed": changed, "groups": len(ours), "views": len(wanted),
             "start": sp.relative_to(root).as_posix()}

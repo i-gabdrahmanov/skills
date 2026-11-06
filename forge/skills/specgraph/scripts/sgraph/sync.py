@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Set, Tuple
 
 from . import edges as E
 from . import fm as F
+from . import fsutil as FS
 from . import ontology as O
 from . import resolve as RS
 
@@ -128,12 +129,12 @@ def sync(root: Path, cfg: Dict[str, Any], dry: bool = False) -> Dict[str, Any]:
         new_text = F.write(data, body if body.endswith("\n") else body + "\n", order)
         if new_text != old_text:
             if not dry:
-                p.write_bytes(new_text.encode("utf-8"))
+                FS.write_bytes(p, new_text.encode("utf-8"))
             written += 1
     journal_changed = new_synced != synced
     if not dry:
         synced_p.parent.mkdir(parents=True, exist_ok=True)
-        synced_p.write_text(json.dumps(new_synced, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        FS.write_text(synced_p, json.dumps(new_synced, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     edges_total = sum(len(r) for by in forward.values() for r in by.values())
     return {"notes": len(index), "written": written, "forward_edges": edges_total, "manual": manual,
             "removed_by_human": removed_by_human, "manual_inverse": manual_inverse[:20], "journal_changed": journal_changed}
