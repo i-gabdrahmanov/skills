@@ -92,7 +92,7 @@
 | М1 | 2 | [2.6 Отчёт связей и шаг graph-link](tasks/2.6-link-step.md) | 2.2, 2.5 | done |
 | М1 | 3 graph-check | [3.1 Валидатор](tasks/3.1-validator.md) | 2.4 | done |
 | М1 | 3 | [3.2 Проверки полноты по ТЗ](tasks/3.2-completeness.md) | 3.1 | done |
-| М1 | 3 | [3.3 Obsidian-слой](tasks/3.3-obsidian-layer.md) | 3.1 | todo |
+| М1 | 3 | [3.3 Obsidian-слой](tasks/3.3-obsidian-layer.md) | 3.1 | done |
 | М1 | 3 | [3.4 MCP обхода](tasks/3.4-traversal-mcp.md) | 3.1 | todo |
 | М1 | 3 | [3.5 Шаг graph-check и приёмка](tasks/3.5-check-step.md) | 3.2, 3.3, 3.4 | todo |
 | М1 | 3 | [3.6 E2E на фикстуре ТЗ](tasks/3.6-e2e.md) | 3.5, 2.6, 1.7 | todo |
