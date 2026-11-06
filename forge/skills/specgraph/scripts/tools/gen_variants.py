@@ -74,6 +74,8 @@ def num_razdel(t: str) -> str:
 def setext(t: str) -> str:
     def f(lvl, title):
         if lvl in (1, 2):
+            # «5. Заголовок» над подчёркиванием — по CommonMark пункт списка: автор экранирует точку
+            title = re.sub(r"^(\d+)([.)])(\s)", r"\1\\\2\3", title)
             return title + "\n" + ("=" if lvl == 1 else "-") * max(3, len(title))
         return "#" * lvl + " " + title
     return _heading_titles(t, f)

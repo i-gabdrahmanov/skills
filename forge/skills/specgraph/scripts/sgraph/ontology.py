@@ -201,6 +201,10 @@ class Ontology:
         return node.get("kind", "?") + (f":{node['role']}" if node.get("role") else "")
 
     # — виды —
+    def owned_by_service(self, kind: str) -> bool:
+        """У вида есть сервис-владелец (путь заметки — под каталогом сервиса)."""
+        return self.kinds[kind].get("owner") == "service"
+
     def fm_keys(self, kind: str, role: Optional[str] = None) -> List[str]:
         """Порядок ключей frontmatter заметки вида: скаляры, прямые рёбра, обратные рёбра.
 

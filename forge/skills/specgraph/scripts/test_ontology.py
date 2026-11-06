@@ -197,10 +197,25 @@ class Local(unittest.TestCase):
                 O.load(Path(td))
 
 
+def branching_rx():
+    """Запрещено ВЕТВЛЕНИЕ по виду (`kind == "scheduler"`, `"kind": "topic"`, `kind="data"`, `in ("endpoint",`);
+    имя поля, совпавшее с видом (`c["service"]`), — не ветвление и не флагуется."""
+    kinds = sorted(BASE["kinds"], key=len, reverse=True)
+    lit = r"""["'](%s)["']""" % "|".join(re.escape(k) for k in kinds)
+    return re.compile(r"(?:[!=]=\s*|\bin\s*[(\[]\s*|[\"']kind[\"']\s*:\s*|\bkind\s*=\s*)" + lit + "|" + lit + r"\s*[!=]=")
+
+
 class NoKindLiteralsInEngine(unittest.TestCase):
+    def test_guard_catches_branching(self):
+        rx = branching_rx()
+        for bad in ('if kind == "scheduler":', 'x = {"kind": "topic"}', 'f(kind="data")', 'if k in ("endpoint", "x")',
+                    'if "screen" == k:'):
+            self.assertTrue(rx.search(bad), bad)
+        for ok in ('c["service"] = svc', 'out = {"service": svc}', 'args.get("service")'):
+            self.assertFalse(rx.search(ok), ok)
+
     def test_only_the_ontology_knows_kinds(self):
-        kinds = sorted(BASE["kinds"], key=len, reverse=True)
-        rx = re.compile(r"""["'](%s)["']""" % "|".join(re.escape(k) for k in kinds))
+        rx = branching_rx()
         offenders = []
         for py in sorted((SCRIPTS / "sgraph").rglob("*.py")):
             if py.name == "ontology.py":

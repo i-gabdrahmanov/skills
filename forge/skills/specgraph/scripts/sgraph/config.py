@@ -23,7 +23,7 @@ ADAPTERS = ("md",)
 # Каталоги, которые никогда не исходники спеки: служебные forge/рантайма, зависимости, VCS.
 _SKIP_DIRS = {".git", ".gigacode", ".spec-graph", "ground", "node_modules", ".obsidian", ".idea",
               ".vscode", "__pycache__", "build", "target", "dist"}
-_TOP_LEVEL_KEYS = {"version", "vault", "sources", "exclude", "services", "ontology_version", "queue"}
+_TOP_LEVEL_KEYS = {"version", "vault", "sources", "exclude", "services", "ontology_version", "queue", "extract"}
 _QUEUE_KEYS = {"parallel", "max_attempts", "budget_chars", "lease_s"}
 _SOURCE_KEYS = {"root", "adapter", "kind_hint"}
 
@@ -89,6 +89,12 @@ def validate(cfg: Any) -> List[str]:
         errors.append("services: объект «путь каталога или файла → имя сервиса»")
     if not isinstance(cfg.get("ontology_version", 1), int):
         errors.append("ontology_version: целое")
+    if "extract" in cfg:
+        try:
+            from . import extract as X                      # правила экстракторов проверяет их модуль
+            X.load_rules(cfg)
+        except Exception as e:  # noqa: BLE001 — ошибка правил проекта = ошибка конфига, не падение
+            errors.append(f"extract: {e}")
     queue = cfg.get("queue", {})
     if not isinstance(queue, dict):
         errors.append("queue: объект {parallel, max_attempts, budget_chars, lease_s}")
