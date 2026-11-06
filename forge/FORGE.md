@@ -171,6 +171,7 @@ resolve_phases; копий кортежей `fix-*`/`tech-*` по коду не�
 | `tdd-guard.py` | PreToolUse (Write/Edit + Bash) | блок `src/main` пока RED pending |
 | `tech-guard.py` | PreToolUse (Write/Edit + Bash) | tech-ветка: правка проекта только на `tech-apply`, по согласию на текущий план, после снимка «до», в `targets` |
 | `ui-guard.py` | PreToolUse (Write/Edit + Bash + read) | ui-ветка (forge-ui): запреты daiver кодом — канон и сырые экспорты макета не читаются (read_file/grep_search/shell), код модуля (`project.outputDir`) пишется только на `ui-build` при действительной подписи плана, инлайн-`<svg` в модуле запрещён; правка на `ui-verify` = переоткрытие `ui-build` |
+| `graph-guard.py` | PreToolUse (Write/Edit + Bash) | репо спеки (spec-graph): frontmatter и маркеры `graph:*` заметок vault пишут только инструменты `graph_*`; новая заметка vault, запись в `_graph/` и `.spec-graph/` (в т.ч. shell) моделью — отказ; проза вне маркеров — можно; вне проекта spec-graph — noop |
 | `eval-guard.py` | PreToolUse (Write/Edit + Bash) | блок `src/main` пока eval'ы задачи не passed |
 | `sod-enforcer.py` | PreToolUse | separation of duties по id активного шага (сборка/тесты: gradle, mvn, npm/pnpm/yarn/npx, tsc, vite, playwright) |
 | `inline-phase-guard.py` | PreToolUse | actor-guard: ГЛАВНЫЙ не производит subagent-фазу inline (артефакты, сборка и продуктивные MCP-инструменты шага — `phase_tools`) |
@@ -193,10 +194,11 @@ resolve_phases; копий кортежей `fix-*`/`tech-*` по коду не�
 5. `tdd-guard`
 6. `tech-guard`
 7. `ui-guard`
-8. `eval-guard`
-9. `sod-enforcer`
-10. `inline-phase-guard`
-11. `gate-guard`
+8. `graph-guard`
+9. `eval-guard`
+10. `sod-enforcer`
+11. `inline-phase-guard`
+12. `gate-guard`
 
 tdd-guard, tech-guard, ui-guard, eval-guard и sod-enforcer судят в Bash-цепочке ЦЕЛИ записи shell-команды
 (`hooks/_shell_targets.py`, общий разбор со state-write-guard) так же, как Write: иначе
@@ -208,10 +210,11 @@ tdd-guard, tech-guard, ui-guard, eval-guard и sod-enforcer судят в Bash-�
 3. `tdd-guard`
 4. `tech-guard`
 5. `ui-guard`
-6. `eval-guard`
-7. `sod-enforcer`
-8. `inline-phase-guard`
-9. `gate-guard`
+6. `graph-guard`
+7. `eval-guard`
+8. `sod-enforcer`
+9. `inline-phase-guard`
+10. `gate-guard`
 
 Читающие инструменты (`read_file`, `grep_search`, …) — тоже sequential: `ui-guard` → `grounding-evidence` → `gate-guard`;
 `read_many_files` — отдельная группа из одного `ui-guard` (канон и сырые экспорты макета не читаются).

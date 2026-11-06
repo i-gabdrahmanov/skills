@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -34,6 +34,7 @@ from . import queue as Q
 from . import resolve as RS
 from . import split as SP
 from . import status as ST
+from . import sync as SY
 from . import survey as SV
 
 
@@ -231,6 +232,10 @@ def _link_put(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return res
 
 
+def _sync(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    return SY.sync(root, _need_cfg(root))
+
+
 _QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
 
 TOOLS: Dict[str, Dict[str, Any]] = {
@@ -367,6 +372,12 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                    "properties": {"item_id": {"type": "string"},
                                   "proposals": {"type": "array", "items": {"type": "object"}}},
                    "required": ["item_id", "proposals"], "x-queue": "link-note", "additionalProperties": False},
+    },
+    "graph_sync": {
+        "fn": _sync,
+        "description": "Записать рёбра в заметки: прямые ключи и таблица оснований (graph:edges) у владельца, обратные "
+                       "ключи у всех — пересчётом; ссылки, добавленные/убранные человеком в Obsidian, учитываются.",
+        "schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     "graph_queue_status": {
         "fn": _queue_status,

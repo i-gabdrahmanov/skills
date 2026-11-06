@@ -54,6 +54,7 @@ ESSENTIAL_HOOKS = [
     "state-write-guard.py",
     "grounding-evidence.py",
     "ui-guard.py",
+    "graph-guard.py",
 ]
 
 
