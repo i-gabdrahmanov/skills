@@ -2,7 +2,7 @@
 """test_validator.py — валидатор графа (задача 3.1).
 
 Пинит:
-  • vault фикстуры после шагов map и link — 0 ошибок E-* и 0 предупреждений;
+  • vault фикстуры после шагов map и link — 0 ошибок E-*; предупреждения — только дыры полноты фикстуры (3.2);
   • по тесту на каждый код: здоровый vault, одна поломка построителем → ровно этот код в счётчиках;
   • scope режет нарушения по префиксу пути; CLI: 0 — нет ошибок, 1 — есть; отчёт _graph/report.md;
   • в validate.py нет имён видов и рёбер литералами (DoD п. 3): всё из онтологии.
@@ -37,6 +37,7 @@ EP = "services/task-service/endpoints/task-service GET api-v1-tasks.md"
 SCREEN = "ui/UI регистрации.md"
 
 _healthy = {}
+HOLES = {"W-op-no-creator": 2, "W-topic-side": 1}      # дыры самой фикстуры (спека их не описывает) — test_completeness
 
 
 def setUpModule():
@@ -73,15 +74,15 @@ class _Base(unittest.TestCase):
     def assertOnly(self, code, *also):
         c = self.counts()
         self.assertIn(code, c, c)
-        self.assertEqual(set(c) - {code, *also}, set(), f"лишние коды: {c}")
+        self.assertEqual(set(c) - {code, *also, *HOLES}, set(), f"лишние коды: {c}")
 
 
 class Healthy(_Base):
     def test_fixture_is_clean(self):
         res = T.call("graph_validate", self.root, {})
-        self.assertEqual((res["errors"], res["warnings"], res["notes"]), (0, 0, 29), res["top"])
-        self.assertIn("Нарушений нет.", (self.vault / "_graph" / "report.md").read_text(encoding="utf-8"))
-        self.assertEqual(json.loads((self.root / ".spec-graph/validate.json").read_text(encoding="utf-8"))["issues"], [])
+        self.assertEqual((res["errors"], res["notes"], res["counts"]), (0, 29, HOLES), res["top"])
+        issues = json.loads((self.root / ".spec-graph/validate.json").read_text(encoding="utf-8"))["issues"]
+        self.assertTrue(all(i.get("hole") for i in issues))
 
 
 class Errors(_Base):
@@ -136,7 +137,7 @@ class Errors(_Base):
 
     def test_inverse(self):
         self.edit(OP, lambda d, b: (dict(d, closed_by=[]), b))
-        self.assertOnly("E-inverse")
+        self.assertOnly("E-inverse", "W-op-no-closer")
 
     def test_symmetric_mirror(self):
         self.edit(OP2, lambda d, b: (dict(d, related=[]), b))
@@ -224,7 +225,7 @@ class Surface(_Base):
     def test_scope_and_cli(self):
         self.edit(OP, lambda d, b: (dict(d, related=["[[Нет такой операции]]"]), b))
         self.assertEqual(self.counts("ui/"), {})
-        self.assertEqual(self.counts("business/"), {"E-ghost": 1})
+        self.assertEqual(self.counts("business/"), {"E-ghost": 1, "W-op-no-creator": 2})
         out = io.StringIO()
         with redirect_stdout(out):
             self.assertEqual(GV.main(["--project", str(self.root)]), 1)

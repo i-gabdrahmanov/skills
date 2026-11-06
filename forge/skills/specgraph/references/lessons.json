@@ -172,14 +172,14 @@
     {
       "id": "P-build-2",
       "text": "Эндпойнт без флоу — ошибка полноты, которую не видит ни один валидатор",
-      "status": "planned",
-      "ref": "3.2"
+      "status": "covered",
+      "ref": "test_completeness.py::EachRule"
     },
     {
       "id": "P-build-3",
       "text": "Топик без издателя или подписчика — мёртвый канал (S-topic-no-side)",
-      "status": "planned",
-      "ref": "3.2"
+      "status": "covered",
+      "ref": "test_completeness.py::EachRule"
     },
     {
       "id": "P-build-4",

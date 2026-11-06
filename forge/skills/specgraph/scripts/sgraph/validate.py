@@ -10,6 +10,8 @@
 
 Ошибки (E-*): fm-parse, fm-key, name, path, key-dup, ghost, edge-kind, inverse, evidence, verbatim,
 coverage, index, marker. Предупреждения (W-*): orphan, manual-inverse, unplaced, source-missing.
+Плюс дыры полноты по правилам `completeness.json` (3.2): раздел «Дыры графа» по бизнес-операциям и вопросы
+в `_graph/open-questions.md`.
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from . import blocks as B
+from . import completeness as CM
 from . import edges as E
 from . import fm as F
 from . import ontology as O
@@ -268,7 +270,9 @@ def validate(root: Path, cfg: Dict[str, Any], scope: Optional[str] = None) -> Di
     run.orphans(nodes)
     run.index(nodes)
     run.sources(nodes)
-    issues = run.issues
+    holes = CM.check(root, nodes)
+    CM.write_questions(root, cfg, holes)
+    issues = run.issues + [dict(h, hole=True) for h in holes]
     if scope:
         issues = [i for i in issues if not i["path"] or i["path"].startswith(scope.rstrip("/"))]
     issues.sort(key=lambda i: (not i["code"].startswith("E-"), i["code"], i["path"], i["msg"]))
@@ -294,8 +298,20 @@ def _write_report(vault: Path, result: Dict[str, Any]) -> None:
              + (f" Область: {result['scope']}." if result["scope"] else ""), ""]
     if result["counts"]:
         lines += ["| код | сколько |", "|---|---|"] + [f"| {k} | {v} |" for k, v in result["counts"].items()] + [""]
+    holes = [i for i in result["issues"] if i.get("hole")]
+    if holes:
+        lines += ["", "## Дыры графа", "", "Чего в графе нет, хотя по ТЗ должно быть. Вопросы — _graph/open-questions.md.", ""]
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        for h in holes:
+            for op in h["ops"] or [""]:
+                groups.setdefault(op, []).append(h)
+        for op in sorted(groups, key=lambda g: (not g, g)):
+            lines += [f"### {F.link(op)}" if op else "### Без связи с бизнес-операцией", ""]
+            lines += [f"- {h['code']} {F.link(h['name'])}: {h['msg']}" for h in groups[op]] + [""]
     code = None
     for i in result["issues"]:
+        if i.get("hole"):
+            continue
         if i["code"] != code:
             code = i["code"]
             lines += ["", f"## {code}", ""]
