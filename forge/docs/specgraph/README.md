@@ -84,7 +84,7 @@
 | М1 | 1 | [1.5 Раскладка блоков по узлам](tasks/1.5-block-assignment.md) | 1.4 |  done |
 | М1 | 1 | [1.6 Нарезка в vault и покрытие](tasks/1.6-split-coverage.md) | 1.5, 0.3 |  done |
 | М1 | 1 | [1.7 Шаг graph-map](tasks/1.7-map-step.md) | 1.6 |  done |
-| М1 | 2 graph-link | [2.1 Ключи и резолвер](tasks/2.1-keys-resolver.md) | 1.6 | todo |
+| М1 | 2 graph-link | [2.1 Ключи и резолвер](tasks/2.1-keys-resolver.md) | 1.6 |  done |
 | М1 | 2 | [2.2 Механические рёбра](tasks/2.2-mechanical-edges.md) | 2.1 | todo |
 | М1 | 2 | [2.3 Предложения рёбер с основаниями](tasks/2.3-edge-proposals.md) | 2.1 | todo |
 | М1 | 2 | [2.4 Синк рёбер и guard frontmatter](tasks/2.4-edge-sync.md) | 2.3, 0.3 | todo |

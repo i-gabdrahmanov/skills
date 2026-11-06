@@ -40,8 +40,8 @@
     {
       "id": "P-inv-7",
       "text": "У endpoint и topic машинный key; межсервисные связи склеиваются по key, а не по имени файла",
-      "status": "planned",
-      "ref": "2.1"
+      "status": "covered",
+      "ref": "test_keys_resolver.py::Resolver"
     },
     {
       "id": "P-inv-8",

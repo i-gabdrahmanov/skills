@@ -23,7 +23,7 @@ ADAPTERS = ("md",)
 # Каталоги, которые никогда не исходники спеки: служебные forge/рантайма, зависимости, VCS.
 _SKIP_DIRS = {".git", ".gigacode", ".spec-graph", "ground", "node_modules", ".obsidian", ".idea",
               ".vscode", "__pycache__", "build", "target", "dist"}
-_TOP_LEVEL_KEYS = {"version", "vault", "sources", "exclude", "services", "ontology_version", "queue", "extract"}
+_TOP_LEVEL_KEYS = {"version", "vault", "sources", "exclude", "services", "ontology_version", "queue", "extract", "http"}
 _QUEUE_KEYS = {"parallel", "max_attempts", "budget_chars", "lease_s"}
 _SOURCE_KEYS = {"root", "adapter", "kind_hint"}
 
@@ -95,6 +95,10 @@ def validate(cfg: Any) -> List[str]:
             X.load_rules(cfg)
         except Exception as e:  # noqa: BLE001 — ошибка правил проекта = ошибка конфига, не падение
             errors.append(f"extract: {e}")
+    http = cfg.get("http", {})
+    if not isinstance(http, dict) or set(http) - {"strip_prefixes"} or not all(
+            isinstance(x, str) and x.startswith("/") for x in http.get("strip_prefixes", [])):
+        errors.append("http: {strip_prefixes: [\"/api\", …]} — срезаемые префиксы путей (gateway)")
     queue = cfg.get("queue", {})
     if not isinstance(queue, dict):
         errors.append("queue: объект {parallel, max_attempts, budget_chars, lease_s}")

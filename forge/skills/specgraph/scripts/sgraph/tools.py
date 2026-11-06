@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -29,6 +29,7 @@ from . import config as C
 from . import metrics as M
 from . import profile as PF
 from . import queue as Q
+from . import resolve as RS
 from . import split as SP
 from . import status as ST
 from . import survey as SV
@@ -203,6 +204,12 @@ def _split(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return res
 
 
+def _resolve(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = _need_cfg(root)
+    idx = RS.vault_index(root, cfg)
+    return {"results": [dict(RS.resolve(idx, m, cfg, args.get("service")), mention=m) for m in args["mentions"][:30]]}
+
+
 _QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
 
 TOOLS: Dict[str, Dict[str, Any]] = {
@@ -309,6 +316,15 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "description": "Нарезать vault по утверждённому каталогу и планам раскладки: заметки с текстом дословно, "
                        "frontmatter по онтологии, _graph/index.md и unplaced.md; ответ — счётчики и проверка полноты.",
         "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "graph_resolve": {
+        "fn": _resolve,
+        "description": "Упоминания (`POST /path`, имя топика, код задачи, имя или алиас узла) → узел vault, либо "
+                       "ambiguous с кандидатами, либо ghost (с подсказкой path_typo). Молча не выбирает.",
+        "schema": {"type": "object",
+                   "properties": {"mentions": {"type": "array", "items": {"type": "string"}},
+                                  "service": {"type": "string", "description": "сервис-контекст для неоднозначных путей"}},
+                   "required": ["mentions"], "additionalProperties": False},
     },
     "graph_queue_status": {
         "fn": _queue_status,
