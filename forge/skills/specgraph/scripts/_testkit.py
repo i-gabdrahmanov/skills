@@ -211,3 +211,21 @@ def oracle_split(root: Path) -> Dict:
     T.call("graph_assign_start", root, {})
     run_queue(root, "assign-section", assign_oracle(root))
     return T.call("graph_split", root, {})
+
+
+def link_answer(root: Path) -> Callable[[Dict], Dict]:
+    """Ответ модели по заметке: рёбра эталона, которые ставит не правило (expected/edges/model-edges.json)."""
+    from sgraph import queue as Q
+    edges = json.loads((FIX / "expected" / "edges" / "model-edges.json").read_text(encoding="utf-8"))
+    data = json.loads((root / Q.QUEUE_REL / "link-note.json").read_text(encoding="utf-8"))
+    by_id = {it["id"]: it for it in data["items"]}
+    return lambda unit: {"proposals": edges.get(by_id[unit["item_id"]]["refs"]["note"], [])}
+
+
+def through_link(root: Path) -> None:
+    """… → нарезка → механика → предложения модели эталоном."""
+    from sgraph import tools as T
+    through_split(root)
+    T.call("graph_edges_mechanical", root, {})
+    T.call("graph_link_start", root, {})
+    run_queue(root, "link-note", link_answer(root))

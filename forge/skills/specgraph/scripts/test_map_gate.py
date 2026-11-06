@@ -150,6 +150,7 @@ class Resume(unittest.TestCase):
 class Registry(unittest.TestCase):
     def test_productive_tools_of_the_step(self):
         self.assertEqual(BR.BRANCHES["specgraph"]["phase_tools"]["graph-map"], ("graph_draft_put", "graph_assign_put"))
+        self.assertEqual(BR.BRANCHES["specgraph"]["phase_tools"]["graph-link"], ("graph_link_put",))
         for free in ("graph_next", "graph_catalog_decide", "graph_split", "graph_survey"):
             self.assertEqual(BR.tool_steps(f"mcp__spec-graph__{free}"), ())
 

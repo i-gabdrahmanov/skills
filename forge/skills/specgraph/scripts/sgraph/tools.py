@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -27,6 +27,7 @@ from . import blocks as B
 from . import catalog as CT
 from . import config as C
 from . import edges as ED
+from . import link as LK
 from . import metrics as M
 from . import profile as PF
 from . import queue as Q
@@ -216,6 +217,20 @@ def _mechanical(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
                 next="механические рёбра предложены (status proposed); дальше — предложения модели по заметкам")
 
 
+def _link_start(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return LK.start(root, _need_cfg(root))
+    except LK.LinkError as e:
+        raise ToolError(str(e), [e.code])
+
+
+def _link_put(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    res, errs = LK.put(root, _need_cfg(root), args["item_id"], args.get("proposals") or [])
+    if errs:
+        raise ToolError("рёбра не приняты:\n" + "\n".join(f"- [{c}] {m}" for c, m in errs), sorted({c for c, _ in errs}))
+    return res
+
+
 _QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
 
 TOOLS: Dict[str, Dict[str, Any]] = {
@@ -337,6 +352,21 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "description": "Механические рёбра по форме текста (обработчик → топик, «публикуется в топик», METHOD /path "
                        "чужого сервиса, имя узла данных) с цитатой-основанием; проходят ту же проверку, что и рёбра модели.",
         "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "graph_link_start": {
+        "fn": _link_start,
+        "description": "Построить очередь link-note: единица на заметку, у которой онтология разрешает исходящие "
+                       "рёбра; во входе — текст заметки, допустимые рёбра, подсказки резолвера, операции, механика.",
+        "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "graph_link_put": {
+        "fn": _link_put,
+        "description": "Сдать рёбра ОДНОЙ заметки (единица link-note): proposals [{edge, to, quote, confidence, why?}]. "
+                       "Цитата — дословно из текста; неоднозначная цель уходит вопросом человеку.",
+        "schema": {"type": "object",
+                   "properties": {"item_id": {"type": "string"},
+                                  "proposals": {"type": "array", "items": {"type": "object"}}},
+                   "required": ["item_id", "proposals"], "x-queue": "link-note", "additionalProperties": False},
     },
     "graph_queue_status": {
         "fn": _queue_status,

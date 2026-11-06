@@ -28,8 +28,8 @@
     {
       "id": "P-inv-5",
       "text": "Не выдумываем: неизвестное — вопросом, сомнительное — confidence low и open-questions",
-      "status": "planned",
-      "ref": "2.3"
+      "status": "covered",
+      "ref": "test_edge_proposals.py::Answers"
     },
     {
       "id": "P-inv-6",
