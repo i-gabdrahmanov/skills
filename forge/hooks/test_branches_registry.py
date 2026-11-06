@@ -159,6 +159,11 @@ class PhaseToolsRegistry(unittest.TestCase):
                       "daiver_e2e_plan", "daiver_e2e_run"),
     }
 
+    # spec-graph (ветка specgraph): свободные инструменты движка — читающие, оркестраторские и механика без решений модели
+    GRAPH_FREE = {"graph_status", "graph_init", "graph_scan", "graph_profile", "graph_survey", "graph_next",
+                  "graph_queue_status", "graph_catalog", "graph_catalog_decide", "graph_assign_start", "graph_split"}
+    EXPECTED_GRAPH = {"graph-map": ("graph_draft_put", "graph_assign_put")}
+
     @staticmethod
     def engine_tools():
         scripts = str(SKILLS / "forgeui" / "scripts")
@@ -166,6 +171,18 @@ class PhaseToolsRegistry(unittest.TestCase):
             sys.path.insert(0, scripts)
         from daiver import tools as T
         return sorted(T.TOOLS)
+
+    @staticmethod
+    def graph_tools():
+        scripts = str(SKILLS / "specgraph" / "scripts")
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        from sgraph import tools as T
+        return sorted(T.TOOLS)
+
+    @staticmethod
+    def ui_steps():
+        return {s: p for s, p in BR.phase_tools().items() if s.startswith("ui-")}
 
     def test_the_field_is_in_every_branch(self):
         for skill, b in BR.BRANCHES.items():
@@ -176,16 +193,33 @@ class PhaseToolsRegistry(unittest.TestCase):
 
     def test_the_ui_branch_by_step(self):
         self.assertEqual(BR.BRANCHES["forgeui"]["phase_tools"], self.EXPECTED_UI)
-        self.assertEqual(BR.phase_tools(), self.EXPECTED_UI)
+        self.assertEqual(self.ui_steps(), self.EXPECTED_UI)
+        self.assertEqual(BR.BRANCHES["specgraph"]["phase_tools"], self.EXPECTED_GRAPH)
+        self.assertEqual(BR.phase_tools(), dict(self.EXPECTED_UI, **self.EXPECTED_GRAPH))
+
+    def test_the_graph_branch_tools_are_engine_names_with_owners(self):
+        tools = self.graph_tools()
+        productive = {t for t in tools if BR.tool_steps(t)}
+        for step, patterns in self.EXPECTED_GRAPH.items():
+            for pattern in patterns:
+                self.assertIn(pattern, tools, f"{pattern}: такого инструмента нет в движке spec-graph")
+        for tool in tools:
+            with self.subTest(tool=tool):
+                self.assertTrue(tool in productive or tool in self.GRAPH_FREE,
+                                f"{tool}: решить, чей он — phase_tools ветки specgraph или GRAPH_FREE этого теста")
+                self.assertFalse(tool in productive and tool in self.GRAPH_FREE)
+        self.assertEqual(set(tools) & self.GRAPH_FREE, self.GRAPH_FREE, "в GRAPH_FREE остался инструмент, которого нет")
+        self.assertEqual(BR.tool_steps("mcp__spec-graph__graph_assign_put"), ("graph-map",))
+        self.assertEqual(BR.tool_steps("mcp__spec-graph__graph_catalog_decide"), ())
 
     def test_patterns_are_names_of_the_engine(self):
         import re
-        for step, patterns in BR.phase_tools().items():
+        for step, patterns in self.ui_steps().items():
             for pattern in patterns:
                 with self.subTest(step=step, pattern=pattern):
                     self.assertRegex(pattern, r"^daiver_[a-z0-9_]+\*?$")
         tools = self.engine_tools()
-        for step, patterns in BR.phase_tools().items():
+        for step, patterns in self.ui_steps().items():
             for pattern in patterns:
                 with self.subTest(step=step, pattern=pattern):
                     matched = [t for t in tools if re.fullmatch(pattern.replace("*", ".*"), t)]
@@ -196,7 +230,7 @@ class PhaseToolsRegistry(unittest.TestCase):
         import fnmatch
         tools = self.engine_tools()
         cover = {step: [t for t in tools if any(fnmatch.fnmatchcase(t, p) for p in patterns)]
-                 for step, patterns in BR.phase_tools().items()}
+                 for step, patterns in self.ui_steps().items()}
         self.assertEqual(cover, {
             "ui-design": ["daiver_normalize", "daiver_pixso_pull", "daiver_plan_contract", "daiver_plan_write",
                           "daiver_resolve_candidates", "daiver_resolve_finalize", "daiver_resolve_query", "daiver_resolve_report"],

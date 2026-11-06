@@ -8,7 +8,7 @@
   • `graph_status` на пустом репо — вопросы первого запуска; `graph_init` пишет конфиг по ответам и
     НЕ перезаписывает существующий; несуществующий корень — отказ без записи;
   • ручная проверка аргументов инструментов: неизвестный аргумент и неверный тип — ToolError;
-  • `graph_gate.py` любого шага — exit 3 «не реализовано»: шаг не закрывается, пока проверки нет.
+  • `graph_gate.py` нереализованного шага (link, check) — exit 3 «не реализовано»: шаг не закрывается.
 Данные — синтетические репо во временном каталоге.
 """
 from __future__ import annotations
@@ -156,9 +156,12 @@ class ToolArgs(unittest.TestCase):
 
 
 class GateStub(unittest.TestCase):
-    def test_every_step_is_not_implemented_yet(self):
+    def test_unimplemented_steps_stop_honestly(self):
         with tempfile.TemporaryDirectory() as td:
-            for step in ("map", "link", "check"):
+            r = subprocess.run([sys.executable, "-X", "utf8", str(SCRIPTS / "graph_gate.py"), "map", "--project", td],
+                               capture_output=True, text=True, encoding="utf-8")
+            self.assertEqual(r.returncode, 1, "map реализован (1.7): без конфига — не пройден")
+            for step in ("link", "check"):
                 with self.subTest(step=step):
                     r = subprocess.run([sys.executable, "-X", "utf8", str(SCRIPTS / "graph_gate.py"), step,
                                         "--project", td], capture_output=True, text=True, encoding="utf-8")

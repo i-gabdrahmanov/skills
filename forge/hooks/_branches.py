@@ -183,8 +183,14 @@ BRANCHES = {
             "graph-check": (r"(^|/)_graph/(report|Начало)\.md$|(^|/)\.obsidian/graph\.json$",
                             "запись отчёта проверки / Obsidian-слоя"),
         },
-        # продуктивные инструменты появятся задачами этапов 1–3 (graph_assign_put, graph_link_put, …)
-        "phase_tools": {},
+        # Продуктивные инструменты движка spec-graph (MCP `spec-graph`): те, что СДАЮТ решение модели по единице очереди
+        # (черновик узлов файла, раскладка блоков) — их вызывает субагент единицы, не главный агент. НЕ входят: graph_status,
+        # graph_init, graph_scan, graph_profile, graph_survey, graph_next, graph_queue_status, graph_catalog, graph_catalog_decide
+        # (решение человека вносит оркестратор), graph_assign_start, graph_split (механика без решений модели; пишет только
+        # по утверждённому каталогу). graph-link — задачи 2.x.
+        "phase_tools": {
+            "graph-map": ("graph_draft_put", "graph_assign_put"),
+        },
         "docs_target": "feature-docs",
         "doc_approval": {},
     },
