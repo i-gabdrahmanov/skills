@@ -64,8 +64,8 @@
     {
       "id": "P-inv-11",
       "text": "Заметка в services/<svc>/ несёт сервис-владельца",
-      "status": "planned",
-      "ref": "3.1"
+      "status": "covered",
+      "ref": "test_validator.py::Errors"
     },
     {
       "id": "P-inv-12",
@@ -76,8 +76,8 @@
     {
       "id": "P-inv-13",
       "text": "Алиас однозначен во всём vault",
-      "status": "planned",
-      "ref": "3.1"
+      "status": "covered",
+      "ref": "test_validator.py::Errors"
     },
     {
       "id": "P-inv-14",
@@ -106,8 +106,8 @@
     {
       "id": "P-inv-18",
       "text": "Вики-ссылка только на существующий узел: ghost-кружок в графе врёт, что здесь вершина",
-      "status": "planned",
-      "ref": "3.1"
+      "status": "covered",
+      "ref": "test_validator.py::Errors"
     },
     {
       "id": "P-inv-19",
@@ -154,8 +154,8 @@
     {
       "id": "P-inv-26",
       "text": "Сирота — нет связи вообще; скалярная ссылка — тоже ребро",
-      "status": "planned",
-      "ref": "3.1"
+      "status": "covered",
+      "ref": "test_validator.py::Warnings"
     },
     {
       "id": "P-inv-27",
@@ -166,8 +166,8 @@
     {
       "id": "P-build-1",
       "text": "Граф «без ошибок» = 0 ошибок всех валидаторов на целиком собранном vault",
-      "status": "planned",
-      "ref": "3.1"
+      "status": "covered",
+      "ref": "test_validator.py::Healthy"
     },
     {
       "id": "P-build-2",

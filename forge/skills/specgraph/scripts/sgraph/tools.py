@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put, graph_edges_review, graph_edges_decide, graph_delta_decide. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put, graph_edges_review, graph_edges_decide, graph_delta_decide, graph_validate. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -26,6 +26,7 @@ from . import assign as AS
 from . import blocks as B
 from . import card as CD
 from . import review as RV
+from . import validate as VA
 from . import catalog as CT
 from . import config as C
 from . import edges as ED
@@ -270,6 +271,10 @@ def _delta_decide(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError(str(e), [e.code])
 
 
+def _validate(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    return VA.validate(root, _need_cfg(root), args.get("scope"))
+
+
 _QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
 
 TOOLS: Dict[str, Dict[str, Any]] = {
@@ -446,6 +451,12 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                        "rename|drop, into?, name?, why}] — затем повторная нарезка.",
         "schema": {"type": "object", "properties": {"decisions": {"type": "array"}},
                    "required": ["decisions"], "additionalProperties": False},
+    },
+    "graph_validate": {
+        "fn": _validate,
+        "description": "Проверить граф: счётчики по кодам E-*/W-*, первые 10 нарушений с путями; полностью — "
+                       "_graph/report.md и .spec-graph/validate.json. scope — префикс пути в vault.",
+        "schema": {"type": "object", "properties": {"scope": {"type": "string"}}, "additionalProperties": False},
     },
     "graph_queue_status": {
         "fn": _queue_status,
