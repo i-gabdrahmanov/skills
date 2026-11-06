@@ -72,7 +72,7 @@
 | `kafka-op` | Kafka-операция, `role: consume\|publish` | `services/<svc>/kafka/<имя>.md` | — |
 | `algorithm` | самостоятельный алгоритм или функция | `services/<svc>/algorithms/<имя>.md` | — |
 | `topic` | Kafka-топик | `topics/<имя>.md` | `kafka:<name>` |
-| `data` | данные: `subkind: attributes\|table\|dto\|enum` | `data/<subkind>s/<имя>.md` | — |
+| `data` | данные: `subkind: attributes\|table\|dto\|enum` | `data/<subkind>/<имя>.md` | — |
 | `external` | внешняя система | `external/<имя>.md` | — |
 
 | прямое ребро (пишется у «от») | от → к | обратное (выводится) | ТЗ |

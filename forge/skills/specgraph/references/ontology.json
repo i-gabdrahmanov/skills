@@ -1,0 +1,33 @@
+{
+  "_comment": "Онтология графа спецификации v1 — по ТЗ аналитика (docs/specgraph/tz-analytics.md §2–3) и таблицам tasks/020-spec-graph.md. Единственное место, где живут виды узлов и рёбер: валидатор, синк, обход, Obsidian-слой читают ЭТОТ файл. Новый вид или ребро — запись здесь (или в .spec-graph/ontology.local.json проекта — только добавления), без правки кода. Прямое ребро пишется у вершины «from»; обратное («inverse») выводит синк. impact — куда идти от ИЗМЕНЁННОГО узла, чтобы найти затронутых: forward — по ребру, inverse — против него, none — не распространяет.",
+  "version": 1,
+  "statuses": ["draft", "stable", "deprecated", "stub", "external"],
+  "name_forbidden": "/\\:#^[]|",
+  "kinds": {
+    "process":   {"title_ru": "Бизнес-процесс", "path": "business/processes/{name}.md", "owner": "none", "name": "phrase"},
+    "operation": {"title_ru": "Бизнес-операция (тип задачи)", "path": "business/operations/{name}.md", "owner": "none", "name": "phrase", "key": "task"},
+    "screen":    {"title_ru": "UI", "path": "ui/{name}.md", "owner": "none", "name": "phrase"},
+    "service":   {"title_ru": "Сервис", "path": "services/{name}/{name}.md", "owner": "self", "name": "as_is"},
+    "endpoint":  {"title_ru": "REST-эндпоинт", "path": "services/{service}/endpoints/{name}.md", "owner": "service", "name": "endpoint", "key": "http", "required": ["key", "method", "path"]},
+    "scheduler": {"title_ru": "Шедулер", "path": "services/{service}/schedulers/{name}.md", "owner": "service", "name": "phrase"},
+    "kafka-op":  {"title_ru": "Kafka-операция", "path": "services/{service}/kafka/{name}.md", "owner": "service", "name": "phrase", "roles": ["consume", "publish"], "required": ["role"]},
+    "algorithm": {"title_ru": "Алгоритм", "path": "services/{service}/algorithms/{name}.md", "owner": "service", "name": "phrase"},
+    "topic":     {"title_ru": "Kafka-топик", "path": "topics/{name}.md", "owner": "none", "name": "topic", "key": "kafka", "required": ["key"]},
+    "data":      {"title_ru": "Данные", "path": "data/{subkind}/{name}.md", "owner": "none", "name": "phrase", "subkinds": ["attributes", "table", "dto", "enum"], "required": ["subkind"]},
+    "external":  {"title_ru": "Внешняя система", "path": "external/{name}.md", "owner": "none", "name": "as_is"}
+  },
+  "edges": {
+    "belongs_to":   {"title_ru": "принадлежит сервису", "from": ["endpoint", "scheduler", "kafka-op", "algorithm"], "to": ["service"], "inverse": "operations", "evidence": "optional", "impact": "none"},
+    "calls":        {"title_ru": "вызывает", "from": ["endpoint", "scheduler", "kafka-op", "algorithm", "screen"], "to": ["endpoint", "external"], "inverse": "called_by", "evidence": "required", "impact": "inverse"},
+    "invokes":      {"title_ru": "запускает", "from": ["endpoint", "scheduler", "kafka-op", "algorithm"], "to": ["algorithm", "kafka-op:publish"], "inverse": "invoked_by", "evidence": "required", "impact": "inverse", "same_service": true},
+    "publishes_to": {"title_ru": "публикует в топик", "from": ["endpoint", "scheduler", "algorithm", "kafka-op:publish"], "to": ["topic"], "inverse": "publishers", "evidence": "required", "impact": "forward"},
+    "consumes":     {"title_ru": "читает топик", "from": ["kafka-op:consume"], "to": ["topic"], "inverse": "consumers", "evidence": "required", "impact": "inverse"},
+    "creates_task": {"title_ru": "формирует задачу", "from": ["scheduler", "endpoint", "kafka-op"], "to": ["operation"], "inverse": "created_by", "evidence": "required", "impact": "forward"},
+    "closes_task":  {"title_ru": "закрывает задачу", "from": ["scheduler", "endpoint", "kafka-op"], "to": ["operation"], "inverse": "closed_by", "evidence": "required", "impact": "forward"},
+    "ui_of":        {"title_ru": "UI задачи", "from": ["screen"], "to": ["operation"], "inverse": "screens", "evidence": "required", "impact": "forward"},
+    "uses_data":    {"title_ru": "использует данные", "from": ["endpoint", "scheduler", "kafka-op", "algorithm", "screen"], "to": ["data"], "inverse": "used_by", "evidence": "required", "impact": "inverse"},
+    "related":      {"title_ru": "связана с операцией", "from": ["operation"], "to": ["operation"], "inverse": "related", "symmetric": true, "evidence": "required", "impact": "none"},
+    "part_of":      {"title_ru": "входит в процесс", "from": ["operation", "process"], "to": ["process"], "inverse": "includes", "evidence": "required", "impact": "forward"}
+  },
+  "scalar_keys": ["kind", "subkind", "role", "key", "method", "path", "aliases", "status", "source", "blocks", "confidence"]
+}
