@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from . import blocks as B
 from . import config as C
 from . import metrics as M
 from . import queue as Q
@@ -105,6 +106,14 @@ def _queue_status(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return Q.status(root, _queue_arg(args))
 
 
+def _scan(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    cfg, errors = C.load(root)
+    if cfg is None:
+        raise ToolError("проект не инициализирован или конфиг с ошибками — сначала graph_status / graph_init"
+                        + (": " + "; ".join(errors) if errors else ""), ["E-config-missing"])
+    return B.scan(root, cfg, args.get("scope"))
+
+
 _QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
 
 TOOLS: Dict[str, Dict[str, Any]] = {
@@ -137,6 +146,14 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                        "единицу исполняет субагент.",
         "schema": {"type": "object", "properties": {"queue": _QUEUE_PROP},
                    "required": ["queue"], "additionalProperties": False},
+    },
+    "graph_scan": {
+        "fn": _scan,
+        "description": "Разобрать исходники спеки на неделимые блоки (.spec-graph/blocks/); ответ — сводка по "
+                       "файлам: число блоков, размер, оглавление, предупреждения (незакрытый фенс).",
+        "schema": {"type": "object",
+                   "properties": {"scope": {"type": "string", "description": "all | каталог | файл; пусто — all"}},
+                   "additionalProperties": False},
     },
     "graph_queue_status": {
         "fn": _queue_status,
