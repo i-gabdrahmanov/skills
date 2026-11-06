@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put, graph_edges_review, graph_edges_decide, graph_delta_decide. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, List, Optional
 from . import assign as AS
 from . import blocks as B
 from . import card as CD
+from . import review as RV
 from . import catalog as CT
 from . import config as C
 from . import edges as ED
@@ -251,6 +252,24 @@ def _card_put(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return res
 
 
+def _review(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    return RV.review(root, _need_cfg(root))
+
+
+def _edges_decide(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return RV.edges_decide(root, _need_cfg(root), args.get("accept") or [], args.get("reject") or [], args.get("why") or "")
+    except RV.ReviewError as e:
+        raise ToolError(str(e), [e.code])
+
+
+def _delta_decide(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return RV.delta_decide(root, _need_cfg(root), args.get("decisions") or [])
+    except RV.ReviewError as e:
+        raise ToolError(str(e), [e.code])
+
+
 _QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
 
 TOOLS: Dict[str, Dict[str, Any]] = {
@@ -406,6 +425,27 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "schema": {"type": "object",
                    "properties": {"item_id": {"type": "string"}, "fields": {"type": "object"}},
                    "required": ["item_id", "fields"], "x-queue": "card", "additionalProperties": False},
+    },
+    "graph_edges_review": {
+        "fn": _review,
+        "description": "Собрать отчёт связей _graph/edges-review.md (операции, межсервисное, сомнительное, отклонённое, "
+                       "вопросы, узлы дельты) и состояние согласия на него; после «да» — принять висящие предложения.",
+        "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "graph_edges_decide": {
+        "fn": _edges_decide,
+        "description": "Решение пользователя по связям из отчёта: accept/reject — id `r-…` или {from, edge, to}; "
+                       "отклонение — с why, больше не предлагается.",
+        "schema": {"type": "object",
+                   "properties": {"accept": {"type": "array"}, "reject": {"type": "array"}, "why": {"type": "string"}},
+                   "additionalProperties": False},
+    },
+    "graph_delta_decide": {
+        "fn": _delta_decide,
+        "description": "Решение пользователя по узлам, добавленным раскладкой: decisions [{node, action: accept|merge|"
+                       "rename|drop, into?, name?, why}] — затем повторная нарезка.",
+        "schema": {"type": "object", "properties": {"decisions": {"type": "array"}},
+                   "required": ["decisions"], "additionalProperties": False},
     },
     "graph_queue_status": {
         "fn": _queue_status,

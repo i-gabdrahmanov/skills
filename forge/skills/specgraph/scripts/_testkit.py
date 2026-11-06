@@ -253,3 +253,33 @@ def card_answer(root: Path) -> Callable[[Dict], Dict]:
                 fields[marks[m.group(1)]] = [{"text": m.group(2), "blocks": [b]}]
         return {"fields": fields}
     return answer
+
+
+def through_review(root: Path, before_link: Optional[Callable[[Path], None]] = None) -> Dict:
+    """… → нарезка (+ правка перед связями) → связи → карточки → синк → отчёт связей (шаг graph-link до вопроса)."""
+    from sgraph import tools as T
+    through_split(root)
+    if before_link:
+        before_link(root)
+    T.call("graph_edges_mechanical", root, {})
+    T.call("graph_link_start", root, {})
+    run_queue(root, "link-note", link_answer(root))
+    T.call("graph_card_start", root, {})
+    run_queue(root, "card", card_answer(root))
+    T.call("graph_sync", root, {})
+    return T.call("graph_edges_review", root, {})
+
+
+def approve_edges(root: Path) -> Dict:
+    """Согласие человека на отчёт связей (как оркестратор после «да») и повторный graph_edges_review."""
+    import subprocess
+    import sys
+    from sgraph import tools as T
+    res = T.call("graph_edges_review", root, {})
+    rec = SCRIPTS.parents[1] / "pipeline-state" / "scripts" / "record_approval.py"
+    r = subprocess.run([sys.executable, "-X", "utf8", str(rec), "--project", str(root), "--key", res["key"],
+                        "--approved-by", "user", "--reason", "связи утверждены", "--evidence", "да, связи верны",
+                        "--bind-file", res["report"]], capture_output=True, text=True, encoding="utf-8")
+    if r.returncode != 0:
+        raise RuntimeError(r.stdout + r.stderr)
+    return T.call("graph_edges_review", root, {})

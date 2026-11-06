@@ -32,6 +32,8 @@ from . import survey as SV
 CATALOG_REL = ".spec-graph/catalog.json"
 APPROVED_REL = ".spec-graph/catalog.approved.json"
 DECISIONS_REL = ".spec-graph/decisions.json"
+DELTA_DECISIONS_REL = ".spec-graph/delta-decisions.json"   # пишет review.delta_decide
+EDGE_DECISIONS_REL = ".spec-graph/edge-decisions.json"     # пишет review.edges_decide
 CONSENT = "graph-catalog"
 ACTIONS = ("merge", "split", "rename", "move", "drop", "scope")
 # поля узла, которые черновик переносит в каталог как есть
@@ -93,14 +95,36 @@ def decide(root: Path, actions: List[Dict[str, Any]], vault: str) -> Dict[str, A
     p = Path(root) / DECISIONS_REL
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(log, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-    lines = ["# Решения по каталогу", "", "Решение человека → почему. Применяются при каждой сборке каталога.", ""]
-    for a in log:
+    write_decisions_md(root, vault)
+    return {"added": added, "total": len(log)}
+
+
+def _load(root: Path, rel: str, empty: Any) -> Any:
+    p = Path(root) / rel
+    return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else empty
+
+
+def write_decisions_md(root: Path, vault: str) -> None:
+    """_graph/decisions.md — все решения человека: каталог, узлы дельты, отклонённые связи (2.6)."""
+    lines = ["# Решения человека", "", "Решение → почему. Применяются при каждой сборке; отклонённое больше не предлагается.", "",
+             "## Каталог", ""]
+    for a in load_decisions(root):
         what = ", ".join(f"{k}={v}" for k, v in a.items() if k not in ("action", "why"))
         lines.append(f"- **{a['action']}** {what} → {a.get('why', 'без пояснения')}")
+    delta = _load(root, DELTA_DECISIONS_REL, {})
+    if delta:
+        lines += ["", "## Узлы, добавленные раскладкой", ""]
+        for name, d in sorted(delta.items()):
+            what = d.get("into") or d.get("name") or ""
+            lines.append(f"- **{d['action']}** «{name}»" + (f" → «{what}»" if what else "") + f" → {d.get('why', '')}")
+    edges = _load(root, EDGE_DECISIONS_REL, [])
+    if edges:
+        lines += ["", "## Отклонённые связи", ""]
+        for e in edges:
+            lines.append(f"- «{e['from']}» —{e['edge']}→ «{e['to']}» → {e.get('why', '')}")
     md = Path(root) / vault / "_graph" / "decisions.md"
     md.parent.mkdir(parents=True, exist_ok=True)
     md.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return {"added": added, "total": len(log)}
 
 
 # ─── сборка ────────────────────────────────────────────────────────────────

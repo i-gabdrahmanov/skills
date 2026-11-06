@@ -61,7 +61,7 @@ def _nodes(root: Path) -> List[Dict[str, Any]]:
     cat = CT.load_approved(root)
     nodes = [n for n in cat["nodes"] if n.get("in_scope", True)]
     names = {n["name"] for n in nodes}
-    nodes += [n for n in AS.load_delta(root) if n["name"] not in names]
+    nodes += [n for n in AS.delta_resolution(root)[0] if n["name"] not in names]
     return nodes
 
 
@@ -78,6 +78,14 @@ def _assignment(root: Path) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, D
         for u in p["unplaced"]:
             for b in u["blocks"]:
                 unplaced[b] = u
+    _, remap = AS.delta_resolution(root)          # решения человека по узлам дельты (2.6)
+    for b, node in list(owner.items()):
+        if node in remap:
+            if remap[node] is None:
+                del owner[b]
+                unplaced[b] = {"blocks": [b], "reason": f"узел дельты «{node}» убран человеком"}
+            else:
+                owner[b] = remap[node]
     return owner, skip, unplaced
 
 

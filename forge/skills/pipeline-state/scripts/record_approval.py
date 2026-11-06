@@ -346,8 +346,13 @@ def cmd_single(args) -> int:
     # сознательно: batch-режим требует идемпотентности, а одиночный и batch должны
     # вести себя одинаково на одних и тех же данных. Если оператор хочет пересогласовать
     # ключ — сначала rollback/revoke, потом новый батч.
+    # Исключение — --bind-file: согласие на ДРУГОЕ содержимое — это новое решение, а не повтор.
+    # Иначе после правки привязанного файла «да» пользователя молча терялось (активно старое,
+    # устаревшее согласие), и шаг, ждущий согласия на текущий файл, не закрывался никогда.
     with _approvals_lock(project):
-        if key in _active_approval_keys(project):
+        active = FE.approval(project, key) if key in _active_approval_keys(project) else None
+        rebind = bool(active and record.get("bound_sha256") and active.get("bound_sha256") != record["bound_sha256"])
+        if active and not rebind:
             out = FE.approvals_path(project)
             print(f"[record_approval] approval '{key}' уже активен — пропущено (идемпотентность) → {out}")
             print("[record_approval] ⚠️ это согласие должно было прозвучать от пользователя ЯВНО. "

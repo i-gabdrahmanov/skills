@@ -8,7 +8,10 @@ map (задача 1.7): очередь draft-file закрыта; каталог
 к снимку catalog.approved.json; очередь assign-section построена из него и закрыта; нарезка сделана по
 снимку (заметка на каждый узел); полнота и дословность — 0 нарушений (E-coverage, E-verbatim);
 frontmatter всех заметок читается. Брошенные единицы очередей перечисляются в ответе.
-link, check — пока «не реализовано» (exit 3): шаг не закрывается. Проверки — задачи 2.6, 3.5.
+link (задача 2.6): очереди link-note и card построены и закрыты; висящих предложений (proposed) нет; по каждому
+узлу дельты есть решение; синк чистый (сухой повтор — 0 изменений); отчёт связей свежий (пересборка даёт тот же
+текст); согласие graph-edges-<KEY> привязано к хешу _graph/edges-review.md.
+check — пока «не реализовано» (exit 3): шаг не закрывается. Проверки — задача 3.5.
 
 Коды: 0 — гейт пройден, 1 — проверки не прошли, 2 — неверный вызов, 3 — гейт шага не реализован.
 """
@@ -24,7 +27,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 STEPS = {"map": "graph-map", "link": "graph-link", "check": "graph-check"}
-_PLANNED = {"link": "2.6", "check": "3.5"}
+_PLANNED = {"check": "3.5"}
+_OK = {"map": "каталог утверждён, нарезка полная и дословная",
+       "link": "связи решены, синк чистый, отчёт связей утверждён"}
 
 
 def check_map(root: Path) -> Tuple[List[str], List[str]]:
@@ -76,6 +81,46 @@ def check_map(root: Path) -> Tuple[List[str], List[str]]:
     return bad, notes
 
 
+def check_link(root: Path) -> Tuple[List[str], List[str]]:
+    from sgraph import config as C
+    from sgraph import consent as CS
+    from sgraph import queue as Q
+    from sgraph import review as RV
+    from sgraph import sync as SY
+    bad, notes = [], []
+    cfg, errors = C.load(root)
+    if cfg is None:
+        return [f"конфиг: {'; '.join(errors) or 'нет .spec-graph/config.json — graph_init'}"], notes
+    for name in ("link-note", "card"):
+        if not (root / Q.QUEUE_REL / f"{name}.json").is_file():
+            bad.append(f"очередь {name} не построена")
+            continue
+        closed, abandoned = Q.closed(root, name)
+        if not closed:
+            st = Q.status(root, name)
+            bad.append(f"очередь {name} не закрыта: pending {st['pending']}, в аренде {st['leased']}")
+        if abandoned:
+            notes.append(f"очередь {name}: брошено единиц {len(abandoned)} — они в отчёте связей (раздел 4)")
+    left = RV.undecided_delta(root)
+    if left:
+        bad.append(f"узлы дельты без решения: {len(left)} (например «{left[0]}») — graph_delta_decide")
+    dry = SY.sync(root, cfg, dry=True)
+    if dry["written"] or dry["removed_by_human"] or dry["journal_changed"]:
+        bad.append(f"синк не чистый: изменится заметок {dry['written']} — graph_sync, затем graph_edges_review")
+    p = RV.review_path(root, cfg)
+    if not p.is_file():
+        bad.append("нет отчёта связей — graph_edges_review")
+        return bad, notes
+    if RV.report(root, cfg)[0] != p.read_text(encoding="utf-8"):
+        bad.append("отчёт связей устарел — graph_edges_review и снова вопрос пользователю")
+    st = CS.state(root, RV.CONSENT, p)
+    if st["state"] != "ok":
+        bad.append(f"согласие {st['key']}: {st['state']} — покажи отчёт, спроси пользователя; «да» — {st.get('how', '')}")
+    elif RV.pending(root):
+        bad.append(f"висящих предложений {RV.pending(root)} — согласие есть: снова graph_edges_review их примет")
+    return bad, notes
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Гейт шага ветки specgraph.")
     ap.add_argument("step", choices=sorted(STEPS))
@@ -89,7 +134,7 @@ def main(argv=None) -> int:
         print(f"✗ {STEPS[args.step]}: гейт шага не реализован (spec-graph, задача {_PLANNED[args.step]}) — "
               f"шаг не закрывается. Скажи пользователю, что этот шаг конвейера ещё не готов.")
         return 3
-    bad, notes = check_map(root)
+    bad, notes = (check_map if args.step == "map" else check_link)(root)
     for n in notes:
         print(f"• {n}")
     if bad:
@@ -97,7 +142,7 @@ def main(argv=None) -> int:
         for b in bad[:15]:
             print(f"  - {b}")
         return 1
-    print(f"✓ {STEPS[args.step]}: каталог утверждён, нарезка полная и дословная")
+    print(f"✓ {STEPS[args.step]}: {_OK[args.step]}")
     return 0
 
 

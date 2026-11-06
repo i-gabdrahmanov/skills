@@ -30,6 +30,8 @@ from . import queue as Q
 
 PLAN_REL = ".spec-graph/plan"
 DELTA_REL = ".spec-graph/catalog.delta.json"
+DELTA_DECISIONS_REL = CT.DELTA_DECISIONS_REL
+DELTA_ACTIONS = ("accept", "merge", "rename", "drop")
 BRIEF = "assign-section.md"
 BRIEFS = Path(__file__).resolve().parents[2] / "references" / "briefs"
 TOOL = "graph_assign_put"
@@ -159,6 +161,29 @@ def _unit(root: Path, item_id: str) -> Dict[str, Any]:
 def load_delta(root: Path) -> List[Dict[str, Any]]:
     p = Path(root) / DELTA_REL
     return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else []
+
+
+def load_delta_decisions(root: Path) -> Dict[str, Dict[str, Any]]:
+    """Решения человека по узлам дельты (отчёт связей, 2.6): имя узла → {action, into?, name?, why}."""
+    p = Path(root) / DELTA_DECISIONS_REL
+    return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+
+
+def delta_resolution(root: Path) -> Tuple[List[Dict[str, Any]], Dict[str, Optional[str]]]:
+    """(узлы дельты, которые остаются — с новым именем после rename; старое имя → новое или None для drop).
+    Узел без решения остаётся как есть — гейт link его не пропустит."""
+    dec = load_delta_decisions(root)
+    kept, remap = [], {}
+    for n in load_delta(root):
+        d = dec.get(n["name"]) or {"action": "accept"}
+        if d["action"] == "accept":
+            kept.append(n)
+        elif d["action"] == "rename":
+            kept.append(dict(n, name=d["name"]))
+            remap[n["name"]] = d["name"]
+        else:
+            remap[n["name"]] = d.get("into") if d["action"] == "merge" else None
+    return kept, remap
 
 
 def _all_blocks_text(root: Path) -> Dict[str, str]:

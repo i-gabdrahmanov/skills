@@ -14,6 +14,7 @@
     отчёт `W-manual-inverse`;
   • `belongs_to` ставит нарезка (из каталога) — синк его не трогает, но выводит из него `operations`.
 Повтор без изменений входа — 0 изменённых файлов. Заметки — байтами (CRLF исходника не трогаем).
+`dry=True` — ничего не пишет, только считает (гейт link проверяет так «синк чистый»).
 """
 from __future__ import annotations
 
@@ -35,7 +36,7 @@ def _targets(values: Any) -> List[str]:
     return [t for t in (F.link_target(v) for v in (values or []) if isinstance(v, str)) if t]
 
 
-def sync(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
+def sync(root: Path, cfg: Dict[str, Any], dry: bool = False) -> Dict[str, Any]:
     root = Path(root)
     ont = O.load(root)
     vault = root / cfg["vault"]
@@ -80,7 +81,7 @@ def sync(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
                     rows[t] = {"from": name, "edge": edge, "to": t, "quote": "", "origin": "manual", "status": "accepted"}
                     manual += 1
             forward.setdefault(name, {})[edge] = rows
-        if changed_props:
+        if changed_props and not dry:
             E.save(root, name, props)
     inverse: Dict[str, Dict[str, Set[str]]] = {}
     for src, by_edge in forward.items():
@@ -126,10 +127,13 @@ def sync(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
             body = F.set_block(body, "edges", "_рёбер нет_")
         new_text = F.write(data, body if body.endswith("\n") else body + "\n", order)
         if new_text != old_text:
-            p.write_bytes(new_text.encode("utf-8"))
+            if not dry:
+                p.write_bytes(new_text.encode("utf-8"))
             written += 1
-    synced_p.parent.mkdir(parents=True, exist_ok=True)
-    synced_p.write_text(json.dumps(new_synced, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    journal_changed = new_synced != synced
+    if not dry:
+        synced_p.parent.mkdir(parents=True, exist_ok=True)
+        synced_p.write_text(json.dumps(new_synced, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     edges_total = sum(len(r) for by in forward.values() for r in by.values())
     return {"notes": len(index), "written": written, "forward_edges": edges_total, "manual": manual,
-            "removed_by_human": removed_by_human, "manual_inverse": manual_inverse[:20]}
+            "removed_by_human": removed_by_human, "manual_inverse": manual_inverse[:20], "journal_changed": journal_changed}
