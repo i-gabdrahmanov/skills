@@ -59,11 +59,13 @@ def _links(v: Any) -> List[str]:
     return [t for t in (F.link_target(x) for x in vals) if t]
 
 
-def _write(p: Path, text: str) -> bool:
+def _write(p: Path, text: str, dry: bool = False) -> bool:
+    """Изменился ли файл; dry — только сравнить."""
     if p.is_file() and p.read_text(encoding="utf-8") == text:
         return False
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(text, encoding="utf-8")
+    if not dry:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
     return True
 
 
@@ -195,7 +197,8 @@ def _base_view(ont: O.Ontology, view: Dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
+def build(root: Path, cfg: Dict[str, Any], dry: bool = False) -> Dict[str, Any]:
+    """Записать слой; dry — ничего не писать, только перечислить, что изменилось бы (гейт check)."""
     root = Path(root)
     ont = O.load(root)
     layer = load()
@@ -218,7 +221,7 @@ def build(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
         raise O.OntologyError(f"{gp.relative_to(root)}: не JSON — исправьте файл в Obsidian или удалите его")
     merged = merge_graph_json(current, ours, state.get("queries") or [])
     if merged != current:
-        _write(gp, json.dumps(merged, ensure_ascii=False, indent=2) + "\n")
+        _write(gp, json.dumps(merged, ensure_ascii=False, indent=2) + "\n", dry)
         changed.append(gp.relative_to(root).as_posix())
     mode = "bases" if bases_enabled(vault) else "markdown"
     views_dir = vault / "_graph" / "views"
@@ -229,18 +232,19 @@ def build(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
         else:
             p, text = views_dir / f"{v['file']}.md", _markdown_view(ont, v, nodes)
         wanted.add(p.name)
-        if _write(p, text):
+        if _write(p, text, dry):
             changed.append(p.relative_to(root).as_posix())
     for old in state.get("views") or []:                 # виды прежнего режима — наши, снимаем
         p = views_dir / old
         if old not in wanted and p.is_file():
-            p.unlink()
+            if not dry:
+                p.unlink()
             changed.append(p.relative_to(root).as_posix())
     sp = vault / "_graph" / START_NAME
-    if _write(sp, _start(ont, layer, nodes, ours, mode)):
+    if _write(sp, _start(ont, layer, nodes, ours, mode), dry):
         changed.append(sp.relative_to(root).as_posix())
     new_state = {"queries": [g["query"] for g in ours], "views": sorted(wanted), "mode": mode}
-    if new_state != state:
+    if new_state != state and not dry:
         state_p.parent.mkdir(parents=True, exist_ok=True)
         state_p.write_text(json.dumps(new_state, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     return {"mode": mode, "changed": changed, "groups": len(ours), "views": len(wanted),

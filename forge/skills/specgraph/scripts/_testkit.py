@@ -283,3 +283,18 @@ def approve_edges(root: Path) -> Dict:
     if r.returncode != 0:
         raise RuntimeError(r.stdout + r.stderr)
     return T.call("graph_edges_review", root, {})
+
+
+def approve_accept(root: Path) -> Dict:
+    """Приёмка графа человеком (как оркестратор после «да»): graph_check → record_approval → graph_check."""
+    import subprocess
+    import sys
+    from sgraph import tools as T
+    res = T.call("graph_check", root, {})
+    rec = SCRIPTS.parents[1] / "pipeline-state" / "scripts" / "record_approval.py"
+    r = subprocess.run([sys.executable, "-X", "utf8", str(rec), "--project", str(root), "--key", res["key"],
+                        "--approved-by", "user", "--reason", "граф принят", "--evidence", "да, принимаю граф",
+                        "--bind-file", res["report"]], capture_output=True, text=True, encoding="utf-8")
+    if r.returncode != 0:
+        raise RuntimeError(r.stdout + r.stderr)
+    return T.call("graph_check", root, {})

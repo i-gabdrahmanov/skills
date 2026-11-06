@@ -8,8 +8,8 @@
   • `graph_status` на пустом репо — вопросы первого запуска; `graph_init` пишет конфиг по ответам и
     НЕ перезаписывает существующий; несуществующий корень — отказ без записи;
   • ручная проверка аргументов инструментов: неизвестный аргумент и неверный тип — ToolError;
-  • `graph_gate.py` нереализованного шага (check) — exit 3 «не реализовано»: шаг не закрывается; map и link
-    без конфига — exit 1.
+  • `graph_gate.py` map, link и check без конфига — exit 1 (не пройден); неизвестный шаг — exit 2; нереализованных
+    шагов больше нет, и текст гейта не обещает exit 3.
 Данные — синтетические репо во временном каталоге.
 """
 from __future__ import annotations
@@ -157,20 +157,17 @@ class ToolArgs(unittest.TestCase):
 
 
 class GateStub(unittest.TestCase):
-    def test_unimplemented_steps_stop_honestly(self):
+    def test_steps_without_config_fail(self):
         with tempfile.TemporaryDirectory() as td:
-            r = subprocess.run([sys.executable, "-X", "utf8", str(SCRIPTS / "graph_gate.py"), "map", "--project", td],
-                               capture_output=True, text=True, encoding="utf-8")
-            self.assertEqual(r.returncode, 1, "map реализован (1.7): без конфига — не пройден")
-            r = subprocess.run([sys.executable, "-X", "utf8", str(SCRIPTS / "graph_gate.py"), "link", "--project", td],
-                               capture_output=True, text=True, encoding="utf-8")
-            self.assertEqual(r.returncode, 1, "link реализован (2.6): без конфига — не пройден")
-            for step in ("check",):
+            for step in ("map", "link", "check"):
                 with self.subTest(step=step):
                     r = subprocess.run([sys.executable, "-X", "utf8", str(SCRIPTS / "graph_gate.py"), step,
                                         "--project", td], capture_output=True, text=True, encoding="utf-8")
-                    self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
-                    self.assertIn("не реализован", r.stdout)
+                    self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            for text in ((SCRIPTS / "graph_gate.py").read_text(encoding="utf-8"),
+                         (SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8"),
+                         (SCRIPTS / "sgraph" / "status.py").read_text(encoding="utf-8")):
+                self.assertNotIn("не реализован", text, "снятый гейт — снят и в тексте")
             r = subprocess.run([sys.executable, "-X", "utf8", str(SCRIPTS / "graph_gate.py"), "build"],
                                capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(r.returncode, 2)

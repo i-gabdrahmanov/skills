@@ -99,8 +99,12 @@ def check(root: Path, nodes: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
-def write_questions(root: Path, cfg: Dict[str, Any], holes: List[Dict[str, Any]]) -> Path:
-    """_graph/open-questions.md: вопросы шага link (цели, призраки, описания) и дыры полноты."""
+def questions_path(root: Path, cfg: Dict[str, Any]) -> Path:
+    return Path(root) / cfg["vault"] / "_graph" / QUESTIONS_NAME
+
+
+def write_questions(root: Path, cfg: Dict[str, Any], holes: List[Dict[str, Any]], write: bool = True) -> str:
+    """_graph/open-questions.md: вопросы шага link (цели, призраки, описания) и дыры полноты; текст файла."""
     lines = ["# Открытые вопросы", "", "Вопросы аналитику, которые граф не может решить по спеке. Ответ — правка спеки "
              "или свойства заметки в Obsidian; следующая проверка уберёт закрытый вопрос сама.", ""]
     qp = Path(root) / LINK_QUESTIONS_REL
@@ -111,9 +115,9 @@ def write_questions(root: Path, cfg: Dict[str, Any], holes: List[Dict[str, Any]]
     gaps = sorted({f"- {F.link(h['name'])} ({h['code']}): {h['question']}" for h in holes})
     for title, rows in (("Дыры графа", gaps), ("Операции без описания", desc), ("Связи: неясная цель", targets)):
         lines += [f"## {title}", ""] + (rows or ["- нет"]) + [""]
-    p = Path(root) / cfg["vault"] / "_graph" / QUESTIONS_NAME
-    p.parent.mkdir(parents=True, exist_ok=True)
+    p = questions_path(root, cfg)
     text = "\n".join(lines)
-    if not p.is_file() or p.read_text(encoding="utf-8") != text:
+    if write and (not p.is_file() or p.read_text(encoding="utf-8") != text):
+        p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text, encoding="utf-8")
-    return p
+    return text

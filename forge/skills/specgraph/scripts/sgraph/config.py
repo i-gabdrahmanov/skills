@@ -23,7 +23,8 @@ ADAPTERS = ("md",)
 # Каталоги, которые никогда не исходники спеки: служебные forge/рантайма, зависимости, VCS.
 _SKIP_DIRS = {".git", ".gigacode", ".spec-graph", "ground", "node_modules", ".obsidian", ".idea",
               ".vscode", "__pycache__", "build", "target", "dist"}
-_TOP_LEVEL_KEYS = {"version", "vault", "sources", "exclude", "services", "ontology_version", "queue", "extract", "http"}
+_TOP_LEVEL_KEYS = {"version", "vault", "sources", "exclude", "services", "ontology_version", "queue", "extract", "http",
+                   "walks"}
 _QUEUE_KEYS = {"parallel", "max_attempts", "budget_chars", "lease_s"}
 _SOURCE_KEYS = {"root", "adapter", "kind_hint"}
 
@@ -99,6 +100,11 @@ def validate(cfg: Any) -> List[str]:
     if not isinstance(http, dict) or set(http) - {"strip_prefixes"} or not all(
             isinstance(x, str) and x.startswith("/") for x in http.get("strip_prefixes", [])):
         errors.append("http: {strip_prefixes: [\"/api\", …]} — срезаемые префиксы путей (gateway)")
+    walks = cfg.get("walks", [])
+    if not isinstance(walks, list) or not all(isinstance(w, dict) and set(w) <= {"from", "to", "why"} and
+                                              all(isinstance(w.get(k), str) and w.get(k) for k in ("from", "to"))
+                                              for w in walks):
+        errors.append("walks: [{from, to, why?}] — переходы, которые смоук шага check обязан найти в графе (3.5)")
     queue = cfg.get("queue", {})
     if not isinstance(queue, dict):
         errors.append("queue: объект {parallel, max_attempts, budget_chars, lease_s}")

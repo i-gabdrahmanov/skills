@@ -11,7 +11,9 @@
 Ошибки (E-*): fm-parse, fm-key, name, path, key-dup, ghost, edge-kind, inverse, evidence, verbatim,
 coverage, index, marker. Предупреждения (W-*): orphan, manual-inverse, unplaced, source-missing.
 Плюс дыры полноты по правилам `completeness.json` (3.2): раздел «Дыры графа» по бизнес-операциям и вопросы
-в `_graph/open-questions.md`.
+в `_graph/open-questions.md`. Раздел «Перенос исходников» (3.5): по каждому файлу спеки — перенесён полностью
+(каждый блок назначен, дословность цела, 0 E-* в его заметках) или что мешает. `write=False` — ничего не
+пишет и отдаёт тексты отчёта и вопросов (так гейт check проверяет их свежесть).
 """
 from __future__ import annotations
 
@@ -252,13 +254,38 @@ class _Run:
                     missing.setdefault(rel, []).append(n["path"])
         for rel, paths in sorted(missing.items()):
             self.add("W-source-missing", paths[0], f"исходник {rel} удалён (заметок: {len(paths)}) — после приёмки норма")
-        cov = SP.coverage(self.root, self.cfg)
+        cov = self.cov = SP.coverage(self.root, self.cfg)
         for rel, f in sorted(cov["files"].items()):
             if f["unplaced"]:
                 self.add("W-unplaced", rel, f"неразмещённых блоков: {f['unplaced']} (_graph/unplaced.md)")
 
 
-def validate(root: Path, cfg: Dict[str, Any], scope: Optional[str] = None) -> Dict[str, Any]:
+def _transfer(run: "_Run", nodes: Dict[str, Dict[str, Any]], issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Перенос каждого файла спеки: блоки, неразмещённые, и что мешает считать его перенесённым полностью."""
+    notes_of: Dict[str, set] = {}
+    for n in nodes.values():
+        try:
+            found = F.blocks(n["body"])
+        except ValueError:
+            continue
+        for blk in found:
+            if blk["name"].startswith("source") and blk["attrs"].get("file"):
+                notes_of.setdefault(blk["attrs"]["file"], set()).add(n["path"])
+    out = []
+    for rel, f in sorted(run.cov["files"].items()):
+        why = []
+        if f["unassigned"]:
+            why.append(f"блоков без места: {f['unassigned']}")
+        mine = notes_of.get(rel, set())
+        errs = sorted({i["code"] for i in issues if i["code"].startswith("E-") and i["path"] in mine})
+        if errs:
+            why.append("ошибки в его заметках: " + ", ".join(errs))
+        out.append({"file": rel, "blocks": f["blocks"], "unplaced": f["unplaced"], "notes": len(mine),
+                    "present": (run.root / rel).is_file(), "full": not why, "why": why})
+    return out
+
+
+def validate(root: Path, cfg: Dict[str, Any], scope: Optional[str] = None, write: bool = True) -> Dict[str, Any]:
     run = _Run(root, cfg)
     nodes = run.read()
     keys: Dict[str, str] = {}
@@ -271,8 +298,9 @@ def validate(root: Path, cfg: Dict[str, Any], scope: Optional[str] = None) -> Di
     run.index(nodes)
     run.sources(nodes)
     holes = CM.check(root, nodes)
-    CM.write_questions(root, cfg, holes)
+    questions = CM.write_questions(root, cfg, holes, write=write)
     issues = run.issues + [dict(h, hole=True) for h in holes]
+    transfer = _transfer(run, nodes, issues)
     if scope:
         issues = [i for i in issues if not i["path"] or i["path"].startswith(scope.rstrip("/"))]
     issues.sort(key=lambda i: (not i["code"].startswith("E-"), i["code"], i["path"], i["msg"]))
@@ -282,17 +310,30 @@ def validate(root: Path, cfg: Dict[str, Any], scope: Optional[str] = None) -> Di
     errors = sum(v for k, v in counts.items() if k.startswith("E-"))
     warnings = sum(v for k, v in counts.items() if k.startswith("W-"))
     result = {"notes": len(nodes), "errors": errors, "warnings": warnings, "counts": dict(sorted(counts.items())),
-              "scope": scope or "", "issues": issues}
-    rp = Path(root) / RESULT_REL
-    rp.parent.mkdir(parents=True, exist_ok=True)
-    rp.write_text(json.dumps(result, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-    _write_report(run.vault, result)
+              "scope": scope or "", "issues": issues, "transfer": transfer}
+    report = _render_report(result)
+    if write:
+        rp = Path(root) / RESULT_REL
+        rp.parent.mkdir(parents=True, exist_ok=True)
+        rp.write_text(json.dumps(result, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        p = report_path(root, cfg)
+        if not p.is_file() or p.read_text(encoding="utf-8") != report:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(report, encoding="utf-8")
     top = [f"{i['code']} {i['path']}: {i['msg']}" if i["path"] else f"{i['code']}: {i['msg']}" for i in issues[:TOP]]
-    return {"notes": len(nodes), "errors": errors, "warnings": warnings, "counts": result["counts"], "top": top,
-            "report": f"{cfg['vault']}/_graph/{REPORT_NAME}", "full": RESULT_REL}
+    out = {"notes": len(nodes), "errors": errors, "warnings": warnings, "counts": result["counts"], "top": top,
+           "report": f"{cfg['vault']}/_graph/{REPORT_NAME}", "full": RESULT_REL,
+           "transfer": [{"file": t["file"], "full": t["full"], "why": t["why"]} for t in transfer]}
+    if not write:
+        out.update(report_text=report, questions_text=questions)
+    return out
 
 
-def _write_report(vault: Path, result: Dict[str, Any]) -> None:
+def report_path(root: Path, cfg: Dict[str, Any]) -> Path:
+    return Path(root) / cfg["vault"] / "_graph" / REPORT_NAME
+
+
+def _render_report(result: Dict[str, Any]) -> str:
     lines = ["# Проверка графа", "",
              f"Заметок: {result['notes']}. Ошибок: {result['errors']}, предупреждений: {result['warnings']}."
              + (f" Область: {result['scope']}." if result["scope"] else ""), ""]
@@ -319,8 +360,14 @@ def _write_report(vault: Path, result: Dict[str, Any]) -> None:
         lines.append(f"- {where}{i['msg']}")
     if not result["issues"]:
         lines.append("Нарушений нет.")
-    p = vault / "_graph" / REPORT_NAME
-    p.parent.mkdir(parents=True, exist_ok=True)
-    text = "\n".join(lines) + "\n"
-    if not p.is_file() or p.read_text(encoding="utf-8") != text:
-        p.write_text(text, encoding="utf-8")
+    if result["transfer"]:
+        lines += ["", "## Перенос исходников", "", "Перенесён полностью — каждый блок файла в заметке, в skip с причиной или в "
+                  "_graph/unplaced.md, дословность цела, ошибок в его заметках нет. Удалять исходники — решение "
+                  "пользователя: пайплайн их не трогает; после удаления их блоки дают W-source-missing, текст уже в vault.",
+                  "", "| файл | блоков | заметок | неразмещённых | итог |", "|---|---|---|---|---|"]
+        for t in result["transfer"]:
+            verdict = "перенесён полностью" if t["full"] else "не полностью: " + "; ".join(t["why"])
+            if not t["present"]:
+                verdict += " (исходник удалён)"
+            lines.append(f"| `{t['file']}` | {t['blocks']} | {t['notes']} | {t['unplaced']} | {verdict} |")
+    return "\n".join(lines) + "\n"

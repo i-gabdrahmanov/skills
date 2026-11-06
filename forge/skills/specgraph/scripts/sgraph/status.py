@@ -33,5 +33,4 @@ def status(root: Path) -> Dict[str, Any]:
                 "next": "задай вопросы пользователю (кандидаты — первыми, решает он), затем graph_init с ответами"}
     return {"engine": VERSION, "initialized": True, "config": C.CONFIG_REL, "vault": cfg["vault"],
             "sources": [s["root"] for s in cfg["sources"]],
-            "next": "шаг graph-map: graph_survey (разведка), дальше по брифу шага. Затем шаг graph-link. Шаг graph-check "
-                    "ещё не реализован — его гейт отвечает «не реализовано»"}
+            "next": "шаг graph-map: graph_survey (разведка), дальше по брифу шага; затем шаги graph-link и graph-check"}

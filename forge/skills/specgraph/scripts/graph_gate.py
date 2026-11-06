@@ -11,9 +11,11 @@ frontmatter всех заметок читается. Брошенные еди�
 link (задача 2.6): очереди link-note и card построены и закрыты; висящих предложений (proposed) нет; по каждому
 узлу дельты есть решение; синк чистый (сухой повтор — 0 изменений); отчёт связей свежий (пересборка даёт тот же
 текст); согласие graph-edges-<KEY> привязано к хешу _graph/edges-review.md.
-check — пока «не реализовано» (exit 3): шаг не закрывается. Проверки — задача 3.5.
+check (задача 3.5): валидатор — 0 ошибок E-*; отчёт _graph/report.md и вопросы свежие (пересчёт без записи даёт тот
+же текст); Obsidian-слой свежий (сухая сборка — 0 изменений); смоук обхода без проблем; согласие graph-accept-<KEY>
+привязано к хешу отчёта.
 
-Коды: 0 — гейт пройден, 1 — проверки не прошли, 2 — неверный вызов, 3 — гейт шага не реализован.
+Коды: 0 — гейт пройден, 1 — проверки не прошли, 2 — неверный вызов.
 """
 from __future__ import annotations
 
@@ -27,9 +29,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 STEPS = {"map": "graph-map", "link": "graph-link", "check": "graph-check"}
-_PLANNED = {"check": "3.5"}
 _OK = {"map": "каталог утверждён, нарезка полная и дословная",
-       "link": "связи решены, синк чистый, отчёт связей утверждён"}
+       "link": "связи решены, синк чистый, отчёт связей утверждён",
+       "check": "граф без ошибок, отчёт и Obsidian-слой свежие, обход работает, граф принят"}
 
 
 def check_map(root: Path) -> Tuple[List[str], List[str]]:
@@ -121,6 +123,43 @@ def check_link(root: Path) -> Tuple[List[str], List[str]]:
     return bad, notes
 
 
+def check_check(root: Path) -> Tuple[List[str], List[str]]:
+    from sgraph import accept as AC
+    from sgraph import completeness as CM
+    from sgraph import config as C
+    from sgraph import consent as CS
+    from sgraph import obsidian as OB
+    from sgraph import validate as VA
+    bad, notes = [], []
+    cfg, errors = C.load(root)
+    if cfg is None:
+        return [f"конфиг: {'; '.join(errors) or 'нет .spec-graph/config.json — graph_init'}"], notes
+    res = VA.validate(root, cfg, write=False)
+    if res["errors"]:
+        bad.append(f"ошибок валидатора: {res['errors']} — " + "; ".join(res["top"][:3]))
+    report = VA.report_path(root, cfg)
+    if not report.is_file() or report.read_text(encoding="utf-8") != res["report_text"]:
+        bad.append("отчёт _graph/report.md устарел или не записан — graph_check")
+    qp = CM.questions_path(root, cfg)
+    if not qp.is_file() or qp.read_text(encoding="utf-8") != res["questions_text"]:
+        bad.append("_graph/open-questions.md устарел — graph_check")
+    try:
+        stale = OB.build(root, cfg, dry=True)["changed"]
+    except Exception as e:  # noqa: BLE001 — слой не собирается: это нарушение, а не падение гейта
+        stale = [f"слой не собирается: {e}"]
+    if stale:
+        bad.append(f"Obsidian-слой устарел ({', '.join(stale[:3])}) — graph_check")
+    for p in AC.smoke(root, cfg)[:5]:
+        bad.append(f"смоук обхода: {p}")
+    partial = [t["file"] for t in res["transfer"] if not t["full"]]
+    if partial:
+        notes.append(f"перенесены не полностью: {', '.join(partial[:5])} — их исходники удалять рано")
+    st = CS.state(root, AC.CONSENT, report)
+    if st["state"] != "ok":
+        bad.append(f"согласие {st['key']}: {st['state']} — покажи сводку отчёта, спроси о приёмке; «да» — {st.get('how', '')}")
+    return bad, notes
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Гейт шага ветки specgraph.")
     ap.add_argument("step", choices=sorted(STEPS))
@@ -130,11 +169,7 @@ def main(argv=None) -> int:
     if not root.is_dir():
         print(f"✗ нет каталога проекта: {args.project}", file=sys.stderr)
         return 2
-    if args.step in _PLANNED:
-        print(f"✗ {STEPS[args.step]}: гейт шага не реализован (spec-graph, задача {_PLANNED[args.step]}) — "
-              f"шаг не закрывается. Скажи пользователю, что этот шаг конвейера ещё не готов.")
-        return 3
-    bad, notes = (check_map if args.step == "map" else check_link)(root)
+    bad, notes = {"map": check_map, "link": check_link, "check": check_check}[args.step](root)
     for n in notes:
         print(f"• {n}")
     if bad:

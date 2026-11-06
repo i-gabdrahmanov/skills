@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put, graph_edges_review, graph_edges_decide, graph_delta_decide, graph_validate, graph_obsidian, graph_find, graph_node, graph_neighbors, graph_path, graph_impact, graph_service_links. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put, graph_edges_review, graph_edges_decide, graph_delta_decide, graph_validate, graph_obsidian, graph_find, graph_node, graph_neighbors, graph_path, graph_impact, graph_service_links, graph_check. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from . import accept as AC
 from . import assign as AS
 from . import blocks as B
 from . import card as CD
@@ -300,6 +301,13 @@ _NAME = {"type": "string", "description": "имя узла, алиас или к
 _LIMIT = {"type": "integer", "description": f"сколько строк (потолок {TR.LIMIT_MAX})"}
 
 
+def _check(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return AC.run(root, _need_cfg(root))
+    except O.OntologyError as e:
+        raise ToolError(str(e), ["E-check"])
+
+
 _QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
 
 TOOLS: Dict[str, Dict[str, Any]] = {
@@ -530,6 +538,12 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "fn": _traverse(lambda idx, root, cfg, a: TR.service_links(idx, a["svc"], a.get("limit"))),
         "description": "Связи сервиса с другими сервисами: вызовы и топики с узлами-посредниками (вид, а не рёбра графа).",
         "schema": dict(_READ, properties={"svc": _NAME, "limit": _LIMIT}, required=["svc"]),
+    },
+    "graph_check": {
+        "fn": _check,
+        "description": "Шаг graph-check: проверка графа (ошибки, дыры, перенос исходников), Obsidian-слой, смоук обхода; "
+                       "сводка для пользователя и состояние согласия на приёмку.",
+        "schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     "graph_queue_status": {
         "fn": _queue_status,
