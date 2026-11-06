@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put, graph_edges_review, graph_edges_decide, graph_delta_decide, graph_validate, graph_obsidian. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put, graph_edges_review, graph_edges_decide, graph_delta_decide, graph_validate, graph_obsidian, graph_find, graph_node, graph_neighbors, graph_path, graph_impact, graph_service_links. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -40,6 +40,7 @@ from . import split as SP
 from . import status as ST
 from . import survey as SV
 from . import sync as SY
+from . import traverse as TR
 from . import validate as VA
 
 
@@ -284,6 +285,21 @@ def _obsidian(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError(str(e), ["E-obsidian"])
 
 
+def _traverse(fn):
+    def run(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+        cfg = _need_cfg(root)
+        try:
+            return fn(TR.build_index(root, cfg), root, cfg, args)
+        except TR.TraverseError as e:
+            raise ToolError(str(e), [e.code])
+    return run
+
+
+_READ = {"type": "object", "additionalProperties": False}
+_NAME = {"type": "string", "description": "имя узла, алиас или ключ (task:…, http:…)"}
+_LIMIT = {"type": "integer", "description": f"сколько строк (потолок {TR.LIMIT_MAX})"}
+
+
 _QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
 
 TOOLS: Dict[str, Dict[str, Any]] = {
@@ -472,6 +488,48 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "description": "Obsidian-слой: цвета видов в .obsidian/graph.json (слиянием), _graph/Начало.md, виды-таблицы "
                        "_graph/views (Bases, если включён, иначе Markdown). Повтор без изменений графа — 0 записей.",
         "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "graph_find": {
+        "fn": _traverse(lambda idx, root, cfg, a: TR.find(idx, a["q"], a.get("kind"), a.get("limit"))),
+        "description": "Найти узел по части имени, алиасу или ключу; до 20 строк «[[имя]] (вид, сервис)».",
+        "schema": dict(_READ, properties={"q": {"type": "string"}, "kind": {"type": "string"},
+                                          "limit": {"type": "integer", "description": "≤ 20"}}, required=["q"]),
+    },
+    "graph_node": {
+        "fn": _traverse(lambda idx, root, cfg, a: TR.node(idx, root, cfg, a["name"], a.get("body") or "none",
+                                                          a.get("max_chars"))),
+        "description": "Узел: рёбра по ключам (прямые и обратные) и выбранная часть тела: card — карточка операции, "
+                       "source — текст спеки, evidence — основания рёбер.",
+        "schema": dict(_READ, properties={"name": _NAME, "body": {"type": "string", "enum": ["none", "card", "source", "evidence"]},
+                                          "max_chars": {"type": "integer", "description": f"≤ {TR.CHARS_MAX}"}},
+                       required=["name"]),
+    },
+    "graph_neighbors": {
+        "fn": _traverse(lambda idx, root, cfg, a: TR.neighbors(idx, a["name"], a.get("edges"), a.get("dir") or "both",
+                                                               a.get("depth"), a.get("limit"))),
+        "description": "Соседи узла: рёбра «[[a]] —ребро→ [[b]]»; edges — имена рёбер или обратных ключей; dir out|in|both; "
+                       f"depth ≤ {TR.DEPTH_MAX}.",
+        "schema": dict(_READ, properties={"name": _NAME, "edges": {"type": "array", "items": {"type": "string"}},
+                                          "dir": {"type": "string", "enum": ["out", "in", "both"]},
+                                          "depth": {"type": "integer"}, "limit": _LIMIT}, required=["name"]),
+    },
+    "graph_path": {
+        "fn": _traverse(lambda idx, root, cfg, a: TR.path(idx, a["from"], a["to"], a.get("max_depth"))),
+        "description": "Как связаны два узла: до 3 кратчайших путей, шаг подписан ключом свойства (closed_by — против "
+                       f"ребра closes_task); max_depth ≤ {TR.PATH_DEPTH_MAX}.",
+        "schema": dict(_READ, properties={"from": _NAME, "to": _NAME, "max_depth": {"type": "integer"}},
+                       required=["from", "to"]),
+    },
+    "graph_impact": {
+        "fn": _traverse(lambda idx, root, cfg, a: TR.impact(idx, a["name"], a.get("limit"))),
+        "description": "Что затронет изменение узла (эндпойнта, топика, данных, шедулера): вверх до бизнес-операций, "
+                       "экранов и процессов — по онтологии; у каждой строки — через что.",
+        "schema": dict(_READ, properties={"name": _NAME, "limit": _LIMIT}, required=["name"]),
+    },
+    "graph_service_links": {
+        "fn": _traverse(lambda idx, root, cfg, a: TR.service_links(idx, a["svc"], a.get("limit"))),
+        "description": "Связи сервиса с другими сервисами: вызовы и топики с узлами-посредниками (вид, а не рёбра графа).",
+        "schema": dict(_READ, properties={"svc": _NAME, "limit": _LIMIT}, required=["svc"]),
     },
     "graph_queue_status": {
         "fn": _queue_status,

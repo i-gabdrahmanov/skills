@@ -1,5 +1,5 @@
 {
-  "_comment": "Онтология графа спецификации v1 — по ТЗ аналитика (docs/specgraph/tz-analytics.md §2–3) и таблицам tasks/020-spec-graph.md. Единственное место, где живут виды узлов и рёбер: валидатор, синк, обход, Obsidian-слой читают ЭТОТ файл. Новый вид или ребро — запись здесь (или в .spec-graph/ontology.local.json проекта — только добавления), без правки кода. Прямое ребро пишется у вершины «from»; обратное («inverse») выводит синк. impact — куда идти от ИЗМЕНЁННОГО узла, чтобы найти затронутых: forward — по ребру, inverse — против него, none — не распространяет.",
+  "_comment": "Онтология графа спецификации v1 — по ТЗ аналитика (docs/specgraph/tz-analytics.md §2–3) и таблицам tasks/020-spec-graph.md. Единственное место, где живут виды узлов и рёбер: валидатор, синк, обход, Obsidian-слой читают ЭТОТ файл. Новый вид или ребро — запись здесь (или в .spec-graph/ontology.local.json проекта — только добавления), без правки кода. Прямое ребро пишется у вершины «from»; обратное («inverse») выводит синк. impact — куда идти от ИЗМЕНЁННОГО узла, чтобы найти затронутых: forward — по ребру, inverse — против него, both — в обе стороны (экран и его задача затрагивают друг друга), none — не распространяет.",
   "version": 1,
   "statuses": ["draft", "stable", "deprecated", "stub", "external"],
   "name_forbidden": "/\\:#^[]|",
@@ -24,7 +24,7 @@
     "consumes":     {"title_ru": "читает топик", "from": ["kafka-op:consume"], "to": ["topic"], "inverse": "consumers", "evidence": "required", "impact": "inverse"},
     "creates_task": {"title_ru": "формирует задачу", "from": ["scheduler", "endpoint", "kafka-op"], "to": ["operation"], "inverse": "created_by", "evidence": "required", "impact": "forward"},
     "closes_task":  {"title_ru": "закрывает задачу", "from": ["scheduler", "endpoint", "kafka-op"], "to": ["operation"], "inverse": "closed_by", "evidence": "required", "impact": "forward"},
-    "ui_of":        {"title_ru": "UI задачи", "from": ["screen"], "to": ["operation"], "inverse": "screens", "evidence": "required", "impact": "forward"},
+    "ui_of":        {"title_ru": "UI задачи", "from": ["screen"], "to": ["operation"], "inverse": "screens", "evidence": "required", "impact": "both"},
     "uses_data":    {"title_ru": "использует данные", "from": ["endpoint", "scheduler", "kafka-op", "algorithm", "screen"], "to": ["data"], "inverse": "used_by", "evidence": "required", "impact": "inverse"},
     "related":      {"title_ru": "связана с операцией", "from": ["operation"], "to": ["operation"], "inverse": "related", "symmetric": true, "evidence": "required", "impact": "none"},
     "part_of":      {"title_ru": "входит в процесс", "from": ["operation", "process"], "to": ["process"], "inverse": "includes", "evidence": "required", "impact": "forward"}
