@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -29,6 +29,7 @@ from . import config as C
 from . import metrics as M
 from . import profile as PF
 from . import queue as Q
+from . import split as SP
 from . import status as ST
 from . import survey as SV
 
@@ -189,6 +190,19 @@ def _assign_put(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
             "new_nodes": len(args.get("new_nodes") or [])}
 
 
+def _split(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = _need_cfg(root)
+    try:
+        res = SP.split(root, cfg)
+    except SP.SplitError as e:
+        raise ToolError(str(e), [e.code])
+    errs = SP.verify(root, cfg)
+    res["verify"] = {"errors": len(errs), "first": [f"[{c}] {m}" for c, m in errs[:10]]}
+    res["next"] = ("нарезка цела — дальше гейт graph_gate.py map" if not errs else
+                   "есть нарушения полноты/дословности — смотри verify.first; блоки без назначения — переразложить")
+    return res
+
+
 _QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
 
 TOOLS: Dict[str, Dict[str, Any]] = {
@@ -289,6 +303,12 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                                   "unplaced": {"type": "array", "items": {"type": "object"}},
                                   "new_nodes": {"type": "array", "items": {"type": "object"}}},
                    "required": ["item_id", "assign"], "x-queue": "assign-section", "additionalProperties": False},
+    },
+    "graph_split": {
+        "fn": _split,
+        "description": "Нарезать vault по утверждённому каталогу и планам раскладки: заметки с текстом дословно, "
+                       "frontmatter по онтологии, _graph/index.md и unplaced.md; ответ — счётчики и проверка полноты.",
+        "schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     "graph_queue_status": {
         "fn": _queue_status,

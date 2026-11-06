@@ -7,21 +7,21 @@
     "e2e": "весь /graph даёт эталонный граф (3.6)"
   },
   "variants": {
-    "num-trailing-dot": {"quotes": "ok", "extract": "ok", "coverage": "pending:1.6", "e2e": "pending:3.6"},
-    "num-none":         {"quotes": "ok", "extract": "ok", "coverage": "pending:1.6", "e2e": "pending:3.6"},
-    "num-razdel":       {"quotes": "ok", "extract": "ok", "coverage": "pending:1.6", "e2e": "pending:3.6"},
-    "setext":           {"quotes": "ok", "extract": "ok", "coverage": "pending:1.6", "e2e": "pending:3.6"},
-    "bold-h3":          {"quotes": "ok", "extract": "ok", "coverage": "pending:1.6", "e2e": "pending:3.6"},
-    "code-prefix":      {"quotes": "ok", "extract": "ok", "coverage": "pending:1.6", "e2e": "pending:3.6"},
-    "english-groups":   {"quotes": "ok", "extract": "ok", "coverage": "pending:1.6", "e2e": "pending:3.6"},
-    "api-in-body":      {"quotes": "ok", "extract": "ok", "coverage": "pending:1.6", "e2e": "pending:3.6"},
-    "api-openapi":      {"quotes": "ok", "extract": "ok", "coverage": "pending:1.6", "e2e": "pending:3.6"},
-    "html-tables":      {"quotes": "ok", "extract": "ok", "coverage": "pending:1.6", "e2e": "pending:3.6"},
-    "paren-lists":      {"quotes": "ok", "extract": "ok", "coverage": "pending:1.6", "e2e": "pending:3.6"},
-    "crlf-bom":         {"quotes": "ok", "extract": "ok", "coverage": "pending:1.6", "e2e": "pending:3.6"},
-    "nbsp-yo":          {"quotes": "ok", "extract": "ok", "coverage": "pending:1.6", "e2e": "pending:3.6"},
-    "unclosed-fence":   {"quotes": "ok", "extract": "ok", "coverage": "pending:1.6", "e2e": "pending:3.6"},
-    "prose-in-fence":   {"quotes": "ok", "extract": "ok", "coverage": "pending:1.6", "e2e": "pending:3.6"},
-    "mixed":            {"quotes": "ok", "extract": "ok", "coverage": "pending:1.6", "e2e": "pending:3.6"}
+    "num-trailing-dot": {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "pending:3.6"},
+    "num-none":         {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "pending:3.6"},
+    "num-razdel":       {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "pending:3.6"},
+    "setext":           {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "pending:3.6"},
+    "bold-h3":          {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "pending:3.6"},
+    "code-prefix":      {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "pending:3.6"},
+    "english-groups":   {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "pending:3.6"},
+    "api-in-body":      {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "pending:3.6"},
+    "api-openapi":      {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "pending:3.6"},
+    "html-tables":      {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "pending:3.6"},
+    "paren-lists":      {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "pending:3.6"},
+    "crlf-bom":         {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "pending:3.6"},
+    "nbsp-yo":          {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "pending:3.6"},
+    "unclosed-fence":   {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "pending:3.6"},
+    "prose-in-fence":   {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "pending:3.6"},
+    "mixed":            {"quotes": "ok", "extract": "ok", "coverage": "ok", "e2e": "pending:3.6"}
   }
 }

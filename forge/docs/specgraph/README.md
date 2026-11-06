@@ -82,7 +82,7 @@
 | М1 | 1 | [1.3 Разведка: обзор спеки и черновой каталог](tasks/1.3-survey.md) | 1.2, 4.2, 0.6 |  done |
 | М1 | 1 | [1.4 Дедуп и каталог — решение до нарезки](tasks/1.4-catalog-dedup.md) | 1.3 |  done |
 | М1 | 1 | [1.5 Раскладка блоков по узлам](tasks/1.5-block-assignment.md) | 1.4 |  done |
-| М1 | 1 | [1.6 Нарезка в vault и покрытие](tasks/1.6-split-coverage.md) | 1.5, 0.3 | todo |
+| М1 | 1 | [1.6 Нарезка в vault и покрытие](tasks/1.6-split-coverage.md) | 1.5, 0.3 |  done |
 | М1 | 1 | [1.7 Шаг graph-map](tasks/1.7-map-step.md) | 1.6 | todo |
 | М1 | 2 graph-link | [2.1 Ключи и резолвер](tasks/2.1-keys-resolver.md) | 1.6 | todo |
 | М1 | 2 | [2.2 Механические рёбра](tasks/2.2-mechanical-edges.md) | 2.1 | todo |

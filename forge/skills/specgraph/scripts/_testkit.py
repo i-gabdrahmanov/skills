@@ -126,3 +126,88 @@ def through_catalog(root: Path) -> None:
     T.call("graph_survey", root, {})
     run_queue(root, "draft-file", draft_answer(root))
     approve_catalog(root)
+
+
+def through_split(root: Path) -> Dict:
+    """… → каталог → раскладка эталоном → нарезка (для тестов связей и проверки)."""
+    from sgraph import tools as T
+    through_catalog(root)
+    T.call("graph_assign_start", root, {})
+    run_queue(root, "assign-section", assign_answer(root))
+    return T.call("graph_split", root, {})
+
+
+# ─── «модель-оракул»: отвечает по кандидатам любого корпуса (стресс-корпус 0.5) ──
+
+def draft_oracle(root: Path) -> Callable[[Dict], Dict]:
+    """Черновик единицы = её кандидаты как есть (так отвечает идеальная модель на чистом корпусе)."""
+    from sgraph import queue as Q
+    data = json.loads((root / Q.QUEUE_REL / "draft-file.json").read_text(encoding="utf-8"))
+    by_id = {it["id"]: it for it in data["items"]}
+
+    def answer(unit):
+        refs = by_id[unit["item_id"]]["refs"]
+        cands = json.loads((root / ".spec-graph" / "candidates" / (refs["file"] + ".json")).read_text(encoding="utf-8"))
+        wanted = set(refs["candidates"])
+        nodes = []
+        for c in cands["candidates"]:
+            if c["name_hint"] in wanted:
+                n = {"kind": c["kind"], "name": c["name_hint"], "why": c["rule"]}
+                for k in ("role", "subkind", "key", "service"):
+                    if c.get(k):
+                        n[k] = c[k]
+                if c.get("section") and c["section"] in refs["sections"]:
+                    n["sections"] = [c["section"]]
+                nodes.append(n)
+        return {"nodes": nodes, "not_nodes": []}
+    return answer
+
+
+def assign_oracle(root: Path) -> Callable[[Dict], Dict]:
+    """Раскладка: самый внутренний раздел-кандидат → экран/сервис файла → заголовок в skip:toc → unplaced."""
+    from sgraph import catalog as CT
+    from sgraph import queue as Q
+    data = json.loads((root / Q.QUEUE_REL / "assign-section.json").read_text(encoding="utf-8"))
+    by_id = {it["id"]: it for it in data["items"]}
+    names = {n["name"] for n in CT.load_approved(root)["nodes"]}
+
+    def answer(unit):
+        refs = by_id[unit["item_id"]]["refs"]
+        cands = json.loads((root / ".spec-graph" / "candidates" / (refs["file"] + ".json")).read_text(encoding="utf-8"))
+        cands = [c for c in cands["candidates"] if c["name_hint"] in names]
+        inner = {}
+        for c in cands:
+            if c.get("section"):
+                for b in c["blocks"]:
+                    if b not in inner or len(c["blocks"]) < inner[b][0]:
+                        inner[b] = (len(c["blocks"]), c["name_hint"])
+        file_level = [c for c in cands if c["rule"] in ("R-screen-file", "R-service-file")]
+        svc = next((c for c in file_level if c["rule"] == "R-service-file"), None)
+        blocks = {b["id"]: b for b in json.loads((root / ".spec-graph" / "blocks" / (refs["file"] + ".json"))
+                                                 .read_text(encoding="utf-8"))["blocks"]}
+        assign, skip, unplaced = {}, [], []
+        for b in refs["blocks"]:
+            if b in inner:
+                assign.setdefault(inner[b][1], []).append(b)
+            elif file_level:
+                fl = next((c for c in file_level if b in c["blocks"]), svc or file_level[0])
+                assign.setdefault(fl["name_hint"], []).append(b)
+            elif blocks[b]["type"] == "heading":
+                skip.append(b)
+            else:
+                unplaced.append(b)
+        return {"assign": [{"node": n, "blocks": ids} for n, ids in assign.items()],
+                "skip": [{"blocks": skip, "reason": "toc"}] if skip else [],
+                "unplaced": [{"blocks": unplaced}] if unplaced else []}
+    return answer
+
+
+def oracle_split(root: Path) -> Dict:
+    """Весь graph-map на «модели-оракуле»: разведка → черновики → каталог → согласие → раскладка → нарезка."""
+    from sgraph import tools as T
+    T.call("graph_survey", root, {})
+    run_queue(root, "draft-file", draft_oracle(root))
+    approve_catalog(root)
+    T.call("graph_assign_start", root, {})
+    run_queue(root, "assign-section", assign_oracle(root))
+    return T.call("graph_split", root, {})
