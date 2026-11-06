@@ -175,6 +175,8 @@ class InstallKinds(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in (ext / "commands").iterdir()), ["graph.md"])
         self.assertIn("specgraph", (ext / "commands" / "graph.md").read_text(encoding="utf-8"))
         self.assertIn("profile graph", (ext / ".forge-profile").read_text(encoding="utf-8"))
+        gi = (tgt / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn(".spec-graph/*\n!.spec-graph/config.json", gi, "производные spec-graph вне git, конфиг — в git")
         self._named_paths_exist(tgt, ext, "spec-graph")
 
         mcp = self._manifest(ext)["mcpServers"]
