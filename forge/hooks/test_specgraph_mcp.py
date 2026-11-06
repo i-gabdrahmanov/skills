@@ -17,7 +17,8 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent
 SERVER = HOOKS / "specgraph_mcp.py"
 
-EXPECTED_TOOLS = ["graph_init", "graph_next", "graph_profile", "graph_queue_status", "graph_scan", "graph_status"]
+EXPECTED_TOOLS = ["graph_draft_put", "graph_init", "graph_next", "graph_profile", "graph_queue_status", "graph_scan",
+                  "graph_status", "graph_survey"]
 
 
 def _session(root: Path, messages: list) -> list:

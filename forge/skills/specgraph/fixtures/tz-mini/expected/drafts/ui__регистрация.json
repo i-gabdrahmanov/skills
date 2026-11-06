@@ -1,0 +1,12 @@
+{
+ "file": "ui/регистрация.md",
+ "nodes": [
+  {
+   "confidence": "high",
+   "kind": "screen",
+   "name": "UI регистрации",
+   "why": "кандидат R-screen-file"
+  }
+ ],
+ "not_nodes": []
+}

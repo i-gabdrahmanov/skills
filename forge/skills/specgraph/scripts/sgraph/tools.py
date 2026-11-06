@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -28,6 +28,7 @@ from . import metrics as M
 from . import profile as PF
 from . import queue as Q
 from . import status as ST
+from . import survey as SV
 
 
 class ToolError(Exception):
@@ -65,6 +66,10 @@ def _check_args(args: Dict[str, Any], schema: Dict[str, Any]) -> None:
         elif spec.get("type") == "array" and (spec.get("items") or {}).get("type") == "string" \
                 and not all(isinstance(x, str) for x in v):
             errors.append(f"«{k}»: ожидается список строк")
+            codes.append("E-arg-type")
+        elif spec.get("type") == "array" and (spec.get("items") or {}).get("type") == "object" \
+                and not all(isinstance(x, dict) for x in v):
+            errors.append(f"«{k}»: ожидается список объектов")
             codes.append("E-arg-type")
     if errors:
         raise ToolError("; ".join(errors), codes)
@@ -126,6 +131,19 @@ def _profile(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return PF.profile(root, cfg, args.get("scope"))
 
 
+def _survey(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    return SV.survey(root, _need_cfg(root), args.get("scope"))
+
+
+def _draft_put(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    nodes, not_nodes = args.get("nodes") or [], args.get("not_nodes") or []
+    draft, errs = SV.put_draft(root, args["item_id"], nodes, not_nodes, _need_cfg(root))
+    if errs:
+        raise ToolError("черновик не принят:\n" + "\n".join(f"- [{c}] {m}" for c, m in errs),
+                        sorted({c for c, _ in errs}))
+    return {"accepted": True, "nodes": len(nodes), "not_nodes": len(not_nodes), "file": draft["file"]}
+
+
 _QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
 
 TOOLS: Dict[str, Dict[str, Any]] = {
@@ -176,6 +194,24 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                    "properties": {"scope": {"type": "string", "description": "all | каталог | файл; пусто — all"},
                                   "reveal": {"type": "string", "description": "w#xxxxxx или f#xxxxxx — раскрыть хеш"}},
                    "additionalProperties": False},
+    },
+    "graph_survey": {
+        "fn": _survey,
+        "description": "Разведка спеки: скан, экстракторы, _graph/survey.md для человека (оглавления, кандидаты, "
+                       "аномалии, объём работ, предложение scope) и очередь draft-file. Первый ход шага graph-map.",
+        "schema": {"type": "object",
+                   "properties": {"scope": {"type": "string", "description": "all | каталог | файл; пусто — all"}},
+                   "additionalProperties": False},
+    },
+    "graph_draft_put": {
+        "fn": _draft_put,
+        "description": "Сдать черновик узлов ОДНОГО файла (единица очереди draft-file): nodes — узлы с видом, именем, "
+                       "сервисом, key, разделами; not_nodes — кандидаты, которые не узлы, с причиной.",
+        "schema": {"type": "object",
+                   "properties": {"item_id": {"type": "string"},
+                                  "nodes": {"type": "array", "items": {"type": "object"}},
+                                  "not_nodes": {"type": "array", "items": {"type": "object"}}},
+                   "required": ["item_id", "nodes"], "x-queue": "draft-file", "additionalProperties": False},
     },
     "graph_queue_status": {
         "fn": _queue_status,

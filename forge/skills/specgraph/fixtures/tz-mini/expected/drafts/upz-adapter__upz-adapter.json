@@ -1,0 +1,36 @@
+{
+ "file": "upz-adapter/upz-adapter.md",
+ "nodes": [
+  {
+   "confidence": "high",
+   "key": "http:POST /api/v1/upz/tasks",
+   "kind": "endpoint",
+   "name": "upz-adapter POST api-v1-upz-tasks",
+   "sections": [
+    "upz-adapter/upz-adapter.md#5"
+   ],
+   "service": "upz-adapter",
+   "why": "кандидат R-endpoint-heading"
+  },
+  {
+   "confidence": "high",
+   "kind": "service",
+   "name": "upz-adapter",
+   "why": "кандидат R-service-file"
+  },
+  {
+   "confidence": "high",
+   "key": "kafka:pprbkid.upz.task.response.v1",
+   "kind": "topic",
+   "name": "pprbkid.upz.task.response.v1",
+   "why": "кандидат R-topic-name"
+  },
+  {
+   "confidence": "high",
+   "kind": "external",
+   "name": "УПЗ",
+   "why": "кандидат R-external-phrase"
+  }
+ ],
+ "not_nodes": []
+}

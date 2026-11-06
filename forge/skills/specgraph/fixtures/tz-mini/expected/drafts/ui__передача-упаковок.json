@@ -1,0 +1,12 @@
+{
+ "file": "ui/передача-упаковок.md",
+ "nodes": [
+  {
+   "confidence": "high",
+   "kind": "screen",
+   "name": "UI передачи упаковок",
+   "why": "кандидат R-screen-file"
+  }
+ ],
+ "not_nodes": []
+}
