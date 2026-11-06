@@ -17,7 +17,7 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent
 SERVER = HOOKS / "specgraph_mcp.py"
 
-EXPECTED_TOOLS = ["graph_assign_put", "graph_assign_start", "graph_catalog", "graph_catalog_decide", "graph_draft_put", "graph_edges_mechanical", "graph_init", "graph_link_put", "graph_link_start", "graph_next", "graph_profile", "graph_queue_status", "graph_resolve", "graph_scan",
+EXPECTED_TOOLS = ["graph_assign_put", "graph_assign_start", "graph_card_put", "graph_card_start", "graph_catalog", "graph_catalog_decide", "graph_draft_put", "graph_edges_mechanical", "graph_init", "graph_link_put", "graph_link_start", "graph_next", "graph_profile", "graph_queue_status", "graph_resolve", "graph_scan",
                   "graph_split", "graph_status", "graph_survey", "graph_sync"]
 
 

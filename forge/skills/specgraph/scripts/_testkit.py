@@ -229,3 +229,27 @@ def through_link(root: Path) -> None:
     T.call("graph_edges_mechanical", root, {})
     T.call("graph_link_start", root, {})
     run_queue(root, "link-note", link_answer(root))
+
+
+def card_answer(root: Path) -> Callable[[Dict], Dict]:
+    """Карточка из бизнес-описания фикстуры: строки «**Для чего:** …» → поле со ссылкой на свой блок."""
+    import re
+    from sgraph import blocks as B
+    from sgraph import queue as Q
+    data = json.loads((root / Q.QUEUE_REL / "card.json").read_text(encoding="utf-8"))
+    by_id = {it["id"]: it for it in data["items"]}
+    marks = {"Для чего": "purpose", "Когда возникает": "when", "Что выполнить": "what", "Результат": "result"}
+
+    def answer(unit):
+        ids = by_id[unit["item_id"]]["refs"]["blocks"]
+        fields = {k: "нет в источнике" for k in marks.values()}
+        texts = {}
+        for b in ids:
+            rel = b.rsplit("#", 1)[0]
+            texts.update({x["id"]: x["text"] for x in B.load(root, rel)["blocks"]})
+        for b in ids:
+            m = re.match(r"^- \*\*([^*:]+):\*\* (.+?)\.?\s*$", texts[b].strip())
+            if m and m.group(1) in marks:
+                fields[marks[m.group(1)]] = [{"text": m.group(2), "blocks": [b]}]
+        return {"fields": fields}
+    return answer

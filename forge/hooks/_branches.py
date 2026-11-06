@@ -190,7 +190,7 @@ BRANCHES = {
         # по утверждённому каталогу). graph-link — задачи 2.x.
         "phase_tools": {
             "graph-map": ("graph_draft_put", "graph_assign_put"),
-            "graph-link": ("graph_link_put",),
+            "graph-link": ("graph_link_put", "graph_card_put"),
         },
         "docs_target": "feature-docs",
         "doc_approval": {},

@@ -161,8 +161,8 @@ class PhaseToolsRegistry(unittest.TestCase):
 
     # spec-graph (ветка specgraph): свободные инструменты движка — читающие, оркестраторские и механика без решений модели
     GRAPH_FREE = {"graph_status", "graph_init", "graph_scan", "graph_profile", "graph_survey", "graph_next",
-                  "graph_queue_status", "graph_catalog", "graph_resolve", "graph_edges_mechanical", "graph_link_start", "graph_sync", "graph_catalog_decide", "graph_assign_start", "graph_split"}
-    EXPECTED_GRAPH = {"graph-map": ("graph_draft_put", "graph_assign_put"), "graph-link": ("graph_link_put",)}
+                  "graph_queue_status", "graph_catalog", "graph_resolve", "graph_edges_mechanical", "graph_link_start", "graph_sync", "graph_card_start", "graph_catalog_decide", "graph_assign_start", "graph_split"}
+    EXPECTED_GRAPH = {"graph-map": ("graph_draft_put", "graph_assign_put"), "graph-link": ("graph_link_put", "graph_card_put")}
 
     @staticmethod
     def engine_tools():

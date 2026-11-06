@@ -88,7 +88,7 @@
 | М1 | 2 | [2.2 Механические рёбра](tasks/2.2-mechanical-edges.md) | 2.1 |  done |
 | М1 | 2 | [2.3 Предложения рёбер с основаниями](tasks/2.3-edge-proposals.md) | 2.1 |  done |
 | М1 | 2 | [2.4 Синк рёбер и guard frontmatter](tasks/2.4-edge-sync.md) | 2.3, 0.3 |  done |
-| М1 | 2 | [2.5 Карточка бизнес-операции](tasks/2.5-operation-card.md) | 2.4 | todo |
+| М1 | 2 | [2.5 Карточка бизнес-операции](tasks/2.5-operation-card.md) | 2.4 | done |
 | М1 | 2 | [2.6 Отчёт связей и шаг graph-link](tasks/2.6-link-step.md) | 2.2, 2.5 | todo |
 | М1 | 3 graph-check | [3.1 Валидатор](tasks/3.1-validator.md) | 2.4 | todo |
 | М1 | 3 | [3.2 Проверки полноты по ТЗ](tasks/3.2-completeness.md) | 3.1 | todo |

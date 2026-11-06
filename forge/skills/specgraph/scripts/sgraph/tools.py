@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -24,6 +24,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from . import assign as AS
 from . import blocks as B
+from . import card as CD
 from . import catalog as CT
 from . import config as C
 from . import edges as ED
@@ -236,6 +237,20 @@ def _sync(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return SY.sync(root, _need_cfg(root))
 
 
+def _card_start(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return CD.start(root, _need_cfg(root))
+    except CD.CardError as e:
+        raise ToolError(str(e), [e.code])
+
+
+def _card_put(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    res, errs = CD.put(root, _need_cfg(root), args["item_id"], args.get("fields"))
+    if errs:
+        raise ToolError("карточка не принята:\n" + "\n".join(f"- [{c}] {m}" for c, m in errs), sorted({c for c, _ in errs}))
+    return res
+
+
 _QUEUE_PROP = {"type": "string", "description": "имя очереди: " + ", ".join(Q.QUEUES)}
 
 TOOLS: Dict[str, Dict[str, Any]] = {
@@ -378,6 +393,19 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "description": "Записать рёбра в заметки: прямые ключи и таблица оснований (graph:edges) у владельца, обратные "
                        "ключи у всех — пересчётом; ссылки, добавленные/убранные человеком в Obsidian, учитываются.",
         "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "graph_card_start": {
+        "fn": _card_start,
+        "description": "Построить очередь card: единица на бизнес-операцию, вход — её блоки текста с id.",
+        "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "graph_card_put": {
+        "fn": _card_put,
+        "description": "Сдать карточку бизнес-операции: fields {purpose, when, what, result} — до 3 утверждений {text, "
+                       "blocks} или «нет в источнике»; ссылки только на блоки этой операции.",
+        "schema": {"type": "object",
+                   "properties": {"item_id": {"type": "string"}, "fields": {"type": "object"}},
+                   "required": ["item_id", "fields"], "x-queue": "card", "additionalProperties": False},
     },
     "graph_queue_status": {
         "fn": _queue_status,

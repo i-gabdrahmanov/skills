@@ -152,7 +152,15 @@ def put(root: Path, cfg: Dict[str, Any], item_id: str, proposals: List[Dict[str,
             errs.append((err[0], f"proposals[{i}] {p['edge']} → «{p['to']}»: {err[1]}"))
     if errs:
         return {}, errs[:10]
-    stats = E.add(root, note, ok)
+    here, there = [], {}
+    for n in ok:                      # симметричное ребро: одно основание на пару — копим у той стороны, где оно уже есть
+        if g.ont.is_symmetric(n["edge"]) and any(x["edge"] == n["edge"] and x["to"] == note for x in E.load(root, n["to"])):
+            there.setdefault(n["to"], []).append(dict(n, **{"from": n["to"], "to": note}))
+        else:
+            here.append(n)
+    stats = E.add(root, note, here)
+    for t, ps in sorted(there.items()):
+        stats["merged"] += E.add(root, t, ps)["merged"]
     if questions:
         cur = load_questions(root)
         for q in questions:
