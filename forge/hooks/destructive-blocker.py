@@ -241,6 +241,12 @@ def _targets_inside_project(targets: "list[str]", root) -> bool:
     return True
 
 
+# human_override.py — команда от имени ЧЕЛОВЕКА (снимает R4 на один вызов). Модели её запуск
+# закрыт всегда: и прямой, и через python -c/import, и обёрткой (`script`, `env -u …`) — по
+# упоминанию в команде. Сам скрипт держит ещё два слоя (маркер агента в окружении, /dev/tty).
+_HUMAN_ONLY = re.compile(r"human[_-]?override", re.I)
+
+
 def main() -> int:
     try:
         raw = sys.stdin.read()
@@ -264,6 +270,12 @@ def main() -> int:
             policy = R.load_policy().get("destructive_blacklist", []) or []
         except Exception:
             policy = []
+        if _HUMAN_ONLY.search(cmd):
+            print("[destructive-blocker] DENY: human_override запускает только человек в своём "
+                  "терминале. Не обходи это: покажи пользователю команду целиком (что меняется "
+                  "и почему) и попроси выполнить её в отдельном терминале, затем жди результата.",
+                  file=sys.stderr)
+            return 2
         if _rm_bare_dangerous_target(cmd):
             print("[destructive-blocker] DENY: `rm` с целью «корень/дом/звезда/текущий "
                   "каталог». Уборку делай по конкретному относительному пути "
