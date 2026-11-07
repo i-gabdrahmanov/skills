@@ -120,16 +120,61 @@ def _section_lines(lines: list[str], markers: list[str]) -> list[str]:
     return lines[span[0] + 1:span[1]] if span else []
 
 
-def _gwt_lines(lines: list[str]) -> list[str]:
-    out, seen = [], set()
+_STEP_OPEN = re.compile(r"(?i)^\s*(?:[-*]\s+)?(?:\*\*|__)?\s*(?:given|when|then)\b")
+_STEP_CONT = re.compile(r"(?i)^\s*(?:[-*]\s+)?(?:\*\*|__)?\s*(?:given|when|then|and|but)\b")
+_BULLET = re.compile(r"^\s*[-*]\s+")
+
+
+def _gwt_split(lines: list[str]) -> "tuple[list[str], list[str]]":
+    """(сценарии, остальные строки). Сценарий — строка Given-When-Then либо шаги подряд.
+
+    Аналитик пишет сценарий и одной строкой, и столбиком — `- **Given** …` / `- **When** …` /
+    `- **Then** …`. Столбик раньше не узнавался: шаги склеивались в утверждение требования
+    («0 сценар.»), а разбор мастера после записи читал ту же строку уже сценарием — план
+    давал `~`, и только что записанное объявлялось «не подтверждено» (KIDPPRB-10815)."""
+    scen: list[str] = []
+    rest: list[str] = []
+    group: list[str] = []
+
+    def flush() -> None:
+        joined = " ".join([group[0].strip()] + [_BULLET.sub("", l).strip() for l in group[1:]])
+        if _GWT.search(joined):
+            scen.append(joined)
+        else:
+            rest.extend(group)
+        group.clear()
+
     for line in lines:
         if line.lstrip().startswith("#"):
+            if group:
+                flush()
             continue                      # заголовок «(Given-When-Then)» — не сценарий
         if _GWT.search(line):
-            n = _norm(line)
-            if n and n not in seen:
-                seen.add(n)
-                out.append(line.strip())
+            if group:
+                flush()
+            scen.append(line.strip())
+        elif group and _STEP_CONT.match(line):
+            group.append(line)
+        elif _STEP_OPEN.match(line):
+            if group:
+                flush()
+            group.append(line)
+        else:
+            if group:
+                flush()
+            rest.append(line)
+    if group:
+        flush()
+    return scen, rest
+
+
+def _gwt_lines(lines: list[str]) -> list[str]:
+    out, seen = [], set()
+    for s in _gwt_split(lines)[0]:
+        n = _norm(s)
+        if n and n not in seen:
+            seen.add(n)
+            out.append(s)
     return out
 
 
@@ -161,8 +206,7 @@ def parse_delta(delta_text: str) -> list[dict]:
         out = []
         for s in subs:
             scen = _gwt_lines(s["body"])
-            stmt = " ".join(l.strip() for l in s["body"]
-                            if l.strip() and not _GWT.search(l) and not l.lstrip().startswith("#"))
+            stmt = " ".join(l.strip() for l in _gwt_split(s["body"])[1] if l.strip())
             out.append({"title": s["title"], "statement": stmt or s["title"], "scenarios": scen})
         return out
 
@@ -179,6 +223,17 @@ def parse_delta(delta_text: str) -> list[dict]:
 
 # ── план операций ──────────────────────────────────────────────────────
 
+def _as_written(c: dict, g: "SG.Grammar") -> dict:
+    """Кандидат глазами разбора мастера: render → parse той же грамматикой.
+
+    Сравнивать дельту с мастером «как записано в дельте» нельзя: что считать утверждением, а
+    что сценарием, мастер решает своим стилем (gwt-inline/bullet/…), и повторный план по
+    собственной записи давал `~` вместо `=` — merge объявлял записанное неподтверждённым."""
+    got = g.parse("\n".join(g.render(g.next_id([]), c["title"], c["statement"],
+                                     c["scenarios"], [])))
+    return got[0] if len(got) == 1 else c
+
+
 def plan_ops(master_reqs: list[dict], candidates: list[dict],
              grammar: "SG.Grammar | None" = None) -> list[dict]:
     """Сопоставление по нормализованному названию: same | modify | add."""
@@ -190,9 +245,10 @@ def plan_ops(master_reqs: list[dict], candidates: list[dict],
         if existing is None:
             ops.append({"op": "add", "id": None, "cand": c})
             continue
-        same_stmt = _norm(existing["statement"]) == _norm(c["statement"])
+        w = _as_written(c, g)
+        same_stmt = _norm(existing["statement"]) == _norm(w["statement"])
         same_scen = ("\n".join(g.scenario_key(x) for x in existing["scenarios"])
-                     == "\n".join(g.scenario_key(x) for x in c["scenarios"]))
+                     == "\n".join(g.scenario_key(x) for x in w["scenarios"]))
         ops.append({"op": "same" if (same_stmt and same_scen) else "modify",
                     "id": existing["id"], "cand": c, "existing": existing})
     return ops
@@ -428,10 +484,16 @@ def master_lock(spec_path: Path):
 
 
 def write_master(spec_path: Path, text: str) -> None:
-    """Атомарно: tmp рядом и os.replace — оборванная запись не оставит мастер обрезанным."""
-    tmp = spec_path.with_name(f".{spec_path.name}.{os.getpid()}.tmp")
+    """Атомарно: tmp рядом и os.replace — оборванная запись не оставит мастер обрезанным.
+
+    Пишем в ЦЕЛЬ симлинка. Мастер из соседнего репо часто подключён ссылкой из репо кода
+    (`docs/specs/<сервис>/spec.md → ../spec-repo/…`), а os.replace по пути ссылки подменяет
+    саму ссылку обычным файлом: настоящий мастер не получал ничего, а в репо кода оседала
+    копия spec.md с записью (боевой прогон KIDPPRB-10815, v0.6)."""
+    target = Path(os.path.realpath(spec_path))
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, spec_path)
+    os.replace(tmp, target)
 
 
 def delta_candidates(delta_text: str) -> "tuple[list[dict], dict | None]":

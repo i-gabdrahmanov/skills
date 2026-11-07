@@ -175,6 +175,82 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(r["tags"], ["[from: report-export " + engine.date.today().isoformat() + "]"])
 
 
+class ColumnGwtAndSymlinkTest(unittest.TestCase):
+    """Боевой прогон KIDPPRB-10815 (v0.6): нумерованный мастер без провенанса, симлинк из репо
+    кода, сценарии в дельте столбиком."""
+
+    MASTER = """# Спецификация
+
+## 2. Требования к методам
+#### 2.1.7 Поиск документа
+Описание.
+"""
+    SDD = """# SDD: Поиск по всем статусам
+
+## 3. Функциональные требования (Given-When-Then)
+### Сценарий 1. Флаг не передан
+- **Given** клиент вызывает поиск без флага
+- **When** система фильтрует по статусам
+- **Then** возвращаются документы из статусов 2, 10, 12
+"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.real = self.tmp / "spec-repo" / "tps.md"
+        self.real.parent.mkdir()
+        self.real.write_text(self.MASTER, encoding="utf-8")
+        self.link = self.tmp / "code" / "docs" / "specs" / "tps" / "spec.md"
+        self.link.parent.mkdir(parents=True)
+        self.link.symlink_to(self.real)
+        self.sdd = self.tmp / "sdd.md"
+        self.sdd.write_text(self.SDD, encoding="utf-8")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def g(self, style):
+        return engine.SG.Grammar({"requirement": {"level": 4, "kind": "numbered"},
+                                  "requirements_section": ["требования к методам"],
+                                  "audit_section": [], "scenario": {"style": style},
+                                  "provenance": "none"})
+
+    def _merge(self, g, dry_run=False):
+        return engine.merge(self.sdd, self.link, TEMPLATE, "K-1", "tps", grammar=g,
+                            dry_run=dry_run)
+
+    def test_column_steps_are_one_scenario_not_statement(self):
+        [c] = engine.parse_delta(self.SDD)
+        self.assertEqual(len(c["scenarios"]), 1)
+        self.assertIn("**When** система фильтрует", c["scenarios"][0])
+        self.assertNotIn("Given", c["statement"])
+
+    def test_write_goes_through_symlink(self):
+        self._merge(self.g("gwt-inline"))
+        self.assertTrue(self.link.is_symlink(), "запись подменила симлинк обычным файлом")
+        self.assertIn("#### 2.1.8 Сценарий 1. Флаг не передан",
+                      self.real.read_text(encoding="utf-8"))
+
+    def test_replan_after_write_is_same_for_every_style(self):
+        for style in engine.SG.SCENARIO_STYLES:
+            with self.subTest(style=style):
+                self.real.write_text(self.MASTER, encoding="utf-8")
+                g = self.g(style)
+                self.assertEqual(self._merge(g)["kinds"], ["add"])
+                self.assertEqual(self._merge(g, dry_run=True)["kinds"], ["same"])
+
+    def test_gwt_in_statement_still_replans_same(self):
+        """Сравнение идёт глазами разбора мастера: утверждение, которое мастер прочтёт
+        сценарием (так раньше склеивался столбик), — не повод для `~` по своей записи."""
+        g = self.g("gwt-inline")
+        cand = {"title": "Флаг", "statement": "- **Given** a - **When** b - **Then** c",
+                "scenarios": []}
+        res = engine.apply_ops(self.MASTER, engine.plan_ops([], [cand], g), prefix="REQ",
+                               feature="K-1", today="2026-11-07", grammar=g)
+        ops = engine.plan_ops(engine.parse_master(res["text"], grammar=g), [cand], g)
+        self.assertEqual([o["op"] for o in ops], ["same"])
+
+
 class Battle046Test(unittest.TestCase):
     """Боевой прогон v0.4.6: SA-1 (гонка без замка), SA-2 (пустая дельта), SA-3 (дубли)."""
 
