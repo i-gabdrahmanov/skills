@@ -114,6 +114,19 @@ class McpTest(unittest.TestCase):
         for reply in out[2:]:
             self.assertTrue(reply["result"]["isError"], reply)
 
+    def test_map_edit_takes_absolute_and_project_relative_paths(self):
+        """Слабая модель пишет пути абсолютными или от корня проекта: отказ по форме пути
+        уводил её править мастер в обход forge (KIDPPRB-10815)."""
+        want = "db-service/db-service.md"
+        for form in (str(self.spec / want), f"../{self.spec.name}/{want}"):
+            with self.subTest(form=form):
+                out = rpc(self.root, INIT, call(2, "master_research"),
+                          call(3, "master_map_edit", {"set": [{"capability": "inbound-adapter",
+                                                               "path": form}]}))
+                self.assertFalse(out[2]["result"]["isError"], self.text(out[2]))
+                m = json.loads((self.root / "ground" / "spec-map.json").read_text("utf-8"))
+                self.assertEqual(m["capabilities"]["inbound-adapter"]["spec"], want)
+
     def test_read_returns_master_text(self):
         out = rpc(self.root, INIT, call(2, "master_research"),
                   call(3, "master_read", {"capability": "db-service"}))

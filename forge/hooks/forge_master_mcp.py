@@ -103,12 +103,16 @@ def _flag(args: dict, key: str, default: bool = False) -> bool:
 
 
 def _rel_path(v) -> str:
+    """Путь к файлу мастера — в той форме, в какой его дала модель.
+
+    Абсолютный, от корня проекта, от базы — приводит к базе spec_map.resolve_in_base, он же
+    держит границу «файл только внутри базы». Отказ здесь по форме пути слабая модель читала
+    как поломку инструмента и шла править мастер в обход forge."""
     if not isinstance(v, str) or not v.strip():
-        raise ToolError("path: ожидается путь относительно базы мастера")
-    p = Path(v.strip())
-    if p.is_absolute() or ".." in p.parts or v.strip().startswith("~"):
-        raise ToolError(f"path «{v}» должен быть относительным путём внутри базы мастера")
-    return p.as_posix()
+        raise ToolError("path: ожидается путь к файлу мастера")
+    if v.strip().startswith("-"):
+        raise ToolError(f"path «{v}» не может начинаться с «-»")
+    return v.strip()
 
 
 # ── инструменты ────────────────────────────────────────────────────────
@@ -238,7 +242,8 @@ TOOLS: Dict[str, dict] = {
             "исключить файл, сопоставить модуль кода сервису. Карта снова становится черновиком."),
         "schema": {"type": "object", "properties": {
             "set": {"type": "array", "items": {"type": "object", "properties": {
-                "capability": _S, "path": {**_S, "description": "относительно базы мастера"}},
+                "capability": _S, "path": {**_S, "description": (
+                    "файл мастера: от базы, от корня проекта или абсолютный — всё равно")}},
                 "required": ["capability", "path"], "additionalProperties": False}},
             "ignore": {"type": "array", "items": _S},
             "map_module": {"type": "array", "items": {"type": "object", "properties": {
