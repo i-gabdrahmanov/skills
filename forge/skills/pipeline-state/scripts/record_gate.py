@@ -89,16 +89,126 @@ def _expected_tokens(step_id: str) -> list:
     return best
 
 
+# Операторы оболочки, после которых exit-код команды перестаёт быть exit-кодом гейта:
+# `гейт || true`, `false; гейт`, `гейт | tee`, `гейт &`. Разрешена только цепочка `&&` — в ней
+# любой упавший шаг валит всю команду. Перевод строки — тот же `;`.
+_MASKING_OPS = frozenset(("||", ";", "|", "&", "|&", ";;", "\n"))
+_SHELL_PUNCT = frozenset(("&&", "||", ";", "|", "&", "|&", ";;", "(", ")", "<", ">", ">>",
+                          "<<", ">&", "<&", "&>", ">|", "\n"))
+_PY_OPTS_WITH_VALUE = frozenset(("-X", "-W", "-Q"))
+_WRAPPERS = {"env": 0, "timeout": 1, "nice": 0, "nohup": 0, "time": 0, "command": 0}
+
+
+def _cmd_segments(cmd: str) -> "tuple[list[list[str]], str | None]":
+    """(argv по сегментам `&&`, причина отказа). Отказ — маскирующий оператор или комментарий."""
+    import shlex
+    try:
+        lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        lex.commenters = ""
+        toks = list(lex)
+        cut = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+        cut.whitespace_split = True
+        cut.commenters = "#"
+        if len(list(cut)) != len(toks):
+            return [], "комментарий в команде гейта прячет её хвост"
+        if cmd.count("\n") > sum(t.count("\n") for t in toks):
+            return [], "перевод строки — это `;`: маскирует exit-код гейта (между шагами — только &&)"
+    except ValueError as e:
+        return [], f"команда не разбирается оболочкой ({e})"
+    segs: "list[list[str]]" = [[]]
+    skip_redirect_target = False
+    for t in toks:
+        if t in _MASKING_OPS:
+            return [], (f"оператор «{t.strip() or 'перевод строки'}» маскирует exit-код гейта "
+                        f"(между шагами — только &&)")
+        if t == "&&":
+            segs.append([])
+            continue
+        if t in _SHELL_PUNCT:
+            skip_redirect_target = t in ("<", ">", ">>", ">&", "<&", "&>", ">|")
+            continue
+        if skip_redirect_target:
+            skip_redirect_target = False
+            continue
+        segs[-1].append(t)
+    return [s for s in segs if s], None
+
+
+def _strip_wrappers(argv: "list[str]") -> "list[str]":
+    import re as _re
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if _re.match(r"^[A-Za-z_]\w*=", a):
+            i += 1
+            continue
+        name = Path(a).name
+        if name in _WRAPPERS:
+            i += 1
+            while i < len(argv) and argv[i].startswith("-"):
+                i += 1
+            i += _WRAPPERS[name]
+            continue
+        break
+    return argv[i:]
+
+
+def _base(prog: str) -> str:
+    name = Path(prog.replace("\\", "/")).name.lower()
+    for ext in (".bat", ".cmd", ".exe", ".sh"):
+        if name.endswith(ext):
+            name = name[: -len(ext)]
+    return name
+
+
+def _segment_runs(argv: "list[str]", token: str) -> bool:
+    """Запускает ли сегмент гейт `token` («скрипт.py [подкоманда]» или раннер gradlew/mvn)."""
+    argv = _strip_wrappers(argv)
+    if not argv:
+        return False
+    words = str(token).split()
+    head = words[0]
+    prog = _base(argv[0])
+    if not head.endswith(".py"):
+        return prog == head.lower() or (head == "mvn" and prog == "mvnw")
+    if Path(argv[0].replace("\\", "/")).name == head:
+        i = 0                                  # скрипт исполняется сам (shebang)
+    elif prog.startswith("python") or prog in ("py", "pypy3"):
+        i = 1
+        while i < len(argv) and argv[i].startswith("-"):
+            i += 2 if argv[i] in _PY_OPTS_WITH_VALUE else 1
+    else:
+        return False
+    if i >= len(argv) or Path(argv[i].replace("\\", "/")).name != head:
+        return False
+    rest = [a for a in argv[i + 1:] if not a.startswith("-")]
+    return all(w in rest[:len(words) - 1] for w in words[1:])
+
+
 def _check_cmd_substance(step_id: str, cmd: str, compile_cmd: str = "") -> "str | None":
-    """Причина отказа, если в команде нет гейта этого шага; иначе None.
+    """Причина отказа, если команда не запускает гейт этого шага; иначе None.
 
     Провенанс (кто записал evidence) цепочка проверяла, а субстанцию — нет: `--cmd "true"`
-    давал валидный `passed:true` и закрывал шаг. Это фиксировало «гейт прошёл» без гейта."""
+    давал валидный `passed:true` и закрывал шаг. Потом проверка стала подстрочной, и гейт
+    по-прежнему подделывался одной командой: `гейт || true`, `true # гейт`, `echo гейт` —
+    passed:true без прогона гейта. Поэтому гейт обязан стоять в позиции ИСПОЛНЯЕМОЙ команды
+    (раннер или `python <скрипт>`), а операторы, глушащие его exit-код, запрещены."""
     tokens = _expected_tokens(step_id)
     if not tokens:
         return None
-    haystack = f"{cmd} {compile_cmd}"
-    if any(str(t) in haystack for t in tokens):
+    segs: "list[list[str]]" = []
+    for part in (cmd, compile_cmd):
+        if not part:
+            continue
+        s, why = _cmd_segments(part)
+        if why:
+            return (f"команда гейта шага '{step_id}' не годится: {why}.\n"
+                    f"  Получено: {part!r}\n"
+                    f"  Запусти гейт как есть, без `|| true`, `;`, `|`, `&` и комментариев: его "
+                    f"exit-код и есть evidence.")
+        segs += s
+    if any(_segment_runs(argv, t) for argv in segs for t in tokens):
         return None
     return (f"команда гейта шага '{step_id}' не содержит сам гейт "
             f"(ожидается одно из: {', '.join(map(str, tokens))}).\n"

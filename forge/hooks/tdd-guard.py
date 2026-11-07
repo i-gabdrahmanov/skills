@@ -213,7 +213,7 @@ def main() -> int:
     # одной shell-командой (боевой прогон v0.4.6, L-17b). Каждую цель записи судим как Write;
     # содержимого у неё нет — проверки по аннотациям к ней не применяются.
     if tool_name in ("Bash", "run_shell_command"):
-        writes = [(t, "") for t in ST.write_targets(str(tool_input.get("command") or ""))
+        writes = [(t, "") for t in ST.write_targets(str(tool_input.get("command") or ""), cwd)
                   if "src/" in t.replace("\\", "/")]
         if not writes:
             return 0

@@ -86,8 +86,9 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py brd <sl
 ```bash
 python3 <project>/.gigacode/skills/pipeline-state/scripts/record_approval.py \
     --project <project> --key brd-approved-<slug> --approved-by user \
-    --reason "BRD утверждён пользователем"
+    --reason "BRD утверждён пользователем" --evidence "<его ответ дословно>"
 ```
+`--evidence` — ответ пользователя как есть («да, утверждаю»): без цитаты маркер не пишется.
 Обнови `00-brd` (`gates: {"brd-judge": "PASS"}`). Если пользователю нужно вынести `brd.md`
 на согласование аналитикам (ветка/коммит/пуш) — это он делает сам, промптом или руками;
 пайплайн доков не коммитит.

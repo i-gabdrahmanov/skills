@@ -572,7 +572,7 @@ def check_module_deps(root: Path, base: str, mode: str, arch_ground: "dict | Non
             violations.append(_mdep_violation(
                 edge, f"новая межмодульная зависимость {frm} → {to} в {edge['file']}: {edge['line']} — "
                       f"не подключай модуль молча. Используй существующий API-модуль/контракт; если это "
-                      f"осознанное архрешение — override (§0.6.1) или ground/architecture-policy.json allowed_new."))
+                      f"осознанное архрешение — override (§0.6.1) или ребро в ground/architecture-policy.json allowed_new — его вносит архитектор, не модель."))
             continue
         # mode == "graph"
         if _creates_cycle(base_edges, frm, to):
@@ -584,7 +584,7 @@ def check_module_deps(root: Path, base: str, mode: str, arch_ground: "dict | Non
                 edge, f"НОВАЯ group-связка {_group(frm)} → {_group(to)} ({frm} → {to} в {edge['file']}): "
                       f"проект так модули не соединяет (нет в architecture-ground). Не вводи новое арх-связывание "
                       f"молча — используй существующий API-модуль/контракт, либо подтверди: override (§0.6.1) "
-                      f"или ground/architecture-policy.json allowed_new."))
+                      f"или ребро в ground/architecture-policy.json allowed_new (вносит архитектор, не модель)."))
         # иначе — связка уже принята в проекте → пропуск
     return violations
 

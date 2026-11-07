@@ -113,6 +113,9 @@ def _read_transcript_tail(path: str, limit: int = 20000) -> str:
         return ""
 
 
+_UNIT_STATUSES = frozenset(("unit", "unit-done", "progress"))
+
+
 def _status_from(obj: dict) -> str:
     for key in ("status", "result", "ok", "passed"):
         v = obj.get(key)
@@ -178,6 +181,10 @@ def main() -> int:
         step_id = obj.get("step_id")
         if step_id:
             status = _status_from(obj)
+            # Единица работы шага (spec-graph: черновик файла, связи заметки, карточка): субагент
+            # отчитывается о своей части, а шаг закрывает оркестратор по гейту. Origin пишем —
+            # шаг прошёл через субагентов, — но update.py не зовём: закрывать шаг нечем.
+            unit = str(obj.get("status") or "").strip().lower() in _UNIT_STATUSES
             run = _owner_run(root, str(step_id))
             if run is None:
                 # Шага нет ни в одном читаемом манифесте: писать некуда. Раньше запись уходила
@@ -192,6 +199,8 @@ def main() -> int:
             # теперь требует наличия _origins/<step_id>.json (а не доверяет --closed-by).
             # Это единственное место, где маркер рождается — на реальном SubagentStop.
             _write_origin_marker(root, skill, feature, step_id, data)
+            if unit:
+                return 0
             # SubagentStop вызывается отдельным процессом на каждый шаг — буферизация
             # между вызовами невозможна (была мёртвая абстракция FlushGate). Пишем напрямую.
             _direct_update(root, skill, feature, step_id, status, obj)

@@ -76,7 +76,10 @@ def _run_cli(root: Path, argv: List[str]) -> dict:
     sys.stdin = io.StringIO("")
     try:
         with redirect_stdout(out), redirect_stderr(err):
-            rc = spec_cli.main(["--project-root", str(root)] + argv)
+            try:
+                rc = spec_cli.main(["--project-root", str(root)] + argv)
+            except SystemExit as e:     # argparse и sys.exit: BaseException уронил бы весь сервер
+                rc = e.code if isinstance(e.code, int) else 2
     finally:
         sys.stdin = saved_stdin
     return {"exit": rc, "stdout": out.getvalue(), "stderr": err.getvalue()}

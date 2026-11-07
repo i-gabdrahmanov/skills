@@ -152,6 +152,13 @@ if profile_has skills-all; then
     x="$(basename "$d")"
     case "$x" in __pycache__|.*) continue ;; esac
     if profile_values exclude-skill | grep -Fxq "$x"; then continue; fi
+    # Только то, что в репо: неотслеживаемый каталог рабочего дерева (прототип, черновик) в
+    # поставку не едет — иначе `skills/spec-graph` («ПРОТОТИП») уезжал в каждый бэк-репо.
+    if git -C "$SRC" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+       && ! git -C "$SRC" ls-files --error-unmatch "skills/$x" >/dev/null 2>&1; then
+      echo "  (skills/$x не в git — пропущен; поставка собирается из отслеживаемого)" >&2
+      continue
+    fi
     copy_tree "$SRC/skills/$x" "$STAGE/skills/$x"
     DEPLOYED_SKILLS="$DEPLOYED_SKILLS $x"
   done

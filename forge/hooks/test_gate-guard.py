@@ -975,10 +975,12 @@ class TConsentIsExternal(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("WARN", r.stderr)
 
-    def test_plan_approvals_not_gated(self):
-        for key in ("fix-plan-STOR-1", "jira-plan-f1", "sdd-approved-f1", "human-approval"):
+    def test_plan_approvals_need_evidence(self):
+        """Аудит 2026-11-07: согласия плана/документа выписывались без слов пользователя."""
+        for key in ("fix-plan-STOR-1", "jira-plan-f1", "sdd-approved-f1", "brd-approved-f1"):
             with self.subTest(key=key):
-                self.assertEqual(self._run(self.RA.format(key=key)).returncode, 0)
+                self.assertEqual(self._run(self.RA.format(key=key)).returncode, 2)
+        self.assertEqual(self._run(self.RA.format(key="human-approval")).returncode, 0)
 
     def test_banners_do_not_ship_a_ready_bypass(self):
         """Баннер R4-гейта не должен быть копипастом: без --evidence команда всё равно не поедет."""
@@ -1027,6 +1029,49 @@ class TConsentIsExternal(unittest.TestCase):
             fresh = "да, сбрасывай рабочее дерево"
             self.assertEqual(self._quote(d, [old, fresh], fresh).returncode, 0,
                              "свежий ответ «да» отбит")
+
+    def test_yes_to_another_question_is_not_consent(self):
+        """Аудит 2026-11-07: «да, записывай в мастер» на вопрос о merge выписывало git-discard,
+        gate-override, rollback и policy-downgrade. Вопрос или ответ обязаны назвать действие."""
+        ask = self._qwen("assistant", [{"text": "План слияния: +4 сценария. Записать в мастер?"}])
+        with tempfile.TemporaryDirectory() as d:
+            for key in ("git-discard", "gate-override-coverage-judge", "rollback-f1-02-sdd",
+                        "policy-downgrade-quality.tdd"):
+                with self.subTest(key=key):
+                    p = Path(d) / "transcript.jsonl"
+                    cmd = self.RA.format(key=key) + ' --evidence "да, записывай в мастер"'
+                    p.write_text("\n".join([self._qwen("user", [{"text": "/forge продолжай"}]), ask,
+                                            self._qwen("user", [{"text": "да, записывай в мастер"}])])
+                                 + "\n", encoding="utf-8")
+                    r = self._run(cmd, str(p))
+                    self.assertEqual(r.returncode, 2, f"{key}: {r.stderr}")
+                    self.assertIn("не на вопрос об этом действии", r.stderr)
+
+    def test_question_naming_the_action_makes_plain_yes_consent(self):
+        ask = self._qwen("assistant", [{"text": "Гейт coverage-judge не проходит. Снять гейт?"}])
+        with tempfile.TemporaryDirectory() as d:
+            r = self._quote(d, ["/forge продолжай"], "да, согласен, снимай",
+                            key="gate-override-coverage-judge",
+                            extra=[ask, self._qwen("user", [{"text": "да, согласен, снимай"}])])
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_one_reply_one_consent_class(self):
+        """Одно «да» — одно действие: тот же ответ не выписывает второй класс согласия, но
+        `--judge a,b` (два маркера одного класса) по одному ответу проходит."""
+        ask = self._qwen("assistant", [{"text": "Снять гейты coverage-judge и tautology-judge и "
+                                                "сбросить рабочее дерево git?"}])
+        reply = "да, снимай оба и сбрасывай"
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "transcript.jsonl"
+            p.write_text("\n".join([ask, self._qwen("user", [{"text": reply}])]) + "\n",
+                         encoding="utf-8")
+            run = lambda key: self._run(self.RA.format(key=key) + f' --evidence "{reply}"', str(p))
+            self.assertEqual(run("gate-override-coverage-judge").returncode, 0)
+            self.assertEqual(run("gate-override-coverage-judge").returncode, 0, "повтор того же ключа")
+            self.assertEqual(run("gate-override-tautology-judge").returncode, 0, "тот же класс")
+            r = run("git-discard")
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("уже засчитан", r.stderr)
 
     def test_reply_opening_with_refusal_is_not_consent(self):
         """Кусок «Да, …» из реплики, начатой отказом, — подмена смысла, а не цитата."""
@@ -1108,10 +1153,11 @@ class TConsentIsExternal(unittest.TestCase):
                 self.assertIn("По одному вызову", r.stderr)
 
     def test_plan_approvals_batch_is_free(self):
+        """Батч — для согласий без цитаты; sdd-approved с 2026-11-07 требует её (см. выше)."""
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "p.yaml").write_text(
                 "approvals:\n  - key: phase-04\n    reason: r\n    approver: lead\n"
-                "  - key: sdd-approved-f1\n    reason: r\n    approver: lead\n",
+                "  - key: human-approval\n    reason: r\n    approver: lead\n",
                 encoding="utf-8")
             payload = {"hook_event_name": "PreToolUse", "cwd": d,
                        "tool_name": "run_shell_command",

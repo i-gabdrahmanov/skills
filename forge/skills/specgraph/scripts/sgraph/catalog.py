@@ -204,9 +204,12 @@ def build(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     out.sort(key=lambda n: (order.get(n["kind"], 99), n.get("service") or "", n["name"]))
     names: Dict[str, List[Dict[str, Any]]] = {}
     for n in out:
-        names.setdefault(n["name"], []).append(n)
-    collisions = [{"name": k, "kinds": [n["kind"] for n in v],
-                   "suggest": [f"{k} ({n.get('service') or ont.kinds[n['kind']]['title_ru'].lower()})" for n in v]}
+        # без учёта регистра: «Задача А» и «задача а» — один файл на macOS/Windows и одна
+        # ссылка [[…]] в Obsidian (его ссылки регистронезависимы)
+        names.setdefault(n["name"].casefold(), []).append(n)
+    collisions = [{"name": v[0]["name"], "kinds": [n["kind"] for n in v],
+                   "suggest": [f"{n['name']} ({n.get('service') or ont.kinds[n['kind']]['title_ru'].lower()})"
+                               for n in v]}
                   for k, v in names.items() if len(v) > 1]
     review = []
     generic = PF.generic_words()

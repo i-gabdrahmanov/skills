@@ -87,10 +87,10 @@ class _Run:
                          if kind else "нет ключа kind")
                 continue
             name = p.stem
-            if name in seen:
-                self.add("E-name", rel, f"дубль имени «{name}»: уже есть {seen[name]}")
+            if name.casefold() in seen:     # ссылки Obsidian регистронезависимы
+                self.add("E-name", rel, f"дубль имени «{name}»: уже есть {seen[name.casefold()]}")
                 continue
-            seen[name] = rel
+            seen[name.casefold()] = rel
             owner = _targets(data.get(self._structural_edge(kind) or "", []))
             nodes[name] = {"name": name, "kind": kind, "role": data.get("role"), "subkind": data.get("subkind"),
                            "key": data.get("key"), "service": owner[0] if owner else None, "path": rel,

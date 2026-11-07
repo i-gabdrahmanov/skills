@@ -114,16 +114,23 @@ def _cfg(root: Path) -> Optional[Dict[str, Any]]:
     return cfg
 
 
+_QUEUE_STEP = {"draft-file": "graph-map", "assign-section": "graph-map", "link-note": "graph-link",
+               "card": "graph-link"}
+
+
 def _unit_next(u: Dict[str, Any]) -> str:
+    step = _QUEUE_STEP.get(str(u.get("queue") or ""), "")
+    tail = (f"; последней строкой субагент возвращает {{\"step_id\": \"{step}\", \"status\": \"unit\"}}"
+            if step else "")
     return (f"запусти субагента: бриф {u['brief']}, вход {u['input']}; результат он сдаёт инструментом {u['tool']} "
-            f"с item_id «{u['item_id']}»")
+            f"с item_id «{u['item_id']}»{tail}")
 
 
 def _next(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     if args.get("batch"):
         res = Q.lease_batch(root, _queue_arg(args), _cfg(root))
         for u in res.get("units", []):
-            u["next"] = _unit_next(u)
+            u["next"] = _unit_next(dict(u, queue=res.get("queue")))
         res["next"] = ("очередь пуста — переходи к гейту шага" if res["status"] == Q.EMPTY else
                        f"запусти {len(res['units'])} субагентов ОДНИМ ходом (каждому — свою единицу), дождись, пока "
                        f"все сдадут результат, затем снова graph_next batch")

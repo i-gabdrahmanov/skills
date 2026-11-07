@@ -98,9 +98,18 @@ def _new_text(old: Optional[str], tool_input: Dict[str, Any]) -> Optional[str]:
     for e in edits:
         a, b = e.get("old_string") or "", e.get("new_string") or ""
         if not a or a not in text:
-            return None                      # правка не применится — рантайм откажет сам; не наше дело
+            # Не «рантайм откажет сам»: edit qwen 0.21.14 при недословном old_string ищет нечётко
+            # (типографские кавычки и тире ≡ ASCII, хвостовые пробелы строк не в счёт) и ПРИМЕНЯЕТ
+            # правку. Что она изменит, отсюда не проверить — значит, не пропускаем (аудит 2026-11-07).
+            raise _Undecidable("old_string не найден в заметке дословно — рантайм применил бы его "
+                               "нечётким сопоставлением, и правку frontmatter/маркеров не проверить; "
+                               "дай точный текст из файла")
         text = text.replace(a, b) if e.get("replace_all") else text.replace(a, b, 1)
     return text
+
+
+class _Undecidable(Exception):
+    """Правку нельзя смоделировать точно — проверка невозможна."""
 
 
 def _markers(F, body: str) -> List[tuple]:
@@ -109,7 +118,10 @@ def _markers(F, body: str) -> List[tuple]:
 
 def _judge_note(F, path: Path, tool_input: Dict[str, Any], rel: str) -> Optional[str]:
     old = path.read_bytes().decode("utf-8") if path.is_file() else None
-    new = _new_text(old, tool_input)
+    try:
+        new = _new_text(old, tool_input)
+    except _Undecidable as e:
+        return f"правка заметки {rel}: {e}. {HINT}"
     if old is None:
         return f"новая заметка графа ({rel}) моделью не создаётся — узлы появляются из каталога через graph_split. {HINT}"
     if new is None:
@@ -133,27 +145,68 @@ def _judge_note(F, path: Path, tool_input: Dict[str, Any], rel: str) -> Optional
     return None
 
 
+def _is_note(p: Path) -> bool:
+    return p.suffix.lower() == ".md"      # `A.MD` на macOS/Windows — тот же файл, что `a.md`
+
+
+def _engine_file(p: Path, vault: Path) -> bool:
+    """Файлы vault, которые пишет движок (не заметки): отчёты и виды `_graph/**`, Bases (`.base`),
+    раскраска графа `.obsidian/graph.json`."""
+    rel = p.relative_to(vault).as_posix().lower()
+    return rel.startswith("_graph/") or rel.endswith(".base") or rel == ".obsidian/graph.json"
+
+
+def _covers(root_dir: Path, target: Path) -> bool:
+    """Удаление/перенос каталога root_dir уносит target (vault, состояние)."""
+    return target == root_dir or root_dir in target.parents
+
+
+def _judge_removal(root: Path, cwd: str, cmd: str, vault: Path, state: Path) -> Optional[str]:
+    """Удаление/перенос заметок, файлов движка и состояния: rm, mv-источник, rmtree, find -delete,
+    git checkout/restore по ним. До 2026-11-07 хук смотрел только на запись — `rm -rf .spec-graph`,
+    `rm` заметки и `find docs/graph -delete` проходили всю цепочку."""
+    cands = list(ST.unlink_targets(cmd))
+    for argv in ST._segments(cmd):
+        if Path(argv[0]).name == "find" and ("-delete" in argv or any(
+                a in ("-exec", "-execdir", "-ok", "-okdir") for a in argv)):
+            roots = [a for a in argv[1:] if not a.startswith(("-", "(", "!"))][:1] or ["."]
+            cands += roots
+    for t in cands:
+        p = _abs(cwd, root, t)
+        if _covers(p, state) or _inside(p, state):
+            return f"удаление/перенос {t}: состояние движка spec-graph (очереди, каталог, согласия) — только инструменты graph_*"
+        if _covers(p, vault):
+            return f"удаление/перенос {t} уносит vault графа целиком. {HINT}"
+        if _inside(p, vault) and (_is_note(p) or _engine_file(p, vault) or p.is_dir()):
+            return f"удаление/перенос {t} в vault графа: заметки и отчёты убирает движок, не модель. {HINT}"
+    return None
+
+
 def _judge(root: Path, cwd: str, tool_name: str, tool_input: Dict[str, Any], cfg: Dict[str, Any]) -> Optional[str]:
     vault = _abs("", root, str(root / cfg.get("vault", "docs/graph")))
     state = _abs("", root, str(root / ".spec-graph"))
     if tool_name in _BASH_TOOLS:
-        for t in ST.write_targets(str(tool_input.get("command") or "")):
+        cmd = str(tool_input.get("command") or "")
+        for t in ST.write_targets(cmd, cwd):
             p = _abs(cwd, root, t)
             if _inside(p, state):
                 return f"shell-запись в {t}: состояние движка spec-graph пишут только инструменты graph_*"
-            if _inside(p, vault) and p.suffix == ".md":
-                return f"shell-запись в заметку графа {t}. {HINT}"
-        return None
+            if _inside(p, vault) and (_is_note(p) or _engine_file(p, vault)):
+                return f"shell-запись в заметку/отчёт графа {t}. {HINT}"
+            if _covers(p, vault) or (_inside(p, vault) and p.is_dir()):
+                return f"shell-запись в каталог {t} (git checkout/restore, распаковка) перезаписывает заметки графа. {HINT}"
+        return _judge_removal(root, cwd, cmd, vault, state)
     raw = _tool_path(tool_input)
     if not raw:
         return None
     p = _abs(cwd, root, raw)
     if _inside(p, state):
         return f"запись в {raw}: состояние движка spec-graph пишут только инструменты graph_*"
-    if _inside(p, vault) and p.suffix == ".md":
+    if _inside(p, vault) and _engine_file(p, vault):
         rel = p.relative_to(vault).as_posix()
-        if rel.startswith("_graph/"):
-            return f"отчёты {rel} пишет движок spec-graph — правка руками перезапишется и собьёт согласия"
+        return f"файл {rel} пишет движок spec-graph — правка руками перезапишется и собьёт согласия"
+    if _inside(p, vault) and _is_note(p):
+        rel = p.relative_to(vault).as_posix()
         return _judge_note(_fm(), p, tool_input, rel)
     return None
 

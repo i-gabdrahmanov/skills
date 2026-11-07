@@ -493,6 +493,11 @@ def write_master(spec_path: Path, text: str) -> None:
     target = Path(os.path.realpath(spec_path))
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     tmp.write_text(text, encoding="utf-8")
+    try:
+        import shutil
+        shutil.copymode(target, tmp)      # права мастера (группа на запись и т.п.) — как были
+    except OSError:
+        pass
     os.replace(tmp, target)
 
 

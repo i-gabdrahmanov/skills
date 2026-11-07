@@ -763,11 +763,14 @@ class TestConsentEvidenceRequired(unittest.TestCase):
                          self.QUOTE)
 
 
-    def test_plan_approvals_unaffected(self):
-        """Approval плана/документа двигает прогон вперёд, а не снимает защиту — цитата не нужна."""
-        for key in ("fix-plan-STOR-1", "jira-plan-f1", "sdd-approved-f1", "human-approval"):
+    def test_plan_approvals_need_evidence(self):
+        """Аудит 2026-11-07: согласия плана/документа выписывались без слов пользователя."""
+        for key in ("fix-plan-STOR-1", "jira-plan-f1", "sdd-approved-f1", "brd-approved-f1"):
             with self.subTest(key=key):
-                self.assertEqual(self._run("--key", key).returncode, 0)
+                self.assertNotEqual(self._run("--key", key).returncode, 0)
+                self.assertEqual(self._run("--key", key, "--evidence",
+                                           "да, утверждаю план целиком").returncode, 0)
+        self.assertEqual(self._run("--key", "human-approval").returncode, 0)
 
 
 if __name__ == "__main__":

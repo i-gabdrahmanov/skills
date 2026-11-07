@@ -104,8 +104,9 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.p
 - **exit 2** — нарушение: **цикл** между модулями ИЛИ **новая group-связка** `groupA → groupB`,
   которой проект ещё не делает (напр. `service → service`, как подключение УПЗ к task-service).
   **Не вводи новое арх-связывание ради того, чтобы код собрался**: используй существующий
-  API-модуль/контракт. Если это осознанное архрешение — внеси ребро в `ground/architecture-policy.json`
-  (`module_deps.allowed_new`) или подтверди override (§0.6.1).
+  API-модуль/контракт. Если это осознанное архрешение — покажи пользователю ребро и попроси
+  архитектора внести его в `ground/architecture-policy.json` (`module_deps.allowed_new`) самому, либо
+  подтверди override (§0.6.1). Сам файл не правь: это решение человека, `state-write-guard` его охраняет.
 - **ADR-энфорс (`adr.enforce_couplings`):** если включён, ребро в `allowed_new` проходит **только**
   со ссылкой на **accepted** ADR: `{"edge": ["service-a","service-b"], "adr": "ADR-0007"}`. Bare-форма
   `["A","B"]` без ADR → exit 2 («связка в allowed_new без accepted ADR»). Так grounding-гейт (граф из

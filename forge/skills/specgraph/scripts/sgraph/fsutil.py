@@ -91,6 +91,16 @@ def project_lock(root: Union[str, Path], timeout: Optional[float] = None) -> Ite
         f.close()
 
 
+def _mode_for(p: Path) -> int:
+    import stat
+    try:
+        return stat.S_IMODE(os.stat(p).st_mode)
+    except OSError:
+        mask = os.umask(0)
+        os.umask(mask)
+        return 0o666 & ~mask
+
+
 def write_bytes(path: Union[str, Path], data: bytes) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -98,6 +108,10 @@ def write_bytes(path: Union[str, Path], data: bytes) -> None:
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
+        # mkstemp создаёт файл с правами 0600, и os.replace переносил их на заметку: после записи
+        # движком vault на общей машине/шаре переставал читаться другими. Режим — как у прежнего
+        # файла, у нового — обычный по umask.
+        os.chmod(tmp, _mode_for(p))
         os.replace(tmp, p)
     except BaseException:
         try:

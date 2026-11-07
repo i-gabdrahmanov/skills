@@ -30,6 +30,7 @@ _IMPACT = ("forward", "inverse", "both", "none")
 _EVIDENCE = ("required", "optional")
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 _NAME_MAX = 150
+_WIN_RESERVED = {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)}
 
 
 class OntologyError(Exception):
@@ -265,6 +266,10 @@ class Ontology:
             errors.append("запрещённые символы в имени: " + " ".join(repr(c) for c in bad))
         if "`" in name:
             errors.append("бэктики в имени")
+        if name.rstrip().endswith("."):
+            errors.append("имя оканчивается точкой (Windows отрезает её в имени файла)")
+        if name.split(".")[0].strip().upper() in _WIN_RESERVED:
+            errors.append("имя зарезервировано Windows (CON, NUL, COM1…) — файл с ним не создать")
         grammar = self.kinds[kind]["name"]
         if grammar == "endpoint":
             parts = name.split(" ")
