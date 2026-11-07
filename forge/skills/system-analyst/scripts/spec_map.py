@@ -166,6 +166,14 @@ def _md_files(d: Path, depth: int) -> List[Path]:
 
 
 def _rel(p: Path, base: Path) -> str:
+    """Путь от базы. Файл, который симлинком ведёт за базу, — отказ с рецептом, а не сырой
+    ValueError: так подключали мастер соседнего репо, research падал трейсбеком, и слабая
+    модель пересоздавала симлинки до кольца (KIDPPRB-10815)."""
+    if not inside(base, p):
+        raise MapError(f"«{p}» ведёт за базу мастера {base} (→ {Path(p).resolve()}). Мастер "
+                       f"из соседнего репо подключается не симлинком, а настройкой проекта: "
+                       f"docs.master.mode=separate-repo и docs.master.repo_path=<корень репо "
+                       f"спеки> — это решает пользователь; симлинки не трогай")
     return p.resolve().relative_to(base.resolve()).as_posix()
 
 
@@ -368,17 +376,57 @@ def _need(m: Optional[dict]) -> dict:
     return m
 
 
+def resolve_in_base(root: Path, base: Path, given: str) -> Path:
+    """Путь в любой естественной форме → существующий файл ВНУТРИ базы мастера.
+
+    Принимается: относительно базы, относительно корня проекта, абсолютный, с повтором хвоста
+    базы (`docs/specs/…` при базе `<root>/docs`). Модель передавала путь от корня проекта при
+    описании «относительно базы» и получала `docs/docs/…` (KIDPPRB-10815): описание инструмента
+    слабая модель не читает, значит форму пути выясняет скрипт. Граница прежняя — файл обязан
+    лежать в базе; угадывания по имени нет, похожие файлы только подсказываются."""
+    raw = Path(str(given).strip()).expanduser()
+    if raw.is_absolute():
+        cands = [raw]
+    else:
+        cands = [base / raw, Path(root) / raw]
+        tail = base.resolve().parts
+        for k in range(1, len(raw.parts)):
+            if tuple(raw.parts[:k]) == tuple(tail[-k:]):
+                cands.append(base / Path(*raw.parts[k:]))
+    hits: Dict[str, Path] = {}
+    out: List[Path] = []
+    for c in cands:
+        if not c.is_file():
+            continue
+        if inside(base, c):
+            hits.setdefault(str(c.resolve()), c)
+        else:
+            out.append(c)
+    if len(hits) == 1:
+        return next(iter(hits.values()))
+    if len(hits) > 1:
+        raise MapError(f"путь «{given}» неоднозначен — под базой {base} это разные файлы: "
+                       + ", ".join(_rel(p, base) for p in hits.values())
+                       + " — укажи путь относительно базы")
+    if out:
+        raise MapError(f"«{given}» выходит за базу мастера {base} (→ {out[0].resolve()}); "
+                       f"карта берёт файлы только из базы")
+    like = [_rel(p, base) for p in sorted(base.rglob(raw.name))
+            if p.is_file() and inside(base, p)][:5] if raw.name else []
+    raise MapError(f"файла «{given}» нет под базой мастера {base}"
+                   + (f" — похожие (путь относительно базы): {', '.join(like)}" if like else ""))
+
+
 def set_spec(root: Path, cap: str, rel: str) -> dict:
-    """Выбрать файл мастера сервиса вручную. Путь — относительно базы и только внутри неё."""
+    """Выбрать файл мастера сервиса вручную. Путь — в любой форме (resolve_in_base), файл —
+    только внутри базы."""
     m = _need(load(root))
     base = master_base(root)
     if not _CAP_SAFE.match(cap):
         raise MapError(f"имя сервиса «{cap}» недопустимо")
-    p = (base / rel)
-    if Path(rel).is_absolute() or ".." in Path(rel).parts or not inside(base, p):
-        raise MapError(f"путь «{rel}» выходит за базу мастера {base}")
-    if not p.is_file() or p.suffix.lower() != ".md":
-        raise MapError(f"файла нет или это не .md: {p}")
+    p = resolve_in_base(root, base, rel)
+    if p.suffix.lower() != ".md":
+        raise MapError(f"это не .md: {p}")
     entry = describe_file(p, base)
     old = (m.get("capabilities") or {}).get(cap) or {}
     entry.update(why="выбран вручную", manual=True,
@@ -392,6 +440,9 @@ def set_spec(root: Path, cap: str, rel: str) -> dict:
 
 def add_ignore(root: Path, rel: str) -> dict:
     m = _need(load(root))
+    base = master_base(root)
+    # Игнор сравнивается строкой с путём от базы: путь в другой форме молча не срабатывал.
+    rel = _rel(resolve_in_base(root, base, rel), base)
     m.setdefault("ignore", [])
     if not any(i.get("path") == rel for i in m["ignore"]):
         m["ignore"].append({"path": rel, "why": "исключён вручную", "manual": True})

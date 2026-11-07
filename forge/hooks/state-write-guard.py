@@ -161,6 +161,19 @@ _CP_PATTERNS = [
     # Защищаем ВСЕГДА (не только при активном ране) — это кодовая константа, не derived state.
     # Легитимная запись — Edit в PR с явным обоснованием, не в проде.
     r"(?<![\w-])(?:hooks/|\.gigacode/hooks/)risk-policy\.json\b",
+    # Файлы, которым гейты верят как решению человека или эталону (аудит 2026-11-07):
+    #  • architecture-policy.json — allowed_new снимает гейт межмодульных зависимостей; это решение
+    #    архитектора, а отказ гейта советовал модели дописать его самой;
+    #  • test-baseline.json — эталон «зелёного ДО кода» судьи регрессий: красный тест, вписанный в
+    #    эталон, перестаёт быть регрессией (пишет только module_tests.py snapshot);
+    #  • spec-map.json — карта мастера и её `status: confirmed` («человек подтвердил»): подделка
+    #    одним Write отправляла merge в любой файл базы (пишет только spec_cli research);
+    #  • forge-consent-* / forge-subagent-* в temp ОС — журнал «реплика → согласие» gate-guard и
+    #    маркер «идёт субагент»: правка снимала привязку согласия и actor-гейт.
+    r"(?<![\w-])ground/architecture-policy\.json\b",
+    r"(?<![\w-])ground/spec-map\.json\b",
+    r"(?<![\w-])ground/statements/[^/]+/[^/]+/test-baseline\.json\b",
+    r"(?<![\w-])forge-(?:consent|subagent)-[0-9a-f]{16}\.json\b",
 ]
 
 # ── `.daiver/` — состояние движка forge-ui (фронт-репо; задача 3.4) ───────────────────────────
@@ -294,6 +307,16 @@ def _unlink_hint(target: str, real: str = "") -> str:
 
 
 def _harness_hint(target: str) -> str:
+    if "/skills/specgraph/" in target.replace("\\", "/"):
+        # движок графа: подсказка про sdd.md/skill_paths feature-pipeline тут уводила в сторону,
+        # модель трижды повторяла ту же правку и предлагала человеку снять хук
+        return (
+            f"[state-write-guard] DENY: '{target}' — код движка spec-graph (общий для всех проектов "
+            f"поставки), во время прогона его не правят ни модель, ни по просьбе пользователя.\n"
+            f"  Нашёл дефект движка — остановись и отдай человеку: файл, функцию, причину и diff. "
+            f"Правка вносится в источнике forge и доезжает установкой (update.sh), затем "
+            f"переподключение MCP spec-graph (/mcp). Снимать хук не предлагай."
+        )
     return (
         f"[state-write-guard] DENY: запись в каталог ХАРНЕСА '{target}' запрещена во время "
         f"прогона. Это код форжа ({'/'.join(_HARNESS_HINT_DIRS)}), а в extension-раскладке — "
@@ -464,6 +487,60 @@ def _docs_hint(target: str) -> str:
     )
 
 
+_PY_DELETE_RE = re.compile(r"\b(?:rmtree|os\.(?:remove|unlink|rmdir|removedirs|rename|replace)|shutil\.move"
+                           r"|\.unlink|\.rmdir|\.rename|rmSync|unlinkSync|renameSync)\s*\(")
+
+
+def _docs_removals(cmd: str, cwd: str) -> "list[str]":
+    """Цели, которыми команда УНОСИТ доки фичи: rm, mv наружу (перенос внутри feature-pipeline —
+    штатная работа forgefix), find … -delete по их каталогу, rmtree/remove из inline-скрипта.
+    Раньше смотрели только rm — `mv … /tmp`, `find … -delete` и `shutil.rmtree` проходили."""
+    out = [t for t in (_collapse(x) for x in _rm_targets(cmd)) if _DOCS_RE.search(t)]
+    for argv in _segments(cmd):
+        name = posixpath.basename(argv[0])
+        files = [a for a in argv[1:] if not a.startswith("-")]
+        if name == "mv" and len(files) >= 2 and not _DOCS_RE.search(_collapse(files[-1])):
+            out += [f for f in (_collapse(x) for x in files[:-1]) if _DOCS_RE.search(f)]
+        if name == "find" and _find_is_deleting(argv, cmd):
+            roots, _ = _find_roots_and_filters(argv)
+            out += [r for r in (_collapse(x) for x in roots) if _DOCS_RE.search(r)]
+    if _PY_DELETE_RE.search(cmd):
+        lits = re.findall(r"'([^']+)'", cmd) + re.findall(r'"([^"]+)"', cmd)
+        out += [t for t in (_collapse(x) for x in lits) if _DOCS_RE.search(t) and len(t) < 512]
+    return out
+
+
+def _master_files(cwd: str) -> "set[str]":
+    """Файлы требований-мастера из карты (`ground/spec-map.json`): realpath каждого.
+
+    Мастер пишет только merge (`/forge-merge`, MCP master_merge) — под замком и с пост-проверкой.
+    Боевой прогон KIDPPRB-10815: после not-confirmed модель правила мастер руками по симлинку,
+    удаляла записанное, пересоздавала симлинк до кольца и коммитила копию — ни один хук не мешал."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import risk_ladder as _R
+        root = Path(_R.project_root(cwd or "."))
+        m = json.loads((root / "ground" / "spec-map.json").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — карты нет: мастер не определён, охранять нечего
+        return set()
+    base = m.get("base") if isinstance(m, dict) else None
+    caps = m.get("capabilities") if isinstance(m, dict) else None
+    if not isinstance(base, str) or not isinstance(caps, dict):
+        return set()
+    out = set()
+    for e in caps.values():
+        if isinstance(e, dict) and isinstance(e.get("spec"), str):
+            out.add(os.path.realpath(os.path.join(base, e["spec"])).replace("\\", "/"))
+    return out
+
+
+def _master_hint(target: str) -> str:
+    return (f"[state-write-guard] DENY: '{target}' — файл требований-мастера (карта ground/spec-map.json). "
+            f"Его пишет только слияние: /forge-merge (MCP master_merge) — под замком и с проверкой после "
+            f"записи. Руками его не правь, симлинки на него не пересоздавай и не удаляй. «not-confirmed» — "
+            f"мастер уже записан: покажи отчёт пользователю, решает он (правка мастера вручную — его работа).")
+
+
 def _resolved(target: str, cwd: str) -> str:
     """Цель через симлинки: `ln -s ground l; echo x > l/policy.json` писал в policy.json мимо
     CP-паттерна — в строке цели нет `ground/` (track C F-3). Для харнеса realpath уже был."""
@@ -536,6 +613,7 @@ def _hint(target: str, real: str = "") -> str:
 
 
 def main() -> int:
+    raw = ""
     try:
         raw = sys.stdin.read()
         data = json.loads(raw) if raw.strip() else {}
@@ -548,8 +626,14 @@ def main() -> int:
 
         if tn in WRITE_TOOLS:
             target = _collapse(str(ti.get("file_path") or ti.get("path") or ti.get("filename") or ""))
-            if target and _CP_RE.search(target):
-                print(_hint(target), file=sys.stderr)
+            # Цель — и как написана, и через симлинки: `g -> ground`, затем write_file g/policy.json
+            # писал в policy.json мимо паттерна (Bash-ветка realpath делала, Write — нет).
+            real = _resolved(target, cwd) if target else ""
+            if target and (_CP_RE.search(target) or (real and _CP_RE.search(real))):
+                print(_hint(target, real), file=sys.stderr)
+                return 2
+            if real and real in _master_files(cwd):
+                print(_master_hint(target), file=sys.stderr)
                 return 2
             if target and _in_harness(target, cwd) and _pipeline_active(cwd):
                 print(_harness_hint(target), file=sys.stderr)
@@ -578,11 +662,16 @@ def main() -> int:
                     if v and _CP_CONTAINER_RE.search(v):
                         print(_container_hint(t), file=sys.stderr)
                         return 2
-            for t in (_collapse(x) for x in _rm_targets(cmd)):
-                if _DOCS_RE.search(t):
-                    print(_docs_hint(t), file=sys.stderr)
-                    return 2
-            targets = [_collapse(t) for t in _write_targets(cmd)]
+            masters = _master_files(cwd)
+            if masters:
+                for t in list(_write_targets(cmd, cwd)) + list(_unlink_targets(cmd)):
+                    if _resolved(_collapse(t), cwd) in masters:
+                        print(_master_hint(t), file=sys.stderr)
+                        return 2
+            for t in _docs_removals(cmd, cwd):
+                print(_docs_hint(t), file=sys.stderr)
+                return 2
+            targets = [_collapse(t) for t in _write_targets(cmd, cwd)]
             for t in targets:
                 real = _resolved(t, cwd)
                 if _CP_RE.search(t) or _CP_RE.search(real):
@@ -593,7 +682,14 @@ def main() -> int:
                     print(_harness_hint(t), file=sys.stderr)
                     return 2
             return 0
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        # Сбой разбора — не «возражений нет»: если в вызове фигурирует control-plane, отказ
+        # (exit 1/0 рантайм читает как разрешение, и потерянная функция молча снимала гард).
+        if re.search(r"ground/|\.gigacode|\.daiver|feature-pipeline|forge-(?:consent|subagent)-",
+                     raw if isinstance(raw, str) else "", re.I):
+            print(f"[state-write-guard] DENY: ошибка проверки ({type(e).__name__}: {e}) на вызове, "
+                  f"задевающем control-plane — без проверки не пропускаю", file=sys.stderr)
+            return 2
         return 0
     return 0
 

@@ -120,7 +120,10 @@ fi
 if [ "$FORCE" -eq 1 ]; then
   echo
   echo "== uninstall (ground/ и бэкапы сохраняются) =="
-  bash "$UNINSTALL" "$KIND" "$TARGET" ${PASS[@]+"${PASS[@]}"}
+  # --with-graph — флаг сборки поставки, uninstall.sh его не знает (падал с exit 2 после git pull)
+  UPASS=()
+  for a in ${PASS[@]+"${PASS[@]}"}; do [ "$a" = "--with-graph" ] || UPASS+=("$a"); done
+  bash "$UNINSTALL" "$KIND" "$TARGET" ${UPASS[@]+"${UPASS[@]}"}
 fi
 echo
 bash "$INSTALL" "$KIND" "$TARGET" ${PASS[@]+"${PASS[@]}"}

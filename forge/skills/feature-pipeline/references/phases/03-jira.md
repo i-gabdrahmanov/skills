@@ -74,11 +74,13 @@ agent(subagent_type="general-purpose",
    ```bash
    python3 <project>/.gigacode/skills/pipeline-state/scripts/record_approval.py \
        --project <toplevel> --key jira-plan-<slug> --approved-by user \
-       --reason "подтверждён черновик: Story + <N> подзадач"
+       --reason "подтверждён черновик: Story + <N> подзадач" \
+       --evidence "<ответ пользователя дословно>"
    ```
-   > Цитата (`--evidence`) здесь НЕ обязательна: это approval ПЛАНА, он двигает прогон
-   > вперёд, а не снимает защиту. Цитату требуют только ключи класса
-   > `gate-override-*`/`rollback-*`/`skip-judges-*`/`policy-downgrade-*`.
+   > Цитата (`--evidence`) ОБЯЗАТЕЛЬНА: задачи в трекере необратимы, а без цитаты маркер
+   > выписывался без пользователя. `gate-guard` сверяет её с ПОСЛЕДНЕЙ репликой пользователя;
+   > вопрос перед ней должен называть действие («Заводим в Jira эти задачи?»), и одно «да»
+   > засчитывается только на одно действие.
 
    Затем создай Story и Sub-task **строго по последнему подтверждённому черновику**
    (не по сырому task-plan) через Jira MCP, следуя `references/jira-create-workflow.md`.

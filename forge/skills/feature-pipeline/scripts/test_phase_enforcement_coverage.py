@@ -62,7 +62,6 @@ REPRESENTATIVE = {
     # Граф спецификации (specgraph = spec-graph в репо спеки): каталог, связи, отчёт проверки.
     "graph-map":   ("graph-map",   "Write", {"file_path": ".spec-graph/catalog.json"}),
     "graph-link":  ("graph-link",  "Write", {"file_path": ".spec-graph/edges/n1.json"}),
-    "graph-check": ("graph-check", "Write", {"file_path": "docs/graph/_graph/report.md"}),
 }
 
 

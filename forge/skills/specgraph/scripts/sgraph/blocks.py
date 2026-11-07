@@ -190,6 +190,17 @@ def _finish(raw, lines, file):
     return out
 
 
+def full_id(file: str, bid: Any) -> Any:
+    """Короткий id блока единицы одного файла (`#12`, `12`) — в полный `<файл>#12`; прочее как есть.
+    Субагент GLM на боевом прогоне писал короткие id по шаблону оркестратора, и валидатор отбивал
+    целую пачку: файл единицы известен, гадать модели не о чем."""
+    if isinstance(bid, int) and not isinstance(bid, bool):
+        return f"{file}#{bid}"
+    if isinstance(bid, str) and re.fullmatch(r"#?\d+", bid.strip()):
+        return f"{file}#{bid.strip().lstrip('#')}"
+    return bid
+
+
 # ─── скан исходников проекта ───────────────────────────────────────────────
 
 def source_files(root: Path, cfg: Dict[str, Any]) -> List[str]:

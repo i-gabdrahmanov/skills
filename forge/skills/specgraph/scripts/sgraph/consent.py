@@ -43,9 +43,9 @@ def state(root: Path, prefix: str, bound_file: Path) -> Dict[str, Any]:
     rec = fe.approval(Path(root), k)
     sha = fe.file_sha256(Path(bound_file)) if Path(bound_file).is_file() else None
     rel = Path(bound_file).resolve().relative_to(Path(root).resolve()).as_posix()
-    how = (f"после явного «да» пользователя оркестратор: python3 <поставка>/skills/pipeline-state/scripts/record_approval.py "
-           f"--project . --key {k} --approved-by user --reason \"<что утверждено>\" --evidence \"<ответ дословно>\" "
-           f"--bind-file {rel}")
+    how = (f"спроси пользователя ОДНИМ вопросом с вариантом «Да, утверждаю» / «Утвердить»; после его «да» оркестратор: python3 <поставка>/skills/pipeline-state/scripts/record_approval.py "
+           f"--project . --key {k} --approved-by user --reason \"<что утверждено>\" --evidence \"<текст его ответа дословно, "
+           f"без своих слов и подписей полей>\" --bind-file {rel}")
     if rec is None:
         return {"state": "none", "key": k, "how": how}
     bound = rec.get("bound_sha256")

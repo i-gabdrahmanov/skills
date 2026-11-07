@@ -95,8 +95,9 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py sdd <sl
   ```bash
   python3 <project>/.gigacode/skills/pipeline-state/scripts/record_approval.py \
       --project <project> --key sdd-approved-<slug> --approved-by user \
-      --reason "SDD утверждён пользователем"
+      --reason "SDD утверждён пользователем" --evidence "<его ответ дословно>"
   ```
+  `--evidence` — ответ пользователя как есть («да, утверждаю SDD»): без цитаты маркер не пишется.
 
 Если пользователю нужно вынести `sdd.md` на согласование аналитикам (ветка/коммит/пуш) —
 это он делает сам, промптом или руками; пайплайн доков не коммитит.

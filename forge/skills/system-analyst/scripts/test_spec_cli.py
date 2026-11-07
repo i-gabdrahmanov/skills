@@ -538,17 +538,52 @@ class PostCheckGateTest(MergeArchiveBase):
     """Доки уезжают только на ПОДТВЕРЖДЁННОМ merged — слову вызывающего архивация не верит."""
 
     def test_unconfirmed_master_holds_the_docs(self):
-        real = spec_cli._state_of
-        spec_cli._state_of = lambda *a, **kw: "drifted"     # пост-проверка не подтвердила
+        real = spec_cli._plan_state
+        # пост-проверка не подтвердила
+        spec_cli._plan_state = lambda *a, **kw: (
+            "drifted", {"ops": ["= REQ-0002: другое (1 сценар.)",
+                                "~ REQ-0001: Экспорт отчёта по заявкам (1 сценар.)"]})
         try:
             rc, out = self._r("merge", "report-export", "-y")
         finally:
-            spec_cli._state_of = real
+            spec_cli._plan_state = real
         self.assertEqual(rc, 3)
         self.assertTrue(self.spec.exists(), "мастер записан")
         self.assertTrue((self.docs / "sdd.md").is_file(), "а доки обязаны остаться на месте")
         self.assertFalse(self.archived.exists())
         self.assertIn("нужно решение — not-confirmed", out)
+        # Отчёт обязан сказать, что запись УЖЕ в мастере и откатывать её нельзя, и показать,
+        # что именно разошлось, — иначе модель удаляет записанное и сливает заново.
+        self.assertIn("мастер ЗАПИСАН", out)
+        self.assertIn("не удаляй", out)
+        tail = out.split("после записи разбор видит:", 1)[1]
+        self.assertIn("~ REQ-0001", tail)
+        self.assertNotIn("= REQ-0002", tail)
+
+    def test_column_gwt_into_symlinked_master_is_confirmed(self):
+        """Боевой прогон KIDPPRB-10815: мастер из соседнего репо подключён симлинком, шаги
+        Given/When/Then в дельте столбиком. Было: запись подменяла симлинк копией spec.md в
+        репо кода, а пост-проверка видела `~` по только что записанному → not-confirmed."""
+        self._r("merge", "report-export", "-y", "--no-archive")
+        real = self.root / "spec-repo" / "claims.md"
+        real.parent.mkdir()
+        self.spec.rename(real)
+        self.spec.symlink_to(real)
+        d = self._second_delta(body="""# SDD: Поиск по всем статусам
+
+## 3. Функциональные требования (Given-When-Then)
+### Сценарий 1. Флаг не передан
+- **Given** клиент вызывает поиск без флага
+- **When** система фильтрует по статусам
+- **Then** возвращаются документы из статусов 2, 10, 12
+""")
+        rc, out = self._r("merge", "audit-log", "-y")
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("not-confirmed", out)
+        self.assertIn("(1 сценар.)", out)
+        self.assertTrue(self.spec.is_symlink(), "симлинк на мастер обязан остаться симлинком")
+        self.assertIn("Сценарий 1. Флаг не передан", real.read_text(encoding="utf-8"))
+        self.assertFalse(d.exists(), "подтверждённое слияние увозит доки в архив")
 
     def test_blocked_modify_holds_the_docs(self):
         self._r("merge", "report-export", "-y", "--no-archive")

@@ -228,10 +228,13 @@ def split(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
         if n.get("service") and ont.owned_by_service(n["kind"]):
             by_service.setdefault(n["service"], {}).setdefault(n["kind"], []).append(n["name"])
     paths, written, unchanged = {}, 0, 0
+    folded: Dict[str, str] = {}
     for n in nodes:
         path = ont.path_for(n["kind"], n["name"], n.get("service"), n.get("subkind"))
-        if path in paths:
-            raise SplitError(f"два узла в один файл {path}: «{paths[path]}» и «{n['name']}»", "E-split-path")
+        if path.casefold() in folded:    # macOS/Windows: регистр в имени файла не различается
+            raise SplitError(f"два узла в один файл {path}: «{folded[path.casefold()]}» и «{n['name']}»",
+                             "E-split-path")
+        folded[path.casefold()] = n["name"]
         paths[path] = n["name"]
         toc = None
         if ont.kinds[n["kind"]]["owner"] == "self":

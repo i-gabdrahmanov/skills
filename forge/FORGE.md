@@ -171,7 +171,7 @@ resolve_phases; копий кортежей `fix-*`/`tech-*` по коду не�
 | `tdd-guard.py` | PreToolUse (Write/Edit + Bash) | блок `src/main` пока RED pending |
 | `tech-guard.py` | PreToolUse (Write/Edit + Bash) | tech-ветка: правка проекта только на `tech-apply`, по согласию на текущий план, после снимка «до», в `targets` |
 | `ui-guard.py` | PreToolUse (Write/Edit + Bash + read) | ui-ветка (forge-ui): запреты daiver кодом — канон и сырые экспорты макета не читаются (read_file/grep_search/shell), код модуля (`project.outputDir`) пишется только на `ui-build` при действительной подписи плана, инлайн-`<svg` в модуле запрещён; правка на `ui-verify` = переоткрытие `ui-build` |
-| `graph-guard.py` | PreToolUse (Write/Edit + Bash) | репо спеки (spec-graph): frontmatter и маркеры `graph:*` заметок vault пишут только инструменты `graph_*`; новая заметка vault, запись в `_graph/` и `.spec-graph/` (в т.ч. shell) моделью — отказ; проза вне маркеров — можно; вне проекта spec-graph — noop |
+| `graph-guard.py` | PreToolUse (Write/Edit + Bash) | репо спеки (spec-graph): frontmatter и маркеры `graph:*` заметок vault пишут только инструменты `graph_*`; новая заметка vault, запись в `_graph/` и `.spec-graph/` (в т.ч. shell), их удаление/перенос и Edit с недословным `old_string` (рантайм применил бы его нечётко) моделью — отказ; проза вне маркеров — можно; вне проекта spec-graph — noop |
 | `eval-guard.py` | PreToolUse (Write/Edit + Bash) | блок `src/main` пока eval'ы задачи не passed |
 | `sod-enforcer.py` | PreToolUse | separation of duties по id активного шага (сборка/тесты: gradle, mvn, npm/pnpm/yarn/npx, tsc, vite, playwright) |
 | `inline-phase-guard.py` | PreToolUse | actor-guard: ГЛАВНЫЙ не производит subagent-фазу inline (артефакты, сборка и продуктивные MCP-инструменты шага — `phase_tools`) |
@@ -263,8 +263,10 @@ v0.4.6: отказ «никогда не откатывай прогон авт�
 отрицания перед ним и сразу за ним, не вопрос (`forge_events.consent_quote_problem`, словарь
 общий на оба слоя). Ответ без явного «да» — повод переспросить, а не выписать маркер.
 
-Approval'ы ПЛАНА (`fix-plan-*`, `jira-plan-*`, `<doc>-approved-*`) цитаты не требуют: они
-двигают прогон вперёд, а не убирают защиту. Второй слой — сам `record_approval.py`
+Согласия плана и документов (`fix-plan-*`, `jira-plan-*`, `brd/sdd-approved-*`) с 2026-11-07 тоже
+требуют цитату (без неё модель выписывала их себе сама; UI-ключи — отдельной задачей). Цитата
+привязана к действию: вопрос перед ответом или сам ответ обязаны назвать действие класса ключа, и
+одна реплика — согласие одного класса (журнал `forge-consent-<хеш>.json` в temp ОС). Второй слой — сам `record_approval.py`
 (`_check_evidence`), в том числе в `--batch`: та же проверка смысла цитаты, без транскрипта.
 Согласия этих классов батчем не пишутся — gate-guard читает batch-файл и отказывает: цитату в
 файле сверить не с чем (через батч `git-discard` выписывался с `zzzzzzzzzzzzzzzzzz`).
@@ -716,6 +718,33 @@ git-история и связанные `tasks/`.
 - Мелочь: `evidence_ok` ищет нерекурсивно; `agent_caps` перематчивают (`(?i)…|dev|…`);
   инертные секции `policy.json` (`security.*`, `risk.deny_first`, `evidence.threshold`) —
   либо начать читать, либо перестать писать (см. `hooks/DEPLOY.md`).
+
+### Аудит 2026-11-07 — закрыто
+
+Найдено живыми payload'ами хуков при зелёных 214/214; пины — `hooks/test_audit_2026_11_07.py`,
+`skills/specgraph/scripts/test_audit_fixes.py`, тесты record_gate/gate-guard.
+
+- `record_gate`: гейт обязан стоять в позиции исполняемой команды; `|| true`, `;`, `|`, `&`, перевод
+  строки и комментарий в `--cmd` — отказ (подстрочная проверка пропускала `гейт || true` и `echo гейт`).
+- Согласие привязано к действию (вопрос/ответ называют действие класса, одна реплика — один класс);
+  согласия плана и документов требуют цитату (см. §Approval markers).
+- state-write-guard: Write через симлинк каталога резолвится; охраняются `architecture-policy.json`,
+  `test-baseline.json`, `spec-map.json`, журналы `forge-consent-*`/`forge-subagent-*`; файлы мастера из
+  карты пишет только merge; доки фичи не уносятся `mv` наружу, `find -delete`, `rmtree`; сбой разбора на
+  вызове с control-plane — отказ.
+- Общий разбор целей записи (`_shell_targets`): `git apply`/`patch` (пути из патча), `git checkout/restore`
+  по путям, `node -e`, `awk >`. git-discard разбирается им же (`sh -c`, `eval`, `env`, `VAR=`, `xargs`) и
+  ловит сброс каталога целиком.
+- destructive-blocker: `rm -rf ..`/`.git`, `find ..`-удаление, force-push `+ref`; чтение про human_override
+  больше не режется.
+- spec-graph: прогон `GRAPH-<N>` заводится и шаги закрываются командами из `graph_status.run`; единицы
+  отчитываются `{"step_id", "status": "unit"}` (origin без закрытия); `graph-check` — шаг оркестратора;
+  имена без `" * ? < >`, точки в конце и имён CON/NUL; коллизии имён и путей — без учёта регистра.
+- install.sh не везёт неотслеживаемые каталоги `skills/*`; update.sh --force не падает на `--with-graph`.
+
+**Не закрыто:** слияние в мастер адресует требования только по названию (правка существующего пункта,
+перенесённое вручную — вечное `new`); human_override — только POSIX; UI-ключи согласий без цитаты;
+`python3 script.py`/`tar x`/`git stash pop` как запись мимо гардов (best-effort по природе).
 
 ## Что НЕ входит в скоуп этого документа
 

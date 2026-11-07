@@ -95,11 +95,22 @@ def _status(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return ST.status(root)
 
 
+def _run_hint(root: Path) -> Optional[str]:
+    """Команда заведения прогона, если активного нет. На боевом прогоне модель после graph_init сразу
+    пошла в graph_survey: шаги не записывались, согласия легли под `-adhoc`."""
+    run = ST.run_info(root)
+    if run.get("step") is not None:
+        return None
+    cmd = run["commands"].get("init") or run["commands"].get("init_next")
+    return f"заведи прогон {run['next_key']}: выполни в shell как есть `{cmd}`, затем graph_status"
+
+
 def _init(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     res = C.init(root, args)
     if res.get("status") == "invalid":
         raise ToolError("конфиг не записан: " + "; ".join(res["errors"]), ["E-config-invalid"])
-    return res
+    hint = _run_hint(root)
+    return dict(res, next=hint or "graph_status — шаг прогона и его первая команда")
 
 
 def _queue_arg(args: Dict[str, Any]) -> str:
@@ -114,16 +125,23 @@ def _cfg(root: Path) -> Optional[Dict[str, Any]]:
     return cfg
 
 
+_QUEUE_STEP = {"draft-file": "graph-map", "assign-section": "graph-map", "link-note": "graph-link",
+               "card": "graph-link"}
+
+
 def _unit_next(u: Dict[str, Any]) -> str:
+    step = _QUEUE_STEP.get(str(u.get("queue") or ""), "")
+    tail = (f"; последней строкой субагент возвращает {{\"step_id\": \"{step}\", \"status\": \"unit\"}}"
+            if step else "")
     return (f"запусти субагента: бриф {u['brief']}, вход {u['input']}; результат он сдаёт инструментом {u['tool']} "
-            f"с item_id «{u['item_id']}»")
+            f"с item_id «{u['item_id']}»{tail}")
 
 
 def _next(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     if args.get("batch"):
         res = Q.lease_batch(root, _queue_arg(args), _cfg(root))
         for u in res.get("units", []):
-            u["next"] = _unit_next(u)
+            u["next"] = _unit_next(dict(u, queue=res.get("queue")))
         res["next"] = ("очередь пуста — переходи к гейту шага" if res["status"] == Q.EMPTY else
                        f"запусти {len(res['units'])} субагентов ОДНИМ ходом (каждому — свою единицу), дождись, пока "
                        f"все сдадут результат, затем снова graph_next batch")
@@ -160,7 +178,11 @@ def _profile(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _survey(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
-    return SV.survey(root, _need_cfg(root), args.get("scope"))
+    res = SV.survey(root, _need_cfg(root), args.get("scope"))
+    hint = _run_hint(root)
+    if hint:
+        res["run_missing"] = "прогона нет — шаг не запишется, согласия лягут под -adhoc; " + hint
+    return res
 
 
 def _draft_put(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -179,6 +201,8 @@ def _catalog(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     res = {"nodes": len(cat["nodes"]), "review": len(cat["review"]), "conflicts": len(cat["conflicts"]),
            "collisions": len(cat["collisions"]), "not_nodes": len(cat["not_nodes"]), "scope": cat["scope"],
            "report": f"{cfg['vault']}/_graph/catalog.md", "consent": st["state"], "key": st["key"]}
+    if cat.get("problems"):
+        res["decision_problems"] = [f"№{x['n']} {x['action']} «{x['ref']}»: {x['problem']}" for x in cat["problems"][:8]]
     if st["state"] == "ok":
         res["next"] = "каталог утверждён (снимок catalog.approved.json) — дальше цикл очереди assign-section"
     else:
@@ -409,8 +433,11 @@ TOOLS: Dict[str, Dict[str, Any]] = {
     },
     "graph_catalog_decide": {
         "fn": _catalog_decide,
-        "description": "Записать решения ЧЕЛОВЕКА по каталогу (после его ответа): merge {into, names}, split {node, file, "
-                       "name}, rename {node, name}, move {node, service}, drop {node}, scope {include}; у каждого — why.",
+        "description": "Записать решения ЧЕЛОВЕКА по каталогу (после его ответа): {action: merge, into, names}, "
+                       "{action: split, node, file, name, kind?, key?}, {action: rename, node, name}, {action: move, node, "
+                       "service}, {action: drop, node}, {action: scope, include}, {action: revoke, index} (номер записи "
+                       "в _graph/decisions.md); у каждого — why. Узел — id `n-…` или имя, которое носит ровно один узел; "
+                       "неоднозначное или неприменимое решение — отказ с перечнем id, журнал не меняется.",
         "schema": {"type": "object", "properties": {"actions": {"type": "array", "items": {"type": "object"}}},
                    "required": ["actions"], "additionalProperties": False},
     },
@@ -631,6 +658,13 @@ def _call(name: str, root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
             st = Q.settle(root, queue, args["item_id"], False, e.codes, _cfg(root))
             if st["status"] == "abandoned":
                 M.bump(root, f"queue.{queue}.abandoned")
+                tail = "единица брошена после последней попытки — уходит в отчёт человеку; бери следующую через graph_next"
+            else:
+                left = Q.settings(_cfg(root))["max_attempts"] - st["attempts"]
+                tail = (f"аренда за тобой: исправь названное и сдай снова тем же item_id «{args['item_id']}» "
+                        f"(осталось попыток: {left})")
+            M.record_call(root, name, "rejected", codes=e.codes, refs=refs, duration_ms=elapsed())
+            raise ToolError(f"{e}\n{tail}", e.codes) from e
         M.record_call(root, name, "rejected", codes=e.codes, refs=refs, duration_ms=elapsed())
         raise
     except Q.QueueError as qe:

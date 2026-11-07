@@ -162,14 +162,19 @@ BRANCHES = {
         "mode": "graph",
         "prefix": "graph-",
         "steps": ("graph-map", "graph-link", "graph-check"),
-        "subagent_steps": ("graph-map", "graph-link", "graph-check"),
+        # map и link исполняют субагенты ЕДИНИЦ очередей (оркестратор крутит очередь и вызывает
+        # механику движка); единица отчитывается JSON {"step_id": <шаг>, "status": "unit"} — это
+        # origin шага без его закрытия (state-recorder). graph-check единиц не имеет: проверку,
+        # Obsidian-слой и приёмку ведёт оркестратор, шаг закрывает гейт (аудит 2026-11-07: шаг
+        # требовал субагента, которого конвейер не запускает, и не закрывался вовсе).
+        "subagent_steps": ("graph-map", "graph-link"),
         "gate_steps": ("graph-map", "graph-link", "graph-check"),
         "build_steps": (),
         "red_step": None,
         # каталог узлов — «план» графа: после его утверждения идёт нарезка
         "design_step": "graph-map",
         "final_step": "graph-check",
-        "roles": {"graph-map": "spec", "graph-link": "spec", "graph-check": "spec"},
+        "roles": {"graph-map": "spec", "graph-link": "spec"},
         # проверка находит дыры связей → переоткрывается шаг связей (цикл самоулучшения, задача 4.6)
         "verify_to_impl": {"graph-check": "graph-link"},
         # артефакты живут в vault (_graph/) и .spec-graph/, а не в docs-каталоге задачи: их
@@ -180,8 +185,6 @@ BRANCHES = {
                           "запись разведки / каталога / плана нарезки (.spec-graph/…, _graph/catalog.md)"),
             "graph-link": (r"(^|/)\.spec-graph/edges/|(^|/)_graph/edges-review\.md$",
                            "запись предложений рёбер / отчёта связей"),
-            "graph-check": (r"(^|/)_graph/(report|Начало)\.md$|(^|/)\.obsidian/graph\.json$",
-                            "запись отчёта проверки / Obsidian-слоя"),
         },
         # Продуктивные инструменты движка spec-graph (MCP `spec-graph`): те, что СДАЮТ решение модели по единице очереди
         # (черновик узлов файла, раскладка блоков) — их вызывает субагент единицы, не главный агент. НЕ входят: graph_status,

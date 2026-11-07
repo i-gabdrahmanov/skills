@@ -62,12 +62,31 @@ if _HOOKS not in sys.path:
     sys.path.append(_HOOKS)
 
 from _project import (  # noqa: E402  (после sys.path.append)
-    load_active_manifest, locked_json_update, resolve_active_run as load_active_run,
+    install_rel, load_active_manifest, locked_json_update, resolve_active_run as load_active_run,
     safe_component,
 )
 
 
 REGISTRY = Path(__file__).resolve().parent.parent / "references" / "params-registry.json"
+
+
+def _human_command() -> str:
+    """Та же команда для человека — через hooks/human_override.py в его терминале.
+
+    Слабая модель протокол согласия (вопрос → цитата → record_approval) не проходит, и
+    параметр не менялся вовсе, даже когда человек был согласен. Модели этот путь закрыт
+    (destructive-blocker + проверки в самом скрипте) — она только показывает команду."""
+    import shlex
+    args = [a for a in sys.argv[1:]]
+    if "--project" in args:                     # проект задаёт cwd человека, а не флаг
+        i = args.index("--project")
+        del args[i:i + 2]
+    return f"python3 {install_rel()}/hooks/human_override.py -- config {shlex.join(args)}"
+
+
+# Пояснение — отдельным полем: в одной строке с командой оно уезжало в shell при вставке.
+_HUMAN_NOTE = ("команду из поля human выполняет ЧЕЛОВЕК в своём терминале из корня проекта, "
+               "вставив как есть; агенту запуск закрыт — покажи команду и жди результата")
 
 
 # ── Переключатели enforcement: правка = R4 (approval) ─────────────────────────
@@ -422,6 +441,7 @@ def cmd_set(project: Path, params: list, args) -> int:
             print(json.dumps({
                 "error": f"{e['id']} — R4-класс: нужен approval-маркер с провенансом record_approval",
                 "approval_key": approval_key,
+                "human": _human_command(), "human_note": _HUMAN_NOTE,
                 "hint": (f"quality.*/security.* — пороги, которыми харнес меряет сам себя, и "
                          f"policy.json действует на весь проект, а не на один прогон. "
                          f"(1) прогони гейт, а не снимай его; (2) если он объективно "
@@ -605,6 +625,7 @@ def _structure_consent(project: Path, key: str, what: str) -> "str | None":
     print(json.dumps({
         "error": f"{what} — R4-класс: нужен approval-маркер с провенансом record_approval",
         "approval_key": key,
+        "human": _human_command(), "human_note": _HUMAN_NOTE,
         "hint": (f"(1) покажи пользователю, ЧТО ослабляется; (2) после явного «да»: "
                  f"pipeline-state/scripts/record_approval.py --key {key} --approved-by user "
                  f"--reason \"<почему>\" --evidence \"<дословная цитата пользователя>\"; "
@@ -1024,6 +1045,7 @@ def cmd_repin(project: Path, params: list, args) -> int:
             "blocked": True,
             "reason": "repin — R4-класс: нужен approval-маркер с провенансом record_approval",
             "approval_key": approval_key,
+            "human": _human_command(), "human_note": _HUMAN_NOTE,
             "hint": (f"(1) покажи пользователю расхождение: config.py repin --skill {args.skill} "
                      f"--feature {args.feature} --dry-run; (2) после явного «да»: "
                      f"pipeline-state/scripts/record_approval.py --key {approval_key} "

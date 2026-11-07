@@ -2,7 +2,7 @@
   "_comment": "Онтология графа спецификации v1 — по ТЗ аналитика (docs/specgraph/tz-analytics.md §2–3) и таблицам tasks/020-spec-graph.md. Единственное место, где живут виды узлов и рёбер: валидатор, синк, обход, Obsidian-слой читают ЭТОТ файл. Новый вид или ребро — запись здесь (или в .spec-graph/ontology.local.json проекта — только добавления), без правки кода. Прямое ребро пишется у вершины «from»; обратное («inverse») выводит синк. impact — куда идти от ИЗМЕНЁННОГО узла, чтобы найти затронутых: forward — по ребру, inverse — против него, both — в обе стороны (экран и его задача затрагивают друг друга), none — не распространяет.",
   "version": 1,
   "statuses": ["draft", "stable", "deprecated", "stub", "external"],
-  "name_forbidden": "/\\:#^[]|",
+  "name_forbidden": "/\\:#^[]|\"*?<>",
   "kinds": {
     "process":   {"title_ru": "Бизнес-процесс", "path": "business/processes/{name}.md", "owner": "none", "name": "phrase"},
     "operation": {"title_ru": "Бизнес-операция (тип задачи)", "path": "business/operations/{name}.md", "owner": "none", "name": "phrase", "key": "task"},

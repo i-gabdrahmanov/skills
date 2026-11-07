@@ -51,7 +51,17 @@ _PY_WRITE_RE = re.compile(
     r"|\bshutil\.\w+\s*\(|\bos\.(?:remove|unlink|rmdir|removedirs|rename|replace|renames"
     r"|truncate|mkfifo|mknod|symlink|link)\s*\(|\.(?:unlink|rmdir|rename|symlink_to"
     r"|hardlink_to|link_to)\s*\(|\b(?:rmtree|copyfile|copytree|copy2)\s*\("
+    # node -e / deno eval: fs.writeFileSync, appendFile, copyFile, rename, rm, unlink, createWriteStream
+    r"|\b(?:writeFile|appendFile|copyFile|rename|rm|rmdir|unlink|truncate|symlink|cp)(?:Sync)?\s*\("
+    r"|\bcreateWriteStream\s*\("
 )
+# Программа awk пишет в файл своим `print … > "файл"` — без редиректа оболочки (аудит 2026-11-07).
+_AWK_CMDS = ("awk", "gawk", "mawk", "nawk")
+_AWK_REDIR_RE = re.compile(r'>>?\s*"([^"]+)"')
+# Патч пишет в файлы, названные в нём самом: `+++ b/<путь>` (и `--- a/<путь>` для удаления).
+# `git apply`/`patch` — естественный для модели способ применить дифф, и до 2026-11-07 он писал в
+# src/main мимо всех гейтов на фазе RED.
+_PATCH_PATH_RE = re.compile(r"^(?:\+\+\+|---)\s+(?:[ab]/)?([^\t\n]+?)\s*(?:\t.*)?$", re.M)
 
 # Префиксы, за которыми идёт настоящая команда. Гард смотрел на argv[0] сегмента, и
 # `sudo tee ground/policy.json`, `echo x | sudo tee …`, `sudo rm ground/policy.json`
@@ -150,11 +160,77 @@ def _py_literals(cmd: str) -> list[str]:
     return re.findall(r"'([^']+)'", cmd) + re.findall(r'"([^"]+)"', cmd)
 
 
-def write_targets(cmd: str) -> list[str]:
+def _patch_paths(text: str) -> list[str]:
+    return [m for m in _PATCH_PATH_RE.findall(text or "") if m and m != "/dev/null"]
+
+
+def _read_patch(path: str, cwd: str) -> str:
+    import os
+    try:
+        p = path if os.path.isabs(path) else os.path.join(cwd or os.getcwd(), path)
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            return f.read(4 * 1024 * 1024)
+    except (OSError, ValueError):
+        return ""
+
+
+def _git_targets(argv: list[str], cmd: str, cwd: str) -> list[str]:
+    """Пути, которые пишет git-подкоманда: apply/am — файлы патча; checkout/restore — pathspec."""
+    i = 1
+    while i < len(argv) and argv[i].startswith("-"):
+        i += 2 if argv[i] in ("-C", "-c", "--git-dir", "--work-tree") else 1
+    if i >= len(argv):
+        return []
+    sub, args = argv[i], argv[i + 1:]
+    if sub in ("apply", "am"):
+        if "--check" in args or "--stat" in args or "--numstat" in args:
+            return []
+        out = _patch_paths(cmd)                        # патч прямо в команде (heredoc)
+        for a in args:
+            if not a.startswith("-"):
+                out += _patch_paths(_read_patch(a, cwd))
+        return out
+    if sub in ("checkout", "restore"):
+        if sub == "restore" and "--staged" in args and not ({"--worktree", "-W"} & set(args)):
+            return []
+        if "--" in args:
+            return [a for a in args[args.index("--") + 1:] if a]
+        pos, skip = [], False
+        for a in args:
+            if skip:
+                skip = False
+                continue
+            if a in ("-s", "--source", "-b", "-B", "--orphan", "--conflict", "--pathspec-from-file"):
+                skip = True
+                continue
+            if not a.startswith("-"):
+                pos.append(a)
+        return pos if sub == "restore" else pos[1:]   # checkout <ветка> [пути…]
+    return []
+
+
+def write_targets(cmd: str, cwd: str = "") -> list[str]:
     """Пути, в которые команда ПИШЕТ (best-effort). Путь исполняемого скрипта, аргументы-входы
-    и `2>&1` целями не считаются."""
+    и `2>&1` целями не считаются. `cwd` — каталог сессии: от него читается файл патча."""
     out: list[str] = _py_literals(cmd)
     for toks in _segments(cmd):
+        name0 = posixpath.basename(toks[0]) if toks else ""
+        if name0 == "git":
+            out += _git_targets(toks, cmd, cwd)
+        elif name0 == "patch" and "--dry-run" not in toks:
+            src = ""
+            for i, t in enumerate(toks):
+                if t in ("-i", "--input") and i + 1 < len(toks):
+                    src = toks[i + 1]
+                elif t.startswith("--input="):
+                    src = t.split("=", 1)[1]
+                elif t == "<" and i + 1 < len(toks):
+                    src = toks[i + 1]
+                elif t.startswith("<") and len(t) > 1 and not t.startswith("<<"):
+                    src = t[1:]
+            out += _patch_paths(_read_patch(src, cwd) if src else cmd)
+        elif name0 in _AWK_CMDS:
+            out += _AWK_REDIR_RE.findall(" ".join(toks[1:]))
         # редиректы: `> f`, `>>f`, `1> f`, `&> f` (но не `2>&1` и не fd-номер)
         redirect_idx = set()
         for i, t in enumerate(toks):

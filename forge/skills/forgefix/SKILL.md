@@ -297,13 +297,15 @@ python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <to
    что сломано → что должно быть · root cause (подтверждён/гипотеза) · где правим (файл:строка) ·
    подход одним предложением · какое требование спеки затронуто (якорь) · риск регресса ·
    что НЕ трогаем.
-2. Спроси `ask_user_question`: «Делаем так?» — варианты: **«Да, делаем»** / **«Правки в план»** /
+2. Спроси `ask_user_question`: «Делаем фикс по этому плану?» — варианты: **«Да, делаем»** / **«Правки в план»** /
    **«Это не минорный фикс — сменить путь»**.
 3. Ответ:
    - **«Да»** — только теперь фиксируй согласие:
      ```
-     python3 <project>/.gigacode/skills/pipeline-state/scripts/record_approval.py --project <toplevel> --key fix-plan-<KEY|slug> --approved-by user --reason "<кратко: что утвердили>"
+     python3 <project>/.gigacode/skills/pipeline-state/scripts/record_approval.py --project <toplevel> --key fix-plan-<KEY|slug> --approved-by user --reason "<кратко: что утвердили>" --evidence "<его ответ дословно>"
      ```
+     `--evidence` — ответ пользователя как есть («Да, делаем»): `gate-guard` сверяет его с последней
+     репликой и с вопросом перед ней, а одно «да» засчитывается только на одно действие.
      (`<KEY|slug>` — ровно тот, что в `--feature`; ключ маркера строит `gate-guard` из активной
      фичи. Прямая запись в `ground/approvals*` заблокирована `state-write-guard`.)
    - **«Правки»** — верни `fix-diag` субагенту с правками (переоткрытие шага считается,

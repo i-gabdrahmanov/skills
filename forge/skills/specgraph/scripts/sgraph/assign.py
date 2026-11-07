@@ -7,7 +7,9 @@
 Очередь `assign-section` строится ТОЛЬКО из утверждённого каталога (без согласия graph-catalog — отказ
 E-catalog-unapproved, кодом). Единица — непрерывный диапазон блоков одного файла: файл режется по
 разделам верхнего уровня, крупный раздел — по подразделам, слишком крупный лист — по блокам (никогда
-внутри блока). Каждый блок файла — ровно в одной единице, поэтому полнота раскладки обеспечена до ответа.
+внутри блока). Каждый блок файла — ровно в одной единице, поэтому полнота раскладки обеспечена до ответа. Размер
+единицы меряется по готовому тексту входа; блок, который один не влезает в бюджет, идёт отдельной
+единицей с пометкой `indivisible` — сборку остальных он не роняет.
 
 Проверки ответа (`put`): каждый блок единицы назначен ровно раз (узел / skip / unplaced); цель — узел
 утверждённого каталога или новый узел этого же ответа (идёт в дельту `catalog.delta.json`, решается в
@@ -106,6 +108,35 @@ def _nodes_for_file(cat: Dict[str, Any], rel: str) -> List[Dict[str, Any]]:
     return [n for n in cat["nodes"] if n.get("in_scope", True) and any(s["file"] == rel for s in n["sources"])]
 
 
+def _nodes_near(nodes: List[Dict[str, Any]], rel: str, spans: Dict[str, Tuple[int, int]], a: int, b: int):
+    """Узлы файла, чьи разделы задевают диапазон блоков [a, b), и узлы без разделов (весь файл).
+    Раздел, которого нет в оглавлении, считается задевающим: лучше лишняя строка, чем пропавший узел."""
+    out = []
+    for n in nodes:
+        secs = [x for s in n["sources"] if s["file"] == rel for x in s.get("sections") or []]
+        if not secs or any(x not in spans or (spans[x][0] < b and a < spans[x][1]) for x in secs):
+            out.append(n)
+    return out
+
+
+def _fit(blocks: List[Dict[str, Any]], ranges: List[Tuple[int, int]], measure, limit: int):
+    """Довести диапазоны до бюджета по НАСТОЯЩЕМУ тексту входа: перелив — пополам по ближайшему к
+    середине заголовку (нет заголовка — по блокам). Один блок сверх бюджета — неделимый остаток."""
+    out, todo = [], list(ranges)
+    while todo:
+        a, b = todo.pop(0)
+        if measure(a, b) <= limit:
+            out.append((a, b, False))
+        elif b - a <= 1:
+            out.append((a, b, True))
+        else:
+            mid = (a + b) // 2
+            heads = [i for i in range(a + 1, b) if blocks[i]["type"] == "heading"]
+            cut = min(heads, key=lambda i: (abs(i - mid), i)) if heads else mid
+            todo[:0] = [(a, cut), (cut, b)]
+    return out
+
+
 def _input(rel: str, blocks: List[Dict[str, Any]], nodes: List[Dict[str, Any]], cands: List[Dict[str, Any]],
            part: str) -> str:
     lines = [f"# Раскладка блоков: {rel}{part}", "", "## Узлы каталога этого файла", ""]
@@ -131,7 +162,12 @@ def start(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
         raise AssignError(why, "E-catalog-unapproved")
     cat = CT.load_approved(root)
     files = sorted({s["file"] for n in cat["nodes"] if n.get("in_scope", True) for s in n["sources"]})
-    budget = Q.settings(cfg)["budget_chars"] - brief_chars() - 2000
+    # Бюджет — на НАСТОЯЩИЙ вход единицы (шапка + кандидаты + блоки), а не «бюджет − бриф − 2000» на
+    # одни блоки: у жирного файла шапка со списком его узлов доходила до 26 тыс. знаков (≈250 узлов
+    # rmoc-спеки), и сборка падала при любом бюджете — куски добивались до нового room (боевой прогон).
+    # Поэтому в шапке — узлы, чьи разделы задевают кусок (весь список — только если он помещается),
+    # а кусок с переливом делится дальше.
+    limit = Q.settings(cfg)["budget_chars"] - brief_chars()
     specs = []
     for rel in files:
         data = B.load(root, rel) or B.scan_file(root, rel)
@@ -139,17 +175,34 @@ def start(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
         cand_p = Path(root) / X.CANDIDATES_REL / (rel + ".json")
         cands = json.loads(cand_p.read_text(encoding="utf-8"))["candidates"] if cand_p.is_file() else []
         nodes = _nodes_for_file(cat, rel)
-        ranges = _ranges(blocks, budget)
-        for k, (a, b) in enumerate(ranges, 1):
+        spans = {blocks[x["head"]]["id"]: (x["start"], x["end"]) for x in X.sections(blocks)}
+
+        def make(a, b, part):
+            ids = {x["id"] for x in blocks[a:b]}
+            cc = [c for c in cands if set(c["blocks"]) & ids]
+            text = _input(rel, blocks[a:b], nodes, cc, part)
+            if len(text) > limit:
+                text = _input(rel, blocks[a:b], _nodes_near(nodes, rel, spans, a, b), cc, part)
+            return text
+
+        base = len(_input(rel, [], [], [], " — часть 999 из 999"))
+        ranges = _fit(blocks, _ranges(blocks, max(limit - base, 2000)),
+                      lambda a, b: len(make(a, b, " — часть 999 из 999")), limit)
+        for k, (a, b, indivisible) in enumerate(ranges, 1):
             ids = [x["id"] for x in blocks[a:b]]
-            cc = [c for c in cands if set(c["blocks"]) & set(ids)]
             part = "" if len(ranges) == 1 else f" — часть {k} из {len(ranges)}"
-            specs.append({"id": unit_id(rel, ids[0]), "brief": BRIEF, "tool": TOOL,
-                          "input": _input(rel, blocks[a:b], nodes, cc, part),
-                          "refs": {"file": rel, "blocks": ids}})
+            spec = {"id": unit_id(rel, ids[0]), "brief": BRIEF, "tool": TOOL, "input": make(a, b, part),
+                    "refs": {"file": rel, "blocks": ids}}
+            if indivisible:
+                spec["indivisible"] = True
+            specs.append(spec)
     counts = Q.build(root, "assign-section", specs, cfg, {BRIEF: brief_chars()})
-    return {"files": len(files), "units": len(specs), "queue": counts,
-            "next": "цикл очереди assign-section: graph_next queue=assign-section"}
+    out = {"files": len(files), "units": len(specs), "queue": counts,
+           "next": "цикл очереди assign-section: graph_next queue=assign-section"}
+    if counts.get("oversize"):
+        out["oversize"] = (f"{len(counts['oversize'])} единиц из одного блока сверх бюджета — блок не режется, "
+                           f"идут как есть: " + ", ".join(f"{o['id']} ({o['chars']})" for o in counts["oversize"]))
+    return out
 
 
 # ─── ответ модели ──────────────────────────────────────────────────────────
@@ -157,6 +210,17 @@ def start(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
 def _unit(root: Path, item_id: str) -> Dict[str, Any]:
     data = json.loads((Path(root) / Q.QUEUE_REL / "assign-section.json").read_text(encoding="utf-8"))
     return next(it for it in data["items"] if it["id"] == item_id)
+
+
+def _full_ids(rel: str, row: Any) -> Any:
+    """Короткие id блоков (`#12`) — в полные (`<файл>#12`): единица всегда про один файл."""
+    if not isinstance(row, dict):
+        return row
+    out = dict(row)
+    for k in ("blocks", "of"):
+        if isinstance(out.get(k), list):
+            out[k] = [B.full_id(rel, b) for b in out[k]]
+    return out
 
 
 def load_delta(root: Path) -> List[Dict[str, Any]]:
@@ -206,6 +270,7 @@ def put(root: Path, item_id: str, args: Dict[str, Any]) -> Tuple[Dict[str, Any],
     by_id = {n["id"]: n for n in cat["nodes"]}
     errs: List[Tuple[str, str]] = []
     assign, skip, unplaced, new_nodes = (args.get(k) or [] for k in ("assign", "skip", "unplaced", "new_nodes"))
+    assign, skip, unplaced = ([_full_ids(rel, x) for x in rows] for rows in (assign, skip, unplaced))
     for k, v in (("assign", assign), ("skip", skip), ("unplaced", unplaced), ("new_nodes", new_nodes)):
         for i, x in enumerate(v):
             if not isinstance(x, dict):

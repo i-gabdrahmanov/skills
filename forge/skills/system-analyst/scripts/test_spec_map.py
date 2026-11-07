@@ -132,6 +132,37 @@ class MissingScanDirTest(unittest.TestCase):
             self.assertNotIn("FileNotFoundError", out)
 
 
+class ResolveInBaseTest(unittest.TestCase):
+    """Раскладка аналитика: проект и репо спеки в разных деревьях, база глубоко в репо."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        t = Path(self._tmp.name).resolve()
+        self.root = t / "code" / "proj"
+        self.root.mkdir(parents=True)
+        self.base = t / "spec" / "kid-spec" / "docs" / "sr"
+        self.f = self.base / "tps" / "tps.md"
+        self.f.parent.mkdir(parents=True)
+        self.f.write_text("# x\n", encoding="utf-8")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_every_natural_form_lands_on_the_file(self):
+        for form in ("tps/tps.md", str(self.f), "../../spec/kid-spec/docs/sr/tps/tps.md",
+                     "docs/sr/tps/tps.md", "kid-spec/docs/sr/tps/tps.md"):
+            with self.subTest(form=form):
+                self.assertEqual(SM.resolve_in_base(self.root, self.base, form).resolve(),
+                                 self.f)
+
+    def test_escape_and_typo_refused(self):
+        (self.root / "x.md").write_text("# x\n", encoding="utf-8")
+        with self.assertRaisesRegex(SM.MapError, "выходит за базу"):
+            SM.resolve_in_base(self.root, self.base, "x.md")
+        with self.assertRaisesRegex(SM.MapError, "похожие.*tps/tps.md"):
+            SM.resolve_in_base(self.root, self.base, "other/tps.md")
+
+
 class BuildTest(SpecMapBase):
     def test_services_found_and_index_ignored(self):
         m = SM.build(self.root)
@@ -165,6 +196,45 @@ class BuildTest(SpecMapBase):
         rc, out = self.cli("research", "--set", "db-service=../proj/ground/policy.json")
         self.assertEqual(rc, 2)
         self.assertIn("выходит за базу", out)
+
+    def test_set_spec_accepts_any_natural_path_form(self):
+        """KIDPPRB-10815: модель дала путь от корня проекта при описании «от базы» и получила
+        `docs/docs/…`. Форму пути выясняет скрипт — в карту ложится путь от базы."""
+        self.cli("research")
+        want = "db-service/dbservice.md"
+        rel_root = Path("..") / "npf-spec" / want          # от корня проекта
+        for form in (want, str(self.spec / want), rel_root.as_posix(), f"npf-spec/{want}"):
+            with self.subTest(form=form):
+                rc, out = self.cli("research", "--set", f"inbound-adapter={form}")
+                self.assertEqual(rc, 3, out)
+                self.assertEqual(SM.load(self.root)["capabilities"]["inbound-adapter"]["spec"],
+                                 want)
+
+    def test_set_spec_typo_names_similar_files(self):
+        self.cli("research")
+        rc, out = self.cli("research", "--set", "db-service=specs/db/dbservice.md")
+        self.assertEqual(rc, 2)
+        self.assertIn("нет под базой", out)
+        self.assertIn("db-service/dbservice.md", out, "подсказка — путь от базы")
+
+    def test_ignore_path_normalised_to_base(self):
+        self.cli("research")
+        self.cli("research", "--ignore", str(self.spec / "db-service" / "dbservice.md"))
+        self.assertIn("db-service/dbservice.md",
+                      [i["path"] for i in SM.load(self.root)["ignore"] if i.get("manual")])
+
+    def test_symlink_out_of_base_is_recipe_not_traceback(self):
+        """Мастер соседнего репо, подключённый симлинком в базу: research падал сырым
+        ValueError. Отказ обязан назвать штатный путь — separate-repo в настройке проекта."""
+        outside = self.root / "elsewhere.md"
+        outside.write_text(PROSE, encoding="utf-8")
+        (self.spec / "linked").mkdir()
+        (self.spec / "linked" / "linked.md").symlink_to(outside)
+        rc, out = self.cli("research")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("ведёт за базу", out)
+        self.assertIn("docs.master.repo_path", out)
+        self.assertNotIn("ValueError", out)
 
     def test_rescan_keeps_confirmation_when_structure_same(self):
         self.confirm()

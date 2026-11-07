@@ -44,6 +44,7 @@ try:
     import risk_ladder as R
     from _project import active_feature, safe_component
     import forge_events as FE
+    import _shell_targets as ST
 except Exception as _e:  # pragma: no cover — сломанный бандл/интерпретатор
     # Форточка на команды ВОССТАНОВЛЕНИЯ: сплошной deny запирал и починку бандла
     # (баннер советовал `bash .gigacode/deploy-local.sh`, а матчер ^Bash$ её же и резал).
@@ -266,8 +267,12 @@ def check_phase_gate(tool_name: str, tool_input: dict, agent_type: str | None,
             pattern = re.sub(r"^(?:\./)+", "", str(tool_input.get("pattern") or "")
                              .replace("\\", "/"))
             is_glob = tool_name in ("Glob", "glob")
-            if is_glob and pattern and not pattern.startswith(("*", "{")):
-                if not any(bp in pattern + "/" for bp in blocked_paths):
+            # `{UI,docs/x}/**/*.md` — несколько корней: проходит, если ни один не ведёт в blocked
+            # (на прогоне spec-graph такой glob по каталогам спеки резался как «весь проект»)
+            brace = re.fullmatch(r"\{([^{}]*)\}(.*)", pattern) if is_glob else None
+            alts = [a + brace.group(2) for a in brace.group(1).split(",")] if brace else [pattern]
+            if is_glob and pattern and all(a and not a.startswith(("*", "{")) for a in alts):
+                if not any(bp in a + "/" for a in alts for bp in blocked_paths):
                     return True            # glob по docs/**, ground/** и т.п.
                 file_path = pattern
             else:
@@ -445,9 +450,9 @@ def check_gate_override(command: str, root: Path) -> str | None:
 # в JSONL они экранированы). Туда же попадали собственные реплики модели и вывод её команд
 # (`echo "<фраза>"` в tool_result) — согласие можно было «процитировать» у самого себя.
 #
-# Гейт стоит на классах, которые СНИМАЮТ enforcement (FE.CONSENT_PREFIXES). Approval'ы
-# плана (fix-plan-*, jira-plan-*, <doc>-approved-*) не гейтятся: они двигают прогон вперёд,
-# а не убирают защиту, и их брифы и так проводят через явный вопрос.
+# Гейт стоит на классах из FE.CONSENT_PREFIXES: снимающих enforcement и — с аудита 2026-11-07 —
+# на согласиях плана/документа (jira-plan, fix-plan, brd/sdd-approved): без цитаты модель
+# выписывала их себе сама, и точка «покажи и спроси» держалась одной прозой.
 _EVIDENCE_MIN_CHARS = 12          # «да», «ок», «+» цитатой пользователя не являются
 # Потолок чтения транскрипта: файл читается целиком (реплика с согласием может быть далеко
 # от хвоста — после неё модель успевает прочитать десятки файлов), но не бесконечно.
@@ -519,10 +524,40 @@ def _main_transcript(transcript_path: str) -> str:
     return transcript_path
 
 
-def _transcript_utterances(transcript_path: str) -> "list[str] | None":
-    """Реплики пользователя в этой сессии по порядку (одна запись — одна реплика); None —
-    сверить не с чем (файла нет либо в нём не распознано ни одной реплики — формат рантайма
-    не тот)."""
+def _assistant_texts(rec) -> "list[str]":
+    """Что в этой записи видел пользователь от модели: текст реплики и вопрос ask_user_question
+    (заголовок, вопрос, варианты). Прочие functionCall — нет: их аргументы пользователь не читал,
+    а текущий вызов (record_approval …) рантайм пишет в транскрипт ещё до PreToolUse."""
+    if not isinstance(rec, dict) or rec.get("type") not in ("assistant", "model"):
+        return []
+    msg = rec.get("message") if isinstance(rec.get("message"), dict) else rec
+    out = []
+    parts = msg.get("parts")
+    for p in parts if isinstance(parts, list) else []:
+        if not isinstance(p, dict):
+            continue
+        if isinstance(p.get("text"), str) and not p.get("thought"):
+            out.append(p["text"])
+        fc = p.get("functionCall")
+        if isinstance(fc, dict) and fc.get("name") in _ASK_TOOLS:
+            out.append(json.dumps(fc.get("args"), ensure_ascii=False))
+    content = msg.get("content")
+    if isinstance(content, str):
+        out.append(content)
+    elif isinstance(content, list):
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "text" and isinstance(b.get("text"), str):
+                out.append(b["text"])
+            elif b.get("type") == "tool_use" and b.get("name") in _ASK_TOOLS:
+                out.append(json.dumps(b.get("input"), ensure_ascii=False))
+    return out
+
+
+def _transcript_dialog(transcript_path: str) -> "tuple[list[str], list[str]] | None":
+    """(реплики пользователя по порядку, текст модели ПЕРЕД каждой из них); None — сверить не с
+    чем (файла нет либо в нём не распознано ни одной реплики — формат рантайма не тот)."""
     if not transcript_path:
         return None
     try:
@@ -530,17 +565,138 @@ def _transcript_utterances(transcript_path: str) -> "list[str] | None":
             raw = f.read(_TRANSCRIPT_MAX_BYTES)
     except Exception:  # noqa: BLE001 — рантайм не отдал путь/файл недоступен
         return None
-    out = []
+    utterances: "list[str]" = []
+    before: "list[str]" = []
+    pending: "list[str]" = []
     for line in raw.decode("utf-8", errors="replace").splitlines():
-        if '"user"' not in line and '"tool_result"' not in line:   # дешёвый префильтр
+        if '"user"' not in line and '"tool_result"' not in line and '"assistant"' not in line \
+                and '"model"' not in line:          # дешёвый префильтр
             continue
         try:
-            texts = _user_texts(json.loads(line))
+            rec = json.loads(line)
         except ValueError:
             continue
+        texts = _user_texts(rec)
         if texts:
-            out.append("\n".join(texts))
-    return out or None
+            utterances.append("\n".join(texts))
+            before.append("\n".join(pending))
+            pending = []
+            continue
+        pending += _assistant_texts(rec)
+    return (utterances, before) if utterances else None
+
+
+def _transcript_utterances(transcript_path: str) -> "list[str] | None":
+    """Реплики пользователя в этой сессии по порядку (см. _transcript_dialog)."""
+    d = _transcript_dialog(transcript_path)
+    return d[0] if d else None
+
+
+# ── Согласие привязано к ДЕЙСТВИЮ ─────────────────────────────────────────────────────
+# Цитата из последней реплики, выражающая согласие, ещё не согласие на ЭТО: пользователь
+# ответил «да, записывай в мастер» на вопрос о merge — и той же фразой выписывались
+# git-discard, gate-override, rollback и policy-downgrade (аудит 2026-11-07). Поэтому:
+#   1. вопрос модели перед ответом либо сам ответ обязаны НАЗЫВАТЬ действие этого класса
+#      (слова класса ниже или ключ целиком): «да» на вопрос о слиянии не отпирает откат;
+#   2. одна реплика — согласия одного класса: второй класс тем же «да» не выписывается
+#      (журнал «реплика → ключи» лежит рядом с маркерами субагентов, в temp ОС).
+_CONSENT_ACTION_WORDS = (
+    ("gate-override", ("гейт", "override", "оверрайд", "судь", "judge")),
+    ("skip-judges", ("skip-judges", "судь", "judge", "гейт")),
+    ("rollback", ("откат", "rollback")),
+    ("policy-repin", ("repin", "перепин", "переснят", "политик", "снимок")),
+    ("policy-downgrade", ("policy-downgrade", "порог", "отключ", "выключ", "политик", "quality",
+                          "security", "параметр", "tdd", "покрыт", "coverage", "eval")),
+    ("acceptance", ("acceptance", "критери", "приёмк", "приемк")),
+    ("abandon", ("abandon", "прогон", "брош")),
+    ("archive-force", ("архив", "archive")),
+    ("git-discard", ("git", "reset", "clean", "checkout", "restore", "stash", "сброс",
+                     "сбрасыв", "стере", "стира", "удал", "откат", "незакоммич", "рабоч")),
+    ("tech-plan", ("план", "plan")),
+    ("ui-plan", ("план", "plan")),
+    ("ui-map", ("карт", "map", "компонент")),
+    ("ui-resolve", ("резолв", "resolve", "компонент")),
+    ("ui-accept", ("прин", "accept", "стоп", "дефект", "провер")),
+    ("graph-catalog", ("каталог", "catalog", "узл")),
+    ("graph-edges", ("связ", "рёбр", "ребр", "edge")),
+    ("graph-accept", ("граф", "прин", "accept")),
+    ("graph-ontology", ("онтолог", "ontology")),
+    ("spec-entity", ("сущност", "entity")),
+    ("jira-plan", ("jira", "джир", "задач")),
+    ("fix-plan", ("план", "plan", "фикс", "fix", "правим", "регресс", "root cause")),
+    ("brd-approved", ("brd", "утверд", "требован", "документ")),
+    ("sdd-approved", ("sdd", "спек", "утверд", "требован", "документ")),
+)
+_DOC_APPROVED_WORDS = ("утверд", "approve", "документ", "спек", "spec", "sdd", "brd")
+
+
+def _consent_class(key: str) -> str:
+    k = str(key).lower()
+    for prefix, _ in _CONSENT_ACTION_WORDS:
+        if k == prefix or k.startswith(prefix + "-"):
+            return prefix
+    if "-approved-" in k:
+        return k.split("-approved-", 1)[0] + "-approved"
+    return k
+
+
+def _action_named(key: str, text: str) -> bool:
+    t = (text or "").lower()
+    k = str(key).lower()
+    if k and k in t:
+        return True
+    cls = _consent_class(key)
+    words = dict(_CONSENT_ACTION_WORDS).get(cls)
+    if words is None and cls.endswith("-approved"):
+        words = _DOC_APPROVED_WORDS + (cls[: -len("-approved")],)
+    if words is None:
+        return True                       # класс без словаря — привязка не применяется
+    tail = k[len(cls) + 1:] if k.startswith(cls + "-") else ""
+    return any(w in t for w in words) or bool(tail and len(tail) >= 3 and tail in t)
+
+
+def _consent_ledger_path(transcript_path: str) -> str:
+    import hashlib
+    import tempfile
+    tag = hashlib.sha256(f"consent|{_main_transcript(transcript_path)}".encode("utf-8")).hexdigest()[:16]
+    return os.path.join(tempfile.gettempdir(), f"forge-consent-{tag}.json")
+
+
+def _utterance_id(index: int, text: str) -> str:
+    import hashlib
+    return f"{index}:{hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _ledger_load(path: str) -> dict:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _ledger_problem(transcript_path: str, uid: str, key: str) -> "str | None":
+    used = _ledger_load(_consent_ledger_path(transcript_path)).get(uid) or []
+    cls = _consent_class(key)
+    other = [k for k in used if _consent_class(k) != cls]
+    if other:
+        return (f"этот ответ пользователя уже засчитан согласием на «{other[0]}». Одно «да» — "
+                f"одно действие: спроси отдельно, назвав, что снимается сейчас.")
+    return None
+
+
+def _ledger_add(transcript_path: str, uid: str, key: str) -> None:
+    path = _consent_ledger_path(transcript_path)
+    data = _ledger_load(path)
+    keys = data.setdefault(uid, [])
+    if key not in keys:
+        keys.append(key)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception:  # noqa: BLE001 — журнал не записался: следующая проверка строже не станет
+        pass
 
 
 def _norm_ws(s: str) -> str:
@@ -649,7 +805,8 @@ def check_record_approval(command: str, root: Path, transcript_path: str,
         argv = _gated_argv(command, r"record_approval\.py")
         if not argv:
             return None
-        tail = ("\n  Порядок: (1) покажи пользователю, ЧТО снимается и почему, и спроси прямо — "
+        tail = ("\n  Порядок: (1) покажи пользователю, ЧТО снимается и почему, и спроси прямо, НАЗВАВ "
+                "действие (например «снять гейт coverage-judge?», «откатить к 02-design?») — "
                 "ask_user_question с вариантом-фразой «Да, <действие>» либо вопросом в чате; "
                 "(2) повтори команду с --evidence \"<его ответ дословно>\". Цитата сверяется с "
                 "ПОСЛЕДНЕЙ репликой пользователя в транскрипте и обязана быть согласием "
@@ -676,7 +833,8 @@ def check_record_approval(command: str, root: Path, transcript_path: str,
             return head + (f"В команде нет --evidence (или он короче {_EVIDENCE_MIN_CHARS} "
                            f"символов: «да»/«ок» цитатой не считаются).") + tail
 
-        utterances = _transcript_utterances(transcript_path)
+        dialog = _transcript_dialog(transcript_path)
+        utterances = dialog[0] if dialog else None
         if utterances is None:
             # Сверить не с чем. Не запираем единственный аварийный выход наглухо:
             # --evidence уже обязателен, record_approval проверит, что это согласие, и
@@ -689,6 +847,16 @@ def check_record_approval(command: str, root: Path, transcript_path: str,
         problem = _evidence_problem(evidence, utterances)
         if problem:
             return head + problem[0].upper() + problem[1:] + tail
+        last, asked = utterances[-1], dialog[1][-1]
+        if not _action_named(key, f"{asked}\n{last}"):
+            return head + (f"Ответ пользователя «{last[:80]}» дан не на вопрос об этом действии: "
+                           f"ни вопрос перед ним, ни сам ответ не называют, что снимается "
+                           f"('{key}'). «Да» на другой вопрос согласием на это не считается.") + tail
+        uid = _utterance_id(len(utterances) - 1, last)
+        problem = _ledger_problem(transcript_path, uid, key)
+        if problem:
+            return head + problem[0].upper() + problem[1:] + tail
+        _ledger_add(transcript_path, uid, key)
         return None
     except Exception as e:
         return f"deny-first: ошибка проверки record_approval ({e})."
@@ -1076,7 +1244,32 @@ def check_archive_drop(command: str, root: Path) -> str | None:
 _WHOLE_TREE = frozenset((".", "./", ":/", ":/*", "*"))
 
 
-def _git_discard(argv: "list[str]") -> str:
+def _pathspecs(sub: str, args: "list[str]") -> "list[str]":
+    """Пути checkout/restore: после `--`, иначе позиционные (у checkout первый — ветка/коммит)."""
+    if "--" in args:
+        return [a for a in args[args.index("--") + 1:] if a]
+    pos, skip = [], False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a in ("-s", "--source", "-b", "-B", "--orphan", "--conflict"):
+            skip = True
+            continue
+        if not a.startswith("-"):
+            pos.append(a)
+    return pos if sub == "restore" else pos[1:] or pos
+
+
+def _is_dir(path: str, cwd: str) -> bool:
+    try:
+        p = path if os.path.isabs(path) else os.path.join(cwd or os.getcwd(), path)
+        return os.path.isdir(p)
+    except (OSError, ValueError):
+        return False
+
+
+def _git_discard(argv: "list[str]", cwd: str = "") -> str:
     """Описание git-команды, стирающей незакоммиченную работу целиком; '' — не такая.
 
     reset --hard, clean -f, checkout/restore всего дерева (или checkout -f), switch
@@ -1094,9 +1287,18 @@ def _git_discard(argv: "list[str]") -> str:
         return "git clean -f"
     if sub == "checkout" and (whole or "-f" in args or "--force" in args):
         return "git checkout всего дерева / -f"
-    if sub == "restore" and whole and not ("--staged" in args and not
-                                           ({"--worktree", "-W"} & set(args))):
+    worktree = not ("--staged" in args and not ({"--worktree", "-W"} & set(args)))
+    if sub == "restore" and whole and worktree:
         return "git restore всего дерева"
+    # Каталог целиком (`git checkout HEAD -- src`, `git restore --source=HEAD src/`) — тот же сброс
+    # незакоммиченного, только по поддереву: точечным он был бы для файла, не для каталога.
+    if sub in ("checkout", "restore") and (sub == "checkout" or worktree) and any(
+            _is_dir(p, cwd) for p in _pathspecs(sub, args)):
+        return f"git {sub} каталога целиком"
+    if sub == "checkout-index" and ({"-a", "--all"} & set(args)) and ({"-f", "--force"} & set(args)):
+        return "git checkout-index -a -f"
+    if sub == "read-tree" and "--reset" in args and "-u" in args:
+        return "git read-tree --reset -u"
     if sub == "switch" and ("--discard-changes" in args or "-f" in args or "--force" in args):
         return "git switch --discard-changes"
     if sub == "stash" and args[:1] in (["drop"], ["clear"]):
@@ -1104,7 +1306,7 @@ def _git_discard(argv: "list[str]") -> str:
     return ""
 
 
-def check_git_discard(command: str, root: Path) -> str | None:
+def check_git_discard(command: str, root: Path, cwd: str = "") -> str | None:
     """R4-класс: git-команда стирает незакоммиченную работу целиком (reset --hard, clean -f,
     checkout/restore всего дерева, stash drop|clear). Требует approval-маркера `git-discard` с
     цитатой пользователя; маркер ОДНОРАЗОВЫЙ — тратится здесь же, на пропуске команды.
@@ -1120,8 +1322,17 @@ def check_git_discard(command: str, root: Path) -> str | None:
         policy = R.load_policy().get("git_discard") or {}
         key = _safe_key(policy.get("approval_key", "git-discard"))
         what = ""
-        for argv in _command_segments(R.normalize_git_command(command)):
-            what = _git_discard(argv)
+        # Разбор — общий с остальными хуками (_shell_targets): снимает обёртки `env`, `VAR=x`,
+        # `command`, `nice`…, раскрывает `sh -c '…'` и `eval`. Свой разбор их не знал, и
+        # `sh -c "git reset --hard"` / `env git reset --hard` проходили (аудит 2026-11-07).
+        norm = R.normalize_git_command(command)
+        for argv in list(ST._segments(norm)) + _command_segments(norm):
+            if argv and os.path.basename(argv[0]) == "xargs":
+                i = 1
+                while i < len(argv) and argv[i].startswith("-"):
+                    i += 2 if argv[i] in ("-n", "-I", "-L", "-P", "-d", "-E", "-s") else 1
+                argv = argv[i:]
+            what = _git_discard([os.path.basename(argv[0])] + argv[1:] if argv else argv, cwd)
             if what:
                 break
         if not what:
@@ -1233,7 +1444,7 @@ def main() -> int:
             return _block(deny)
 
         # ── R4-класс: git стирает незакоммиченную работу (reset --hard, clean -f, …) ──
-        deny = check_git_discard(command, root)
+        deny = check_git_discard(command, root, str(data.get("cwd") or ""))
         if deny:
             return _block(deny)
 

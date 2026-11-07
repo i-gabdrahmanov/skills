@@ -44,6 +44,10 @@ _TOK = r"(?:(?<=\s)|^)"
 _CORE_BLACKLIST = [
     # find в опасном корне + удаление; -execdir/-ok/-okdir — те же rm (боевой прогон v0.4.6)
     r"\bfind\s+(?:/|~|\$HOME)\S*\s.*-(?:delete\b|(?:exec|execdir|ok|okdir)\s+(?:\S*/)?rm\b)",
+    # то же от родителя проекта: `find .. -delete` уносит соседние репо (в т.ч. репо мастер-спеки)
+    r"\bfind\s+(?:\S+\s+)*\.\.(?:/\S*)?\s.*-(?:delete\b|(?:exec|execdir|ok|okdir)\s+(?:\S*/)?rm\b)",
+    # force-push refspec'ом `+ветка` — тот же --force, только без флага (аудит 2026-11-07)
+    r"\bgit\s+push\b[^;&|\n]*\s\+[^\s+]",
     # force-push и в короткой форме `-f` (кластер флагов), кроме --force-with-lease
     r"\bgit\s+push\b(?=.*(?:--force\b|\s-[A-Za-z]*f))(?!.*--force-with-lease)",
     # SQL-деструктив — только в КОНТЕКСТЕ выполнения: вызов БД-клиента либо начало сегмента
@@ -148,8 +152,13 @@ _HOME_FORMS = ("~", "$HOME", "${HOME}")
 
 
 def _is_dangerous_root(target: str) -> bool:
-    return target.startswith("/") or any(target == h or target.startswith(h + "/")
-                                         for h in _HOME_FORMS)
+    """Абсолютный путь, дом — и относительный путь, выходящий за cwd (`..`, `../x`): его
+    резолв проверяется дальше той же проверкой «внутри проекта» (аудит 2026-11-07: `rm -rf ..`
+    уносил родителя со всеми соседними репо). История git проекта (`.git`) — всегда опасна."""
+    if target.startswith("/") or any(target == h or target.startswith(h + "/") for h in _HOME_FORMS):
+        return True
+    parts = [x for x in target.replace("\\", "/").split("/") if x not in ("", ".")]
+    return ".." in parts or (bool(parts) and parts[-1] == ".git")
 
 
 def _rm_recursive_dangerous_targets(cmd: str) -> "list[str]":
@@ -238,7 +247,33 @@ def _targets_inside_project(targets: "list[str]", root) -> bool:
             return False
         if p == root or root not in p.parents:
             return False
+        if p.name == ".git":
+            return False                  # история репо — не уборка, даже внутри проекта
     return True
+
+
+# human_override.py — команда от имени ЧЕЛОВЕКА (снимает R4 на один вызов). Модели её запуск
+# закрыт всегда: и прямой, и через python -c/import, и обёрткой (`script`, `env -u …`) — по
+# упоминанию в команде. Сам скрипт держит ещё два слоя (маркер агента в окружении, /dev/tty).
+_HUMAN_ONLY = re.compile(r"human[_-]?override", re.I)
+
+
+def _human_override_run(cmd: str) -> bool:
+    """Команда ЗАПУСКАЕТ human_override (а не читает о нём). Чтение — `grep`/`cat`/`git log` по
+    упоминанию — резалось вместе с запуском: модель не могла даже найти, что передать человеку."""
+    if not _HUMAN_ONLY.search(cmd):
+        return False
+    for toks in _segment_tokens(cmd):
+        seg = " ".join(toks)
+        if not _HUMAN_ONLY.search(seg):
+            continue
+        try:
+            if R.is_read_only_command(shlex.join(toks)):
+                continue
+        except Exception:  # noqa: BLE001 — не разобрали: считаем запуском
+            pass
+        return True
+    return False
 
 
 def main() -> int:
@@ -264,6 +299,12 @@ def main() -> int:
             policy = R.load_policy().get("destructive_blacklist", []) or []
         except Exception:
             policy = []
+        if _human_override_run(cmd):
+            print("[destructive-blocker] DENY: human_override запускает только человек в своём "
+                  "терминале. Не обходи это: покажи пользователю команду целиком (что меняется "
+                  "и почему) и попроси выполнить её в отдельном терминале, затем жди результата.",
+                  file=sys.stderr)
+            return 2
         if _rm_bare_dangerous_target(cmd):
             print("[destructive-blocker] DENY: `rm` с целью «корень/дом/звезда/текущий "
                   "каталог». Уборку делай по конкретному относительному пути "

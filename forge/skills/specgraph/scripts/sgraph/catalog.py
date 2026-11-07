@@ -9,8 +9,16 @@
 склеиваются никогда.
 
 Решения человека (`decide`): merge, split, rename, move, drop, scope — журнал `.spec-graph/decisions.json`
-и человеческий `_graph/decisions.md`. Журнал применяется при каждой сборке, поэтому повторная разведка
-даёт тот же каталог. Сборка детерминирована: тот же вход → побайтно тот же `catalog.json` — согласие
+и человеческий `_graph/decisions.md`; revoke {index} снимает запись журнала. Журнал применяется при
+каждой сборке, поэтому повторная разведка даёт тот же каталог.
+
+Ссылка на узел в решении — id (`n-…`) или имя, которое носит РОВНО один узел. Решение проверяется
+сухим прогоном до записи: неоднозначное имя, узел, которого нет, split последнего файла узла — отказ
+с перечнем id, а не тихий пропуск. На боевом прогоне GLM без этого merge по имени ушёл не в тот из
+двух одноимённых узлов, merge по id молча не применился, split последнего файла молча пропустился, а
+split-back затёр одноимённый узел вместе с его разделами. Записи журнала прежнего формата (без `v`)
+применяются как раньше (по имени, одноимённые — последний вставленный), чтобы утверждённый каталог не
+поменялся сам; неприменившееся видно в `problems` сборки и в отчёте. Сборка детерминирована: тот же вход → побайтно тот же `catalog.json` — согласие
 `graph-catalog-<KEY>`, привязанное к нему, не слетает от простой пересборки, только от изменения.
 Утверждённый снимок — `catalog.approved.json`; узлы, которые позже предложит раскладка (1.5), идут
 отдельной дельтой и снимок не меняют.
@@ -36,7 +44,8 @@ DECISIONS_REL = ".spec-graph/decisions.json"
 DELTA_DECISIONS_REL = ".spec-graph/delta-decisions.json"   # пишет review.delta_decide
 EDGE_DECISIONS_REL = ".spec-graph/edge-decisions.json"     # пишет review.edges_decide
 CONSENT = "graph-catalog"
-ACTIONS = ("merge", "split", "rename", "move", "drop", "scope")
+ACTIONS = ("merge", "split", "rename", "move", "drop", "scope", "revoke")
+DECISION_V = 2
 # поля узла, которые черновик переносит в каталог как есть
 NODE_FIELDS = ("service", "key", "role", "subkind")
 _REVIEW_MIN = 0.5
@@ -71,33 +80,71 @@ def load_decisions(root: Path) -> List[Dict[str, Any]]:
     return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else []
 
 
-def _check_action(a: Dict[str, Any]) -> Optional[str]:
+def _check_action(a: Dict[str, Any], ont: Optional[O.Ontology] = None) -> Optional[str]:
+    if not isinstance(a, dict):
+        return "решение — объект {action, …, why}"
     act = a.get("action")
     need = {"merge": ("into", "names"), "split": ("node", "file", "name"), "rename": ("node", "name"),
-            "move": ("node", "service"), "drop": ("node",), "scope": ("include",)}
+            "move": ("node", "service"), "drop": ("node",), "scope": ("include",), "revoke": ("index",)}
+    if act is None and a.get("type") in need:
+        return f"нет ключа action (передан type=«{a['type']}») — вид решения пишется в поле action"
     if act not in need:
         return f"action — одно из {', '.join(ACTIONS)}"
     miss = [f for f in need[act] if f not in a]
-    return f"{act}: нет полей {', '.join(miss)}" if miss else None
+    if miss:
+        return f"{act}: нет полей {', '.join(miss)}"
+    if act == "merge" and not (isinstance(a["names"], list) and a["names"]):
+        return "merge: names — непустой список имён или id узлов"
+    if act == "split" and a.get("kind") is not None and ont is not None and a["kind"] not in ont.kinds:
+        return f"split: kind — один из {', '.join(ont.kinds)}"
+    if act == "revoke" and not (isinstance(a["index"], int) and not isinstance(a["index"], bool)):
+        return "revoke: index — номер записи журнала (как в _graph/decisions.md)"
+    return None
 
 
 def decide(root: Path, actions: List[Dict[str, Any]], vault: str) -> Dict[str, Any]:
-    """Дописать решения в журнал (повтор того же решения не дублируется) и в _graph/decisions.md."""
-    errors = [f"actions[{i}]: {e}" for i, a in enumerate(actions) for e in [_check_action(a)] if e]
+    """Дописать решения в журнал (повтор того же решения не дублируется) и в _graph/decisions.md.
+    Новые решения сначала применяются вхолостую к текущему каталогу: не применилось — отказ всех."""
+    ont = O.load(root)
+    msgs: Dict[str, List[int]] = {}
+    for i, a in enumerate(actions):
+        e = _check_action(a, ont)
+        if e:
+            msgs.setdefault(e, []).append(i)
+    if msgs:
+        return {"errors": [f"actions[{','.join(map(str, ix))}]: {e}" for e, ix in msgs.items()]}
+    log = load_decisions(root)
+    revoke = sorted({a["index"] for a in actions if a["action"] == "revoke"}, reverse=True)
+    bad = [n for n in revoke if not 1 <= n <= len(log)]
+    if bad:
+        return {"errors": [f"revoke: записи №{', '.join(map(str, bad))} нет (в журнале {len(log)})"]}
+    revoked = [log.pop(n - 1) for n in revoke]
+    fresh = []
+    for a in actions:
+        if a["action"] == "revoke":
+            continue
+        rec = dict({k: a[k] for k in sorted(a)}, v=DECISION_V)
+        if rec not in log and rec not in fresh:
+            fresh.append(rec)
+    nodes, _, _ = _collect(root)
+    _apply(nodes, log, ont)
+    problems = _apply(nodes, fresh, ont, base=len(log))
+    errors = [f"actions «{fresh[p['n'] - len(log) - 1]['action']}» ({p['ref']}): {p['problem']}"
+              for p in problems if p.get("strict")]
     if errors:
         return {"errors": errors}
-    log = load_decisions(root)
-    added = 0
-    for a in actions:
-        rec = {k: a[k] for k in sorted(a)}
-        if rec not in log:
-            log.append(rec)
-            added += 1
+    log += fresh
     p = Path(root) / DECISIONS_REL
     p.parent.mkdir(parents=True, exist_ok=True)
     FS.write_text(p, json.dumps(log, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     write_decisions_md(root, vault)
-    return {"added": added, "total": len(log)}
+    out: Dict[str, Any] = {"added": len(fresh), "total": len(log)}
+    if revoked:
+        out["revoked"] = len(revoked)
+    notes = [p["problem"] for p in problems if not p.get("strict")]
+    if notes:
+        out["notes"] = notes[:10]
+    return out
 
 
 def _load(root: Path, rel: str, empty: Any) -> Any:
@@ -109,9 +156,9 @@ def write_decisions_md(root: Path, vault: str) -> None:
     """_graph/decisions.md — все решения человека: каталог, узлы дельты, отклонённые связи (2.6)."""
     lines = ["# Решения человека", "", "Решение → почему. Применяются при каждой сборке; отклонённое больше не предлагается.", "",
              "## Каталог", ""]
-    for a in load_decisions(root):
-        what = ", ".join(f"{k}={v}" for k, v in a.items() if k not in ("action", "why"))
-        lines.append(f"- **{a['action']}** {what} → {a.get('why', 'без пояснения')}")
+    for i, a in enumerate(load_decisions(root), 1):
+        what = ", ".join(f"{k}={v}" for k, v in a.items() if k not in ("action", "why", "v"))
+        lines.append(f"{i}. **{a['action']}** {what} → {a.get('why', 'без пояснения')}")
     delta = _load(root, DELTA_DECISIONS_REL, {})
     if delta:
         lines += ["", "## Узлы, добавленные раскладкой", ""]
@@ -140,8 +187,8 @@ def _merge_into(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
     dst["from"] = sorted(set(dst["from"]) | set(src["from"]))
 
 
-def build(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
-    ont = O.load(root)
+def _collect(root: Path) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Узлы черновиков, склеенные по точной идентичности (до решений человека)."""
     drafts = SV.load_drafts(root)
     drafts.sort(key=lambda d: (d["file"], d["item_id"]))
     nodes: Dict[str, Dict[str, Any]] = {}
@@ -166,32 +213,109 @@ def build(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
                 nodes[ident] = rec
         for x in d.get("not_nodes") or []:
             not_nodes.append(dict(x, file=d["file"]))
-    scope = None
-    for a in load_decisions(root):
-        by_name = {n["name"]: k for k, n in nodes.items()}
-        act = a["action"]
+    return nodes, conflicts, not_nodes
+
+
+def _ref(nodes: Dict[str, Dict[str, Any]], ref: Any, strict: bool) -> Tuple[Optional[str], Optional[str]]:
+    """(ключ узла, проблема). strict (решения нового формата): id `n-…` или имя ровно одного узла.
+    Прежний формат: только имя, из одноимённых — последний вставленный (как было)."""
+    if strict:
+        for k in nodes:
+            if node_id(k) == ref:
+                return k, None
+    hits = [k for k, n in nodes.items() if n["name"] == ref]
+    if not hits:
+        return None, f"узла «{ref}» нет в каталоге (сейчас) — имя или id `n-…` из catalog.json"
+    if len(hits) > 1:
+        desc = "; ".join(f"{node_id(k)} — {nodes[k]['kind']}, {nodes[k]['sources'][0]['file']}" for k in hits)
+        if strict:
+            return None, f"имя «{ref}» у {len(hits)} узлов ({desc}) — укажи id нужного"
+        return hits[-1], f"имя «{ref}» у {len(hits)} узлов — применено к последнему ({node_id(hits[-1])}): {desc}"
+    return hits[0], None
+
+
+def _apply(nodes: Dict[str, Dict[str, Any]], log: List[Dict[str, Any]], ont: O.Ontology,
+           base: int = 0) -> List[Dict[str, Any]]:
+    """Применить решения к узлам на месте. Ответ — проблемы [{n, action, ref, problem, strict}]: n — номер
+    записи журнала; strict — решение нового формата не применилось (decide его не запишет). Итоговый
+    scope — в nodes под ключом-маркером не кладётся: его возвращает `_scope(log)`."""
+    problems: List[Dict[str, Any]] = []
+
+    def note(n, a, ref, msg, strict):
+        problems.append({"n": n, "action": a["action"], "ref": ref, "problem": msg, "strict": strict})
+
+    for n, a in enumerate(log, base + 1):
+        act, strict = a["action"], a.get("v", 1) >= DECISION_V
+
+        def get(ref):
+            k, msg = _ref(nodes, ref, strict)
+            if msg:
+                note(n, a, ref, msg, strict and k is None)
+            return k
+
         if act == "merge":
-            into = by_name.get(a["into"])
+            into = get(a["into"])
             for name in a["names"]:
-                k = by_name.get(name)
+                k = get(name)
                 if into and k and k != into:
                     _merge_into(nodes[into], nodes.pop(k))
-        elif act == "split" and by_name.get(a["node"]):
-            src = nodes[by_name[a["node"]]]
-            part = [s for s in src["sources"] if s["file"] == a["file"]]
-            if part and len(src["sources"]) > 1:
-                src["sources"] = [s for s in src["sources"] if s["file"] != a["file"]]
-                new = {k: v for k, v in src.items() if k in ("kind", "service", "role", "subkind")}
-                new.update(name=a["name"], sources=part, names_seen=[a["name"]], **{"from": []})
-                nodes[f"{src['kind']}|{norm_name(a['name'])}"] = new
-        elif act == "rename" and by_name.get(a["node"]):
-            nodes[by_name[a["node"]]]["name"] = a["name"]
-        elif act == "move" and by_name.get(a["node"]):
-            nodes[by_name[a["node"]]]["service"] = a["service"]
-        elif act == "drop" and by_name.get(a["node"]):
-            nodes.pop(by_name[a["node"]])
-        elif act == "scope":
+        elif act == "split":
+            key = get(a["node"])
+            if key is None:
+                continue
+            src = nodes[key]
+            part = [x for x in src["sources"] if x["file"] == a["file"]]
+            if not part:
+                note(n, a, a["node"], f"у узла нет источника {a['file']}", strict)
+                continue
+            if len(part) == len(src["sources"]):
+                note(n, a, a["node"], "split забирает у узла последний файл — это rename (action rename, node, name)",
+                     strict)
+                continue
+            src["sources"] = [x for x in src["sources"] if x["file"] != a["file"]]
+            kind = (a.get("kind") or src["kind"]) if strict else src["kind"]
+            new = {k: v for k, v in src.items() if k in ("role", "subkind") and kind == src["kind"]}
+            if src.get("service"):
+                new["service"] = src["service"]
+            new.update(kind=kind, name=a["name"], sources=part, names_seen=[a["name"]], **{"from": []})
+            if strict and a.get("key"):
+                new["key"] = a["key"]
+            ident = new["key"] if new.get("key") else f"{kind}|{norm_name(a['name'])}"
+            if ident in nodes:
+                # тот же вид и имя (или ключ) — это тот же узел: источник сливается в него. Прежде
+                # узел перезаписывался, и его разделы пропадали из каталога (README kid_narochno).
+                _merge_into(nodes[ident], new)
+                note(n, a, a["node"], f"«{a['name']}» уже есть ({node_id(ident)}) — файл {a['file']} слит в него",
+                     False)
+            else:
+                nodes[ident] = new
+        elif act in ("rename", "move", "drop"):
+            key = get(a["node"])
+            if key is None:
+                continue
+            if act == "rename":
+                nodes[key]["name"] = a["name"]
+            elif act == "move":
+                nodes[key]["service"] = a["service"]
+            else:
+                nodes.pop(key)
+    return problems
+
+
+def _scope(log: List[Dict[str, Any]]) -> Optional[List[str]]:
+    scope = None
+    for a in log:
+        if a["action"] == "scope":
             scope = sorted(a["include"])
+    return scope
+
+
+def build(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
+    ont = O.load(root)
+    nodes, conflicts, not_nodes = _collect(root)
+    log = load_decisions(root)
+    problems = _apply(nodes, log, ont)
+    scope = _scope(log)
     order = {k: i for i, k in enumerate(ont.kinds)}
     out = []
     for ident, n in nodes.items():
@@ -204,9 +328,12 @@ def build(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     out.sort(key=lambda n: (order.get(n["kind"], 99), n.get("service") or "", n["name"]))
     names: Dict[str, List[Dict[str, Any]]] = {}
     for n in out:
-        names.setdefault(n["name"], []).append(n)
-    collisions = [{"name": k, "kinds": [n["kind"] for n in v],
-                   "suggest": [f"{k} ({n.get('service') or ont.kinds[n['kind']]['title_ru'].lower()})" for n in v]}
+        # без учёта регистра: «Задача А» и «задача а» — один файл на macOS/Windows и одна
+        # ссылка [[…]] в Obsidian (его ссылки регистронезависимы)
+        names.setdefault(n["name"].casefold(), []).append(n)
+    collisions = [{"name": v[0]["name"], "kinds": [n["kind"] for n in v],
+                   "suggest": [f"{n['name']} ({n.get('service') or ont.kinds[n['kind']]['title_ru'].lower()})"
+                               for n in v]}
                   for k, v in names.items() if len(v) > 1]
     review = []
     generic = PF.generic_words()
@@ -226,6 +353,8 @@ def build(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     p = Path(root) / CATALOG_REL
     p.parent.mkdir(parents=True, exist_ok=True)
     FS.write_text(p, json.dumps(cat, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    # проблемы решений — в отчёт и ответ, но не в catalog.json: к его байтам привязано согласие
+    cat = dict(cat, problems=[{k: v for k, v in x.items() if k != "strict"} for x in problems])
     _write_md(root, cfg, cat, ont)
     return cat
 
@@ -265,6 +394,9 @@ def _write_md(root: Path, cfg: Dict[str, Any], cat: Dict[str, Any], ont: O.Ontol
              lambda r: f"- «{r.get('candidate')}» ({r['file']}): {r.get('reason')}"
                        + (f" — предложен вид «{r['suggested_kind']}»" if r.get("suggested_kind") else ""))):
         lines += [f"## {title}", ""] + ([fmt(r) for r in rows] or ["- нет"]) + [""]
+    if cat.get("problems"):
+        lines += ["## Решения, применённые не так, как записаны", ""]
+        lines += [f"- №{x['n']} {x['action']} «{x['ref']}»: {x['problem']}" for x in cat["problems"]] + [""]
     kinds_new = sorted({r["suggested_kind"] for r in cat["not_nodes"] if r.get("suggested_kind")})
     lines += ["## Кандидаты в новые виды", ""] + ([f"- {k}" for k in kinds_new] or ["- нет"]) + [""]
     p = Path(root) / cfg["vault"] / "_graph" / "catalog.md"
@@ -285,6 +417,11 @@ def approval(root: Path) -> Dict[str, Any]:
 def approved(root: Path) -> Tuple[bool, str]:
     """Утверждён ли снимок: согласие привязано к содержимому catalog.approved.json."""
     snap = Path(root) / APPROVED_REL
+    if not snap.is_file() and (Path(root) / CATALOG_REL).is_file():
+        # согласие записано (record_approval --bind-file catalog.json), а graph_catalog после него
+        # не звали — снимок делается здесь же: раньше graph_assign_start отвечал «нет снимка» сразу
+        # после записанного «да», и модель гадала, что ещё нужно
+        approval(root)
     if not snap.is_file():
         return False, "каталог не утверждён: нет снимка (покажи _graph/catalog.md и спроси пользователя)"
     st = CS.state(root, CONSENT, snap)

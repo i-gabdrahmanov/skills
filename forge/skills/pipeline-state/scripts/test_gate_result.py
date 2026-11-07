@@ -524,6 +524,39 @@ class TestGateResultCheck(unittest.TestCase):
             self.assertIsNone(FE.gate(tmp, SKILL, FEATURE, "fix-diag"),
                               "evidence не должно записываться при отказе")
 
+    def test_record_gate_rejects_masked_gate(self):
+        """Подстрочная проверка пропускала гейт, который не исполнялся или чей exit-код заглушён:
+        `гейт || true`, `true # гейт`, `echo гейт`, `false; гейт`, `гейт | tee` → passed:true."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_manifest(tmp)
+            good = _stub_gate(tmp, "check_taskplan.py", exit_code=1)
+            for cmd in (f"{good} || true", "true # check_taskplan.py", "echo check_taskplan.py",
+                        f"false; {good}", f"{good} | tee log", f"{good} &",
+                        'sh -c "python3 check_taskplan.py"', f"{good}\ntrue"):
+                r = _record(tmp, "fix-diag", "--cmd", cmd)
+                self.assertEqual(r.returncode, 2, f"{cmd!r}: {r.stderr}")
+            self.assertIsNone(FE.gate(tmp, SKILL, FEATURE, "fix-diag"))
+
+    def test_record_gate_accepts_real_gate_forms(self):
+        """Штатные формы брифов: цепочка &&, обёртки env/timeout, опции python, редирект."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d); _make_manifest(tmp)
+            good = _stub_gate(tmp, "check_taskplan.py")
+            for cmd in (good, f"true && {good}", f"env A=1 nice {good}",
+                        f"{good} --scan x > out.log 2>&1",
+                        f'"{sys.executable}" -X utf8 check_taskplan.py plan.json'):
+                r = _record(tmp, "fix-diag", "--cmd", cmd)
+                self.assertEqual(r.returncode, 0, f"{cmd!r}: {r.stderr}")
+
+    def test_two_word_gate_token_needs_its_subcommand(self):
+        import record_gate as RG
+        self.assertTrue(RG._segment_runs(["python3", "/x/graph_gate.py", "map", "--project", "."],
+                                         "graph_gate.py map"))
+        self.assertFalse(RG._segment_runs(["python3", "/x/graph_gate.py", "check"], "graph_gate.py map"))
+        self.assertTrue(RG._segment_runs(["./gradlew", "build"], "gradlew"))
+        self.assertTrue(RG._segment_runs(["./mvnw", "verify"], "mvn"))
+        self.assertFalse(RG._segment_runs(["echo", "./gradlew"], "gradlew"))
+
     def test_fix_intake_scope_gate_required(self):
         # скоуп-чек (check_fix_scope) нельзя молча пропустить: без evidence fix-intake не закрыть.
         # inputs.story в манифесте — отдельный гейт (required_decisions_on_close), здесь он

@@ -317,20 +317,26 @@ def _state_of(slug: str, sdd: Path, spec_path: Path, capability: str, prefix: st
 
     `status == "error"` (в дельте нет требований) считаем «делать нечего» — так эта ветка
     вела себя с самого начала, и на ней же стоит гейт архивации."""
+    return _plan_state(slug, sdd, spec_path, capability, prefix, g)[0]
+
+
+def _plan_state(slug: str, sdd: Path, spec_path: Path, capability: str, prefix: str,
+                g: "SG.Grammar | None" = None) -> "tuple[str, dict]":
+    """(состояние, план) — план нужен отчёту пост-проверки: ЧТО разошлось после записи."""
     plan = engine.merge(sdd, spec_path, engine.default_template(), slug, capability,
                         prefix=prefix, dry_run=True, grammar=g,
                         superseded=_superseded(slug, sdd, spec_path, capability, prefix, g))
     if plan["status"] == "unsupported":
         # Форму мастера не разобрали — «слито» это или нет, неизвестно. Врать «merged»
         # нельзя: на этом состоянии стоит гейт архивации, и требование уехало бы мимо мастера.
-        return "unknown-format"
+        return "unknown-format", plan
     if plan["status"] == "no-section":
-        return "new"        # раздела требований нет — значит и требований дельты там нет
+        return "new", plan  # раздела требований нет — значит и требований дельты там нет
     if plan["status"] == "error":
         # Дубли названий — дельта не слита и слиться не может, пока человек не разведёт их:
         # «делать нечего» тут значило бы отпустить её в архив мимо мастера.
-        return "drifted" if plan.get("kind") == "duplicate-titles" else "merged"
-    return _classify(plan.get("kinds", []))
+        return ("drifted" if plan.get("kind") == "duplicate-titles" else "merged"), plan
+    return _classify(plan.get("kinds", [])), plan
 
 
 def delta_state(project_root, slug: str) -> str:
@@ -803,6 +809,10 @@ def _print_report(rows: list, verify: bool, dry: bool) -> None:
         if r["ops"] and (r["problem"] or r["master_written"] or dry):
             for op in r["ops"]:
                 print(f"        {op}")
+        if r.get("after_ops"):
+            print("     после записи разбор видит:")
+            for op in r["after_ops"]:
+                print(f"        {op}")
         _print_choices(r)
     tally = {k: sum(1 for r in rows if r.get("did") == k)
              for k in ("merged", "verified", "actual", "skipped")}
@@ -822,7 +832,8 @@ def _row(slug: str, short: str) -> dict:
             "master_written": False, "archived": False, "archive_target": None,
             "archive_error": None, "problem": None, "error": None, "did": None,
             "master_note": "не тронут", "docs_note": "остались на месте",
-            "spec": None, "capability": None, "candidates": [], "impl": None}
+            "spec": None, "capability": None, "candidates": [], "impl": None,
+            "after_ops": []}
 
 
 def cmd_merge(args) -> int:
@@ -941,13 +952,22 @@ def cmd_merge(args) -> int:
             # только на подтверждённом merged — иначе требование ушло бы с рабочего стола, так
             # и не попав в мастер, а обнаружить это было бы уже нечем.
             row["in_master_after"] = _in_master(_master_text(spec_path), slug, g)
-            row["delta_state_after"] = _state_of(slug, sdd, spec_path, capability, prefix, g)
+            row["delta_state_after"], after = _plan_state(slug, sdd, spec_path, capability,
+                                                          prefix, g)
             if res["blocked"]:
                 row["problem"] = "blocked-modify"
                 rc = rc or 3
                 continue
             if row["delta_state_after"] != "merged":
                 row["problem"] = "not-confirmed"
+                row["after_ops"] = [op for op in after.get("ops") or []
+                                    if not op.startswith("=")]
+                # Модель читала not-confirmed как «записалось не туда», удаляла записанное
+                # руками и сливала заново (KIDPPRB-10815). Запись уже в мастере — и это так и
+                # должно быть сказано в отчёте, а не выводиться из вариантов.
+                row["error"] = ("мастер ЗАПИСАН, но перечитанный разбор видит расхождение — "
+                                "записанное не удаляй, не переноси и не переписывай руками, "
+                                "merge повторно не запускай: решает пользователь")
                 rc = rc or 3
                 continue
             row["did"] = "merged"
