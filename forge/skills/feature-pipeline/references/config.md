@@ -497,9 +497,10 @@ exit 3. Мастер при этом не трогается вообще; де�
 ## Переносимость скиллов (не параметр, а упаковка)
 
 `feature-pipeline` ссылается на `../minor-defect-fix/references/*` (общие jira/bitbucket/
-coverage воркфлоу). `deploy.sh` раскладывает ВСЕ скиллы co-located в `<project>/.gigacode/skills/`,
-поэтому `minor-defect-fix` и `pipeline-state` лежат рядом и вызываются по проектному пути
-`<project>/.gigacode/skills/<skill>/scripts/` — отдельная глобальная установка не нужна.
+coverage воркфлоу). `install.sh forge` кладёт ВСЕ скиллы поставки в один extension проекта
+(`<project>/.gigacode/extensions/forge/skills/`), поэтому `minor-defect-fix` и `pipeline-state` лежат
+рядом и вызываются по пути `<project>/.gigacode/skills/<skill>/scripts/` (в установленной поставке он
+уже переписан под каталог extension'а) — отдельная глобальная установка не нужна.
 
 ---
 

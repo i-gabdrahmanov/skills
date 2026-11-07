@@ -203,7 +203,8 @@ class TestStepIdConventions(unittest.TestCase):
         self.assertIn("BR.subagent_steps()", src,
                       "fallback update._check_subagent_origin обязан брать плоские ветки из реестра")
         for ph in ("fix-diag", "fix-red", "fix-green", "fix-verify", "fix-spec",
-                   "tech-diag", "tech-apply", "tech-verify", "tech-record"):
+                   "tech-diag", "tech-apply", "tech-verify", "tech-record",
+                   "ui-spec", "ui-design", "ui-build", "ui-verify"):
             self.assertIn(ph, PP.SUBAGENT_PHASE_PREFIXES)
 
 

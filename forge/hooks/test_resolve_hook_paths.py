@@ -445,6 +445,40 @@ class TestMcpServers(unittest.TestCase):
         self.assertEqual(removed, ["forge-master"])
         self.assertEqual(updated, {"x": 1})
 
+    def _profile(self, proj: Path, text: str):
+        (proj / ".gigacode" / ".forge-profile").write_text(text, encoding="utf-8")
+
+    def test_ui_profile_registers_only_forge_ui(self):
+        """Фронт-репо (профиль ui): движок forge-ui, без канала к бэковому мастеру."""
+        with tempfile.TemporaryDirectory() as td:
+            proj = self._project(td, {"mcpServers": {"jira": {"command": "jira-mcp"}}})
+            self._profile(proj, "profile ui\nmcp forge-ui  # движок\n")
+            r = self._run(proj)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            s = json.loads((proj / ".gigacode" / "settings.json").read_text(encoding="utf-8"))
+            self.assertEqual(sorted(s["mcpServers"]), ["forge-ui", "jira"])
+            root = str(proj.resolve()).replace("\\", "/")
+            self.assertEqual(s["mcpServers"]["forge-ui"]["args"][2], f"{root}/.gigacode/hooks/daiver_mcp.py")
+
+    def test_profile_switch_drops_other_profiles_server(self):
+        """Репо переставили back → ui: мёртвый forge-master не остаётся висеть, и обратно."""
+        with tempfile.TemporaryDirectory() as td:
+            proj = self._project(td, {})
+            self._run(proj)
+            self._profile(proj, "profile ui\nmcp forge-ui\n")
+            self._run(proj)
+            s = json.loads((proj / ".gigacode" / "settings.json").read_text(encoding="utf-8"))
+            self.assertEqual(sorted(s["mcpServers"]), ["forge-ui"])
+            (proj / ".gigacode" / ".forge-profile").unlink()
+            self._run(proj)
+            s = json.loads((proj / ".gigacode" / "settings.json").read_text(encoding="utf-8"))
+            self.assertEqual(sorted(s["mcpServers"]), ["forge-master"])
+
+    def test_remove_strips_forge_ui_too(self):
+        updated, removed = rhp.strip_forge_mcp({"mcpServers": {"forge-ui": {}, "jira": {}}})
+        self.assertEqual(removed, ["forge-ui"])
+        self.assertEqual(updated, {"mcpServers": {"jira": {}}})
+
 
 if __name__ == "__main__":
     unittest.main()

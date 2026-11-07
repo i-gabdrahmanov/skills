@@ -1,0 +1,45 @@
+{
+ "file": "rmoc-service/rmoc-service.md",
+ "nodes": [
+  {
+   "confidence": "high",
+   "key": "http:GET /rmoc/packages",
+   "kind": "endpoint",
+   "name": "rmoc-service GET rmoc-packages",
+   "sections": [
+    "rmoc-service/rmoc-service.md#5"
+   ],
+   "service": "rmoc-service",
+   "why": "кандидат R-endpoint-heading"
+  },
+  {
+   "confidence": "high",
+   "key": "http:POST /rmoc/packages/transfer",
+   "kind": "endpoint",
+   "name": "rmoc-service POST rmoc-packages-transfer",
+   "sections": [
+    "rmoc-service/rmoc-service.md#9"
+   ],
+   "service": "rmoc-service",
+   "why": "кандидат R-endpoint-heading"
+  },
+  {
+   "confidence": "high",
+   "key": "http:GET /rmoc/komplekt/items",
+   "kind": "endpoint",
+   "name": "rmoc-service GET rmoc-komplekt-items",
+   "sections": [
+    "rmoc-service/rmoc-service.md#13"
+   ],
+   "service": "rmoc-service",
+   "why": "кандидат R-endpoint-heading"
+  },
+  {
+   "confidence": "high",
+   "kind": "service",
+   "name": "rmoc-service",
+   "why": "кандидат R-service-file"
+  }
+ ],
+ "not_nodes": []
+}

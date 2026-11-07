@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #
-# cleanup-legacy.sh — снять остатки СТАРОЙ раскладки forge (эпохи deploy.sh), которые
-#                     перекрывают установленный extension.
+# cleanup-legacy.sh — снять остатки СТАРЫХ раскладок forge на уровне пользователя ($HOME:
+#                     ~/.gigacode/{skills,commands,hooks}, блок hooks в ~/.gigacode/settings.json),
+#                     которые перекрывают extension проекта.
 #
-# Это НЕ деинсталлятор extension'а: снять сам extension — одна команда рантайма
-# (`gigacode extensions uninstall forge`, INSTALL.md §5). И это НЕ `forge/uninstall.sh`: тот —
-# зеркало `deploy.sh`, он снимает раскладку внутри одного проекта и о extension'е не знает.
+# Это НЕ деинсталлятор: extension проекта (<repo>/.gigacode/extensions/<forge|forge-ui>/) снимает
+# `uninstall.sh <kind> <repo>`, а старую раскладку ВНУТРИ проекта install.sh снимает сам перед
+# установкой (uninstall.sh --legacy-only). Каталоги extensions/ этот скрипт не трогает.
 #
 # Зачем отдельный скрипт. Старая раскладка не удаляется сама и МОЛЧА ПОБЕЖДАЕТ extension:
 #   • скилл резолвится project > user > extension — каталог `~/.gigacode/skills/feature-pipeline`

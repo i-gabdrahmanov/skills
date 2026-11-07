@@ -1,0 +1,23 @@
+{
+  "_comment": "Правила полноты графа по ТЗ аналитика (задача 3.2). Ноль ошибок валидатора значит только, что существующие ссылки целы; здесь — дыры: чего в графе НЕТ, хотя по ТЗ должно быть. Правило: вид (и роль) узла, ключи frontmatter и условие — empty_all (во всех ключах вместе меньше min ссылок) или empty_any (хотя бы в одном ключе меньше min); unless — флаг во frontmatter, который ставит аналитик («да, так задумано»), и правило молчит. severity: error — структурная ошибка (гейт), warning — дыра для аналитика. question — вопрос в _graph/open-questions.md ({name} — имя узла). group_by — вид, по которому дыры группируются в отчёте.",
+  "version": 1,
+  "group_by": "operation",
+  "rules": [
+    {"id": "W-op-no-creator", "kind": "operation", "empty_all": ["created_by"], "min": 1, "severity": "warning",
+     "question": "Кто формирует задачу «{name}»? В спеке нет шедулера, эндпойнта или обработчика, который её создаёт."},
+    {"id": "W-op-no-closer", "kind": "operation", "empty_all": ["closed_by"], "min": 1, "severity": "warning",
+     "question": "Кто закрывает задачу «{name}»? Без этого её задачи не закрываются никогда."},
+    {"id": "W-op-no-ui", "kind": "operation", "empty_all": ["screens"], "min": 1, "unless": "system", "severity": "warning",
+     "question": "Где пользователь работает с задачей «{name}»? Экрана в спеке нет; если задача системная — поставьте в её свойствах system: true."},
+    {"id": "W-sched-idle", "kind": "scheduler", "empty_all": ["creates_task", "closes_task", "invokes"], "min": 1, "severity": "warning",
+     "question": "Что делает шедулер «{name}»? Он не формирует и не закрывает задачи и ничего не запускает."},
+    {"id": "W-ep-no-caller", "kind": "endpoint", "empty_all": ["called_by"], "min": 1, "unless": "public", "severity": "warning",
+     "question": "Кто вызывает «{name}»? Ни экран, ни сервис его не вызывает; если это внешний API — поставьте public: true."},
+    {"id": "W-topic-side", "kind": "topic", "empty_any": ["publishers", "consumers"], "min": 1, "unless": "external_side", "severity": "warning",
+     "question": "У топика «{name}» нет издателя или читателя. Если другую сторону держит внешний контрагент — поставьте external_side: true."},
+    {"id": "W-screen-no-op", "kind": "screen", "empty_all": ["ui_of"], "min": 1, "severity": "warning",
+     "question": "Для какой задачи экран «{name}»?"},
+    {"id": "E-consume-no-topic", "kind": "kafka-op", "role": "consume", "empty_all": ["consumes"], "min": 1, "severity": "error",
+     "question": "Какой топик читает обработчик «{name}»?"}
+  ]
+}

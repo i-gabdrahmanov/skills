@@ -45,7 +45,7 @@ from _util import (gate_result_path, judges_dir, load_project_config, origins_di
                    task_docs_dir as _task_docs_dir)
 import forge_events as FE  # журнал evidence (импорт _util уже положил hooks/ в sys.path)
 import _branches as BR  # реестр плоских веток (fix, tech) — hooks/, как forge_events
-from _project import exclusive_lock, safe_component  # noqa: E402
+from _project import exclusive_lock, safe_component, install_rel as _install_rel  # noqa: E402
 
 # Соглашение «какие фазы обязаны идти через субагента» — ЕДИНЫЙ источник pipeline_phases
 # (co-located feature-pipeline). best-effort импорт + inline-fallback, чтобы переименование
@@ -282,8 +282,9 @@ def _check_subagent_origin(step: dict, closed_by: str, project: Path, skill: str
 
 
 # Доко-фазы, закрытие которых требует человеческого утверждения дока (Гейт 1 / Гейт SDD).
-# Префикс id шага → имя дока. Ключ маркера: <doc>-approved-<feature>.
-_DOC_APPROVAL_STEPS = (("00-brd", "brd"), ("02-sdd", "sdd"))
+# Префикс id шага → имя дока. Ключ маркера: <doc>-approved-<feature>. Плоские ветки
+# (ui-spec → ui-spec-approved-<feature>) — из реестра _branches, не копией здесь.
+_DOC_APPROVAL_STEPS = (("00-brd", "brd"), ("02-sdd", "sdd")) + tuple(BR.doc_approvals().items())
 
 
 def _approval_marker_valid(project: Path, key: str) -> bool:
@@ -387,7 +388,7 @@ def _check_grounding_substance(step: dict, project: Path, skill: str, feature: s
         return
     raise StepGateBlocked(
         f"Шаг {step_id} нельзя закрыть: {problem}.\n"
-        f"   Сними инвентарь: python3 <project>/.gigacode/skills/system-analyst/scripts/"
+        f"   Сними инвентарь: python3 <project>/{_install_rel()}/skills/system-analyst/scripts/"
         f"ensure_inventory.py --root <project> --force, затем повтори update.py.\n"
         + _override_hint(f"grounding-substance-{step_id}", feature, step_id,
                          "<почему grounding объективно недоступен>")

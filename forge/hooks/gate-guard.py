@@ -26,6 +26,15 @@ import shlex
 import sys
 from pathlib import Path
 
+
+def _install_rel() -> str:
+    """Каталог установки forge от корня проекта — для подсказок (см. _project.install_rel)."""
+    try:
+        from _project import install_rel
+        return install_rel()
+    except Exception:  # noqa: BLE001 — подсказка, не enforcement
+        return ".gigacode"
+
 # Импорт форж-модулей — fail-CLOSED. Крэш на импорте отдаёт exit 1, а блокировка —
 # exit 2; рантайм читает exit 1 как «хук не возражает» и ВЫПОЛНЯЕТ вызов. Так уже молча
 # выключался весь enforcement (PEP 604 без future-импорта в _project.py под python 3.9 —
@@ -43,8 +52,8 @@ except Exception as _e:  # pragma: no cover — сломанный бандл/и
         from _failclosed import bundle_denied
     except Exception:
         print(f"[gate-guard] DENY: бандл forge не грузится ({_e}). Проверь интерпретатор в "
-              f".gigacode/settings.json (нужен python 3.9+ с рабочим expat), затем "
-              f"перезапусти: bash .gigacode/deploy-local.sh", file=sys.stderr)
+              f"hooks/hooks.json установки forge (нужен python 3.9+ с рабочим expat), затем "
+              f"перезапусти: bash .gigacode/extensions/<forge|forge-ui>/deploy-local.sh", file=sys.stderr)
         sys.exit(2)
     sys.exit(bundle_denied("gate-guard", _e))
 
@@ -1166,7 +1175,7 @@ def main() -> int:
         # (иначе всё прошло бы как R1-auto). preflight ловит это ДО старта; здесь — backstop.
         if not R.policy_loaded() and R.manifest_exists(root):
             return _block("risk-policy.json не загружена/битая — risk ladder неактивен; "
-                          "почини .gigacode/hooks/risk-policy.json (см. preflight).")
+                          f"почини {_install_rel()}/hooks/risk-policy.json (см. preflight).")
 
         info = R.classify(tool_name, tool_input, str(root))
         level = info["level"]
@@ -1294,7 +1303,7 @@ def main() -> int:
                 "не выбрана критичность фичи (v2: decisions.criticality + decisions.auto_max_risk "
                 "в manifest.json активной фичи). Вызови скрипт атомарной записи — "
                 "feature-pipeline/scripts/set_criticality.py (он деривит auto_max_risk из критичности):\n"
-                "  python3 <project>/.gigacode/skills/feature-pipeline/scripts/set_criticality.py "
+                f"  python3 <project>/{_install_rel()}/skills/feature-pipeline/scripts/set_criticality.py "
                 "--criticality <low|medium|high> --skill <skill> --feature <feature> "
                 "--project-root <root>\n"
                 "Ручная правка ground/policy.json / manifest.json заблокирована "

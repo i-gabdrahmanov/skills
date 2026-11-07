@@ -17,7 +17,8 @@
   evidence, inline-phase, phase-gate). Блокировка = `exit 2` + причина в `stderr`.
 - **Судьи + execution-gates** — детерминированные проверки, которые закрывают шаг только при PASS.
 
-> Хуки рантайм читает из `<project>/.gigacode/settings.json` (gigacode 26.9 — без флагов;
+> Хуки рантайм берёт из extension'а forge проекта (`<project>/.gigacode/extensions/forge/hooks/hooks.json`,
+> ставит `install.sh forge`; gigacode 26.9 — без флагов;
 > `--experimental-hooks` и `-y` из CLI убраны). `[HOOK_REGISTRY] 0 hook entries` на старте —
 > control-plane молчит. Перед прогоном — `preflight.py` (exit 0 = харнес активен).
 > Запуск — **интерактивный** (`gigacode`, дальше `/forge <задача>`): в headless рантайм не даёт
@@ -279,14 +280,15 @@ Jira делает пользователь сам (forge-no-delivery). Соот�
 | `gate-guard` (+`risk_ladder`, `risk-policy.json`) | PreToolUse Bash/Write/Edit/Read | risk ladder R0–R5, deny-first, форсит выбор критичности; на read-инструментах — только фазовый гейт (блок чтения `src/` до grounding), ladder к чтению неприменим | exit 2 |
 | `tdd-guard` | PreToolUse Write/Edit | блок `src/main` пока RED-тест задачи (`04-test-<id>`) не completed; блок `@DataJpaTest`/`@SpringBootTest` при `test_layer=service-unit` | exit 2 |
 | `tech-guard` | PreToolUse Write/Edit/Bash | tech-ветка: запись в файл проекта только на `tech-apply`, по согласию `tech-plan-<F>` на ТЕКУЩИЙ `change-plan.json` (sha256), после снимка «до», только в `targets` | exit 2 |
+| `ui-guard` | PreToolUse Write/Edit/Bash/Read/Grep | ui-ветка (forge-ui): канон и сырые экспорты макета не читаются (`daiver_outline`/`daiver_section`/`daiver_source_nodes` вместо чтения); запись в `project.outputDir` только на `ui-build` и только при действительной подписи плана (`signature_state`, вердикт кешируется), инлайн-`<svg` в модуле запрещён; вне forgeui — noop | exit 2 |
 | `eval-guard` | PreToolUse Write/Edit | блок `src/main` пока **pre-write** eval'ы задачи (`compile`) не passed в кэше `evals.json` (read-only; прогон — `run_pending_evals.py`). `coverage`/`test_pass` требуют уже написанного кода и форсятся при закрытии шага | exit 2 |
-| `sod-enforcer` | PreToolUse Write/Edit/Bash | separation of duties: роль из активного шага манифеста (test не пишет src/main, design не коммитит/пушит/билдит) | exit 2 |
-| `inline-phase-guard` | PreToolUse Write/Edit/Bash | actor-guard: ГЛАВНЫЙ агент (пустой `agent_type`) не производит артефакты/код subagent-фазы inline; снимается override `subagent-origin` | exit 2 |
+| `sod-enforcer` | PreToolUse Write/Edit/Bash | separation of duties: роль из активного шага манифеста (test не пишет src/main, design не коммитит/пушит/билдит — gradle, mvn, линтеры, npm/pnpm/yarn/npx, tsc, vite, playwright) | exit 2 |
+| `inline-phase-guard` | PreToolUse Write/Edit/Bash/MCP | actor-guard: ГЛАВНЫЙ агент (пустой `agent_type`) не производит артефакты/код subagent-фазы inline и не вызывает продуктивные MCP-инструменты шага (`phase_tools` реестра веток); снимается override `subagent-origin` | exit 2 |
 | `destructive-blocker` | PreToolUse Bash | чёрный список (`rm -rf /`, force-push, DROP) | exit 2 |
-| `pii-boundary` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов | exit 2 |
+| `pii-boundary` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов; мок-данные макета (`mocks.ts` модуля forge-ui) — только дословно из канона трека | exit 2 |
 | `grounding-evidence` | PreToolUse Read | пишет evidence `kind:"grounding"` в журнал прогона при чтении grounding-excerpt (по нему `gate-guard` снимает блок `01-grounding`) | — |
 | `fork-syntax-guard` | PreToolUse Bash | ловит `$(...)`/backticks, которые рантайм молча срезает | exit 2 |
-| `state-write-guard` | PreToolUse Write/Edit/Bash | запрет прямой правки состояния прогона в обход `update.py` | exit 2 |
+| `state-write-guard` | PreToolUse Write/Edit/Bash | запрет прямой правки состояния прогона в обход `update.py`; во фронт-репо — и состояния движка `.daiver/` | exit 2 |
 | `file-journal` | PostToolUse Write/Edit/Bash | журнал изменённых файлов прогона | — |
 | `prompt-guard` | UserPromptSubmit + PostToolUse | детект prompt-injection → additionalContext | — |
 | `state-recorder` | SubagentStop | авто-запись шага по `step_id` | — |
@@ -335,10 +337,10 @@ flowchart TD
 
 ```bash
 # харнес активен ДО прогона:
-python3 .gigacode/hooks/preflight.py --project .
+python3 .gigacode/extensions/forge/hooks/preflight.py --project .
 
 # какие фичи в работе:
-python3 .gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
+python3 .gigacode/extensions/forge/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
 ```
 
 ---

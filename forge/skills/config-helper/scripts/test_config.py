@@ -242,6 +242,15 @@ def main():
         check("запись с пояснением в скобках не снимается чужим set",
               cfg.get("_incomplete") == ["project.is_git (нужен git init для чекпойнтов rollback и pipeline-state)"],
               str(cfg.get("_incomplete")))
+        # репо спеки: «сборки нет» снимает и вопрос о корневом пакете Java (spec-graph)
+        cfg["_incomplete"] = ["project.build_system", "conventions.package_root", "jira.enabled"]
+        (project / "ground" / "policy.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        rc, out, _ = run(project, "set", "project.build_system", "none")
+        cfg = json.loads((project / "ground" / "policy.json").read_text(encoding="utf-8"))
+        check("build_system none снимает и conventions.package_root",
+              rc == 0 and cfg.get("_incomplete") == ["jira.enabled"], out + str(cfg.get("_incomplete")))
+        run(project, "set", "project.build_system", "gradle")
+        cfg = json.loads((project / "ground" / "policy.json").read_text(encoding="utf-8"))
         cfg["_incomplete"] = ["jira.enabled"]
         (project / "ground" / "policy.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
         run(project, "set", "jira.enabled", "true")

@@ -1,0 +1,17 @@
+{
+  "_comment": "Obsidian-слой графа (задача 3.3, D12): только core-плагины. palette — цвета групп graph view по видам в порядке онтологии (0xRRGGBB); entries — точки входа _graph/Начало.md (вид и счётчики строки: ключ frontmatter и подпись); views — таблицы «вид → колонки-ключи frontmatter»: Bases-файлы .base, если плагин bases включён в .obsidian/core-plugins.json, иначе те же таблицы Markdown-заметками. group — колонка, по которой Markdown-вид делится на разделы.",
+  "version": 1,
+  "palette": [7950028, 14701138, 3381759, 10233776, 16750848, 5025616, 2201331, 15277667, 9159498, 6323595, 12434877, 16761095],
+  "entries": [
+    {"kind": "process", "counts": [{"key": "includes", "label": "операций"}]},
+    {"kind": "operation", "counts": [{"key": "created_by", "label": "формируют"}, {"key": "closed_by", "label": "закрывают"},
+                                     {"key": "screens", "label": "UI"}]},
+    {"kind": "service", "counts": [{"key": "operations", "label": "операций"}]}
+  ],
+  "views": [
+    {"file": "Бизнес-операции", "kind": "operation", "columns": ["key", "created_by", "closed_by", "screens", "related"]},
+    {"file": "Шедулеры", "kind": "scheduler", "columns": ["belongs_to", "creates_task", "closes_task", "invokes"], "group": "belongs_to"},
+    {"file": "Эндпойнты по сервисам", "kind": "endpoint", "columns": ["key", "called_by", "calls"], "group": "belongs_to"},
+    {"file": "Kafka", "kind": "topic", "columns": ["key", "publishers", "consumers"]}
+  ]
+}

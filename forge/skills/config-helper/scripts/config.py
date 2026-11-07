@@ -146,13 +146,22 @@ def resolve_file(project: Path, file_key: str) -> Path:
     if file_key == "gates":
         return project / "ground" / "feature-gates.json"
     if file_key == "risk":
-        cand = project / ".gigacode" / "hooks" / "risk-policy.json"
-        if cand.exists():
-            return cand
-        alt = project / "hooks" / "risk-policy.json"  # source-layout forge
-        if alt.exists():
-            return alt
-        return cand
+        # Политику читают хуки той установки, рядом с которыми она лежит (risk_ladder:
+        # gigacode_dir()/hooks): extension — .gigacode/extensions/<kind>/hooks, старая
+        # раскладка — .gigacode/hooks, source-layout forge — hooks/.
+        cands = [project / ".gigacode" / "extensions" / k / "hooks" / "risk-policy.json"
+                 for k in ("forge", "forge-ui")]
+        cands += [project / ".gigacode" / "hooks" / "risk-policy.json",
+                  project / "hooks" / "risk-policy.json"]
+        for cand in cands:
+            if cand.exists():
+                return cand
+        own = Path(_HOOKS) / "risk-policy.json"  # для текста ошибки — путь своей установки
+        try:
+            own.resolve().relative_to(project.resolve())
+            return own
+        except ValueError:
+            return cands[2]
     raise ValueError(f"неизвестный file-key: {file_key}")
 
 
@@ -547,8 +556,12 @@ def cmd_set(project: Path, params: list, args) -> int:
     if file_key in ("pipeline", "policy") and new_val is not None:
         inc = data.get("_incomplete")
         if isinstance(inc, list):
+            answered = {sub_path}
+            # репо спеки (spec-graph): «сборки нет» отвечает и на вопрос о корневом пакете Java
+            if sub_path == "project.build_system" and new_val == "none":
+                answered.add("conventions.package_root")
             keep = [i for i in inc
-                    if not (i == sub_path or str(i).startswith(sub_path + " "))]
+                    if not any(i == a or str(i).startswith(a + " ") for a in answered)]
             if not keep:
                 data.pop("_incomplete", None)
             elif keep != inc:

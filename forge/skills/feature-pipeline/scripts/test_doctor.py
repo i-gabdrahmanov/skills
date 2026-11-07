@@ -98,5 +98,37 @@ class Doctor(unittest.TestCase):
                         res["problems"])
 
 
+class RegistryUnderProfile(unittest.TestCase):
+    """Проверка путей реестра — под профиль поставки (.gigacode/.forge-profile).
+
+    Во фронт-репо (forge-ui) Java-скиллов нет намеренно: объявлять их пути битыми — значит
+    валить preflight исправной установке. Но то, что профиль кладёт, проверяется как прежде."""
+
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("cp_mod", SCRIPTS / "check_paths.py")
+        self.cp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.cp)
+        self.cfg = {"skills": {
+            "forgeui": {"dir": "a", "skill_md": "a/SKILL.md"},
+            "feature-pipeline": {"dir": "b", "skill_md": "b/SKILL.md", "scripts": {"x": "b/x.py"}},
+            "java-spring-dev": {"dir": "c", "skill_md": "c/SKILL.md"}},
+            "hooks": {"gate": "h/gate.py"}}
+
+    def test_ui_profile_keeps_only_its_skills(self):
+        out = self.cp.profile_filter(self.cfg, "profile ui\nskill forgeui\n"
+                                               "skill-scripts feature-pipeline # без SKILL.md\n")
+        self.assertEqual(sorted(out["skills"]), ["feature-pipeline", "forgeui"])
+        self.assertNotIn("skill_md", out["skills"]["feature-pipeline"])
+        self.assertIn("skill_md", out["skills"]["forgeui"])
+        self.assertEqual(out["hooks"], self.cfg["hooks"], "хуки едут всегда — проверяются всегда")
+
+    def test_back_profile_excludes_ui_branch(self):
+        out = self.cp.profile_filter(self.cfg, "profile back\nskills-all\nexclude-skill forgeui\n")
+        self.assertEqual(sorted(out["skills"]), ["feature-pipeline", "java-spring-dev"])
+
+    def test_no_profile_checks_everything(self):
+        self.assertIs(self.cp.profile_filter(self.cfg, None), self.cfg)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

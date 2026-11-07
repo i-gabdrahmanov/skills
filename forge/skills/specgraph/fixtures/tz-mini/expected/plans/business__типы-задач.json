@@ -1,0 +1,59 @@
+{
+ "assign": [
+  {
+   "blocks": [
+    "business/типы-задач.md#2",
+    "business/типы-задач.md#3",
+    "business/типы-задач.md#4",
+    "business/типы-задач.md#5",
+    "business/типы-задач.md#6",
+    "business/типы-задач.md#7"
+   ],
+   "node": "Укомплектование"
+  },
+  {
+   "blocks": [
+    "business/типы-задач.md#8",
+    "business/типы-задач.md#9",
+    "business/типы-задач.md#10",
+    "business/типы-задач.md#11",
+    "business/типы-задач.md#12",
+    "business/типы-задач.md#13"
+   ],
+   "node": "Регистрация"
+  },
+  {
+   "blocks": [
+    "business/типы-задач.md#14",
+    "business/типы-задач.md#15",
+    "business/типы-задач.md#16",
+    "business/типы-задач.md#17",
+    "business/типы-задач.md#18",
+    "business/типы-задач.md#19"
+   ],
+   "node": "Приём транспортных упаковок"
+  },
+  {
+   "blocks": [
+    "business/типы-задач.md#20",
+    "business/типы-задач.md#21",
+    "business/типы-задач.md#22",
+    "business/типы-задач.md#23",
+    "business/типы-задач.md#24",
+    "business/типы-задач.md#25",
+    "business/типы-задач.md#26"
+   ],
+   "node": "Передача упаковок в СЦ-архив"
+  }
+ ],
+ "file": "business/типы-задач.md",
+ "skip": [
+  {
+   "blocks": [
+    "business/типы-задач.md#1"
+   ],
+   "reason": "toc"
+  }
+ ],
+ "unplaced": []
+}

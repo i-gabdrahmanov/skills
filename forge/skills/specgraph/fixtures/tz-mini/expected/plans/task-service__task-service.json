@@ -1,0 +1,124 @@
+{
+ "assign": [
+  {
+   "blocks": [
+    "task-service/task-service.md#1",
+    "task-service/task-service.md#2",
+    "task-service/task-service.md#3",
+    "task-service/task-service.md#4",
+    "task-service/task-service.md#5",
+    "task-service/task-service.md#6",
+    "task-service/task-service.md#7",
+    "task-service/task-service.md#28",
+    "task-service/task-service.md#36",
+    "task-service/task-service.md#50",
+    "task-service/task-service.md#55",
+    "task-service/task-service.md#56",
+    "task-service/task-service.md#57"
+   ],
+   "node": "task-service"
+  },
+  {
+   "blocks": [
+    "task-service/task-service.md#8",
+    "task-service/task-service.md#9",
+    "task-service/task-service.md#10",
+    "task-service/task-service.md#11",
+    "task-service/task-service.md#12",
+    "task-service/task-service.md#13",
+    "task-service/task-service.md#14",
+    "task-service/task-service.md#15",
+    "task-service/task-service.md#16"
+   ],
+   "node": "Шедулер формирования задачи укомплектования"
+  },
+  {
+   "blocks": [
+    "task-service/task-service.md#17",
+    "task-service/task-service.md#18",
+    "task-service/task-service.md#19",
+    "task-service/task-service.md#20"
+   ],
+   "node": "Шедулер закрытия регулярных задач"
+  },
+  {
+   "blocks": [
+    "task-service/task-service.md#21",
+    "task-service/task-service.md#22",
+    "task-service/task-service.md#23",
+    "task-service/task-service.md#24",
+    "task-service/task-service.md#25"
+   ],
+   "node": "Шедулер формирования задачи передачи упаковок в СЦ-архив"
+  },
+  {
+   "blocks": [
+    "task-service/task-service.md#26",
+    "task-service/task-service.md#27"
+   ],
+   "node": "Шедулер закрытия задачи передачи упаковок в СЦ-архив"
+  },
+  {
+   "blocks": [
+    "task-service/task-service.md#29",
+    "task-service/task-service.md#30",
+    "task-service/task-service.md#31",
+    "task-service/task-service.md#32"
+   ],
+   "node": "Обработка ответа УПЗ о создании задачи"
+  },
+  {
+   "blocks": [
+    "task-service/task-service.md#33",
+    "task-service/task-service.md#34",
+    "task-service/task-service.md#35"
+   ],
+   "node": "Отправка события о закрытии задачи"
+  },
+  {
+   "blocks": [
+    "task-service/task-service.md#37",
+    "task-service/task-service.md#38",
+    "task-service/task-service.md#39"
+   ],
+   "node": "task-service GET api-v1-tasks"
+  },
+  {
+   "blocks": [
+    "task-service/task-service.md#40",
+    "task-service/task-service.md#41",
+    "task-service/task-service.md#42"
+   ],
+   "node": "task-service POST api-v1-tasks-{id}-complete"
+  },
+  {
+   "blocks": [
+    "task-service/task-service.md#43",
+    "task-service/task-service.md#44",
+    "task-service/task-service.md#45",
+    "task-service/task-service.md#46",
+    "task-service/task-service.md#47",
+    "task-service/task-service.md#48",
+    "task-service/task-service.md#49"
+   ],
+   "node": "Алгоритм балансировки упаковок"
+  },
+  {
+   "blocks": [
+    "task-service/task-service.md#51",
+    "task-service/task-service.md#52"
+   ],
+   "node": "Динамические атрибуты укомплектования"
+  },
+  {
+   "blocks": [
+    "task-service/task-service.md#53",
+    "task-service/task-service.md#54"
+   ],
+   "node": "Динамические атрибуты передачи в СЦ-архив"
+  }
+ ],
+ "file": "task-service/task-service.md",
+ "skip": [],
+ "unplaced": []
+}

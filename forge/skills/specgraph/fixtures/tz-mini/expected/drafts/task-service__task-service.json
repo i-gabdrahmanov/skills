@@ -1,0 +1,168 @@
+{
+ "file": "task-service/task-service.md",
+ "nodes": [
+  {
+   "confidence": "high",
+   "kind": "scheduler",
+   "name": "Шедулер формирования задачи укомплектования",
+   "sections": [
+    "task-service/task-service.md#8"
+   ],
+   "service": "task-service",
+   "why": "кандидат R-scheduler-heading"
+  },
+  {
+   "confidence": "high",
+   "kind": "scheduler",
+   "name": "Шедулер закрытия регулярных задач",
+   "sections": [
+    "task-service/task-service.md#17"
+   ],
+   "service": "task-service",
+   "why": "кандидат R-scheduler-heading"
+  },
+  {
+   "confidence": "high",
+   "kind": "scheduler",
+   "name": "Шедулер формирования задачи передачи упаковок в СЦ-архив",
+   "sections": [
+    "task-service/task-service.md#21"
+   ],
+   "service": "task-service",
+   "why": "кандидат R-scheduler-heading"
+  },
+  {
+   "confidence": "high",
+   "kind": "scheduler",
+   "name": "Шедулер закрытия задачи передачи упаковок в СЦ-архив",
+   "sections": [
+    "task-service/task-service.md#26"
+   ],
+   "service": "task-service",
+   "why": "кандидат R-scheduler-heading"
+  },
+  {
+   "confidence": "high",
+   "kind": "kafka-op",
+   "name": "Обработка ответа УПЗ о создании задачи",
+   "role": "consume",
+   "sections": [
+    "task-service/task-service.md#29"
+   ],
+   "service": "task-service",
+   "why": "кандидат R-kafka-consume"
+  },
+  {
+   "confidence": "high",
+   "kind": "kafka-op",
+   "name": "Отправка события о закрытии задачи",
+   "role": "publish",
+   "sections": [
+    "task-service/task-service.md#33"
+   ],
+   "service": "task-service",
+   "why": "кандидат R-kafka-publish"
+  },
+  {
+   "confidence": "high",
+   "key": "http:GET /api/v1/tasks",
+   "kind": "endpoint",
+   "name": "task-service GET api-v1-tasks",
+   "sections": [
+    "task-service/task-service.md#37"
+   ],
+   "service": "task-service",
+   "why": "кандидат R-endpoint-heading"
+  },
+  {
+   "confidence": "high",
+   "key": "http:POST /api/v1/tasks/{}/complete",
+   "kind": "endpoint",
+   "name": "task-service POST api-v1-tasks-{id}-complete",
+   "sections": [
+    "task-service/task-service.md#40"
+   ],
+   "service": "task-service",
+   "why": "кандидат R-endpoint-heading"
+  },
+  {
+   "confidence": "high",
+   "kind": "algorithm",
+   "name": "Алгоритм балансировки упаковок",
+   "sections": [
+    "task-service/task-service.md#43"
+   ],
+   "service": "task-service",
+   "why": "кандидат R-algorithm-heading"
+  },
+  {
+   "confidence": "high",
+   "kind": "data",
+   "name": "Динамические атрибуты укомплектования",
+   "sections": [
+    "task-service/task-service.md#51"
+   ],
+   "subkind": "attributes",
+   "why": "кандидат R-attributes-heading"
+  },
+  {
+   "confidence": "high",
+   "kind": "data",
+   "name": "Динамические атрибуты передачи в СЦ-архив",
+   "sections": [
+    "task-service/task-service.md#53"
+   ],
+   "subkind": "attributes",
+   "why": "кандидат R-attributes-heading"
+  },
+  {
+   "confidence": "high",
+   "key": "task:KOMPLEKT",
+   "kind": "operation",
+   "name": "Укомплектование",
+   "why": "кандидат R-operation-code-table"
+  },
+  {
+   "confidence": "high",
+   "key": "task:REGISTRATION",
+   "kind": "operation",
+   "name": "Регистрация",
+   "why": "кандидат R-operation-code-table"
+  },
+  {
+   "confidence": "high",
+   "key": "task:TP_RECEIVE",
+   "kind": "operation",
+   "name": "Приём транспортных упаковок",
+   "why": "кандидат R-operation-code-table"
+  },
+  {
+   "confidence": "high",
+   "key": "task:SC_ARCHIVE",
+   "kind": "operation",
+   "name": "Передача упаковок в СЦ-архив",
+   "why": "кандидат R-operation-code-table"
+  },
+  {
+   "confidence": "high",
+   "kind": "service",
+   "name": "task-service",
+   "why": "кандидат R-service-file"
+  },
+  {
+   "confidence": "high",
+   "key": "kafka:pprbkid.upz.task.response.v1",
+   "kind": "topic",
+   "name": "pprbkid.upz.task.response.v1",
+   "why": "кандидат R-topic-name"
+  },
+  {
+   "confidence": "high",
+   "key": "kafka:pprbkid.task.closed.v1",
+   "kind": "topic",
+   "name": "pprbkid.task.closed.v1",
+   "why": "кандидат R-topic-name"
+  }
+ ],
+ "not_nodes": []
+}

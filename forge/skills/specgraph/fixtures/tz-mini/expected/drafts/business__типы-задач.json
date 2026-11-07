@@ -1,0 +1,46 @@
+{
+ "file": "business/типы-задач.md",
+ "nodes": [
+  {
+   "confidence": "high",
+   "key": "task:KOMPLEKT",
+   "kind": "operation",
+   "name": "Укомплектование",
+   "sections": [
+    "business/типы-задач.md#2"
+   ],
+   "why": "кандидат R-operation-code-line"
+  },
+  {
+   "confidence": "high",
+   "key": "task:REGISTRATION",
+   "kind": "operation",
+   "name": "Регистрация",
+   "sections": [
+    "business/типы-задач.md#8"
+   ],
+   "why": "кандидат R-operation-code-line"
+  },
+  {
+   "confidence": "high",
+   "key": "task:TP_RECEIVE",
+   "kind": "operation",
+   "name": "Приём транспортных упаковок",
+   "sections": [
+    "business/типы-задач.md#14"
+   ],
+   "why": "кандидат R-operation-code-line"
+  },
+  {
+   "confidence": "high",
+   "key": "task:SC_ARCHIVE",
+   "kind": "operation",
+   "name": "Передача упаковок в СЦ-архив",
+   "sections": [
+    "business/типы-задач.md#20"
+   ],
+   "why": "кандидат R-operation-code-line"
+  }
+ ],
+ "not_nodes": []
+}

@@ -1,0 +1,12 @@
+{
+ "file": "ui/укомплектование.md",
+ "nodes": [
+  {
+   "confidence": "high",
+   "kind": "screen",
+   "name": "UI укомплектования",
+   "why": "кандидат R-screen-file"
+  }
+ ],
+ "not_nodes": []
+}

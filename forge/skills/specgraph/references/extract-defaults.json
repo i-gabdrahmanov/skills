@@ -1,0 +1,31 @@
+{
+  "_comment": "Правила экстракторов кандидатов (задача 1.2) — данные, а не код: код реализует только ТИПЫ матчеров, а какой вид узла даёт правило и по каким словам — здесь. Проект дополняет и переопределяет правила в .spec-graph/config.json (ключ extract), выученное в окружении (4.7) пишется туда же. У каждого правила id — по нему счётчики и диагностика показывают попадания, промахи и ложные срабатывания в поле. Маркер заголовка — начало слова (регистр не важен).",
+  "kafka_topic_re": "\\b[a-z0-9]+(?:\\.[a-z0-9_-]+){2,}\\.v\\d+\\b",
+  "stop_headings": ["см. также", "смотри также", "see also", "связанные", "related"],
+  "group_suppress": true,
+  "rules": [
+    {"id": "R-endpoint-heading", "match": "heading_http", "kind": "endpoint", "confidence": "high"},
+    {"id": "R-endpoint-body", "match": "body_http_line", "kind": "endpoint", "confidence": "high"},
+    {"id": "R-endpoint-openapi", "match": "openapi_fence", "kind": "endpoint", "confidence": "high"},
+    {"id": "R-scheduler-heading", "match": "heading_markers", "kind": "scheduler", "confidence": "high",
+     "markers": ["шедулер", "планировщик", "scheduler", "job", "джоб", "регламентн", "cron", "крон", "фонов"]},
+    {"id": "R-kafka-consume", "match": "heading_markers", "kind": "kafka-op", "role": "consume", "confidence": "high",
+     "requires_topic": true, "markers": ["обработк", "обработчик", "получени", "чтени", "consumer", "listener", "слушател"]},
+    {"id": "R-kafka-publish", "match": "heading_markers", "kind": "kafka-op", "role": "publish", "confidence": "high",
+     "requires_topic": true, "markers": ["отправк", "публикаци", "producer", "publisher"]},
+    {"id": "R-algorithm-heading", "match": "heading_markers", "kind": "algorithm", "confidence": "high",
+     "markers": ["алгоритм", "расчёт", "расчет", "algorithm", "calculation"]},
+    {"id": "R-attributes-heading", "match": "heading_markers", "kind": "data", "subkind": "attributes", "confidence": "high",
+     "markers": ["динамические атрибуты", "dynamic attributes"]},
+    {"id": "R-operation-code-line", "match": "code_line", "kind": "operation", "confidence": "high",
+     "regex": "(?:код типа|тип задачи|task type)\\s*:\\s*`?([A-Z][A-Z0-9_]+)`?", "key_prefix": "task"},
+    {"id": "R-operation-code-table", "match": "code_table", "kind": "operation", "confidence": "medium",
+     "header_regex": "код типа|task type", "key_prefix": "task"},
+    {"id": "R-screen-file", "match": "file_title", "kind": "screen", "confidence": "high",
+     "markers": ["ui", "экран", "screen", "форма", "страница"]},
+    {"id": "R-service-file", "match": "service_file", "kind": "service", "confidence": "high"},
+    {"id": "R-topic-name", "match": "topic_regex", "kind": "topic", "confidence": "high"},
+    {"id": "R-external-phrase", "match": "phrase", "kind": "external", "confidence": "medium",
+     "regex": "внешн\\w*\\s+систем\\w*\\s+«?([A-ZА-ЯЁ][A-Za-zА-ЯЁа-яё0-9-]*)»?"}
+  ]
+}

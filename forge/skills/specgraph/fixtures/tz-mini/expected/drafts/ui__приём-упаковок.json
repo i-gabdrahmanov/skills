@@ -1,0 +1,12 @@
+{
+ "file": "ui/приём-упаковок.md",
+ "nodes": [
+  {
+   "confidence": "high",
+   "kind": "screen",
+   "name": "UI приёма транспортных упаковок",
+   "why": "кандидат R-screen-file"
+  }
+ ],
+ "not_nodes": []
+}

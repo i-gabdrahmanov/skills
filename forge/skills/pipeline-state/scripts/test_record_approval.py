@@ -141,6 +141,19 @@ class TestRecordApprovalSingle(unittest.TestCase):
         rec = FE.approval(self.project, "x")
         self.assertIsNotNone(rec, "грязный ключ санитайзен до 'x' и записан под ним")
 
+    def test_rebind_to_changed_file_is_recorded(self):
+        """--bind-file: тот же файл — повтор пропущен; файл изменился — новое согласие записано и действует."""
+        bound = self.project / "plan.json"
+        bound.write_text("v1", encoding="utf-8")
+        args = dict(key="graph-edges-x", bind_file=str(bound), evidence="да, утверждаю")
+        self.assertEqual(ra_mod.cmd_single(self._args(**args)), 0)
+        self.assertEqual(ra_mod.cmd_single(self._args(**args)), 0)
+        self.assertEqual(len(self._log_lines()), 1, "тот же файл — повтор, не дубль")
+        bound.write_text("v2", encoding="utf-8")
+        self.assertEqual(ra_mod.cmd_single(self._args(**args)), 0)
+        self.assertEqual(len(self._log_lines()), 2)
+        self.assertEqual(FE.approval(self.project, "graph-edges-x")["bound_sha256"], FE.file_sha256(bound))
+
     def test_idempotent_single_mode(self):
         """Повторный вызов одиночного режима для активного ключа → rc=0, без дубля."""
         rc1 = ra_mod.cmd_single(self._args())

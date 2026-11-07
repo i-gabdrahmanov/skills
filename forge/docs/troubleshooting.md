@@ -7,22 +7,23 @@
 ## Первая помощь (90% проблем)
 
 ```bash
+F=.gigacode/extensions/forge        # во фронт-репо: .gigacode/extensions/forge-ui
+
 # 1. Харнес вообще активен? (заодно прогоняет доктор целостности пайплайна)
-python3 .gigacode/hooks/preflight.py --project .   # 0=ок, 2=не инициализирован, 1=ENFORCEMENT OFF
+python3 $F/hooks/preflight.py --project .   # 0=ок, 2=не инициализирован, 1=ENFORCEMENT OFF
 
-# 2. Доктор целостности пайплайна (судьи, фазы, пути реестра)
-python3 .gigacode/skills/feature-pipeline/scripts/doctor.py --project . --json
+# 2. Рантайм видит extension? (из корня проекта)
+gigacode extensions list            # forge-<проект>-<хеш>: «Включено (Рабочее пространство): true»
 
-# 3. Все пути реестра существуют?
-python3 .gigacode/skills/feature-pipeline/scripts/check_paths.py --project .
+# 3. Доктор целостности пайплайна (судьи, фазы, пути реестра)
+python3 $F/skills/feature-pipeline/scripts/doctor.py --project . --json
 
 # 4. Что в работе / на каком шаге застряли?
-python3 .gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
+python3 $F/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
 ```
 
-> Глубже: eval-набор хуков — `bash .gigacode/hooks/run-hook-tests.sh`; тесты скиллов
-> И юнит-тесты хуков (единый прогон) — `python3 .gigacode/skills/run_all_tests.py`
-> (только хуки — `--skill hooks`).
+> Глубже: eval-набор хуков и тесты скиллов гоняются из клона forge — `bash hooks/run-hook-tests.sh`,
+> `python3 skills/run_all_tests.py` (только хуки — `--skill hooks`).
 
 ---
 
@@ -31,17 +32,19 @@ python3 .gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline
 ### A1. `[HOOK_REGISTRY] 0 hook entries` при старте
 **Симптом:** в выводе рантайма строка `0 hook entries`; гейты, TDD, risk-ladder, evidence — не срабатывают.
 **Причины и фиксы:**
-- **Рантайм запущен не в корне проекта** → хуки читаются из `<project>/.gigacode/settings.json`;
-  запускайте `gigacode` из корня. Флага `--experimental-hooks` в gigacode 26.9 нет — с ним сессия
+- **Рантайм запущен не в проекте** → extension включён только для workspace проекта; запускайте
+  `gigacode` из корня проекта. Флага `--experimental-hooks` в gigacode 26.9 нет — с ним сессия
   не стартует (`Unknown arguments`); на ранних сборках форка хуки были за этим флагом.
-- **Харнес не развёрнут в проект** → в `<project>/.gigacode/` должны лежать `hooks/`, `skills/`,
-  `commands/` и `settings.json` с блоком hooks. Нет — `bash <forge>/deploy.sh <project>`
-  (`<forge>` = корень исходника forge; user-guide §3).
-- **Блок hooks не сгенерирован** (в `settings.json` остались `${PYTHON}`/`${PROJECT_ROOT}`) →
-  `bash .gigacode/deploy-local.sh` (проверить выбор интерпретатора без записи: `--dry-run`).
-- **Legacy extension-раскладка на user-уровне перекрывает project-деплой** (`~/.gigacode/skills/`,
-  `~/.gigacode/hooks/`, блок hooks в user-`settings.json`) → `bash <forge>/cleanup-legacy.sh --apply`
-  (INSTALL.md §1), затем **рестарт сессии**.
+- **forge не установлен или не подключён** → `gigacode extensions list` из корня проекта должен
+  показать `forge-<проект>-<хеш>` включённым для workspace. Нет каталога
+  `<project>/.gigacode/extensions/forge/` — `bash <forge>/install.sh forge <project>` (`<forge>` —
+  клон forge; user-guide §3). Каталог есть, ссылки нет (или проект переехал) —
+  `bash .gigacode/extensions/forge/deploy-local.sh`, затем **рестарт сессии**.
+- **CLI ставит ссылку, но extension выключен** → `(cd <project> && gigacode extensions enable --scope
+  workspace <имя>)`; имя — в `.gigacode/extensions/forge/gigacode-extension.json`.
+- **Остатки старых раскладок перекрывают extension** (`~/.gigacode/skills/`, `~/.gigacode/hooks/`,
+  блок hooks в user-`settings.json`) → `bash <forge>/cleanup-legacy.sh --apply` (INSTALL.md §6),
+  затем **рестарт сессии**. В самом проекте старую раскладку снимает `install.sh`.
 - **`disableAllHooks: true`** в settings → снимите.
 
 ### A2. `preflight.py` → exit 1 (ENFORCEMENT OFF)
@@ -52,9 +55,10 @@ python3 .gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline
 
 ### A3. Гейты не находят скиллы (`../skills`)
 **Симптом:** хук/гейт падает, не может найти скилл-скрипт.
-**Причина:** нарушена co-location — `skills/` не лежат рядом с `hooks/` в одном `.gigacode/`.
-**Фикс:** положите `hooks/` И `skills/` в один дом `<project>/.gigacode/` (см. user-guide §3).
-Проверка путей реестра — `check_paths.py --project .`.
+**Причина:** нарушена co-location — `skills/` не лежат рядом с `hooks/` в одном каталоге extension'а
+(ручное копирование, недокопированная установка).
+**Фикс:** переустановите — `bash <forge>/install.sh forge <project>` кладёт `hooks/` и `skills/` одним
+пакетом. Проверка путей реестра — `check_paths.py --project .`.
 
 ### A4. Рантайм «молча скипает» скилл
 **Причина:** битый frontmatter (нет `name`/`description`) → скилл считается мёртвым.
@@ -134,13 +138,13 @@ service-unit + моки, либо переключите на `test_layer=mixed`
 **Фикс:**
 ```bash
 # 1. посмотреть, какие прогоны числятся активными (блок «Стейт без доков»)
-python3 .gigacode/skills/pipeline-state/scripts/archive.py --project . status
+python3 .gigacode/extensions/forge/skills/pipeline-state/scripts/archive.py --project . status
 # 2. снять лишний с активных — R4: сначала согласие пользователя (его дословная фраза),
 #    потом сам abandon. Вернуть, если сняли не тот: archive.py restore <feature>
-python3 .gigacode/skills/pipeline-state/scripts/record_approval.py --project . \
+python3 .gigacode/extensions/forge/skills/pipeline-state/scripts/record_approval.py --project . \
   --key abandon-<feature> --approved-by user --reason "брошен: <почему>" \
   --evidence "<дословная фраза пользователя>"
-python3 .gigacode/skills/pipeline-state/scripts/archive.py --project . \
+python3 .gigacode/extensions/forge/skills/pipeline-state/scripts/archive.py --project . \
   abandon <feature> --skill <S> --reason "брошен: <почему>"
 ```
 Точно знаете, в какую фичу писать — достаточно назвать её явно, убирать ничего не нужно:
@@ -178,10 +182,10 @@ python3 .gigacode/skills/pipeline-state/scripts/archive.py --project . \
 
 ### C3. Ручной override гейта (последнее средство)
 ```bash
-python3 .gigacode/skills/pipeline-state/scripts/override_judge.py \
+python3 .gigacode/extensions/forge/skills/pipeline-state/scripts/override_judge.py \
     --judge <judge-name> --feature <slug> --step-id <step-id> --reason "<почему допустим пропуск>"
 # затем закрыть шаг как обычно — update.py увидит override
-python3 .gigacode/skills/pipeline-state/scripts/override_judge.py --feature <slug> --list   # просмотр
+python3 .gigacode/extensions/forge/skills/pipeline-state/scripts/override_judge.py --feature <slug> --list   # просмотр
 ```
 Override **не подделывает вердикт**: FAIL остаётся в `judges/<judge>.json`, снимается лишь блок закрытия,
 `--reason` идёт в аудит. Если на шаге два судьи — override нужен на **каждый** упавший.
@@ -220,8 +224,8 @@ Override **не подделывает вердикт**: FAIL остаётся �
   Перезапуститесь интерактивно (`gigacode`) или разрешите инструменты списком (user-guide §4).
 - **хук `SubagentStart` не разложен / не сматчен** — тогда харнес не отличает субагента от
   оркестратора и блокирует **обоих**. Отказ это прямо сообщает («за эту сессию не пришло ни одного
-  SubagentStart»). Проверка: `context-injector` в `.gigacode/settings.json`,
-  `bash .gigacode/deploy-local.sh --check`, наличие `session_id` в payload'е.
+  SubagentStart»). Проверка: `context-injector` в `.gigacode/extensions/forge/hooks/hooks.json`,
+  `bash .gigacode/extensions/forge/deploy-local.sh --check`, наличие `session_id` в payload'е.
 
 **Если `agent` действительно недоступен и починить нельзя** — снятие блока только через судью
 `subagent-origin` (`override_judge.py`, §C3). Это R4: `gate-guard` пропустит override лишь при
@@ -304,11 +308,12 @@ approval-маркере `gate-override-subagent-origin`, который фикс
 
 ```bash
 # харнес активен ДО прогона:
-python3 .gigacode/hooks/preflight.py --project .
+python3 .gigacode/extensions/forge/hooks/preflight.py --project .
 
 # статус шагов пайплайна:
-python3 .gigacode/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
+python3 .gigacode/extensions/forge/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
 ```
 
 > Если после всех шагов проблема не воспроизводится через `preflight`/`doctor` — это, скорее всего,
-> запуск не из корня проекта (рантайм не видит `.gigacode/settings.json`). Проверьте это первым делом.
+> запуск не из проекта или extension не включён для этого workspace (`gigacode extensions list` из корня
+> проекта). Проверьте это первым делом.

@@ -326,5 +326,137 @@ class TPathRiskIsLinear(unittest.TestCase):
         self.assertTrue(mod._path_re("(?i).*?prod").search("x/PROD/y"))
 
 
+# ── фронтовые пути (forge-ui; задача 3.4) ────────────────────────────────────────────────────────────
+class TFrontendPathRisk(unittest.TestCase):
+    """Прод-код фронта `.tsx/.jsx/.vue/.svelte` — R2 (нужен закрытый design-шаг), тесты фронта — R1; граница с тестами та же,
+    что у `_project.is_test_path`. Бэковые пути и тесты не меняются (golden-таблица ниже снята со старой политики)."""
+
+    FRONT_EXT = ("tsx", "jsx", "vue", "svelte")
+    BEFORE = {   # путь → уровень до задачи 3.4 (политика на момент 3.3)
+        "src/main/java/com/x/Foo.java": "R2", "svc/src/main/kotlin/a/Foo.kt": "R2", "src/test/java/com/x/FooTest.java": "R1",
+        "src/test/kotlin/a/FooTest.kt": "R1", "src/test/resources/fixtures/users.json": "R1",
+        "src/main/resources/application.yml": "R1", "src/main/resources/application-prod.yml": "R4",
+        "src/main/resources/application-dev.properties": "R1", "db/migration/V2__x.sql": "R4",
+        "src/main/resources/db/changelog/db.changelog-master.xml": "R4", "src/main/java/com/x/auth/Login.java": "R3",
+        "src/main/java/com/x/payment/Pay.java": "R3", "config/risk-model.json": "R5", "docs/notes.md": "R0",
+        "/repo/docs/sdd.md": "R0", "README.md": "R0", "pom.xml": "R1", "build.gradle": "R1",
+        "ground/statements/forgefix/F1/manifest.json": "R1", "src/main/webapp/index.html": "R1",
+        "src/main/java/com/x/FooIT.java": "R2", "tools/run_tests.py": "R1", "scripts/test_helper.py": "R1",
+        "src/main/resources/secrets/keystore.jks": "R3", "deploy/prod/values.yaml": "R4",
+        "src/test/java/com/x/auth/LoginTest.java": "R3", "frontend/src/utils/format.ts": "R1", "frontend/src/api/client.js": "R1",
+        "frontend/src/styles/main.less": "R1", "frontend/package.json": "R1", "frontend/src/Foo.test.ts": "R1",
+        "frontend/src/Foo.spec.ts": "R1", "frontend/e2e/login.e2e.spec.ts": "R1", "frontend/src/__mocks__/api.ts": "R1",
+        "frontend/src/modules/Modal/mocks.ts": "R1",
+    }
+
+    @staticmethod
+    def level(path: str) -> str:
+        return mod.classify("write_file", {"file_path": path, "content": "x"})["level"]
+
+    @staticmethod
+    def shell(cmd: str) -> str:
+        return mod.classify("run_shell_command", {"command": cmd})["level"]
+
+    def test_front_production_code_is_r2(self):
+        for ext in self.FRONT_EXT:
+            for d in ("", "src/", "src/modules/Modal/", "web/src/components/", "app/", "/abs/work/app/src/", "src/features/Order Form/",
+                      "C:\\work\\app\\src\\", "src/e2e/", "docs/examples/"):
+                path = f"{d}Modal.{ext}"
+                with self.subTest(path=path):
+                    self.assertEqual(self.level(path), "R2")
+        for path in ("src/App.TSX", "SRC/Modal.Vue", "src/Foo.stories.tsx", "src/test.tsx", "src/spec.jsx", "src/a.b.c.svelte",
+                     "src/Contest.tsx", "src/Latest.vue", "src/Attestation.jsx", "src/Digit.svelte", "src/ModalTest.TSX"):
+            with self.subTest(path=path):
+                self.assertEqual(self.level(path), "R2", "регистр, лишние точки, файл по имени test/spec и слово «test» внутри имени — не тест")
+
+    def test_not_front_code_is_not_r2(self):
+        """Расширение — конец имени: `.tsx.map`, `.vue.orig` и опечатки — не код компонента; ts/js — не R2 (задача называет tsx/jsx/vue/svelte)."""
+        for path in ("src/Foo.tsx.map", "src/Foo.tsxx", "src/Foo.vue.orig", "src/Foo.jsx.bak", "src/Foo.d.ts", "src/Foo.ts", "src/Foo.js",
+                     "src/Foo.mjs", "src/Foo.less", "src/Foo.css", "src/tsx", "src/vue", "README.tsx.md", "src/Foo.svelte-kit"):
+            with self.subTest(path=path):
+                self.assertNotEqual(self.level(path), "R2")
+
+    def test_front_tests_are_r1(self):
+        for path in ("src/Button.test.tsx", "src/Button.spec.ts", "e2e/login.e2e.spec.ts", "src/Button.test.jsx", "src/Modal.spec.vue",
+                     "src/Modal.test.svelte", "src/a.test.ts", "src/a.spec.mjs", "src/BUTTON.TEST.TSX",
+                     "src/__tests__/Button.tsx", "src/tests/Button.jsx", "test/Button.vue", "src/spec/Modal.svelte", "src/specs/a.tsx",
+                     "src/fixtures/Modal.tsx", "src/fixture/Modal.tsx", "src/testfixtures/Modal.tsx", "TESTS/Button.TSX",
+                     "src/ModalTest.tsx", "src/ModalTests.jsx", "src/ModalIT.vue", "src/ModalITCase.svelte",   # CamelCase-суффикс, как у is_test_path
+                     "C:\\work\\app\\src\\Button.test.tsx", "C:\\work\\app\\src\\__tests__\\Button.tsx"):
+            with self.subTest(path=path):
+                self.assertEqual(self.level(path), "R1")
+
+    def test_the_test_patterns_are_stated_not_left_to_the_default(self):
+        for path in ("src/Button.test.tsx", "src/Button.spec.ts", "e2e/login.e2e.spec.ts"):
+            with self.subTest(path=path):
+                info = mod.classify("write_file", {"file_path": path, "content": "x"})
+                self.assertEqual(info["level"], "R1")
+                self.assertTrue(info["reason"].startswith("path~"), info)
+
+    def test_border_with_tests_is_the_one_of_is_test_path(self):
+        """Для любого фронтового кодового файла: R2 ⇔ `_project.is_test_path` говорит «не тест»; тест — R1. Корпус — перебор
+        каталогов (в т.ч. тестовых сегментов из `_TEST_DIR_SEGMENTS`) × имён (в т.ч. .test./.spec./.e2e.spec.)."""
+        import itertools
+        import _project as P
+        dirs = ["", "src/", "src/modules/Modal/", "app/", "/abs/app/src/", "C:\\app\\src\\", "src/test/", "src/Test/", "src/tests/",
+                "src/__tests__/", "src/fixtures/", "src/fixture/", "src/testfixtures/", "src/spec/", "src/specs/", "e2e/", "src/mocks/",
+                "src/__mocks__/", "src/tests/unit/", "src/testing/", "src/contest/", "src/latest/", "src/specifics/"]
+        names = ["Modal", "Modal.test", "Modal.spec", "Modal.e2e.spec", "test", "spec", "Modal.tests", "Modal.stories", "my.test.component",
+                 "Modal-test", "Modal_test", "ModalTest", "Modal.spec.d"]
+        checked = {"R2": 0, "R1": 0}
+        for d, n, ext in itertools.product(dirs, names, self.FRONT_EXT):
+            path = f"{d}{n}.{ext}"
+            is_test = P.is_test_path(path)
+            with self.subTest(path=path):
+                self.assertEqual(self.level(path), "R1" if is_test else "R2", f"is_test_path={is_test}")
+            checked["R1" if is_test else "R2"] += 1
+        self.assertGreater(checked["R2"], 100)
+        self.assertGreater(checked["R1"], 100, "корпус обязан содержать и тесты, и прод-код")
+
+    def test_a_test_file_in_the_same_command_does_not_lower_the_production_file(self):
+        for cmd in ("cp src/Foo.test.tsx src/modules/Foo.tsx", "mv src/Foo.tsx src/Foo.test.tsx", "echo > src/__tests__/a.tsx src/modules/b.tsx",
+                    "sed -i s/a/b/ src/Foo.vue src/Foo.spec.vue", "cat > src/modules/Modal/Foo.tsx <<EOF",
+                    "rm src/tests/a.tsx src/Foo.jsx"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.shell(cmd), "R2")
+        for cmd in ("cat > src/Foo.test.tsx <<EOF", "cp a.tsx src/__tests__/b.tsx", "rm src/Foo.spec.vue src/tests/a.svelte", "npm run build",
+                    "echo hi", "git status"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.shell(cmd), "R1")
+
+    def test_higher_classes_still_win_for_front_files(self):
+        self.assertEqual(self.level("src/auth/Login.tsx"), "R3")
+        self.assertEqual(self.level("src/features/payment/Pay.tsx"), "R3")
+        self.assertEqual(self.level("deploy/prod/Banner.tsx"), "R4")
+
+    def test_back_end_paths_and_tests_are_what_they_were(self):
+        for path, want in self.BEFORE.items():
+            with self.subTest(path=path):
+                self.assertEqual(self.level(path), want)
+
+    def test_front_code_needs_a_closed_design_step(self):
+        """R2 → `level_requirements`: шаг дизайна завершён (в ветке ui это `ui-design`, алиас фазы `02-design`)."""
+        req = mod.requirement("R2")
+        self.assertEqual(req.get("mode"), "require")
+        for status, ok in (({"ui-spec": "completed", "ui-design": "completed", "ui-build": "pending"}, True),
+                           ({"ui-spec": "completed", "ui-design": "pending", "ui-build": "pending"}, False)):
+            with unittest.mock.patch.object(mod, "manifest_status", lambda _root, s=status: s):
+                allowed, why = mod.check_requirement("R2", req, Path("/nonexistent"), "write")
+            self.assertEqual(allowed, ok, why)
+            if not ok:
+                self.assertIn("ui-design", why)
+
+    def test_long_front_targets_are_linear(self):
+        import time
+        for tool, ti in (("run_shell_command", {"command": "cat " + "a/" * 4096 + "x.tsx " * 300}),
+                         ("write_file", {"file_path": "a/" * 4096 + "x.tsx"}),
+                         ("write_file", {"file_path": "a" * 100000 + ".tsx"}),
+                         ("run_shell_command", {"command": "echo " + "x.tsx " * 40000})):
+            with self.subTest(tool=tool, n=len(str(ti))):
+                t0 = time.time()
+                mod.classify(tool, ti)
+                self.assertLess(time.time() - t0, 1.5, "классификация фронтового пути квадратична по длине цели")
+
+
 if __name__ == "__main__":
     unittest.main()

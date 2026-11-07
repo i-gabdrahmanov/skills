@@ -1,0 +1,42 @@
+{
+ "assign": [
+  {
+   "blocks": [
+    "rmoc-service/rmoc-service.md#1",
+    "rmoc-service/rmoc-service.md#2",
+    "rmoc-service/rmoc-service.md#3",
+    "rmoc-service/rmoc-service.md#4"
+   ],
+   "node": "rmoc-service"
+  },
+  {
+   "blocks": [
+    "rmoc-service/rmoc-service.md#5",
+    "rmoc-service/rmoc-service.md#6",
+    "rmoc-service/rmoc-service.md#7",
+    "rmoc-service/rmoc-service.md#8"
+   ],
+   "node": "rmoc-service GET rmoc-packages"
+  },
+  {
+   "blocks": [
+    "rmoc-service/rmoc-service.md#9",
+    "rmoc-service/rmoc-service.md#10",
+    "rmoc-service/rmoc-service.md#11",
+    "rmoc-service/rmoc-service.md#12"
+   ],
+   "node": "rmoc-service POST rmoc-packages-transfer"
+  },
+  {
+   "blocks": [
+    "rmoc-service/rmoc-service.md#13",
+    "rmoc-service/rmoc-service.md#14",
+    "rmoc-service/rmoc-service.md#15"
+   ],
+   "node": "rmoc-service GET rmoc-komplekt-items"
+  }
+ ],
+ "file": "rmoc-service/rmoc-service.md",
+ "skip": [],
+ "unplaced": []
+}

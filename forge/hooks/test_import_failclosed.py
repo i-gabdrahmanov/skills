@@ -49,6 +49,7 @@ BLOCKING_HOOKS = [
     "eval-guard.py",
     "sod-enforcer.py",
     "inline-phase-guard.py",
+    "ui-guard.py",
 ]
 
 PAYLOAD = '{"tool_name":"run_shell_command","tool_input":{"command":"echo hi"},"cwd":"%s"}'

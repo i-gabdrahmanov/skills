@@ -1,0 +1,27 @@
+import { Meta, Story, Canvas, ArgsTable } from '@storybook/addon-docs';
+import { Tabs, Tab } from '@fakeui/core';
+
+<Meta
+  title="Navigation/Tabs"
+  component={Tabs}
+  argTypes={{ orientation: { options: ['horizontal', 'vertical'], control: { type: 'radio' } } }}
+/>
+
+# Tabs
+
+Tabs switch between related views. Don't nest them.
+
+<Canvas>
+  <Story name="Default" args={{ orientation: 'horizontal' }}>
+    {(args) => (
+      <Tabs {...args} value="a">
+        <Tab id="a">First</Tab>
+      </Tabs>
+    )}
+  </Story>
+  <Story name="Vertical">
+    <Tabs orientation="vertical" value="b"><Tab id="b">Second</Tab></Tabs>
+  </Story>
+</Canvas>
+
+<ArgsTable of={Tabs} />

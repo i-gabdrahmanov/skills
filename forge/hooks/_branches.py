@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""_branches.py — реестр ПЛОСКИХ веток forge (fix, tech): единый источник истины.
+"""_branches.py — реестр ПЛОСКИХ веток forge (fix, tech, ui, graph): единый источник истины.
 
 Зачем. Плоская ветка — это namespace стейта (`ground/statements/<skill>/…`) с фиксированным
 списком шагов `<prefix>*`. Fix-ветка жила кортежами `("fix-diag", "fix-red", …)`, раскиданными
@@ -17,10 +17,11 @@ Full-ветка (feature-pipeline) сюда НЕ входит: у неё дин�
 """
 from __future__ import annotations
 
+import fnmatch
 from typing import Optional
 
 # Поля ветки:
-#   mode            — пользовательский словарь router/inputs.mode (fix|tech)
+#   mode            — пользовательский словарь router/inputs.mode (fix|tech|ui|graph)
 #   prefix          — префикс id всех шагов ветки
 #   steps           — шаги в порядке (источник истины для манифеста — references/manifest-steps.json
 #                     скилла; совпадение пинит тест)
@@ -34,7 +35,13 @@ from typing import Optional
 #   verify_to_impl  — фаза прогона → шаг реализации, который надо переоткрыть (подсказка SoD)
 #   artifacts       — шаг → канонические имена файлов в docs-каталоге задачи (update.py)
 #   phase_work      — шаг → (regex пути, описание): productive-артефакт фазы (inline-phase-guard)
+#   phase_tools     — шаг → имена/шаблоны (fnmatch) продуктивных MCP-инструментов шага: ГЛАВНЫЙ агент их не вызывает,
+#                     фазу исполняет субагент (inline-phase-guard; у веток без MCP-движка — пусто). Читающие
+#                     инструменты и те, что вызывает сам оркестратор после решения человека (daiver_init, daiver_map_append),
+#                     сюда не входят — иначе оркестратор заблокировал бы собственную работу
 #   docs_target     — CLI-таргет skill_paths.py, печатающий docs-каталог задачи
+#   doc_approval    — шаг → имя документа: закрыть шаг можно только при маркере
+#                     <doc>-approved-<feature> (update._check_doc_approval, как 00-brd/02-sdd)
 BRANCHES = {
     "forgefix": {
         "mode": "fix",
@@ -59,7 +66,9 @@ BRANCHES = {
             "fix-verify": (r"src/", "правка src/ в фазе прогона тестов"),
             "fix-spec": (r"(^|/)sdd\.md$", "запись дельты спеки (sdd.md)"),
         },
+        "phase_tools": {},
         "docs_target": "fix-docs",
+        "doc_approval": {},
     },
     # Tech-ветка (forgetech): техзадача без бизнес-наполнения — апгрейд библиотек, правка
     # конфигурации. Поведение системы должно остаться прежним; гейт — снимок «до» и точный
@@ -89,7 +98,102 @@ BRANCHES = {
             "tech-verify": (r"src/", "правка src/ в фазе прогона тестов"),
             "tech-record": (r"(^|/)report\.md$", "запись итоговой сводки (report.md)"),
         },
+        "phase_tools": {},
         "docs_target": "tech-docs",
+        "doc_approval": {},
+    },
+    # UI-ветка (forgeui = forge-ui во фронт-репо): макет → UI-код на библиотеке проекта →
+    # verify-цикл против макета. Детерминированное ядро — движок по спеке daiver
+    # (skills/forgeui/scripts/daiver/, MCP forge-ui). Четыре шага = четыре решения человека:
+    # утвердить ui-spec.md, подписать план секций, решать по итерациям проверки.
+    # См. tasks/019-forge-ui.md.
+    "forgeui": {
+        "mode": "ui",
+        "prefix": "ui-",
+        "steps": ("ui-spec", "ui-design", "ui-build", "ui-verify"),
+        "subagent_steps": ("ui-spec", "ui-design", "ui-build", "ui-verify"),
+        "gate_steps": ("ui-spec", "ui-design", "ui-build", "ui-verify"),
+        # npm/npx/tsc/vite — продуктивная работа сборки и прогона проверок
+        "build_steps": ("ui-build", "ui-verify"),
+        "red_step": None,
+        "design_step": "ui-design",
+        "final_step": "ui-verify",
+        # ui-spec пишет только документ (роль spec: src/ закрыт); ui-design — канон, план и
+        # отчёт резолва в .daiver/ (design: сборки нет); ui-build пишет код; ui-verify гоняет
+        # проверки, правка кода — переоткрытием ui-build (verify_to_impl).
+        "roles": {"ui-spec": "spec", "ui-design": "design", "ui-build": "dev",
+                  "ui-verify": "test"},
+        "verify_to_impl": {"ui-verify": "ui-build"},
+        "artifacts": {"ui-spec": ("ui-spec.md",)},
+        "phase_work": {
+            "ui-spec": (r"(^|/)ui-spec\.md$", "запись фронт-спеки (ui-spec.md)"),
+            "ui-design": (r"(^|/)\.daiver/tracks/[^/]+/(.+/)?(plan\.(json|md)|resolution-report\.md|ui-plan\.md)$",
+                          "запись плана секций / отчёта резолва (.daiver/tracks/…)"),
+            "ui-build": (r"\.(tsx|jsx|vue|svelte|ts|js|css|less|scss)$",
+                         "запись фронтового кода модуля"),
+            "ui-verify": (r"\.(tsx|jsx|vue|svelte|ts|js|css|less|scss)$",
+                          "правка фронтового кода в фазе проверки"),
+        },
+        # Продуктивные инструменты движка forge-ui (MCP `forge-ui`, имена без префикса mcp__forge-ui__). ui-design: заведение
+        # кадра и канон, резолв (кандидаты, вердикты, отчёт), план и контракт готовности (пишет ui-plan.md/lock, снимает
+        # устаревшее согласие); ui-build: состояние сборки (создаёт и двигает) и svg-арты (с moduleDir копирует в модуль);
+        # ui-verify: снимок страницы и инструменты итерации (инструментов пока нет — шаблоны ждут задач 4.x).
+        # НЕ входят: daiver_status/outline/section/source_nodes/color_tokens/ds_*/map_lookup/spec/resolve-чтение — читают;
+        # daiver_init и daiver_map_append вызывает ОРКЕСТРАТОР после ответа пользователя (согласие ui-map-<KEY>);
+        # daiver_track_manifest и daiver_svg_assets на ui-design — вне списка задачи 3.4.
+        "phase_tools": {
+            "ui-design": ("daiver_pixso_pull", "daiver_normalize", "daiver_resolve_*", "daiver_plan_write",
+                          "daiver_plan_contract"),
+            "ui-build": ("daiver_build_state", "daiver_build_state_set", "daiver_svg_assets"),
+            "ui-verify": ("daiver_screenshot", "daiver_code_compare", "daiver_verify_compare", "daiver_verify_state",
+                          "daiver_verify_state_record", "daiver_render_reference", "daiver_visual_diff", "daiver_visual_review", "daiver_verify_report",
+                          "daiver_e2e_plan", "daiver_e2e_run"),
+        },
+        "docs_target": "feature-docs",
+        "doc_approval": {"ui-spec": "ui-spec"},
+    },
+    # Граф спецификации (specgraph = spec-graph в репо спеки): плоская Markdown-спека → граф
+    # заметок Obsidian для аналитика и агента. Детерминированное ядро — движок
+    # (skills/specgraph/scripts/sgraph/, MCP spec-graph). Три шага = три решения человека:
+    # утвердить каталог узлов и scope (до нарезки), утвердить отчёт связей, принять граф.
+    # Код проекта ветка не пишет и не собирает — роль spec у всех шагов (src/ и сборка закрыты).
+    # Ключ прогона — GRAPH-<N>. См. tasks/020-spec-graph.md.
+    "specgraph": {
+        "mode": "graph",
+        "prefix": "graph-",
+        "steps": ("graph-map", "graph-link", "graph-check"),
+        "subagent_steps": ("graph-map", "graph-link", "graph-check"),
+        "gate_steps": ("graph-map", "graph-link", "graph-check"),
+        "build_steps": (),
+        "red_step": None,
+        # каталог узлов — «план» графа: после его утверждения идёт нарезка
+        "design_step": "graph-map",
+        "final_step": "graph-check",
+        "roles": {"graph-map": "spec", "graph-link": "spec", "graph-check": "spec"},
+        # проверка находит дыры связей → переоткрывается шаг связей (цикл самоулучшения, задача 4.6)
+        "verify_to_impl": {"graph-check": "graph-link"},
+        # артефакты живут в vault (_graph/) и .spec-graph/, а не в docs-каталоге задачи: их
+        # наличие проверяет graph_gate.py, а не update._check_step_artifacts
+        "artifacts": {},
+        "phase_work": {
+            "graph-map": (r"(^|/)\.spec-graph/(blocks|candidates|drafts|plan|catalog)|(^|/)_graph/(catalog|survey)\.md$",
+                          "запись разведки / каталога / плана нарезки (.spec-graph/…, _graph/catalog.md)"),
+            "graph-link": (r"(^|/)\.spec-graph/edges/|(^|/)_graph/edges-review\.md$",
+                           "запись предложений рёбер / отчёта связей"),
+            "graph-check": (r"(^|/)_graph/(report|Начало)\.md$|(^|/)\.obsidian/graph\.json$",
+                            "запись отчёта проверки / Obsidian-слоя"),
+        },
+        # Продуктивные инструменты движка spec-graph (MCP `spec-graph`): те, что СДАЮТ решение модели по единице очереди
+        # (черновик узлов файла, раскладка блоков) — их вызывает субагент единицы, не главный агент. НЕ входят: graph_status,
+        # graph_init, graph_scan, graph_profile, graph_survey, graph_next, graph_queue_status, graph_catalog, graph_catalog_decide
+        # (решение человека вносит оркестратор), graph_assign_start, graph_split (механика без решений модели; пишет только
+        # по утверждённому каталогу). graph-link — задачи 2.x.
+        "phase_tools": {
+            "graph-map": ("graph_draft_put", "graph_assign_put"),
+            "graph-link": ("graph_link_put", "graph_card_put"),
+        },
+        "docs_target": "feature-docs",
+        "doc_approval": {},
     },
 }
 
@@ -177,6 +281,45 @@ def phase_work() -> dict:
     out: dict = {}
     for b in BRANCHES.values():
         out.update(b["phase_work"])
+    return out
+
+
+def phase_tools() -> dict:
+    """шаг → шаблоны имён продуктивных MCP-инструментов шага (fnmatch, регистр важен)."""
+    out: dict = {}
+    for b in BRANCHES.values():
+        for step, patterns in (b.get("phase_tools") or {}).items():
+            out[step] = tuple(patterns)
+    return out
+
+
+def tool_basename(tool_name) -> str:
+    """Имя инструмента без префикса MCP-сервера: `mcp__forge-ui__daiver_plan_write` → `daiver_plan_write`.
+    Имя без префикса возвращается как есть; не строка — пустая строка."""
+    return tool_name.rsplit("__", 1)[-1] if isinstance(tool_name, str) else ""
+
+
+def phase_tool(step_id, tool_name) -> Optional[str]:
+    """Шаблон из `phase_tools` шага, под который подходит инструмент; None — это не продуктивный инструмент шага."""
+    if not isinstance(step_id, str):
+        return None                               # id шага из манифеста — строка; нехэшируемое в .get() упало бы
+    base = tool_basename(tool_name)
+    for pattern in phase_tools().get(step_id, ()):
+        if fnmatch.fnmatchcase(base, pattern):
+            return pattern
+    return None
+
+
+def tool_steps(tool_name) -> tuple:
+    """Шаги, чьим продуктивным инструментом является `tool_name` (пусто — ничьим)."""
+    return tuple(step for step in phase_tools() if phase_tool(step, tool_name))
+
+
+def doc_approvals() -> dict:
+    """шаг → имя документа, утверждение которого человеком нужно для закрытия шага."""
+    out: dict = {}
+    for b in BRANCHES.values():
+        out.update(b.get("doc_approval") or {})
     return out
 
 

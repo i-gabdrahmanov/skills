@@ -48,6 +48,17 @@ def gigacode_home() -> Path:
     return gigacode_dir()
 
 
+def install_rel() -> str:
+    """Каталог установки forge от корня проекта — для подсказок модели и человеку.
+
+    Extension: `.gigacode/extensions/<forge|forge-ui>` (база — этот каталог); старая раскладка и
+    source-репо — `.gigacode` (тексты подсказок остаются прежними)."""
+    base = gigacode_dir()
+    if base.parent.name == "extensions" and base.parent.parent.name == ".gigacode":
+        return f".gigacode/extensions/{base.name}"
+    return ".gigacode"
+
+
 def skills_dir() -> Path:
     """Путь к скиллам: <project>/.gigacode/skills/<skill>/scripts/..."""
     return gigacode_dir() / "skills"

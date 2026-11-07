@@ -44,7 +44,7 @@ REGULATORY_BLOCK = "## 12. Регуляторные требования\nСоо
 
 
 def full_doc() -> str:
-    parts = ["# SDD: тестовая фича", "**Jira:** TEST-1", ""]
+    parts = ["# SDD: тестовая фича", "**Jira:** TEST-1", "**Фронт-часть:** нет", ""]
     parts += list(CORE_BLOCKS.values())
     parts += [ARCH_BLOCK, THREAT_BLOCK, STORIES_BLOCK, DECISIONS_BLOCK, REGULATORY_BLOCK]
     return "\n\n".join(parts) + "\n"
@@ -52,7 +52,7 @@ def full_doc() -> str:
 
 def core_plus_security_doc() -> str:
     """CORE + security/arch, но без contextual/regulatory (минимум под applicability)."""
-    parts = ["# SDD: тестовая фича", "**Jira:** TEST-1", ""]
+    parts = ["# SDD: тестовая фича", "**Jira:** TEST-1", "**Фронт-часть:** нет", ""]
     parts += list(CORE_BLOCKS.values())
     parts += [ARCH_BLOCK, THREAT_BLOCK]
     return "\n\n".join(parts) + "\n"
@@ -190,6 +190,18 @@ class GateTest(unittest.TestCase):
         v = gate.check(self._write(doc), "applicability")
         self.assertEqual(v["status"], "fail")
         self.assertTrue(any("Given-When-Then" in e for e in v["errors"]))
+
+    def test_front_part_field_is_required(self):
+        """Стори бывает бэк, фронт или обе: связь с фронт-частью — явное поле шапки."""
+        doc = full_doc().replace("**Фронт-часть:** нет", "")
+        v = gate.check(self._write(doc), "applicability")
+        self.assertEqual(v["status"], "fail")
+        self.assertTrue(any("Фронт-часть" in e for e in v["errors"]))
+        doc = full_doc().replace("**Фронт-часть:** нет", "**Фронт-часть:** может быть")
+        self.assertEqual(gate.check(self._write(doc), "applicability")["status"], "fail")
+        doc = full_doc().replace("**Фронт-часть:** нет", "**Фронт-часть:** есть: TEST-1")
+        v = gate.check(self._write(doc), "applicability")
+        self.assertEqual(v["status"], "pass", v["errors"])
 
     # --- резолв политики ---
 
