@@ -267,8 +267,12 @@ def check_phase_gate(tool_name: str, tool_input: dict, agent_type: str | None,
             pattern = re.sub(r"^(?:\./)+", "", str(tool_input.get("pattern") or "")
                              .replace("\\", "/"))
             is_glob = tool_name in ("Glob", "glob")
-            if is_glob and pattern and not pattern.startswith(("*", "{")):
-                if not any(bp in pattern + "/" for bp in blocked_paths):
+            # `{UI,docs/x}/**/*.md` — несколько корней: проходит, если ни один не ведёт в blocked
+            # (на прогоне spec-graph такой glob по каталогам спеки резался как «весь проект»)
+            brace = re.fullmatch(r"\{([^{}]*)\}(.*)", pattern) if is_glob else None
+            alts = [a + brace.group(2) for a in brace.group(1).split(",")] if brace else [pattern]
+            if is_glob and pattern and all(a and not a.startswith(("*", "{")) for a in alts):
+                if not any(bp in a + "/" for a in alts for bp in blocked_paths):
                     return True            # glob по docs/**, ground/** и т.п.
                 file_path = pattern
             else:

@@ -307,6 +307,16 @@ def _unlink_hint(target: str, real: str = "") -> str:
 
 
 def _harness_hint(target: str) -> str:
+    if "/skills/specgraph/" in target.replace("\\", "/"):
+        # движок графа: подсказка про sdd.md/skill_paths feature-pipeline тут уводила в сторону,
+        # модель трижды повторяла ту же правку и предлагала человеку снять хук
+        return (
+            f"[state-write-guard] DENY: '{target}' — код движка spec-graph (общий для всех проектов "
+            f"поставки), во время прогона его не правят ни модель, ни по просьбе пользователя.\n"
+            f"  Нашёл дефект движка — остановись и отдай человеку: файл, функцию, причину и diff. "
+            f"Правка вносится в источнике forge и доезжает установкой (update.sh), затем "
+            f"переподключение MCP spec-graph (/mcp). Снимать хук не предлагай."
+        )
     return (
         f"[state-write-guard] DENY: запись в каталог ХАРНЕСА '{target}' запрещена во время "
         f"прогона. Это код форжа ({'/'.join(_HARNESS_HINT_DIRS)}), а в extension-раскладке — "

@@ -148,6 +148,41 @@ def _chunks(rows, cands, room: int, rel: str, svc, others) -> List[Tuple[List[Di
     return out
 
 
+def _halve(chunk: List[Dict[str, Any]], cc: List[Dict[str, Any]]):
+    """Кусок оглавления пополам. Несколько строк — по строкам (кандидат идёт со своим разделом,
+    кандидаты без раздела в куске — в первую половину); одна строка — кандидаты пополам, строка в
+    обеих частях (черновик ссылается на её раздел из любой). None — делить нечего."""
+    if len(chunk) > 1:
+        mid = len(chunk) // 2
+        second = {r["id"] for r in chunk[mid:]}
+        return [(chunk[:mid], [c for c in cc if c.get("section") not in second]),
+                (chunk[mid:], [c for c in cc if c.get("section") in second])]
+    if len(cc) > 1:
+        mid = len(cc) // 2
+        return [(chunk, cc[:mid]), (chunk, cc[mid:])]
+    return None
+
+
+def _fit(chunks, measure, limit: int):
+    """Довести нарезку до бюджета по НАСТОЯЩЕМУ тексту входа. `_chunks` режет по оценке, а шапка
+    (имена корпуса подбираются по сходству под каждую часть) и строки кандидатов (ключ, раздел)
+    длиннее оценки — на боевой спеке две части вышли на 523 знака сверх бюджета и уронили сборку
+    всей очереди. Неделимый остаток помечается `indivisible` (решает Q.build)."""
+    out = []
+    todo = list(chunks)
+    while todo:
+        chunk, cc = todo.pop(0)
+        if measure(chunk, cc) <= limit:
+            out.append((chunk, cc, False))
+            continue
+        halves = _halve(chunk, cc)
+        if halves is None:
+            out.append((chunk, cc, True))
+        else:
+            todo[:0] = halves
+    return out
+
+
 def survey(root: Path, cfg: Dict[str, Any], scope: Optional[str] = None) -> Dict[str, Any]:
     root = Path(root)
     ont = O.load(root)
@@ -176,14 +211,23 @@ def survey(root: Path, cfg: Dict[str, Any], scope: Optional[str] = None) -> Dict
         own = by_file_names[rel]
         # имена кандидатов других файлов, кроме своих (как раньше: «не мой кандидат» минус «мои имена»)
         others = sorted(n for n, k in total_names.items() if n not in own and k > 0)
-        chunks = _chunks(rows, cands, budget - bchars, rel, pf["service"], others)
+        def known_for(chunk, cc):
+            return _similar(others, [c["name_hint"] for c in cc] + [r["title"] for r in chunk], index=index)
+
+        def measure(chunk, cc):
+            return len(_input_text(rel, pf["service"], chunk, cc, known_for(chunk, cc), part=" — часть 999"))
+
+        chunks = _fit(_chunks(rows, cands, budget - bchars, rel, pf["service"], others), measure, budget - bchars)
         single = len(chunks) == 1
-        for k, (chunk, cc) in enumerate(chunks, 1):
-            known = _similar(others, [c["name_hint"] for c in cc] + [r["title"] for r in chunk], index=index)
-            text = _input_text(rel, pf["service"], chunk, cc, known, part="" if single else f" — часть {k}")
-            specs.append({"id": unit_id(rel, 0 if single else k), "brief": BRIEF, "tool": TOOL, "input": text,
-                          "refs": {"file": rel, "sections": [r["id"] for r in chunk],
-                                   "candidates": [c["name_hint"] for c in cc]}})
+        for k, (chunk, cc, indivisible) in enumerate(chunks, 1):
+            text = _input_text(rel, pf["service"], chunk, cc, known_for(chunk, cc),
+                               part="" if single else f" — часть {k}")
+            spec = {"id": unit_id(rel, 0 if single else k), "brief": BRIEF, "tool": TOOL, "input": text,
+                    "refs": {"file": rel, "sections": [r["id"] for r in chunk],
+                             "candidates": [c["name_hint"] for c in cc]}}
+            if indivisible:
+                spec["indivisible"] = True
+            specs.append(spec)
         for w in pf["data"]["warnings"]:
             anomalies.append(f"{rel}: {w['code']} (строка {w['line']})")
         if shas[pf["data"]["sha1"]] > 1:
@@ -193,6 +237,9 @@ def survey(root: Path, cfg: Dict[str, Any], scope: Optional[str] = None) -> Dict
                 anomalies.append(f"{rel}: длинный раздел «{r['title']}» — {r['chars']} знаков")
     excluded = sorted(set(_all_md(root, cfg)) - set(B.source_files(root, cfg)))
     counts = Q.build(root, "draft-file", specs, cfg, {BRIEF: bchars})
+    for o in counts.get("oversize", []):
+        anomalies.append(f"{o['refs']['file']}: единица {o['id']} — {o['chars']} знаков сверх бюджета "
+                         f"{budget}, мельче не режется (один раздел, один кандидат)")
     owners = Counter()
     est_nodes = {(c["kind"], c.get("key") or c["name_hint"]) for c in all_cands}
     est_ops = {k for k in est_nodes if ont.kinds[k[0]].get("key") == "task"}
@@ -267,6 +314,8 @@ def put_draft(root: Path, item_id: str, nodes: List[Dict[str, Any]], not_nodes: 
     res = json.loads((Path(root) / X.CANDIDATES_REL / (rel + ".json")).read_text(encoding="utf-8"))
     wanted = set(unit["refs"].get("candidates") or [])
     cands = [c for c in res["candidates"] if c["name_hint"] in wanted]
+    nodes = [dict(n, sections=[B.full_id(rel, x) for x in n["sections"]])
+             if isinstance(n, dict) and isinstance(n.get("sections"), list) else n for n in nodes]
     errs: List[Tuple[str, str]] = []
     names = Counter()
     for i, n in enumerate(nodes):

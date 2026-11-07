@@ -84,8 +84,13 @@ def norm_ws(text: str) -> str:
     return re.sub(r"[\u00a0\u2007\u202f\t]", " ", text)
 
 
+_HTML_TAG = re.compile(r"</?[A-Za-z][^<>]*>")
+
+
 def clean_title(title: str) -> str:
-    t = re.sub(r" {2,}", " ", norm_ws(title)).strip().strip("*").strip()
+    # HTML в заголовке (якоря оглавления `<a name="21-…"></a>`) — разметка, а не имя: с ним имя
+    # кандидата несло «/» из `</a>`, и черновик падал на запрещённом символе (боевой прогон).
+    t = re.sub(r" {2,}", " ", norm_ws(_HTML_TAG.sub("", title))).strip().strip("*").strip()
     changed = True
     while changed:
         changed = False
@@ -94,6 +99,14 @@ def clean_title(title: str) -> str:
             if n != t:
                 t, changed = n.strip(), True
     return t
+
+
+def safe_name(name: str, forbidden: str) -> str:
+    """Имя кандидата, годное в имя узла (оно же имя файла заметки и ссылка [[…]]): разделители пути
+    «/ \\ |» — в дефис («UI/UX Описание» → «UI-UX Описание»), прочие запрещённые — в пробел, без
+    точки в конце. Модель берёт имя кандидата как есть — раньше «UI/UX» отбивал черновик."""
+    out = "".join("-" if c in "/\\|" else " " if c in forbidden else c for c in name)
+    return re.sub(r"\s+", " ", out).strip().rstrip(".").strip()
 
 
 def sections(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -174,6 +187,8 @@ def extract_blocks(blocks: List[Dict[str, Any]], rel: str, cfg: Dict[str, Any],
 
     def add(rule, name, blk_ids, key=None, section=None, extra=None):
         kind = rule["kind"]
+        if ont.kinds[kind].get("name") == "phrase":
+            name = safe_name(name, ont.forbidden)
         c = {"kind": kind, "name_hint": name, "blocks": blk_ids, "rule": rule["id"],
              "confidence": rule.get("confidence", "medium")}
         for f in ("role", "subkind"):

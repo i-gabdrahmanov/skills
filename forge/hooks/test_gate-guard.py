@@ -739,6 +739,17 @@ class TGroundingReadGateSearchTools(unittest.TestCase):
                 _mk_full_state(td, self.STEPS)
                 self.assertEqual(self._rc(td, tool, ti), 0, f"{tool} {ti} — ложный блок")
 
+    def test_brace_glob_is_judged_per_root(self):
+        """Прогон spec-graph 2026-11-07: `{UI,КОБОТ,architecture}/**/*.md` по каталогам спеки резался
+        как поиск по всему проекту. Корни в фигурных скобках проверяются по одному: ни один не в
+        src/ — проходит; хоть один в src/ или начинается с `*` — блок."""
+        for pattern, rc in (("{UI,КОБОТ,architecture,db_documentation}/**/*.md", 0),
+                            ("{docs,src/main}/**/*.java", 2),
+                            ("{docs,**}/*.md", 2)):
+            with self.subTest(pattern=pattern), tempfile.TemporaryDirectory() as td:
+                _mk_full_state(td, self.STEPS)
+                self.assertEqual(self._rc(td, "glob", {"pattern": pattern}), rc, pattern)
+
     def test_matcher_routes_grep_search_to_gate(self):
         import re as _re
         groups = json.loads((HOOK.parent / "settings.hooks.json").read_text(

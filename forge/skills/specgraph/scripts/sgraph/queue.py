@@ -11,8 +11,12 @@ selfcheck, improve). Единицы строит КОД движка (`build`) �
 Вход единицы готовится заранее в `.spec-graph/queue/inputs/<id>.md` и вместе с брифом обязан
 уложиться в бюджет (`queue.budget_chars`) — крупное режет генератор, а не модель.
 
-Жизненный цикл: pending → leased (аренда, `graph_next`) → done (результат принят) | pending (отказ,
-попытка + 1) → abandoned (после `max_attempts` отказов, с последними кодами — в отчёт человеку).
+Жизненный цикл: pending → leased (аренда, `graph_next`) → done (результат принят) | leased (отказ,
+попытка + 1, аренда продлена) → abandoned (после `max_attempts` отказов, с последними кодами — в отчёт
+человеку). Отказ аренду не снимает: субагент, получивший список ошибок, тут же сдаёт исправленное
+под тем же item_id. Раньше отказ возвращал единицу в pending, и повторная сдача того же субагента
+падала «не в аренде» — на прогоне GLM у субагента была одна содержательная попытка на аренду, а
+готовые исправленные черновики ждали следующей пачки.
 Аренда истекает (субагент оборвался) — единица снова pending. Повторный `graph_next` до сдачи результата
 возвращает ту же единицу: после обрыва сессии работа продолжается с того же места, без повторов и пропусков.
 Параллельные субагенты — `graph_next batch`: пачка до `queue.parallel` (по умолчанию 4) единиц, висящие в
@@ -89,10 +93,13 @@ def build(root: Path, name: str, specs: List[Dict[str, Any]], cfg: Optional[Dict
     spec: {id, brief, tool, input (текст входа), refs?: {…}}. Порядок выдачи = порядок `specs`.
     Повторная сборка детерминирована и бережна: закрытые (done/abandoned) единицы с тем же id
     сохраняют исход, незакрытые — попытки; единица, которой больше нет в артефактах и которая не
-    закрыта, уходит из очереди. Вход сверх бюджета — отказ всей сборки (генератор режет мельче)."""
+    закрыта, уходит из очереди. Вход сверх бюджета — отказ всей сборки (генератор режет мельче).
+    Исключение — `indivisible: true`: генератор ручается, что мельче резать нечего (один блок, одна
+    строка оглавления с одним кандидатом). Такая единица идёт в очередь и в `oversize` ответа: один
+    неделимый кусок не должен ронять сборку всех остальных."""
     st = settings(cfg)
     brief_chars = brief_chars or {}
-    seen, errors = set(), []
+    seen, errors, oversize = set(), [], []
     for s in specs:
         iid = s.get("id")
         if not isinstance(iid, str) or not _ID_RE.match(iid):
@@ -102,7 +109,10 @@ def build(root: Path, name: str, specs: List[Dict[str, Any]], cfg: Optional[Dict
         seen.add(iid)
         size = len(s.get("input") or "") + brief_chars.get(s.get("brief") or "", 0)
         if size > st["budget_chars"]:
-            errors.append(f"вход «{iid}» — {size} знаков с брифом, бюджет {st['budget_chars']}: режь мельче")
+            if s.get("indivisible"):
+                oversize.append({"id": iid, "chars": size, **({"refs": s["refs"]} if s.get("refs") else {})})
+            else:
+                errors.append(f"вход «{iid}» — {size} знаков с брифом, бюджет {st['budget_chars']}: режь мельче")
     if errors:
         raise QueueError("; ".join(errors), "E-queue-build")
     old = {it["id"]: it for it in _load(root, name).get("items", [])}
@@ -123,7 +133,10 @@ def build(root: Path, name: str, specs: List[Dict[str, Any]], cfg: Optional[Dict
         items.append(item)
     data = {"queue": name, "version": 1, "items": items}
     _save(root, name, data)
-    return counts(data)
+    out = counts(data)
+    if oversize:
+        out["oversize"] = oversize[:10]
+    return out
 
 
 def counts(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -218,7 +231,8 @@ def check_leased(root: Path, name: str, item_id: Any) -> None:
 
 def settle(root: Path, name: str, item_id: str, accepted: bool, codes: Optional[List[str]] = None,
            cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Исход сдачи: принято → done; отказ → попытка + 1, pending или abandoned по лимиту."""
+    """Исход сдачи: принято → done; отказ → попытка + 1, аренда продлена (тот же субагент сдаёт
+    исправленное) или abandoned по лимиту."""
     st = settings(cfg)
     data = _load(root, name)
     it = next(x for x in data["items"] if x["id"] == item_id)
@@ -228,7 +242,11 @@ def settle(root: Path, name: str, item_id: str, accepted: bool, codes: Optional[
     else:
         it["attempts"] = it.get("attempts", 0) + 1
         it["last_codes"] = list(codes or [])[:5]
-        it["status"] = "abandoned" if it["attempts"] >= st["max_attempts"] else "pending"
+        if it["attempts"] >= st["max_attempts"]:
+            it["status"] = "abandoned"
+        else:
+            it["status"] = "leased"
+            it["lease_until"] = _clock() + st["lease_s"]
     _save(root, name, data)
     return {"item_id": item_id, "status": it["status"], "attempts": it["attempts"]}
 

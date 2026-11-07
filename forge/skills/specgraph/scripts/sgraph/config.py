@@ -133,17 +133,35 @@ def load(root: Path) -> Tuple[Optional[Dict[str, Any]], List[str]]:
     return (cfg if not errors else None), errors
 
 
+def _git_ignored_md(root: Path) -> set:
+    """MD-файлы, которые git игнорирует (пути от корня, через «/»). Не git-репо или git нет — пусто."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--others", "--ignored", "--exclude-standard",
+                            "--", "*.md", "*.MD"], capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    if r.returncode != 0:
+        return set()
+    # ls-files печатает пути от каталога -C (корня спеки), даже если git-корень выше
+    return {raw.decode("utf-8", "replace") for raw in r.stdout.split(b"\0") if raw}
+
+
 def detect(root: Path, limit: int = 8) -> List[Dict[str, Any]]:
     """Кандидаты в корни исходников: каталоги с MD-файлами, с доказательствами.
 
     Кандидат — каталог верхнего уровня или первого уровня внутри `docs/` (так обычно раскладывают
-    спеку по сервисам). Ранжирование — по числу и объёму MD; решает пользователь, не движок."""
+    спеку по сервисам). Ранжирование — по числу и объёму MD; решает пользователь, не движок.
+    В git-репо файлы, которые git игнорирует, не считаются: на боевом репо спеки первыми кандидатами
+    шли локальные архивы прошлых графов (gitignored, 28 тыс. MD), а настоящая спека — пятой."""
     root = Path(root)
     counts: Dict[str, List[int]] = {}
+    ignored = _git_ignored_md(root)
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS and not d.startswith("."))
         rel = Path(dirpath).relative_to(root)
-        md = [f for f in filenames if f.lower().endswith(".md")]
+        md = [f for f in filenames if f.lower().endswith(".md")
+              and (rel / f).as_posix() not in ignored]
         if not md or not rel.parts:
             continue
         parts = rel.parts
