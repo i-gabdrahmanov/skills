@@ -81,9 +81,12 @@ def _human_command() -> str:
     if "--project" in args:                     # проект задаёт cwd человека, а не флаг
         i = args.index("--project")
         del args[i:i + 2]
-    return (f"python3 {install_rel()}/hooks/human_override.py --reason \"<почему>\" -- config "
-            f"{shlex.join(args)}   ← выполняет ЧЕЛОВЕК в своём терминале из корня проекта "
-            f"(агенту запуск закрыт: покажи команду и жди результата)")
+    return f"python3 {install_rel()}/hooks/human_override.py -- config {shlex.join(args)}"
+
+
+# Пояснение — отдельным полем: в одной строке с командой оно уезжало в shell при вставке.
+_HUMAN_NOTE = ("команду из поля human выполняет ЧЕЛОВЕК в своём терминале из корня проекта, "
+               "вставив как есть; агенту запуск закрыт — покажи команду и жди результата")
 
 
 # ── Переключатели enforcement: правка = R4 (approval) ─────────────────────────
@@ -438,7 +441,7 @@ def cmd_set(project: Path, params: list, args) -> int:
             print(json.dumps({
                 "error": f"{e['id']} — R4-класс: нужен approval-маркер с провенансом record_approval",
                 "approval_key": approval_key,
-                "human": _human_command(),
+                "human": _human_command(), "human_note": _HUMAN_NOTE,
                 "hint": (f"quality.*/security.* — пороги, которыми харнес меряет сам себя, и "
                          f"policy.json действует на весь проект, а не на один прогон. "
                          f"(1) прогони гейт, а не снимай его; (2) если он объективно "
@@ -622,7 +625,7 @@ def _structure_consent(project: Path, key: str, what: str) -> "str | None":
     print(json.dumps({
         "error": f"{what} — R4-класс: нужен approval-маркер с провенансом record_approval",
         "approval_key": key,
-        "human": _human_command(),
+        "human": _human_command(), "human_note": _HUMAN_NOTE,
         "hint": (f"(1) покажи пользователю, ЧТО ослабляется; (2) после явного «да»: "
                  f"pipeline-state/scripts/record_approval.py --key {key} --approved-by user "
                  f"--reason \"<почему>\" --evidence \"<дословная цитата пользователя>\"; "
@@ -1042,7 +1045,7 @@ def cmd_repin(project: Path, params: list, args) -> int:
             "blocked": True,
             "reason": "repin — R4-класс: нужен approval-маркер с провенансом record_approval",
             "approval_key": approval_key,
-            "human": _human_command(),
+            "human": _human_command(), "human_note": _HUMAN_NOTE,
             "hint": (f"(1) покажи пользователю расхождение: config.py repin --skill {args.skill} "
                      f"--feature {args.feature} --dry-run; (2) после явного «да»: "
                      f"pipeline-state/scripts/record_approval.py --key {approval_key} "

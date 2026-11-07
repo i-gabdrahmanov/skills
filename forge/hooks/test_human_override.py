@@ -78,6 +78,19 @@ class HumanPathTest(Base):
         self.assertEqual(grant["produced_by"], "record_approval")
         self.assertTrue(any(r.get("kind") == "approval-revoked" for r in log))
 
+    def test_reason_is_optional_so_hint_pastes_as_is(self):
+        out = io.StringIO()
+        real, sys.stdout = sys.stdout, out
+        try:
+            rc = HO.main(["--project", str(self.root), "--", "config", "set", "quality.tdd", "false"],
+                         env={}, tty=FakeTTY(), stdin_isatty=True)
+        finally:
+            sys.stdout = real
+        self.assertEqual(rc, 0, out.getvalue())
+        grant = next(r for r in FE.read_log(FE.approvals_path(self.root))
+                     if r.get("kind") == "approval")
+        self.assertEqual(grant["reason"], "не указана")
+
     def test_wrong_code_runs_nothing(self):
         rc, out = self.ho("config", "set", "quality.tdd", "false", tty=FakeTTY(answer="NOPE42"))
         self.assertEqual(rc, 5)
@@ -169,6 +182,20 @@ class RealTerminalTest(Base):
         rc, out = self._spawn(False)
         self.assertEqual(rc, 5, out)
         self.assertIs(self.policy()["quality"]["tdd"], True)
+
+
+class RefusalHintTest(Base):
+    def test_human_field_is_a_pasteable_command(self):
+        """Человек вставляет команду из отказа как есть: в ней ни заглушек, ни пояснений."""
+        import shlex
+        cfg = HOOKS.parent / "skills" / "config-helper" / "scripts" / "config.py"
+        p = subprocess.run([sys.executable, str(cfg), "--project", str(self.root),
+                            "set", "quality.tdd", "false"], capture_output=True, text=True)
+        human = json.loads(p.stdout)["human"]
+        toks = shlex.split(human)
+        self.assertTrue(toks[1].endswith("hooks/human_override.py"), human)
+        self.assertEqual(toks[2:], ["--", "config", "set", "quality.tdd", "false"])
+        self.assertNotIn("<", human)
 
 
 class KeysTest(unittest.TestCase):

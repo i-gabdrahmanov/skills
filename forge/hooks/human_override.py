@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """human_override.py — команда forge от имени ЧЕЛОВЕКА: снимает R4-ограничения на один вызов.
 
-    python3 .gigacode/extensions/forge/hooks/human_override.py --reason "<почему>" -- config set quality.tdd false
+    python3 .gigacode/extensions/forge/hooks/human_override.py -- config set quality.tdd false
     python3 .gigacode/extensions/forge/hooks/human_override.py --reason "<почему>" -- config repin --feature KID-1
 
 Зачем. Параметры enforcement (quality.*, security.*, autonomy.mode, repin, ослабление фаз и
@@ -193,7 +193,7 @@ def execute(cmd: "list[str]", project: Path, reason: str, out=None) -> int:
     out.write(text if text.endswith("\n") or not text else text + "\n")
     if rc == 0 and re.search(r"\brepin\b", text) and "repin" not in cmd:
         out.write("  ℹ идущий прогон живёт по снимку политики; применить на нём: "
-                  "human_override.py --reason … -- config repin --feature <F>\n")
+                  "human_override.py -- config repin --feature <F>\n")
     out.write(f"=== итог: exit {rc} ===\n")
     return rc
 
@@ -207,7 +207,8 @@ def main(argv: "list[str] | None" = None, env=None, tty=None, stdin_isatty=None)
         argv, cmd_argv = argv[:i], argv[i + 1:]
     ap = argparse.ArgumentParser(description="Команда forge от имени человека (R4 на один вызов).")
     ap.add_argument("--project", default=".", help="корень проекта (дефолт: текущий каталог)")
-    ap.add_argument("--reason", required=True, help="почему снимаешь ограничение — уйдёт в журнал")
+    ap.add_argument("--reason", default="не указана",
+                    help="почему снимаешь ограничение — уйдёт в журнал (необязательно)")
     args = ap.parse_args(argv)
 
     marker = agent_marker(env)
