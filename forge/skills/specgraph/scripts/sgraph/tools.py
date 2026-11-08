@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put, graph_edges_review, graph_edges_decide, graph_delta_decide, graph_validate, graph_obsidian, graph_find, graph_node, graph_neighbors, graph_path, graph_impact, graph_service_links, graph_check, graph_diag. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put, graph_edges_review, graph_edges_decide, graph_delta_decide, graph_stubs_decide, graph_validate, graph_obsidian, graph_find, graph_node, graph_neighbors, graph_path, graph_impact, graph_service_links, graph_check, graph_diag. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -179,10 +179,16 @@ def _next_raw(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
                  **({"attempt": u["attempt"]} if u["attempt"] > 1 else {}),
                  **({"repeat": True} if u["repeat"] else {})) for u in units])
         step = _QUEUE_STEP.get(str(res.get("queue") or ""), "")
-        tail = (f"; последней строкой каждый возвращает {{\"step_id\": \"{step}\", \"status\": \"unit\"}}"
-                if step else "")
-        res["next"] = (f"запусти {len(units)} субагентов ОДНИМ ходом, каждому — свою единицу: бриф {res['brief']}, "
-                       f"вход — его input; результат он сдаёт инструментом {res['tool']} со своим item_id{tail}. "
+        # готовый промпт субагента — один раз на пачку: свои промпты оркестратора (10 штук на пачку) и
+        # пересказы субагентов копились в контексте по ≈8 тыс. токенов на пачку — 413 к 25-й пачке
+        # link-note (боевой прогон 2026-11-08), хотя сам ответ graph_next уже был компактным
+        res["prompt"] = (f"Ты исполняешь одну единицу очереди {res.get('queue')}. Прочитай бриф "
+                         f"{(LK.BRIEFS / res['brief']).as_posix()} и вход {{input}} и сделай по брифу; результат сдай "
+                         f"инструментом {res['tool']} с item_id «{{item_id}}». Весь твой ответ — одна строка "
+                         + (f'{{"step_id": "{step}", "status": "unit"}}' if step else "«готово»")
+                         + ", без пересказа.")
+        res["next"] = (f"запусти {len(units)} субагентов ОДНИМ ходом, каждому — свою единицу: промпт — поле prompt "
+                       f"как есть, {{item_id}} и {{input}} — его единицы; своего к промпту не дописывай. "
                        f"Дождись, пока сдадут все, затем снова graph_next batch")
         return res
     res = Q.lease(root, _queue_arg(args), _cfg(root))
@@ -240,8 +246,11 @@ def _to_decide(cat: Dict[str, Any]) -> Dict[str, List[str]]:
     """Что пользователю решать, строками — без таблицы узлов. Оркестратор показывал отчёт, читая
     catalog.md целиком (376 узлов, четыре чтения подряд) — это ушло в контекст до конца шага (413)."""
     out = {
+        # просадка к прошлому каталогу и коды из спеки без узла — первыми строками решения человека
+        "drift": [f"{x} (база {cat['drift']['base']}) — решение или регрессия?" for x in (cat.get("drift") or {}).get("flags", [])],
+        "missing_codes": list(cat.get("missing_codes") or []),
         "collisions": [f"«{c['name']}»: " + " / ".join(f"{x} (`{i}`)" for x, i in zip(c["suggest"], c.get("ids") or []))
-                       for c in cat["collisions"]],
+                       + (f" — {c['merge_hint']}" if c.get("merge_hint") else "") for c in cat["collisions"]],
         "conflicts": [f"«{c['node']}»: {c['field']} = {c['values'][0]} / {c['values'][1]}" for c in cat["conflicts"]],
         "same_node": [f"«{r['a']}» ≟ «{r['b']}» ({r['similarity']})" for r in cat["review"]],
     }
@@ -273,6 +282,11 @@ def _catalog(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     else:
         res["next"] = ("покажи пользователю отчёт и спроси: утвердить каталог и scope или что поменять. Правки — "
                        "graph_catalog_decide, затем снова graph_catalog. Согласие: " + st["how"])
+    flags = (cat.get("drift") or {}).get("flags") or []
+    if (flags or cat.get("missing_codes")) and st["state"] != "ok":
+        res["next"] = ("первыми покажи to_decide.drift и to_decide.missing_codes: каталог просел к прошлому или коды "
+                       "типов задач из спеки остались без узла — спроси, это решение (scope, слияние) или регрессия; "
+                       "регрессию не утверждай. ") + res["next"]
     if cat.get("problems") and not dup:
         # на боевом прогоне модель называла их «наследием, не блокируют» и шла к согласию — а это решения
         # человека, которые НЕ применились (split «UI-UX Описание» так и не разделил экраны)
@@ -388,6 +402,13 @@ def _delta_decide(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError(str(e), [e.code])
 
 
+def _stubs_decide(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return RV.stubs_decide(root, _need_cfg(root), args.get("targets") or [], args.get("why") or "")
+    except RV.ReviewError as e:
+        raise ToolError(str(e), [e.code])
+
+
 def _validate(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return VA.validate(root, _need_cfg(root), args.get("scope"))
 
@@ -434,7 +455,7 @@ TOOLS: Dict[str, Dict[str, Any]] = {
     "graph_status": {
         "fn": _status,
         "description": "Состояние spec-graph в проекте: инициализирован ли, а если нет — вопросы первого "
-                       "запуска с кандидатами. Первый ход команды /graph.",
+                       "запуска с кандидатами. Первый ход команды /forge-graph.",
         "schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     "graph_archive": {
@@ -622,6 +643,14 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "schema": {"type": "object", "properties": {"decisions": {"type": "array"}},
                    "required": ["decisions"], "additionalProperties": False},
     },
+    "graph_stubs_decide": {
+        "fn": _stubs_decide,
+        "description": "Решение пользователя по частым целям без узла (отчёт связей, раздел 5): targets [имя | {name, "
+                       "kind?, subkind?}], why — заглушка на каждую (узел без текста спеки, статус stub), вопросы к ним "
+                       "становятся связями. Вид по умолчанию: uses_data → таблица, calls → внешняя система.",
+        "schema": {"type": "object", "properties": {"targets": {"type": "array"}, "why": {"type": "string"}},
+                   "required": ["targets", "why"], "additionalProperties": False},
+    },
     "graph_validate": {
         "fn": _validate,
         "description": "Проверить граф: счётчики по кодам E-*/W-*, первые 10 нарушений с путями; полностью — "
@@ -738,7 +767,10 @@ def _call(name: str, root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
                 raise ToolError(str(qe), [qe.code])
             leased = True
         fn: Callable[[Path, Dict[str, Any]], Dict[str, Any]] = tool["fn"]
-        res = fn(root, args)
+        try:
+            res = fn(root, args)
+        except B.SourceError as se:          # исходник не читается — отказ с именем файла, не трейсбек
+            raise ToolError(str(se), [se.code])
     except ToolError as e:
         if leased:
             st = Q.settle(root, queue, args["item_id"], False, e.codes, _cfg(root))

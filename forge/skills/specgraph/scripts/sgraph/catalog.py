@@ -193,6 +193,8 @@ def write_decisions_md(root: Path, vault: str) -> None:
 # ─── сборка ────────────────────────────────────────────────────────────────
 
 def _merge_into(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
+    if dst.get("stub") and not src.get("stub"):
+        dst.pop("stub")                     # описан где-то разделом — уже не заглушка
     for s in src["sources"]:
         if s not in dst["sources"]:
             dst["sources"].append(s)
@@ -210,6 +212,18 @@ def _collect(root: Path, ont: O.Ontology) -> Tuple[Dict[str, Dict[str, Any]], Li
     drafts.sort(key=lambda d: (d["file"], d["item_id"]))
     nodes: Dict[str, Dict[str, Any]] = {}
     conflicts, not_nodes = [], []
+    # узлы правил (auto) — первыми: модель их не подтверждает и не отклоняет, имя у них от правила
+    for c in rule_nodes(root):
+        ident = identity(c, ont)
+        rec = {"kind": c["kind"], "name": c["name"], "sources": c["sources"], "names_seen": [c["name"]],
+               "from": [f"rule:{c['rule']}"]}
+        for f in NODE_FIELDS + ("stub",):
+            if c.get(f):
+                rec[f] = c[f]
+        if ident in nodes:
+            _merge_into(nodes[ident], rec)
+        else:
+            nodes[ident] = rec
     for d in drafts:
         for n in d["nodes"]:
             ident = identity(n, ont)
@@ -227,13 +241,47 @@ def _collect(root: Path, ont: O.Ontology) -> Tuple[Dict[str, Dict[str, Any]], Li
                 for f in ("kind", "role", "subkind", "service"):
                     if prev.get(f) != rec.get(f):
                         conflicts.append({"node": prev["name"], "field": f, "values": [prev.get(f), rec.get(f)],
-                                          "files": [prev["sources"][0]["file"], d["file"]]})
+                                          "files": [_first_file(prev), d["file"]]})
                 _merge_into(prev, rec)
             else:
                 nodes[ident] = rec
         for x in d.get("not_nodes") or []:
             not_nodes.append(dict(x, file=d["file"]))
     return nodes, conflicts, not_nodes
+
+
+def _first_file(n: Dict[str, Any]) -> str:
+    """Первый файл-источник узла; у заглушки (stub) источников нет."""
+    return n["sources"][0]["file"] if n.get("sources") else f"заглушка {n.get('key') or ''}".strip()
+
+
+def survey_files(root: Path) -> List[str]:
+    """Файлы текущей разведки — по очереди draft-file (кандидаты прошлых разведок вне scope не в счёт)."""
+    p = Path(root) / ".spec-graph" / "queue" / "draft-file.json"
+    items = json.loads(p.read_text(encoding="utf-8"))["items"] if p.is_file() else []
+    return sorted({it["refs"]["file"] for it in items if (it.get("refs") or {}).get("file")})
+
+
+def rule_nodes(root: Path) -> List[Dict[str, Any]]:
+    """Кандидаты правил с auto: true — узлы каталога без модели. Источник — файл и раздел кандидата
+    (без раздела — файл целиком, как у черновика); у заглушки (stub) источника нет: своего текста нет,
+    и целью раскладки блоков она не становится."""
+    from . import extract as X
+    out = []
+    for rel in survey_files(root):
+        p = Path(root) / X.CANDIDATES_REL / (rel + ".json")
+        if not p.is_file():
+            continue
+        for c in json.loads(p.read_text(encoding="utf-8"))["candidates"]:
+            if not c.get("auto"):
+                continue
+            n = {"kind": c["kind"], "name": c["name_hint"], "rule": c["rule"],
+                 "sources": [] if c.get("stub") else [{"file": rel, "sections": [c["section"]] if c.get("section") else []}]}
+            for f in NODE_FIELDS + ("stub",):
+                if c.get(f):
+                    n[f] = c[f]
+            out.append(n)
+    return out
 
 
 def _ref(nodes: Dict[str, Dict[str, Any]], ref: Any, strict: bool) -> Tuple[Optional[str], Optional[str]]:
@@ -248,13 +296,13 @@ def _ref(nodes: Dict[str, Dict[str, Any]], ref: Any, strict: bool) -> Tuple[Opti
         if len(old) == 1:
             return old[0], None
         if old:
-            desc = "; ".join(f"{node_id(k)} — {nodes[k]['name']}, {nodes[k]['sources'][0]['file']}" for k in old)
+            desc = "; ".join(f"{node_id(k)} — {nodes[k]['name']}, {_first_file(nodes[k])}" for k in old)
             return None, f"id «{ref}» прежнего формата теперь у {len(old)} узлов ({desc}) — укажи новый id"
     hits = [k for k, n in nodes.items() if n["name"] == ref]
     if not hits:
         return None, f"узла «{ref}» нет в каталоге (сейчас) — имя или id `n-…` из catalog.json"
     if len(hits) > 1:
-        desc = "; ".join(f"{node_id(k)} — {nodes[k]['kind']}, {nodes[k]['sources'][0]['file']}" for k in hits)
+        desc = "; ".join(f"{node_id(k)} — {nodes[k]['kind']}, {_first_file(nodes[k])}" for k in hits)
         if strict:
             return None, f"имя «{ref}» у {len(hits)} узлов ({desc}) — укажи id нужного"
         return hits[-1], f"имя «{ref}» у {len(hits)} узлов — применено к последнему ({node_id(hits[-1])}): {desc}"
@@ -343,8 +391,12 @@ def _suggest(same: List[Dict[str, Any]], ont: O.Ontology) -> List[str]:
     by_owner = [n.get("service") or ont.kinds[n["kind"]]["title_ru"].lower() for n in same]
     if len(set(by_owner)) == len(same):
         return [f"{n['name']} ({o})" for n, o in zip(same, by_owner)]
-    return [f"{n['name']} ({folder(n['sources'][0]['file']).rsplit('/', 1)[-1] or n['sources'][0]['file']})"
-            for n in same]
+    def where(n):
+        if not n["sources"]:                      # заглушка: файла нет — различает ключ
+            return n.get("key") or "заглушка"
+        f = n["sources"][0]["file"]
+        return folder(f).rsplit("/", 1)[-1] or f
+    return [f"{n['name']} ({where(n)})" for n in same]
 
 
 def build(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -368,9 +420,16 @@ def build(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
         # без учёта регистра: «Задача А» и «задача а» — один файл на macOS/Windows и одна
         # ссылка [[…]] в Obsidian (его ссылки регистронезависимы)
         names.setdefault(n["name"].casefold(), []).append(n)
-    collisions = [{"name": v[0]["name"], "kinds": [n["kind"] for n in v], "ids": [n["id"] for n in v],
-                   "suggest": _suggest(v, ont)}
-                  for k, v in names.items() if len(v) > 1]
+    collisions = []
+    for k, v in names.items():
+        if len(v) < 2:
+            continue
+        c = {"name": v[0]["name"], "kinds": [n["kind"] for n in v], "ids": [n["id"] for n in v], "suggest": _suggest(v, ont)}
+        if len({n["kind"] for n in v}) == 1 and len({n.get("service") for n in v}) == 1:
+            # один вид, одно имя, разные ключи (код папки kid_x и код реестра kid_xe) — скорее один узел
+            c["merge_hint"] = ("вид и имя совпадают" + (": ключи " + " / ".join(str(n.get("key")) for n in v)
+                                                       if any(n.get("key") for n in v) else "") + " — вероятно, один узел: merge")
+        collisions.append(c)
     review = []
     generic = PF.generic_words()
     for i, a in enumerate(out):
@@ -389,10 +448,78 @@ def build(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     p = Path(root) / CATALOG_REL
     p.parent.mkdir(parents=True, exist_ok=True)
     FS.write_text(p, json.dumps(cat, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-    # проблемы решений — в отчёт и ответ, но не в catalog.json: к его байтам привязано согласие
-    cat = dict(cat, problems=[{k: v for k, v in x.items() if k != "strict"} for x in problems])
+    # проблемы решений, сдвиг к прошлому каталогу и коды без узла — в отчёт и ответ, но не в catalog.json:
+    # к его байтам привязано согласие
+    cat = dict(cat, problems=[{k: v for k, v in x.items() if k != "strict"} for x in problems],
+               drift=drift(root, cat, ont), missing_codes=missing_codes(root, cat))
     _write_md(root, cfg, cat, ont)
     return cat
+
+
+DRIFT_RATIO = 0.8
+DRIFT_MIN = 3
+_DRIFT_NAMES = 12
+
+
+def _baseline(root: Path, cat: Dict[str, Any]) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """С чем сравнивать: утверждённый снимок (если каталог уже не он), иначе — каталог последнего
+    архива графа («граф заново»). Регрессия 34 → 1 бизнес-операции между двумя прогонами одной спеки
+    прошла незамеченной: сравнивать было не с чем."""
+    snap = Path(root) / APPROVED_REL
+    if snap.is_file():
+        prev = json.loads(snap.read_text(encoding="utf-8"))
+        if prev.get("nodes") != cat["nodes"]:
+            return APPROVED_REL, prev
+        return None
+    arch = Path(root) / ".spec-graph" / "archive"
+    for d in sorted(arch.iterdir(), reverse=True) if arch.is_dir() else []:
+        for name in ("catalog.approved.json", "catalog.json"):
+            if (d / name).is_file():
+                return (d / name).relative_to(root).as_posix(), json.loads((d / name).read_text(encoding="utf-8"))
+    return None
+
+
+def drift(root: Path, cat: Dict[str, Any], ont: O.Ontology) -> Optional[Dict[str, Any]]:
+    """Сдвиг каталога к прошлому: счётчики по видам, пропавшие узлы; флаг — вид просел больше чем на
+    20 % (и не меньше чем на 3 узла) или пропал узел с ключом. Флаг — пункт решения человека, а не отказ:
+    сдвиг бывает и законным (поменяли scope, слили дубли)."""
+    base = _baseline(root, cat)
+    if base is None:
+        return None
+    rel, prev = base
+    cur_ids = {(n["kind"], n.get("key") or norm_name(n["name"])) for n in cat["nodes"]}
+    kinds: Dict[str, List[int]] = {}
+    lost: Dict[str, List[str]] = {}
+    for n in prev.get("nodes") or []:
+        kinds.setdefault(n["kind"], [0, 0])[0] += 1
+        if (n["kind"], n.get("key") or norm_name(n["name"])) not in cur_ids:
+            lost.setdefault(n["kind"], []).append(n["name"])
+    for n in cat["nodes"]:
+        kinds.setdefault(n["kind"], [0, 0])[1] += 1
+    flags = []
+    for k, (old, new) in sorted(kinds.items(), key=lambda x: list(ont.kinds).index(x[0]) if x[0] in ont.kinds else 99):
+        keyed = [x for x in lost.get(k, []) if ont.kinds.get(k, {}).get("key")]
+        if (old - new >= DRIFT_MIN and new < old * DRIFT_RATIO) or keyed:
+            title = ont.kinds[k]["title_ru"] if k in ont.kinds else k
+            names = sorted(lost.get(k, []))
+            flags.append(f"{title}: {old} → {new}" + (f", пропали: " + ", ".join(f"«{x}»" for x in names[:_DRIFT_NAMES])
+                                                     + (f" … ещё {len(names) - _DRIFT_NAMES}" if len(names) > _DRIFT_NAMES else "")
+                                                     if names else ""))
+    return {"base": rel, "kinds": kinds, "lost": {k: sorted(v) for k, v in lost.items()}, "flags": flags}
+
+
+def missing_codes(root: Path, cat: Dict[str, Any]) -> List[str]:
+    """Ключи типов задач (task:…), которые правила нашли в спеке, а узла с таким ключом в каталоге нет
+    (сняты решением или не дошли): сверка с перечнем, а не с памятью модели."""
+    from . import extract as X
+    have = {n.get("key") for n in cat["nodes"] if n.get("key")}
+    found: Dict[str, str] = {}
+    for rel in survey_files(root):
+        p = Path(root) / X.CANDIDATES_REL / (rel + ".json")
+        for c in json.loads(p.read_text(encoding="utf-8"))["candidates"] if p.is_file() else []:
+            if str(c.get("key") or "").startswith("task:") and c["key"] not in have:
+                found.setdefault(c["key"], c["name_hint"])
+    return [f"{k} «{v}»" for k, v in sorted(found.items())]
 
 
 def _write_md(root: Path, cfg: Dict[str, Any], cat: Dict[str, Any], ont: O.Ontology) -> None:
@@ -427,11 +554,18 @@ def _write_md(root: Path, cfg: Dict[str, Any], cat: Dict[str, Any], ont: O.Ontol
             ("Одинаковые имена у разных узлов", cat["collisions"],
              lambda r: f"- «{r['name']}»: предлагаю " + " / ".join(
                  f"{x} (`{i}`)" if i else x for x, i in zip(r["suggest"], r.get("ids") or [""] * len(r["suggest"])))
-             + " — rename по id или merge, если это один узел"),
+             + " — rename по id или merge, если это один узел" + (f" (**{r['merge_hint']}**)" if r.get("merge_hint") else "")),
             ("Кандидаты, признанные «не узлом»", cat["not_nodes"],
              lambda r: f"- «{r.get('candidate')}» ({r['file']}): {r.get('reason')}"
                        + (f" — предложен вид «{r['suggested_kind']}»" if r.get("suggested_kind") else ""))):
         lines += [f"## {title}", ""] + ([fmt(r) for r in rows] or ["- нет"]) + [""]
+    d = cat.get("drift")
+    if d:
+        lines += ["## Сравнение с прошлым каталогом", "", f"База: `{d['base']}`.", "", "| вид | было | стало |", "|---|---|---|"]
+        lines += [f"| {ont.kinds[k]['title_ru'] if k in ont.kinds else k} | {o} | {n} |" for k, (o, n) in d["kinds"].items()]
+        lines += [""] + ([f"- **{f}** — это решение или регрессия?" for f in d["flags"]] or ["- просадок нет"]) + [""]
+    if cat.get("missing_codes"):
+        lines += ["## Коды типов задач без узла", ""] + [f"- {x}" for x in cat["missing_codes"]] + [""]
     if cat.get("problems"):
         lines += ["## Решения, применённые не так, как записаны", ""]
         lines += [f"- №{x['n']} {x['action']} «{x['ref']}»: {x['problem']}" for x in cat["problems"]] + [""]

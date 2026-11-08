@@ -263,6 +263,16 @@ def status(root: Path, name: str, top: int = 5) -> Dict[str, Any]:
             "top_codes": [[k, v] for k, v in sorted(codes.items(), key=lambda kv: (-kv[1], kv[0]))[:top]]}
 
 
+def done_ids(root: Path, name: str) -> Optional[set]:
+    """id сданных (done) единиц текущей очереди; None — очереди нет. Результаты единиц (черновики, планы)
+    лежат файлами по id и не удаляются при пересборке: читать надо только сданные единицы ЭТОЙ сборки —
+    иначе план исчезнувшей единицы перебивает новый, а единица с изменённым входом (pending) отдаёт
+    старый ответ (ревью 2026-11-08)."""
+    if not _path(root, name).is_file():
+        return None
+    return {it["id"] for it in _load(root, name)["items"] if it["status"] == "done"}
+
+
 def closed(root: Path, name: str) -> Tuple[bool, List[str]]:
     """Гейт: очередь закрыта, если всё done или abandoned. Второе — брошенные единицы для отчёта."""
     data = _load(root, name)

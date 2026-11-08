@@ -2,7 +2,7 @@
 """test_split_coverage.py — нарезка в vault и проверка полноты (задача 1.6).
 
 Пинит:
-  • фикстура через настоящие очереди: 29 заметок по путям онтологии, «не назначено» = 0, дословность
+  • фикстура через настоящие очереди: заметка на узел эталона (с таблицей-заглушкой из SQL) по путям онтологии, «не назначено» = 0, дословность
     цела, каждый блок кода исходника целиком внутри маркера заметки, frontmatter — все ключи вида (рёбра
     `[]`), belongs_to, key/method/path/aliases эндпойнта, source — существующий путь + заголовок;
   • ссылки: якорь `](#ручная-заявка)` → `[[#5.1 Ручная заявка|…]]`, картинка → копия в `_attachments/` и
@@ -55,11 +55,14 @@ class _Split(unittest.TestCase):
 
 class Fixture(_Split):
     def test_notes_coverage_verbatim(self):
-        self.assertEqual((self.res["notes"], self.res["unassigned"], self.res["unplaced"]), (29, 0, 0))
+        self.assertEqual((self.res["notes"], self.res["unassigned"], self.res["unplaced"]), (len(G["nodes"]), 0, 0))
         self.assertEqual(self.res["verify"]["errors"], 0, self.res["verify"]["first"])
         paths = {p.relative_to(self.vault).as_posix() for p in self.vault.rglob("*.md") if "_graph" not in p.parts}
-        self.assertEqual(len(paths), 29)
+        self.assertEqual(len(paths), len(G["nodes"]))
         self.assertIn("services/task-service/schedulers/Шедулер закрытия регулярных задач.md", paths)
+        stub, stub_body = self.note("data/table/task.md")        # таблица из SQL: заглушка без текста спеки
+        self.assertEqual((stub["kind"], stub["subkind"], stub["key"], stub["status"]), ("data", "table", "table:task", "stub"))
+        self.assertNotIn("graph:source", stub_body)
         self.assertIn("data/attributes/Динамические атрибуты укомплектования.md", paths)
         bodies = "".join(SP.read_note(self.vault / p) for p in paths)
         for rel in {it.split("#")[0] for it in AS.load_plans(self.root)[0]["assign"][0]["blocks"]} | {
@@ -100,7 +103,7 @@ class Fixture(_Split):
     def test_index_and_unplaced(self):
         idx = (self.vault / "_graph" / "index.md").read_text(encoding="utf-8")
         rows = [l for l in idx.splitlines() if l.startswith("| [[")]
-        self.assertEqual(len(rows), 29)
+        self.assertEqual(len(rows), len(G["nodes"]))
         for r in rows:
             self.assertTrue((self.vault / r.rstrip(" |").rsplit("| ", 1)[1]).is_file(), r)
         self.assertIn("_нет_", (self.vault / "_graph" / "unplaced.md").read_text(encoding="utf-8"))
@@ -147,7 +150,7 @@ class Variants(unittest.TestCase):
                 with self.subTest(variant=v):
                     root = K.make_project(Path(td) / v, GV.materialize(Path(td) / "_v", v))
                     res = K.oracle_split(root)
-                    self.assertEqual((res["notes"], res["unassigned"], res["verify"]["errors"]), (29, 0, 0),
+                    self.assertEqual((res["notes"], res["unassigned"], res["verify"]["errors"]), (len(G["nodes"]), 0, 0),
                                      res["verify"]["first"])
 
 

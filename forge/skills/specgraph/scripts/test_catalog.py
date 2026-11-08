@@ -57,7 +57,7 @@ class _Proj(unittest.TestCase):
 class Build(_Proj):
     def test_fixture_catalog(self):
         res = T.call("graph_catalog", self.root, {})
-        self.assertEqual(res["nodes"], 29)
+        self.assertEqual(res["nodes"], 30)              # + таблица task из SQL (заглушка)
         cat = self.cat()
         self.assertEqual({(n["kind"], n["name"]) for n in cat["nodes"]}, {(n["kind"], n["name"]) for n in G["nodes"]})
         topic = next(n for n in cat["nodes"] if n["name"] == "pprbkid.upz.task.response.v1")
@@ -160,6 +160,12 @@ class Reports(_Proj):
                             "key": "http:POST /api/v1/upz/tasks"},
                            {"kind": "screen", "name": "Укомплектование"}]}
         (self.root / SV.DRAFTS_REL / "draft-extra.json").write_text(json.dumps(extra, ensure_ascii=False), encoding="utf-8")
+        # каталог читает черновики только сданных единиц текущей разведки — лишняя единица в очереди, сдана
+        qp = self.root / ".spec-graph" / "queue" / "draft-file.json"
+        q = json.loads(qp.read_text(encoding="utf-8"))
+        q["items"].append({"id": "draft-extra", "brief": SV.BRIEF, "tool": SV.TOOL, "refs": {"file": "docs/spec/extra.md"},
+                           "input_sha": "", "status": "done", "attempts": 0, "lease_until": 0, "last_codes": []})
+        qp.write_text(json.dumps(q, ensure_ascii=False), encoding="utf-8")
         self.assertTrue(d)
         T.call("graph_catalog", self.root, {})
         cat = self.cat()

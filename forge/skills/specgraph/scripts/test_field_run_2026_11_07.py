@@ -405,8 +405,8 @@ class CompactBatch(unittest.TestCase):
             res = T.call("graph_next", root, {"queue": "assign-section", "batch": True})
             self.assertEqual((res["brief"], res["tool"], len(res["units"])), ("assign-section.md", "graph_assign_put", 10))
             self.assertEqual(set(res["units"][0]), {"item_id", "input"})
-            self.assertIn('"step_id": "graph-map"', res["next"])
-            self.assertLess(len(json.dumps(res, ensure_ascii=False)), 1800)
+            self.assertIn('"step_id": "graph-map"', res["prompt"])   # промпт субагента — один на пачку (2026-11-08)
+            self.assertLess(len(json.dumps(res, ensure_ascii=False)) - len(res["prompt"]), 1800)
 
 
 class MapNext(unittest.TestCase):

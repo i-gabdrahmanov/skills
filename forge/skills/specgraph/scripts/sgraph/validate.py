@@ -9,7 +9,7 @@
 В этом модуле нет ни одного имени вида или ребра (пинит test_validator.py).
 
 Ошибки (E-*): fm-parse, fm-key, name, path, key-dup, ghost, edge-kind, inverse, evidence, verbatim,
-coverage, index, marker. Предупреждения (W-*): orphan, manual-inverse, unplaced, source-missing.
+coverage, source-changed (исходник изменён после скана), index, marker. Предупреждения (W-*): orphan, manual-inverse, unplaced, source-missing.
 Плюс дыры полноты по правилам `completeness.json` (3.2): раздел «Дыры графа» по бизнес-операциям и вопросы
 в `_graph/open-questions.md`. Раздел «Перенос исходников» (3.5): по каждому файлу спеки — перенесён полностью
 (каждый блок назначен, дословность цела, 0 E-* в его заметках) или что мешает. `write=False` — ничего не
@@ -22,6 +22,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from . import blocks as B
+from . import catalog as CT
 from . import completeness as CM
 from . import edges as E
 from . import fm as F
@@ -54,7 +56,8 @@ def _table(body: str, by_title: Dict[str, str]) -> Dict[Tuple[str, str], Tuple[s
             continue
         target = F.link_target(cells[2])
         if target:
-            out[(by_title[cells[1]], target)] = (cells[3].replace("\\|", "|"), cells[4])
+            # источник — последняя колонка: с 2026-11-08 перед ним «пояснение», старые заметки — без него
+            out[(by_title[cells[1]], target)] = (cells[3].replace("\\|", "|"), cells[-2])
     return out
 
 
@@ -275,6 +278,8 @@ def _transfer(run: "_Run", nodes: Dict[str, Dict[str, Any]], issues: List[Dict[s
     out = []
     for rel, f in sorted(run.cov["files"].items()):
         why = []
+        if B.changed_since_scan(run.root, rel):
+            why.append("исходник изменён после разведки — в графе прежняя версия")
         if f["unassigned"]:
             why.append(f"блоков без места: {f['unassigned']}")
         mine = notes_of.get(rel, set())
@@ -283,7 +288,14 @@ def _transfer(run: "_Run", nodes: Dict[str, Dict[str, Any]], issues: List[Dict[s
             why.append("ошибки в его заметках: " + ", ".join(errs))
         out.append({"file": rel, "blocks": f["blocks"], "unplaced": f["unplaced"], "notes": len(mine),
                     "present": (run.root / rel).is_file(), "full": not why, "why": why})
-    return out
+    # файлы разведки вне scope каталога — строкой «не переносился», а не молчанием: по таблице решают,
+    # какие исходники удалять
+    for rel in CT.survey_files(run.root):
+        if rel not in run.cov["files"]:
+            data = B.load(run.root, rel) or {}
+            out.append({"file": rel, "blocks": len(data.get("blocks") or []), "unplaced": 0, "notes": len(notes_of.get(rel, ())),
+                        "present": (run.root / rel).is_file(), "full": False, "why": ["вне scope каталога — не переносился"]})
+    return sorted(out, key=lambda t: t["file"])
 
 
 def validate(root: Path, cfg: Dict[str, Any], scope: Optional[str] = None, write: bool = True) -> Dict[str, Any]:

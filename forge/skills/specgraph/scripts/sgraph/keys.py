@@ -4,7 +4,8 @@
     http:<METHOD> <path>  — метод в верхнем регистре, путь без хоста и завершающего «/», `{любое}` → `{}`,
                             версия в пути сохраняется;
     kafka:<name>          — имя топика как есть;
-    task:<КОД>            — код типа задачи.
+    task:<КОД>            — код типа задачи (регистр как в спеке: `ABC_TASK`, `abc_task`);
+    table:<имя>           — таблица БД, имя в нижнем регистре (из SQL текста или раздела «Таблица `x`»).
 Здесь — нормализация и имя заметки эндпойнта; резолвер упоминаний и срезаемые префиксы — задача 2.1.
 """
 from __future__ import annotations
@@ -44,6 +45,10 @@ def topic_key(name: str) -> str:
 
 def task_key(code: str) -> str:
     return f"task:{code}"
+
+
+def table_key(name: str) -> str:
+    return f"table:{name.lower()}"
 
 
 def split_key(key: str) -> Tuple[str, Optional[str]]:

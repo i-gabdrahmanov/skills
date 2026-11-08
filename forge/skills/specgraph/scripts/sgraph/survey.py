@@ -64,14 +64,18 @@ def _input_text(rel: str, svc: Optional[str], rows: List[Dict[str, Any]], cands:
     top = min((r["level"] for r in rows), default=1)
     for r in rows:
         lines.append(f"{'  ' * (r['level'] - top)}- `{r['id']}` H{r['level']} {r['title']} — {r['chars']} знаков")
-    lines += ["", "## Кандидаты экстракторов в этом файле", ""]
-    if not cands:
-        lines.append("- нет")
-    for c in cands:
+    auto = [c for c in cands if c.get("auto")]
+    cands = [c for c in cands if not c.get("auto")]
+
+    def row(c):
         kind = c["kind"] + (f":{c['role']}" if c.get("role") else "") + (f":{c['subkind']}" if c.get("subkind") else "")
         key = f" ключ `{c['key']}`" if c.get("key") else ""
         sec = f" раздел `{c['section']}`" if c.get("section") else ""
-        lines.append(f"- {kind} — «{c['name_hint']}»{key}{sec} (правило {c['rule']})")
+        return f"- {kind} — «{c['name_hint']}»{key}{sec} (правило {c['rule']})"
+    lines += ["", "## Узлы правил — уже в каталоге (не повторяй и не отклоняй; бери их имена для связей)", ""]
+    lines += [row(c) for c in auto] or ["- нет"]
+    lines += ["", "## Кандидаты экстракторов в этом файле (реши по каждому)", ""]
+    lines += [row(c) for c in cands] or ["- нет"]
     lines += ["", "## Имена кандидатов всего корпуса (бери их, если узел тот же)", ""]
     lines += [f"- {n}" for n in known] or ["- нет"]
     lines += ["", f"Сдай результат инструментом `{TOOL}` с item_id этой единицы."]
@@ -189,10 +193,11 @@ def survey(root: Path, cfg: Dict[str, Any], scope: Optional[str] = None) -> Dict
     rules = X.load_rules(cfg)
     scan = B.scan(root, cfg, scope, limit=10 ** 6)
     files = [s["file"] for s in scan["summary"]]
+    corpus = X.corpus_info(files, rules)
     per_file, all_cands = [], []
     for rel in files:
         data = B.load(root, rel)
-        res = X.extract_file(root, rel, cfg, rules)
+        res = X.extract_file(root, rel, cfg, rules, corpus)
         secs = X.sections(data["blocks"])
         per_file.append({"file": rel, "service": res["service"], "data": data, "secs": secs,
                          "rows": _section_rows(data["blocks"], secs), "cands": res["candidates"]})
@@ -313,7 +318,7 @@ def put_draft(root: Path, item_id: str, nodes: List[Dict[str, Any]], not_nodes: 
     sections = set(unit["refs"]["sections"])
     res = json.loads((Path(root) / X.CANDIDATES_REL / (rel + ".json")).read_text(encoding="utf-8"))
     wanted = set(unit["refs"].get("candidates") or [])
-    cands = [c for c in res["candidates"] if c["name_hint"] in wanted]
+    cands = [c for c in res["candidates"] if c["name_hint"] in wanted and not c.get("auto")]
     nodes = [dict(n, sections=[B.full_id(rel, x) for x in n["sections"]])
              if isinstance(n, dict) and isinstance(n.get("sections"), list) else n for n in nodes]
     errs: List[Tuple[str, str]] = []
@@ -350,14 +355,18 @@ def put_draft(root: Path, item_id: str, nodes: List[Dict[str, Any]], not_nodes: 
     for name, k in names.items():
         if k > 1:
             errs.append(("E-draft-dup", f"узел «{name}» назван дважды"))
-    accounted = {n.get("name") for n in nodes if isinstance(n, dict)} | {n.get("key") for n in nodes if isinstance(n, dict)}
+    accounted = {n.get("name") for n in nodes if isinstance(n, dict)} | {n["key"] for n in nodes if isinstance(n, dict) and n.get("key")}
     rejected = {x.get("candidate") for x in not_nodes if isinstance(x, dict) and x.get("reason")}
     for c in cands:
         if c["name_hint"] not in accounted and c.get("key") not in accounted and c["name_hint"] not in rejected:
             errs.append(("E-draft-candidate", f"кандидат «{c['name_hint']}» не учтён: узел или not_nodes с причиной"))
     for i, x in enumerate(not_nodes):
-        if not isinstance(x, dict) or not x.get("candidate") or not x.get("reason"):
-            errs.append(("E-draft-shape", f"not_nodes[{i}]: {{candidate, reason, suggested_kind?}}"))
+        if not isinstance(x, dict) or not (x.get("candidate") or x.get("section")) or not x.get("reason"):
+            errs.append(("E-draft-shape", f"not_nodes[{i}]: {{candidate | section, reason, suggested_kind?}}"))
+    if not errs:
+        for sec in uncovered(root, rel, sections, nodes, not_nodes, res["candidates"]):
+            errs.append(("E-draft-uncovered", f"раздел `{sec['id']}` «{sec['title']}» ({sec['chars']} знаков) без узла: "
+                                              "узел в nodes или not_nodes {section, reason}"))
     if errs:
         return {}, errs[:10]
     draft = {"item_id": item_id, "file": rel, "nodes": nodes, "not_nodes": not_nodes}
@@ -367,6 +376,49 @@ def put_draft(root: Path, item_id: str, nodes: List[Dict[str, Any]], not_nodes: 
     return draft, []
 
 
+UNCOVERED_MIN = 1500
+
+
+def uncovered(root: Path, rel: str, unit_sections: set, nodes: List[Dict[str, Any]], not_nodes: List[Dict[str, Any]],
+              cands: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Дозапрос по перечню (gleaning): крупные разделы единицы, которые ни один узел не покрывает (ни сам
+    раздел, ни предок, ни потомок не в `sections` узла), кандидатов в них нет и в not_nodes их нет.
+    GraphRAG переспрашивает «что пропущено?» вслепую; здесь пропущенное перечислено поимённо — модель
+    решает только по ним. Узел без разделов (файл целиком: экран, сервис) покрывает весь файл."""
+    if any(isinstance(n, dict) and not n.get("sections") for n in nodes):
+        return []
+    data = B.load(root, rel)
+    if not data:
+        return []
+    blocks = data["blocks"]
+    secs = X.sections(blocks)
+    ids = [blocks[s["head"]]["id"] for s in secs]
+    covered = set()
+    for n in nodes:
+        covered |= set(n.get("sections") or []) if isinstance(n, dict) else set()
+    covered |= {B.full_id(rel, x["section"]) for x in not_nodes if isinstance(x, dict) and x.get("section")}
+    covered |= {c["section"] for c in cands if c.get("section")}
+    out = []
+    for i, s in enumerate(secs):
+        if ids[i] not in unit_sections or ids[i] in covered:
+            continue
+        near = [j for j, t in enumerate(secs) if (t["start"] <= s["start"] < t["end"]) or (s["start"] <= t["start"] < s["end"])]
+        if any(ids[j] in covered for j in near):
+            continue
+        chars = sum(len(b["text"]) for b in blocks[s["start"] + 1:s["own_end"]])
+        if chars >= UNCOVERED_MIN:
+            out.append({"id": ids[i], "title": s["title"], "chars": chars})
+    return out
+
+
 def load_drafts(root: Path) -> List[Dict[str, Any]]:
+    """Черновики сданных единиц текущей разведки: черновик прошлой разведки (другой scope, другая нарезка
+    файла на части) в каталог не идёт."""
     d = Path(root) / DRAFTS_REL
-    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(d.glob("*.json"))] if d.is_dir() else []
+    done = Q.done_ids(root, "draft-file")
+    out = []
+    for p in sorted(d.glob("*.json")) if d.is_dir() else []:
+        draft = json.loads(p.read_text(encoding="utf-8"))
+        if done is None or draft.get("item_id") in done:
+            out.append(draft)
+    return out

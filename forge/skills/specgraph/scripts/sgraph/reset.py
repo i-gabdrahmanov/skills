@@ -32,7 +32,7 @@ def archive(root: Path, cfg: Dict[str, Any], reason: str) -> Dict[str, Any]:
     root = Path(root)
     run = ST.run_info(root)
     if run.get("step") is not None:
-        cmd = (f"python3 <поставка>/skills/pipeline-state/scripts/archive.py --project . abandon {run['key']} "
+        cmd = (f"{ST.script('pipeline-state/scripts/archive.py')} --project {ST.q(root)} abandon {run['key']} "
                f"--skill specgraph --reason \"<почему>\"")
         raise ResetError(f"прогон {run['key']} не закрыт (шаг {run['step']}): граф заново — только после того, как "
                          f"пользователь ЯВНО скажет бросить этот прогон; тогда запиши согласие abandon-{run['key']} "

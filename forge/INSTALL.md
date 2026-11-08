@@ -114,14 +114,14 @@ UI, эндпойнты, Kafka, данные, сервисы. Связи типи
 
 **Два сценария размещения.**
 - **Репо спеки** (основной): `bash install.sh spec-graph <репо спеки>`. Едут скилл `specgraph`,
-  `pipeline-state`, `config-helper` и скрипты `feature-pipeline` без её SKILL.md; команда `/graph`; MCP
+  `pipeline-state`, `config-helper` и скрипты `feature-pipeline` без её SKILL.md; команда `/forge-graph`; MCP
   **`spec-graph`**. Сборки в репо нет — `init_pipeline_config.py` ставит `build_system: none`. Вторая
   поставка в тот же репо — отказ.
 - **Спека в репо кода**, где стоит forge: `bash install.sh forge <репо> --with-graph`. К бэк-поставке
-  добавляются скилл `specgraph`, `/graph` и MCP `spec-graph`. Метка `with graph` в профиле поставки —
+  добавляются скилл `specgraph`, `/forge-graph` и MCP `spec-graph`. Метка `with graph` в профиле поставки —
   `update.sh` переставляет поставку с тем же флагом. Без флага при переустановке граф снимается.
 
-**Первый запуск.** В корне репо: `/graph` (scope — `all`, имя сервиса или файл). Первым ходом агент
+**Первый запуск.** В корне репо: `/forge-graph` (scope — `all`, имя сервиса или файл). Первым ходом агент
 спросит, где лежит спека, что исключить и куда писать граф. Кандидаты он покажет сам, решаете вы. Конфиг —
 `.spec-graph/config.json` (под git). Рабочие производные `.spec-graph/*` вне git.
 
@@ -136,7 +136,7 @@ Markdown.
 **Проверка без рантайма** (MCP не поднялся, `graph_status` недоступен):
 `python3 .gigacode/extensions/<spec-graph|forge>/hooks/graph_doctor.py --project .`. Он проверяет MCP
 (живой `initialize`), команду, хук `graph-guard`, ссылку в рантайме и движок. Вывод без путей машины —
-его можно вынести из окружения. **Пакет для разработчиков** — `/graph diag` → `_graph/diag/…`. В пакете
+его можно вынести из окружения. **Пакет для разработчиков** — `/forge-graph diag` → `_graph/diag/…`. В пакете
 только форма (коды, числа, хеши), текста спеки нет: до записи его проверяет самопроверка утечки.
 
 ## 2. Проверка готовности

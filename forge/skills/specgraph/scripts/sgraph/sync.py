@@ -8,7 +8,7 @@
     добавил в Properties сам (`manual`: прямая ссылка в FM без предложения);
   • ссылка, которую синк писал раньше, а человек убрал из FM, — человек её отклонил: предложение
     становится rejected и больше не возвращается (журнал записанного — `.spec-graph/synced.json`);
-  • таблица оснований — маркер `graph:edges` в теле: связь | цель | основание | источник;
+  • таблица оснований — маркер `graph:edges` в теле: связь | цель | основание | пояснение | источник;
   • обратные ключи у ВСЕХ заметок пересчитываются из прямых целиком (устаревшие уходят сами); у
     симметричного ребра (`related`) — зеркало; ручная правка обратного ключа перезаписывается и попадает в
     отчёт `W-manual-inverse`;
@@ -31,6 +31,10 @@ from . import resolve as RS
 
 SYNCED_REL = ".spec-graph/synced.json"
 _FIXED = ("belongs_to",)                  # ставит нарезка из каталога
+
+
+def _cell(text: Any) -> str:
+    return str(text or "").replace("|", "\\|").replace("\n", " ").strip()
 
 
 def _targets(values: Any) -> List[str]:
@@ -117,11 +121,12 @@ def sync(root: Path, cfg: Dict[str, Any], dry: bool = False) -> Dict[str, Any]:
                 manual_inverse.append(f"{name}.{key}")
             data[key] = [F.link(t) for t in want]
         new_synced[name] = {e: sorted(r) for e, r in mine.items() if r}
-        table = ["| связь | цель | основание | источник |", "|---|---|---|---|"]
+        table = ["| связь | цель | основание | пояснение | источник |", "|---|---|---|---|---|"]
         for edge, rows in mine.items():
             for t, x in rows.items():
-                why = (x.get("quote") or "").replace("|", "\\|").replace("\n", " ") or "внесено человеком"
-                table.append(f"| {ont.edges[edge]['title_ru']} | {F.link(t)} | {why} | {x['origin']} |")
+                quote = _cell(x.get("quote")) or "внесено человеком"
+                # пояснение: у правила — что оно увидело («SQL: чтение и запись»), у модели — её why
+                table.append(f"| {ont.edges[edge]['title_ru']} | {F.link(t)} | {quote} | {_cell(x.get('why'))} | {x['origin']} |")
         if len(table) > 2:
             body = F.set_block(body, "edges", "\n".join(table))
         elif F.get_block(body, "edges"):

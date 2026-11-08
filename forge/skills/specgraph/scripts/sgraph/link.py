@@ -88,6 +88,22 @@ def _input(g: E.Graph, node: Dict[str, Any], text: str, ops: List[Dict[str, Any]
     return "\n".join(lines) + "\n"
 
 
+def _chunks(text: str, measure, budget: int) -> List[str]:
+    """Куски текста под бюджет: по абзацам, абзац сверх бюджета — по строкам. Резерв под суффикс
+    части — худший настоящий («часть K из N»), а не «часть 99»: разница в 6 знаков давала вход
+    50003 при бюджете 50000 (боевой прогон 2026-11-08)."""
+    out, cur = [], ""
+    pieces = []
+    for para in re.findall(r"(?s).+?(?:\n\n+|\Z)", text):      # абзац вместе со своим разделителем
+        pieces += re.findall(r"[^\n]*\n|[^\n]+", para) if measure(para) > budget else [para]
+    for piece in pieces:
+        if cur and measure(cur + piece) > budget:
+            out.append(cur)
+            cur = ""
+        cur += piece
+    return out + ([cur] if cur else [])
+
+
 def start(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     ok, why = CT.approved(root)
     if not ok:
@@ -110,23 +126,27 @@ def start(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
         if not [e for e in g.ont.edges_from(n) if e not in _SET_BY_SPLIT]:
             continue
         text = g.text(n["name"])
-        known = [p for p in E.load(root, n["name"]) if p["status"] != "rejected"]
+        # только правила: свои прошлые предложения модели в «не повторяй» меняли вход при каждом
+        # перезапуске — сделанные единицы снова шли в работу, вход рос сверх бюджета (2026-11-08)
+        known = [p for p in E.load(root, n["name"]) if p["status"] != "rejected"
+                 and str(p.get("origin", "")).startswith("rule:")]
         parts = [text]
         if len(_input(g, n, text, ops, known, "")) > budget:
-            chunks, cur = [], ""
-            for para in re.split(r"(\n\n+)", text):
-                if cur and len(_input(g, n, cur + para, ops, known, " — часть 99")) > budget:
-                    chunks.append(cur)
-                    cur = ""
-                cur += para
-            parts = chunks + ([cur] if cur else [])
+            parts = _chunks(text, lambda t: len(_input(g, n, t, ops, known, " — часть 999 из 999")), budget)
         for k, part in enumerate(parts, 1):
             single = len(parts) == 1
-            specs.append({"id": unit_id(n["name"], 0 if single else k), "brief": BRIEF, "tool": TOOL,
-                          "input": _input(g, n, part, ops, known, "" if single else f" — часть {k} из {len(parts)}"),
-                          "refs": {"note": n["name"]}})
+            spec = {"id": unit_id(n["name"], 0 if single else k), "brief": BRIEF, "tool": TOOL,
+                    "input": _input(g, n, part, ops, known, "" if single else f" — часть {k} из {len(parts)}"),
+                    "refs": {"note": n["name"]}}
+            if len(spec["input"]) > budget and "\n" not in part.strip("\n"):
+                spec["indivisible"] = True          # одна строка сверх бюджета — резать нечего
+            specs.append(spec)
     counts = Q.build(root, "link-note", specs, cfg, {BRIEF: brief_chars()})
-    return {"units": len(specs), "queue": counts, "next": "цикл очереди link-note: graph_next queue=link-note"}
+    out = {"units": len(specs), "queue": counts, "next": "цикл очереди link-note: graph_next queue=link-note"}
+    if counts.get("oversize"):
+        out["oversize"] = (f"{len(counts['oversize'])} единиц из одной строки сверх бюджета — идут как есть: "
+                           + ", ".join(f"{o['id']} ({o['chars']})" for o in counts["oversize"]))
+    return out
 
 
 def _unit(root: Path, item_id: str) -> Dict[str, Any]:

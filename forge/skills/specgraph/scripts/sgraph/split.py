@@ -186,8 +186,10 @@ def _fm_for(node: Dict[str, Any], ont: O.Ontology, existing: "OrderedDict[str, A
             data[k] = [] if (k in ont.edges or ont.edge_of_inverse(k) or k == "aliases") else None
     if ont.owned_by_service(kind) and node.get("service"):
         data["belongs_to"] = [F.link(node["service"])]
-    if data.get("status") in (None, ""):
-        data["status"] = "draft"
+    if data.get("status") in (None, "") or (node.get("stub") and data.get("status") == "draft"):
+        data["status"] = "stub" if node.get("stub") else "draft"
+    elif data.get("status") == "stub" and not node.get("stub") and not ont.kinds[kind].get("key") == "task":
+        data["status"] = "draft"          # таблицу описали разделом — заглушка стала узлом; у операции stub ставит карточка
     data["source"] = sources
     data.pop("blocks", None)              # блоки — в атрибутах маркера source, во frontmatter не дублируются
     return data, order
@@ -239,7 +241,7 @@ def split(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
                          + " — каталог поменяли после раскладки, а узел по имени и файлу не однозначен; "
                            "переразложи эти файлы или верни имя решением каталога", "E-split-unknown-node")
     files = sorted({b.rsplit("#", 1)[0] for b in list(owner) + list(skip) + list(unplaced)} |
-                   {s["file"] for n in nodes for s in n.get("sources", [])})
+                   {s["file"] for n in nodes for s in n.get("sources", [])} | set(AS.expected_files(root, cfg)))
     files_blocks = {rel: (B.load(root, rel) or B.scan_file(root, rel))["blocks"] for rel in files if (Path(root) / rel).is_file()}
     hidx = _heading_index(files_blocks, owner)
     rewrites: List[Dict[str, Any]] = []
@@ -357,8 +359,14 @@ def _write_index(vault: Path, nodes, paths, ont) -> None:
 def coverage(root: Path, cfg: Dict[str, Any], files_blocks=None, owner=None, skip=None, unplaced=None) -> Dict[str, Any]:
     if files_blocks is None:
         owner, skip, unplaced = _assignment(root)
-        files = sorted({b.rsplit("#", 1)[0] for b in list(owner) + list(skip) + list(unplaced)})
-        files_blocks = {rel: (B.load(root, rel) or B.scan_file(root, rel))["blocks"] for rel in files}
+        # и файлы, где нет ни одного назначения: файл без узлов иначе выпадал из покрытия целиком
+        files = sorted({b.rsplit("#", 1)[0] for b in list(owner) + list(skip) + list(unplaced)}
+                       | set(AS.expected_files(root, cfg)))
+        files_blocks = {}
+        for rel in files:
+            data = B.load(root, rel) or ((Path(root) / rel).is_file() and B.scan_file(root, rel)) or None
+            if data:
+                files_blocks[rel] = data["blocks"]
     out = {}
     for rel, blocks in files_blocks.items():
         ids = [b["id"] for b in blocks]
@@ -377,10 +385,16 @@ def coverage(root: Path, cfg: Dict[str, Any], files_blocks=None, owner=None, ski
 
 
 def verify(root: Path, cfg: Dict[str, Any]) -> List[Tuple[str, str]]:
-    """Ошибки полноты и дословности: E-coverage (блок нигде), E-verbatim (маркер ≠ исходнику)."""
+    """Ошибки полноты и дословности: E-coverage (блок нигде), E-verbatim (маркер ≠ исходнику),
+    E-source-changed (файл спеки изменился после скана — кэш блоков и vault устарели)."""
     errs: List[Tuple[str, str]] = []
     cov = coverage(root, cfg)
     for rel, f in cov["files"].items():
+        if B.changed_since_scan(root, rel):
+            # нарезка и сверка ниже — по кэшу блоков; без этой проверки правка спеки после разведки давала
+            # старый текст в vault при «дословно» и «перенесён полностью» (ревью 2026-11-08)
+            errs.append(("E-source-changed", f"исходник {rel} изменён после разведки: в vault — текст прежней "
+                                             "версии; graph_survey заново, затем шаги graph-map по изменённым единицам"))
         for b in f["unassigned_ids"]:
             errs.append(("E-coverage", f"блок {b} не назначен ни узлу, ни skip, ни unplaced"))
     rw_p = Path(root) / REWRITES_REL

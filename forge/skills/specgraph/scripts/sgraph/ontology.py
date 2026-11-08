@@ -24,7 +24,7 @@ BASE = Path(__file__).resolve().parents[2] / "references" / "ontology.json"
 LOCAL_REL = ".spec-graph/ontology.local.json"
 _KIND_FIELDS = {"title_ru", "path", "owner", "name", "key", "required", "roles", "subkinds", "merge"}
 _MERGE = ("name", "folder")
-_EDGE_FIELDS = {"title_ru", "from", "to", "inverse", "symmetric", "evidence", "impact", "same_service"}
+_EDGE_FIELDS = {"title_ru", "from", "to", "inverse", "symmetric", "evidence", "impact", "same_service", "stub"}
 _GRAMMARS = ("phrase", "endpoint", "topic", "as_is")
 _OWNERS = ("none", "service", "self")
 _IMPACT = ("forward", "inverse", "both", "none")
@@ -121,6 +121,13 @@ def self_check(data: Dict[str, Any]) -> List[str]:
             errors.append(f"{where}: impact — {', '.join(_IMPACT)}")
         if e.get("evidence") not in _EVIDENCE:
             errors.append(f"{where}: evidence — {', '.join(_EVIDENCE)}")
+        st = e.get("stub")
+        if st is not None:
+            # заглушка цели без узла (graph_stubs_decide): вид из концов ребра, subkind — из видов узла
+            if not isinstance(st, dict) or st.get("kind") not in [k for k, _ in _ends(e.get("to", []))]:
+                errors.append(f"{where}: stub — {{kind из to, subkind?, key?}}")
+            elif st.get("subkind") and st["subkind"] not in (kinds.get(st["kind"], {}).get("subkinds") or []):
+                errors.append(f"{where}: stub.subkind — из subkinds вида «{st['kind']}»")
         if e.get("same_service"):
             for kind, _ in _ends(e.get("from", []) + e.get("to", [])):
                 if kind in kinds and kinds[kind].get("owner") != "service":

@@ -11,11 +11,11 @@
   • бэк-репо (`install.sh forge`): .gigacode/extensions/forge/ — все скиллы, кроме forgeui и
     specgraph, все команды, MCP forge-master;
   • репо спеки (`install.sh spec-graph`): .gigacode/extensions/spec-graph/ — скилл specgraph,
-    control-plane, скрипты feature-pipeline без SKILL.md; /graph; MCP spec-graph (отвечает на
+    control-plane, скрипты feature-pipeline без SKILL.md; /forge-graph; MCP spec-graph (отвечает на
     initialize); сборки в репо нет — init ставит build_system none и не спрашивает корневой пакет,
     preflight проходит; вторая поставка в тот же репо — отказ;
   • спека в репо кода (`install.sh forge --with-graph`, X.2/D2): к бэк-поставке добавлены скилл specgraph,
-    /graph и MCP spec-graph (отвечает), метка «with graph» в профиле; update.sh переставляет с тем же флагом;
+    /forge-graph и MCP spec-graph (отвечает), метка «with graph» в профиле; update.sh переставляет с тем же флагом;
     к другим поставкам флаг — отказ; доктор graph_doctor.py видит MCP, команду и хук без рантайма;
   • тексты для модели называют пути своей поставки, и каждый названный путь существует;
   • uninstall снимает каталог поставки целиком и не трогает чужое в .gigacode/.
@@ -175,8 +175,8 @@ class InstallKinds(unittest.TestCase):
         self.assertTrue((ext / "skills" / "specgraph" / "SKILL.md").is_file())
         self.assertFalse((ext / "skills" / "feature-pipeline" / "SKILL.md").exists(),
                          "Java-конвейер в репо спеки скиллом не светится")
-        self.assertEqual(sorted(p.name for p in (ext / "commands").iterdir()), ["graph.md"])
-        self.assertIn("specgraph", (ext / "commands" / "graph.md").read_text(encoding="utf-8"))
+        self.assertEqual(sorted(p.name for p in (ext / "commands").iterdir()), ["forge-graph.md"])
+        self.assertIn("specgraph", (ext / "commands" / "forge-graph.md").read_text(encoding="utf-8"))
         self.assertIn("profile graph", (ext / ".forge-profile").read_text(encoding="utf-8"))
         gi = (tgt / ".gitignore").read_text(encoding="utf-8")
         self.assertIn(".spec-graph/*\n!.spec-graph/config.json", gi, "производные spec-graph вне git, конфиг — в git")
@@ -236,7 +236,7 @@ class InstallKinds(unittest.TestCase):
         self.assertTrue((ext / "skills" / "specgraph" / "SKILL.md").is_file())
         self.assertTrue((ext / "skills" / "feature-pipeline" / "SKILL.md").is_file(), "forge целиком")
         self.assertFalse((ext / "skills" / "forgeui").exists())
-        self.assertTrue((ext / "commands" / "graph.md").is_file())
+        self.assertTrue((ext / "commands" / "forge-graph.md").is_file())
         self.assertTrue((ext / "commands" / "forge.md").is_file())
         prof = (ext / ".forge-profile").read_text(encoding="utf-8").splitlines()
         self.assertIn("with graph", prof)
@@ -254,7 +254,7 @@ class InstallKinds(unittest.TestCase):
 
         r = _run(["bash", str(REPO / "update.sh"), str(tgt), "--no-pull", "--no-link"])
         self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
-        self.assertTrue((ext / "commands" / "graph.md").is_file(), "update.sh сохранил граф")
+        self.assertTrue((ext / "commands" / "forge-graph.md").is_file(), "update.sh сохранил граф")
         self.assertIn("with graph", (ext / ".forge-profile").read_text(encoding="utf-8").splitlines())
         r = _run(["bash", str(REPO / "install.sh"), "forge", str(tgt), "--no-link"])
         self.assertEqual(r.returncode, 0)

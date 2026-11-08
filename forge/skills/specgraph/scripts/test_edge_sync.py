@@ -51,7 +51,7 @@ class _Base(unittest.TestCase):
 
 class Sync(_Base):
     def test_edges_written_and_inverses_derived(self):
-        self.assertEqual(self.first["forward_edges"], 32)
+        self.assertEqual(self.first["forward_edges"], 33)      # + uses_data → task из SQL
         data, body = self.fm(CLOSER)
         self.assertEqual(data["closes_task"], ["[[Приём транспортных упаковок]]", "[[Регистрация]]", "[[Укомплектование]]"])
         self.assertIn("`REGISTRATION` (Регистрация)", F.get_block(body, "edges")["content"])

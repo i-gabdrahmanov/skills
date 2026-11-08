@@ -161,7 +161,12 @@ def start(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     if not ok:
         raise AssignError(why, "E-catalog-unapproved")
     cat = CT.load_approved(root)
-    files = sorted({s["file"] for n in cat["nodes"] if n.get("in_scope", True) for s in n["sources"]})
+    files = [f for f in expected_files(root, cfg, cat) if (Path(root) / f).is_file()]
+    changed = [f for f in files if B.changed_since_scan(root, f)]
+    if changed:
+        raise AssignError("исходник изменён после разведки: " + ", ".join(changed[:5])
+                          + " — блоки устарели; сначала graph_survey (разведка заново), затем graph_catalog",
+                          "E-source-changed")
     # Бюджет — на НАСТОЯЩИЙ вход единицы (шапка + кандидаты + блоки), а не «бюджет − бриф − 2000» на
     # одни блоки: у жирного файла шапка со списком его узлов доходила до 26 тыс. знаков (≈250 узлов
     # rmoc-спеки), и сборка падала при любом бюджете — куски добивались до нового room (боевой прогон).
@@ -373,5 +378,30 @@ def put(root: Path, item_id: str, args: Dict[str, Any]) -> Tuple[Dict[str, Any],
 
 
 def load_plans(root: Path) -> List[Dict[str, Any]]:
+    """Планы сданных единиц текущей очереди: план единицы, которой после пересборки нет (другой бюджет,
+    другие границы кусков), смешивался с новыми — блок оказывался и в заметке, и в unplaced."""
     d = Path(root) / PLAN_REL
-    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(d.glob("*.json"))] if d.is_dir() else []
+    done = Q.done_ids(root, "assign-section")
+    out = []
+    for p in sorted(d.glob("*.json")) if d.is_dir() else []:
+        plan = json.loads(p.read_text(encoding="utf-8"))
+        if done is None or plan.get("item_id") in done:
+            out.append(plan)
+    return out
+
+
+def expected_files(root: Path, cfg: Dict[str, Any], cat: Optional[Dict[str, Any]] = None) -> List[str]:
+    """Файлы, каждый блок которых обязан где-то оказаться (узел / skip / unplaced): источники узлов
+    утверждённого каталога в scope и файлы текущей разведки в scope — в том числе те, где модель не нашла
+    ни одного узла. Раньше раскладка и покрытие брали файлы только из источников узлов, и такой файл
+    («Общие требования») выпадал из vault целиком при гейте «нарезка полная» (ревью 2026-11-08)."""
+    if cat is None:
+        if not (Path(root) / CT.APPROVED_REL).is_file():
+            return []
+        cat = CT.load_approved(root)
+    files = {s["file"] for n in cat["nodes"] if n.get("in_scope", True) for s in n["sources"]}
+    scope = cat.get("scope")
+    for rel in CT.survey_files(root):
+        if scope is None or X.service_of(rel, cfg) in scope or any(rel.startswith(x) for x in scope):
+            files.add(rel)
+    return sorted(f for f in files if (Path(root) / f).is_file() or B.load(root, f) is not None)

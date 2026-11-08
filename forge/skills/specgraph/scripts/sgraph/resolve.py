@@ -87,7 +87,7 @@ def resolve(index: List[Dict[str, Any]], mention: str, cfg: Optional[Dict[str, A
             if close:
                 return {"status": "ghost", "hint": "path_typo", "candidates": [c[1]["name"] for c in close[:3]]}
             return {"status": "ghost"}
-    elif m.startswith(("kafka:", "task:", "http:")):
+    elif m.startswith(("kafka:", "task:", "http:", "table:")):
         hits = [n for n in pool if n.get("key") == m]
     elif _TOPIC_HINT.match(m):
         hits = [n for n in pool if n.get("key") == K.topic_key(m) or n["name"] == m]

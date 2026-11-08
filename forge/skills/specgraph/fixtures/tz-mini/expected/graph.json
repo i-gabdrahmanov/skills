@@ -1,5 +1,5 @@
 {
-  "_comment": "Эталонный граф фикстуры tz-mini (задача 0.4): что должно получиться из sources/ по ТЗ аналитика. Узлы — kind/name/service/role/subkind/key и источник (файл#раздел). Рёбра — прямые, с дословной цитатой-основанием из исходника и признаком mechanical (ставится правилом 2.2, без модели). walks — переходы ТЗ §10 путями: узел, ключ ребра (прямой или обратный), узел, …",
+  "_comment": "Эталонный граф фикстуры tz-mini (задача 0.4): что должно получиться из sources/ по ТЗ аналитика. Узлы — kind/name/service/role/subkind/key и источник (файл#раздел). Рёбра — прямые, с дословной цитатой-основанием из исходника и признаком mechanical (ставится правилом 2.2, без модели). walks — переходы ТЗ §10 путями: узел, ключ ребра (прямой или обратный), узел, … Узел stub — заглушка без своего текста (таблица, известная только по SQL в тексте других узлов): заметка без маркера source, статус stub.",
   "exclude": ["task-service/task-service-draft.md"],
   "nodes": [
     {"kind": "service", "name": "task-service", "source": "task-service/task-service.md#1"},
@@ -32,6 +32,7 @@
     {"kind": "algorithm", "name": "Алгоритм балансировки упаковок", "service": "task-service", "source": "task-service/task-service.md#5"},
     {"kind": "data", "subkind": "attributes", "name": "Динамические атрибуты укомплектования", "source": "task-service/task-service.md#6.1"},
     {"kind": "data", "subkind": "attributes", "name": "Динамические атрибуты передачи в СЦ-архив", "source": "task-service/task-service.md#6.2"},
+    {"kind": "data", "subkind": "table", "name": "task", "key": "table:task", "stub": true},
 
     {"kind": "screen", "name": "UI укомплектования", "source": "ui/укомплектование.md"},
     {"kind": "screen", "name": "UI передачи упаковок", "source": "ui/передача-упаковок.md"},
@@ -68,6 +69,8 @@
      "quote": "`TP_RECEIVE` (Приём транспортных упаковок), срок которых истёк", "file": "task-service/task-service.md"},
     {"from": "Шедулер закрытия регулярных задач", "edge": "invokes", "to": "Отправка события о закрытии задачи", "mechanical": false,
      "quote": "запускается отправка события о закрытии задачи (раздел 3.2)", "file": "task-service/task-service.md"},
+    {"from": "Шедулер закрытия регулярных задач", "edge": "uses_data", "to": "task", "mechanical": true,
+     "quote": "UPDATE task\n   SET status = 'CLOSED', closed_at = now()", "file": "task-service/task-service.md"},
 
     {"from": "Шедулер формирования задачи передачи упаковок в СЦ-архив", "edge": "creates_task", "to": "Передача упаковок в СЦ-архив", "mechanical": false,
      "quote": "формирует задачи с типом `SC_ARCHIVE` (Передача упаковок в", "file": "task-service/task-service.md"},

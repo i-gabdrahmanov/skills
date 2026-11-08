@@ -23,6 +23,10 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 import _testkit as K  # noqa: E402
+
+import json  # noqa: E402
+
+G = json.loads((K.FIX / "expected" / "graph.json").read_text(encoding="utf-8"))
 import graph_validate as GV  # noqa: E402
 from sgraph import assign as AS  # noqa: E402
 from sgraph import fm as F  # noqa: E402
@@ -80,7 +84,7 @@ class _Base(unittest.TestCase):
 class Healthy(_Base):
     def test_fixture_is_clean(self):
         res = T.call("graph_validate", self.root, {})
-        self.assertEqual((res["errors"], res["notes"], res["counts"]), (0, 29, HOLES), res["top"])
+        self.assertEqual((res["errors"], res["notes"], res["counts"]), (0, len(G["nodes"]), HOLES), res["top"])
         issues = json.loads((self.root / ".spec-graph/validate.json").read_text(encoding="utf-8"))["issues"]
         self.assertTrue(all(i.get("hole") for i in issues))
 

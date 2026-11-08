@@ -7,7 +7,10 @@
   3. сомнительные предложения модели (confidence low/medium) с цитатами;
   4. отклонённое: брошенные единицы очередей (коды проверок) и связи, отклонённые человеком;
   5. вопросы: неоднозначные цели, призраки, операции-заготовки (stub);
-  6. узлы, добавленные раскладкой (`catalog.delta.json`), и решение по каждому.
+  6. узлы, добавленные раскладкой (`catalog.delta.json`), и решение по каждому;
+  7. прочие связи — всё живое, чего нет в разделах 1–3 (по виду ребра: число и первые строки с цитатой):
+     «да» утверждает и их, а до ревью 2026-11-08 их не было в отчёте вовсе (`invokes` модели с high,
+     `uses_data` правил — 6 из 33 на фикстуре).
 
 Отчёт читает vault после синка (frontmatter) и хранилище предложений. Статус proposed/accepted в отчёт не
 попадает: согласие `graph-edges-<KEY>` привязано к хешу отчёта, и после «да» `review` переводит висящие
@@ -22,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -38,6 +42,8 @@ from . import resolve as RS
 CONSENT = "graph-edges"
 REVIEW_NAME = "edges-review.md"
 _QUOTE_SHOW = 220
+_OTHER_SHOW = 10
+_CONF_RANK = {"low": 0, "medium": 1, "high": 2}
 
 
 class ReviewError(Exception):
@@ -109,9 +115,13 @@ def report(root: Path, cfg: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
              "Решение пользователя — одно: утвердить связи. Правки: отклонить связь — по id `r-…` или по тройке "
              "«откуда — связь — куда»; по узлу из раздела 6 — принять, слить, переименовать или убрать.", ""]
 
+    shown = set()                                   # (from, edge, to), названные в разделах 1–3
     lines += ["## 1. Бизнес-операции", ""]
     for n in sorted(ops, key=lambda x: x["name"]):
         data, body = notes[n["name"]]
+        for edge in ("creates_task", "closes_task", "ui_of"):
+            shown |= {(x, edge, n["name"]) for x in _links(data.get(ont.inverse_of(edge)))}
+        shown |= {(n["name"], edge, x) for edge in ("related", "part_of") for x in _links(data.get(edge))}
         card = F.get_block(body, "card")
         state = ("заготовка — описания в спеке нет" if data.get("status") == "stub"
                  else "готова" if card else "нет")
@@ -132,6 +142,7 @@ def report(root: Path, cfg: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         for t in _links(notes[n["name"]][0].get("calls")):
             tn = by_name.get(t)
             if tn and tn.get("service") != n.get("service"):
+                shown.add((n["name"], "calls", t))
                 where = tn.get("service") or ont.kinds[tn["kind"]]["title_ru"]
                 cross.append(f"- {n.get('service') or ont.kinds[n['kind']]['title_ru']}: {F.link(n['name'])} → {where}: {F.link(t)}")
     lines += sorted(cross) or ["- вызовов между сервисами нет"]
@@ -144,6 +155,8 @@ def report(root: Path, cfg: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
                          for s in _links(data.get(key))) or "—"
     for n in sorted(topics, key=lambda x: x["name"]):
         data = notes[n["name"]][0]
+        shown |= {(s, "publishes_to", n["name"]) for s in _links(data.get(pub))}
+        shown |= {(s, "consumes", n["name"]) for s in _links(data.get(con))}
         lines.append(f"- топик {F.link(n['name'])}: публикуют — {side(data, pub)}; читают — {side(data, con)}")
     if topics:
         lines.append("")
@@ -155,6 +168,7 @@ def report(root: Path, cfg: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         lines.append(f"- `{edge_id(x)}` {F.link(x['from'])} — {ont.edges[x['edge']]['title_ru']} → {F.link(x['to'])} "
                      f"({x['confidence']}): «{_quote(x['quote'])}»" + (f" — {x['why']}" if x.get("why") else ""))
     lines += ([] if doubt else ["- нет"]) + [""]
+    shown |= {(x["from"], x["edge"], x["to"]) for x in doubt}
 
     lines += ["## 4. Отклонённое", ""]
     rej = []
@@ -175,14 +189,18 @@ def report(root: Path, cfg: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
     lines += ["## 5. Вопросы", ""]
     qs_p = root / ".spec-graph" / "questions.json"
     qs = json.loads(qs_p.read_text(encoding="utf-8")) if qs_p.is_file() else []
-    qlines = []
-    for q in qs:
-        if q["edge"] == "card":
-            qlines.append(f"- {F.link(q['note'])}: {q['reason']}")
-        else:
-            qlines.append(f"- {F.link(q['note'])} — {q['edge']} → «{q['target']}»: {q['reason']}")
-    lines += sorted(set(qlines)) or ["- нет"]
-    lines.append("")
+    lines += ["### Цели без узла — по числу ссылок", "",
+              "Цель, на которую ссылаются многие заметки, — недостающий узел (в Obsidian так выглядит частая "
+              "неразрешённая ссылка). Решение пользователя — graph_stubs_decide: создать заглушки для выбранных целей, "
+              "связи к ним встанут из этих вопросов сами.", ""]
+    groups = question_groups(qs)
+    for g in groups:
+        notes = ", ".join(F.link(x) for x in g["notes"][:_GROUP_NOTES])
+        more = f" … ещё {len(g['notes']) - _GROUP_NOTES}" if len(g["notes"]) > _GROUP_NOTES else ""
+        lines.append(f"- «{g['target']}» — {g['edge']}, {len(g['notes'])} заметок: {notes}{more} ({g['reason']})")
+    lines += ([] if groups else ["- нет"]) + [""]
+    cards = sorted({f"- {F.link(q['note'])}: {q['reason']}" for q in qs if q["edge"] == "card"})
+    lines += ["### Карточки операций", ""] + (cards or ["- нет"]) + [""]
 
     lines += ["## 6. Узлы, добавленные раскладкой", ""]
     dec = AS.load_delta_decisions(root)
@@ -195,7 +213,26 @@ def report(root: Path, cfg: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         lines.append(f"- «{n['name']}» ({ont.kinds[n['kind']]['title_ru']}" + (f", {n['service']}" if n.get("service") else "")
                      + f"): {n.get('why', '')} — {what}")
     lines += ([] if delta else ["- нет"]) + [""]
-    summary = {"edges": len(live), "doubtful": len(doubt), "operations": len(ops), "stubs": stubs,
+
+    other = [x for x in live if x["from"] in by_name and x["to"] in by_name
+             and (x["from"], x["edge"], x["to"]) not in shown
+             and not (ont.is_symmetric(x["edge"]) and (x["to"], x["edge"], x["from"]) in shown)]
+    lines += ["## 7. Прочие связи", "",
+              "Связей нет в разделах 1–3, а «да» утверждает и их. По каждому виду — число и первые "
+              f"{_OTHER_SHOW} (сначала предложения модели, менее уверенные — выше); все — в таблицах оснований "
+              "заметок. Отклонить — по id `r-…`.", ""]
+    by_edge: Dict[str, List[Dict[str, Any]]] = {}
+    for x in other:
+        by_edge.setdefault(x["edge"], []).append(x)
+    for edge in [e for e in ont.edges if e in by_edge]:
+        xs = sorted(by_edge[edge], key=lambda x: (x["origin"] != "model", _CONF_RANK.get(x.get("confidence"), 1),
+                                                   x["from"], x["to"]))
+        lines += [f"### {ont.edges[edge]['title_ru']} (`{edge}`) — {len(xs)}", ""]
+        lines += [f"- `{edge_id(x)}` {F.link(x['from'])} → {F.link(x['to'])} ({x['origin']}, {x.get('confidence') or '—'}): "
+                  f"«{_quote(x['quote'])}»" + (f" — {x['why']}" if x.get("why") else "") for x in xs[:_OTHER_SHOW]]
+        lines += ([f"- … ещё {len(xs) - _OTHER_SHOW}"] if len(xs) > _OTHER_SHOW else []) + [""]
+    lines += ([] if other else ["- нет", ""])
+    summary = {"edges": len(live), "doubtful": len(doubt), "other": len(other), "operations": len(ops), "stubs": stubs,
                "questions": len(qs), "delta": len(delta), "delta_undecided": len(undecided_delta(root))}
     return "\n".join(lines), summary
 
@@ -219,15 +256,105 @@ def review(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
             if hit:
                 E.save(root, name, ps)
                 accepted += len(hit)
-        out.update(accepted=accepted, next="python3 <поставка>/skills/specgraph/scripts/graph_gate.py link --project .")
+        out.update(accepted=accepted, next="гейт шага: graph_status → run.commands.gate, затем run.commands.close")
+    elif summary["delta_undecided"]:
+        # «Да» поверх нерешённого раздела 6 устаревает сразу: graph_delta_decide меняет отчёт и
+        # перезапускает link/card (боевой прогон 2026-11-08 — согласие спросили, потом решали дельту)
+        out["next"] = (f"сначала раздел 6 {rel}: {summary['delta_undecided']} узлов раскладки без решения — покажи их "
+                       f"пользователю и спроси по каждому (принять / слить / переименовать / убрать); его решения — "
+                       f"graph_delta_decide, затем шаги из её next и снова graph_edges_review. Согласие на связи — "
+                       f"только после этого")
     else:
-        out["next"] = (f"покажи пользователю {rel}: операции, межсервисные связи, сомнительное, вопросы, узлы раздела 6; "
+        out["next"] = (f"покажи пользователю {rel}: операции, межсервисные связи, сомнительное, вопросы, узлы раздела 6, прочие связи (раздел 7); "
                        f"спроси — утвердить связи или что поменять. Правки — graph_edges_decide / graph_delta_decide, "
                        f"затем graph_sync и снова graph_edges_review. «Да» — {st['how']}; затем снова graph_edges_review.")
     return out
 
 
 # ─── решения человека ──────────────────────────────────────────────────────
+
+_GROUP_NOTES = 6
+
+
+def question_groups(qs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Вопросы-цели, сгруппированные по (ребро, цель): самые частые — первыми."""
+    by: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for q in qs:
+        if q["edge"] == "card":
+            continue
+        g = by.setdefault((q["edge"], q["target"]), {"edge": q["edge"], "target": q["target"], "notes": [],
+                                                    "reason": q["reason"]})
+        if q["note"] not in g["notes"]:
+            g["notes"].append(q["note"])
+    return sorted(by.values(), key=lambda g: (-len(g["notes"]), g["edge"], g["target"]))
+
+
+def stubs_decide(root: Path, cfg: Dict[str, Any], targets: List[Any], why: str) -> Dict[str, Any]:
+    """Решение пользователя по частым целям без узла: заглушка (узел без текста спеки) на каждую — узел
+    дельты с решением accept, заметка со статусом stub; вопросы к этим целям перепроверяются и становятся
+    предложениями связей (та же проверка цитаты, что у модели). Цель-неоднозначность заглушкой не лечится."""
+    from . import split as SP
+    if not (why or "").strip():
+        raise ReviewError("решение — с причиной (why) со слов пользователя", "E-stub-why")
+    ont = O.load(root)
+    qs_p = Path(root) / ".spec-graph" / "questions.json"
+    qs = json.loads(qs_p.read_text(encoding="utf-8")) if qs_p.is_file() else []
+    groups = {g["target"]: g for g in question_groups(qs)}
+    taken = {n["name"].casefold() for n in RS.vault_index(root, cfg)} | {n["name"].casefold() for n in AS.load_delta(root)}
+    errs, recs = [], []
+    for i, t in enumerate(targets or []):
+        t = {"name": t} if isinstance(t, str) else t if isinstance(t, dict) else {}
+        name = t.get("name") or t.get("target")
+        g = groups.get(name)
+        if g is None:
+            errs.append(f"[{i}] «{name}» — не цель вопросов отчёта (раздел 5)")
+            continue
+        stub = (ont.edges.get(g["edge"]) or {}).get("stub") or {}      # вид заглушки по ребру — из онтологии
+        kind, subkind = (t["kind"], t.get("subkind")) if t.get("kind") else (stub.get("kind"), stub.get("subkind"))
+        if kind not in ont.kinds:
+            errs.append(f"[{i}] «{name}»: вид заглушки — укажи kind ({', '.join(ont.target_kinds(g['edge']))})")
+            continue
+        bad = ont.check_name(kind, name)
+        if bad or name.casefold() in taken or "неоднозначно" in g["reason"]:
+            errs.append(f"[{i}] «{name}»: " + ("; ".join(bad) or ("неоднозначная цель — узел есть, выбери его в связи"
+                                                               if "неоднозначно" in g["reason"] else "имя занято")))
+            continue
+        rec = {"kind": kind, "name": name, "why": why.strip(), "sources": [], "proposed_by": "human", "stub": True}
+        if subkind:
+            rec["subkind"] = subkind
+        if stub.get("key") and stub.get("kind") == rec["kind"] and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", name):
+            rec["key"] = f"{stub['key']}:{name.lower()}"
+        rec["id"] = CT.node_id(CT.identity(rec, ont))
+        recs.append(rec)
+    if errs or not recs:
+        raise ReviewError("; ".join(errs[:6]) or "targets пусто", "E-stub-target")
+    delta = AS.load_delta(root) + recs
+    FS.write_text(Path(root) / AS.DELTA_REL, json.dumps(delta, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
+                  encoding="utf-8")
+    dec = AS.load_delta_decisions(root)
+    for r in recs:
+        dec[r["name"]] = {"action": "accept", "why": f"заглушка: {why.strip()}"}
+    FS.write_text(Path(root) / AS.DELTA_DECISIONS_REL, json.dumps(dec, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
+                  encoding="utf-8")
+    SP.split(root, cfg)
+    g = E.Graph(root, cfg)
+    names = {r["name"] for r in recs}
+    linked, left = 0, []
+    for q in qs:
+        if q["edge"] != "card" and q["target"] in names:
+            norm, err = g.check(q["note"], {"edge": q["edge"], "to": q["target"], "quote": q.get("quote", ""),
+                                            "origin": "model", "confidence": "medium"})
+            if norm:
+                E.add(root, q["note"], [norm])
+                linked += 1
+                continue
+            q = dict(q, reason=f"после заглушки: {err[1]}")
+        left.append(q)
+    FS.write_text(qs_p, json.dumps(left, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    CT.write_decisions_md(root, cfg["vault"])
+    return {"stubs": sorted(names), "linked": linked, "questions_left": len(left),
+            "next": "graph_sync, затем graph_edges_review — и снова вопрос пользователю по обновлённому отчёту"}
+
 
 def _find(stores, item) -> Optional[Tuple[str, Dict[str, Any]]]:
     for name, ps in stores.items():

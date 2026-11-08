@@ -21,6 +21,10 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 import _testkit as K  # noqa: E402
+
+import json  # noqa: E402
+
+G = json.loads((K.FIX / "expected" / "graph.json").read_text(encoding="utf-8"))
 from sgraph import config as C  # noqa: E402
 from sgraph import keys as KY  # noqa: E402
 from sgraph import resolve as RS  # noqa: E402
@@ -58,7 +62,7 @@ class Resolver(unittest.TestCase):
         return RS.resolve(self.idx, m, kw.pop("cfg", self.cfg), **kw)
 
     def test_index(self):
-        self.assertEqual(len(self.idx), 29)
+        self.assertEqual(len(self.idx), len(G["nodes"]))
         ep = next(n for n in self.idx if n["name"] == "upz-adapter POST api-v1-upz-tasks")
         self.assertEqual((ep["kind"], ep["service"], ep["key"]), ("endpoint", "upz-adapter", "http:POST /api/v1/upz/tasks"))
 

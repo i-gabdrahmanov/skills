@@ -14,7 +14,10 @@ hr. Пустые строки приклеиваются к предыдущем
 task-service.md#1748 прототипа). Правило: фенс закрывается перед ближайшим заголовком того же или
 более высокого уровня, чем заголовок его раздела (нет раздела — перед любым заголовком), плюс
 предупреждение `W-fence-unclosed` с номером строки. Текст при этом не меняется — меняется только
-граница блока.
+граница блока. Незакрытым фенс считается, только если закрывающей строки нет до конца файла, или до неё
+открывается другой фенс с языком, или у фенса указан язык без `#`-комментариев (json, sql, xml…), а внутри
+стоит заголовок разметки с пустыми строками вокруг. Иначе строка `# …` внутри — комментарий кода (bash, YAML, Python): до 2026-11-08
+правило срабатывало на ней, и закрытый фенс резался на три блока с ложным H1 (ревью 2026-11-08).
 
 У блока: id `<файл>#<порядковый с 1>`, sha1 текста, вид, строки начала и конца (с 1), путь
 заголовков (хлебные крошки) и id заголовка своего раздела.
@@ -38,6 +41,10 @@ _TABLE = re.compile(r"^ {0,3}\|")
 _HTML = re.compile(r"^ {0,3}<(?:[A-Za-z/!?])")
 _SETEXT = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")
 _HR = re.compile(r"^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$")
+# языки, где строка `# …` — комментарий кода, а не заголовок
+_HASH_LANGS = {"bash", "sh", "shell", "zsh", "console", "yaml", "yml", "python", "py", "toml", "ini", "properties",
+               "conf", "cfg", "dockerfile", "docker", "make", "makefile", "cmake", "r", "perl", "ruby", "rb",
+               "powershell", "ps1", "nginx", "env", "dotenv", "gitignore", "tcl", "hcl", "terraform"}
 
 
 def _strip_eol(line: str) -> str:
@@ -57,6 +64,32 @@ def _starts_block(line: str) -> bool:
     s = _strip_eol(line)
     return bool(_ATX.match(s) or _FENCE.match(s) or _LIST.match(s) or _TABLE.match(s) or _HTML.match(s)
                 or _HR.match(s))
+
+
+def _fence_end(lines: List[str], i: int, mark: str, lang: str, section_level: int) -> Tuple[int, bool]:
+    """(индекс строки после фенса, закрыт ли). Закрывающая строка есть и внутри нет признаков обрыва —
+    фенс закрыт ею; иначе он кончается перед ближайшим заголовком раздела (или следующим фенсом с языком)."""
+    n = len(lines)
+    ch = re.escape(mark[0])
+    close = re.compile(r"^ {0,3}" + ch + "{%d,}[ \t]*$" % len(mark))
+    opener = re.compile(r"^ {0,3}" + ch + "{%d,}[ \t]*[^\\s%s]" % (len(mark), ch))
+
+    def heading(j: int) -> bool:
+        h = _ATX.match(_strip_eol(lines[j]))
+        return bool(h) and (section_level == 0 or len(h.group(1)) <= section_level)
+
+    def markup_heading(j: int, end: int) -> bool:
+        """Заголовок разметки, а не комментарий кода: пустые строки до и после."""
+        return heading(j) and j > 0 and _blank(lines[j - 1]) and (j + 1 >= end or _blank(lines[j + 1]))
+
+    k = next((j for j in range(i + 1, n) if close.match(_strip_eol(lines[j]))), None)
+    if k is not None and not any(opener.match(_strip_eol(lines[j])) for j in range(i + 1, k)):
+        if not lang or lang.lower() in _HASH_LANGS or not any(markup_heading(j, k) for j in range(i + 1, k)):
+            return k + 1, True
+    j = i + 1
+    while j < n and not heading(j) and not opener.match(_strip_eol(lines[j])):
+        j += 1
+    return j, False
 
 
 def parse(text: str, file: str = "") -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -90,21 +123,11 @@ def parse(text: str, file: str = "") -> Tuple[List[Dict[str, Any]], List[Dict[st
         fm = _FENCE.match(s)
         if fm:
             mark = fm.group(1)
-            j = i + 1
-            closed = False
-            while j < n:
-                t = _strip_eol(lines[j])
-                if re.match(r"^ {0,3}" + re.escape(mark[0]) + "{%d,}[ \t]*$" % len(mark), t):
-                    closed = True
-                    j += 1
-                    break
-                h = _ATX.match(t)
-                if h and (section_level == 0 or len(h.group(1)) <= section_level):
-                    break
-                j += 1
+            lang = s.strip()[len(mark):].strip().split(" ")[0]
+            j, closed = _fence_end(lines, i, mark, lang, section_level)
             if not closed:
                 warnings.append({"code": "W-fence-unclosed", "line": i + 1, "file": file})
-            raw.append(("fence", i, j, {"lang": s.strip()[len(mark):].strip().split(" ")[0]}))
+            raw.append(("fence", i, j, {"lang": lang}))
             i = j
             continue
         if _HR.match(s) and not _LIST.match(s):
@@ -226,9 +249,39 @@ def _out_path(root: Path, rel: str) -> Path:
     return Path(root) / BLOCKS_REL / (rel + ".json")
 
 
+class SourceError(Exception):
+    """Исходник не читается движком — отказ с именем файла, а не трейсбек без него."""
+
+    def __init__(self, message: str, code: str):
+        super().__init__(message)
+        self.code = code
+
+
+def decode(raw: bytes, rel: str) -> str:
+    """UTF-8 или отказ E-source-encoding: один файл в cp1251 ронял разведку всего корпуса голым
+    UnicodeDecodeError без имени файла (ревью 2026-11-08)."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise SourceError(f"исходник {rel} не в UTF-8 (байт 0x{raw[e.start]:02x} на позиции {e.start}): пусть "
+                          f"пользователь пересохранит его в UTF-8 или исключит (exclude в .spec-graph/config.json)",
+                          "E-source-encoding")
+
+
+def changed_since_scan(root: Path, rel: str) -> bool:
+    """Файл изменился после скана: sha1 его байтов ≠ sha1 в кэше блоков. Нарезка и проверка дословности
+    читают кэш, поэтому без этой сверки правка спеки после разведки (или после приёмки) не видна: старый
+    текст в vault, «перенесён полностью», гейты проходят. Нет файла или кэша — не «изменился»."""
+    p = Path(root) / rel
+    data = load(root, rel)
+    if data is None or not p.is_file():
+        return False
+    return hashlib.sha1(p.read_bytes()).hexdigest() != data.get("sha1")
+
+
 def scan_file(root: Path, rel: str) -> Dict[str, Any]:
     raw = (Path(root) / rel).read_bytes()
-    text = raw.decode("utf-8")
+    text = decode(raw, rel)
     blocks, warnings = parse(text, rel)
     data = {"file": rel, "sha1": hashlib.sha1(raw).hexdigest(), "bytes": len(raw), "blocks": blocks,
             "warnings": warnings}
