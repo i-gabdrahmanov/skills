@@ -107,6 +107,9 @@ def check_link(root: Path) -> Tuple[List[str], List[str]]:
     if left:
         bad.append(f"узлы дельты без решения: {len(left)} (например «{left[0]}») — graph_delta_decide")
     dry = SY.sync(root, cfg, dry=True)
+    if dry["renamed"]:
+        from sgraph import split as SP
+        bad.append(SP.renamed_hint(dry["renamed"]))
     if dry["written"] or dry["removed_by_human"] or dry["journal_changed"]:
         bad.append(f"синк не чистый: изменится заметок {dry['written']} — graph_sync, затем graph_edges_review")
     p = RV.review_path(root, cfg)

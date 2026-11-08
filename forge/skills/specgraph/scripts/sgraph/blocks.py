@@ -226,6 +226,17 @@ def full_id(file: str, bid: Any) -> Any:
 
 # ─── скан исходников проекта ───────────────────────────────────────────────
 
+def md_files(base: Path) -> List[Path]:
+    """MD-файлы корня исходников: расширение без учёта регистра (`Экран.MD` молча выпадал — rglob("*.md")
+    регистрозависим), без скрытых каталогов (`.trash/` Obsidian с удалёнными заметками, `.obsidian/`)."""
+    if base.is_file():
+        return [base]
+    if not base.is_dir():
+        return []
+    return sorted(p for p in base.rglob("*") if p.is_file() and p.suffix.lower() == ".md"
+                  and not any(part.startswith(".") for part in p.relative_to(base).parts[:-1]))
+
+
 def source_files(root: Path, cfg: Dict[str, Any]) -> List[str]:
     """Относительные пути MD-исходников по конфигу, без исключённых; порядок детерминирован."""
     root = Path(root)
@@ -235,7 +246,7 @@ def source_files(root: Path, cfg: Dict[str, Any]) -> List[str]:
         if s.get("adapter", "md") != "md":
             continue
         base = root / s["root"]
-        cands = [base] if base.is_file() else sorted(base.rglob("*.md")) if base.is_dir() else []
+        cands = md_files(base)
         for p in cands:
             rel = p.relative_to(root).as_posix()
             if any(fnmatch.fnmatch(rel, pat) for pat in excl):

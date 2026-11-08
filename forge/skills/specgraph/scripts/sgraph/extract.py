@@ -19,6 +19,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import unicodedata
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -107,8 +108,13 @@ def safe_name(name: str, forbidden: str) -> str:
     """Имя кандидата, годное в имя узла (оно же имя файла заметки и ссылка [[…]]): разделители пути
     «/ \\ |» — в дефис («UI/UX Описание» → «UI-UX Описание»), прочие запрещённые — в пробел, без
     точки в конце. Модель берёт имя кандидата как есть — раньше «UI/UX» отбивал черновик."""
+    name = unicodedata.normalize("NFC", name)          # имена папок macOS бывают в NFD
     out = "".join("-" if c in "/\\|" else " " if c in forbidden else c for c in name)
-    return re.sub(r"\s+", " ", out).strip().rstrip(".").strip()
+    out = re.sub(r"\s+", " ", out).strip().rstrip(".").strip()
+    while len(out.encode("utf-8")) > O.NAME_MAX_BYTES:    # длинный заголовок — по границе слова, в пределах имени файла
+        cut = out.rsplit(" ", 1)[0] if " " in out else out[:-1]
+        out = cut.rstrip(" .,;:—-")
+    return out
 
 
 def sections(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

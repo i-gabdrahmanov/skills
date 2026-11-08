@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -268,8 +269,7 @@ def _all_md(root: Path, cfg: Dict[str, Any]) -> List[str]:
     out = []
     for s in cfg.get("sources") or []:
         base = Path(root) / s["root"]
-        cands = [base] if base.is_file() else sorted(base.rglob("*.md")) if base.is_dir() else []
-        out += [p.relative_to(root).as_posix() for p in cands]
+        out += [p.relative_to(root).as_posix() for p in B.md_files(base)]
     return out
 
 
@@ -321,6 +321,9 @@ def put_draft(root: Path, item_id: str, nodes: List[Dict[str, Any]], not_nodes: 
     cands = [c for c in res["candidates"] if c["name_hint"] in wanted and not c.get("auto")]
     nodes = [dict(n, sections=[B.full_id(rel, x) for x in n["sections"]])
              if isinstance(n, dict) and isinstance(n.get("sections"), list) else n for n in nodes]
+    # имя — в NFC: модель копирует имена из входа, а «ё»/«й» в NFD (имена папок macOS) дробили узел надвое
+    nodes = [dict(n, name=unicodedata.normalize("NFC", n["name"])) if isinstance(n, dict) and isinstance(n.get("name"), str)
+             else n for n in nodes]
     errs: List[Tuple[str, str]] = []
     names = Counter()
     for i, n in enumerate(nodes):

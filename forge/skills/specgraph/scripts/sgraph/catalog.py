@@ -8,7 +8,7 @@
 кавычки). Похожие имена (общие слова, тот же вид и сервис) идут в `review` «это один узел?» и сами не
 склеиваются никогда.
 
-Решения человека (`decide`): merge, split, rename, move, drop, scope — журнал `.spec-graph/decisions.json`
+Решения человека (`decide`): merge, split, rename, move, retype (вид узла), drop, scope — журнал `.spec-graph/decisions.json`
 и человеческий `_graph/decisions.md`; revoke {index} снимает запись журнала. Журнал применяется при
 каждой сборке, поэтому повторная разведка даёт тот же каталог.
 
@@ -29,6 +29,7 @@ import hashlib
 import json
 import re
 import shutil
+import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -44,7 +45,7 @@ DECISIONS_REL = ".spec-graph/decisions.json"
 DELTA_DECISIONS_REL = ".spec-graph/delta-decisions.json"   # пишет review.delta_decide
 EDGE_DECISIONS_REL = ".spec-graph/edge-decisions.json"     # пишет review.edges_decide
 CONSENT = "graph-catalog"
-ACTIONS = ("merge", "split", "rename", "move", "drop", "scope", "revoke")
+ACTIONS = ("merge", "split", "rename", "move", "retype", "drop", "scope", "revoke")
 DECISION_V = 2
 # поля узла, которые черновик переносит в каталог как есть
 NODE_FIELDS = ("service", "key", "role", "subkind")
@@ -54,17 +55,20 @@ _STOP = {"для", "при", "по", "в", "и", "о", "на", "из"}
 
 
 def norm_name(name: str) -> str:
-    s = name.lower().replace("ё", "е")
+    s = unicodedata.normalize("NFC", name).lower().replace("ё", "е")
     s = re.sub(r"[«»\"'`]", "", s)
     return re.sub(r"\s+", " ", s).strip()
 
 
 def identity(n: Dict[str, Any], ont: Optional[O.Ontology] = None) -> str:
-    """Ключ узла; без ключа — вид и имя, у видов с сервисом-владельцем — и сервис: одноимённые шедулеры
-    cars-service и shpi-service склеивались в один узел с сервисом первого (боевой прогон 2026-11-07)."""
+    """Ключ узла; без ключа — вид и имя. У видов с сервисом-владельцем — и сервис: одноимённые шедулеры
+    cars-service и shpi-service склеивались в один узел с сервисом первого (боевой прогон 2026-11-07), а
+    один `GET /path` двух сервисов — в эндпойнт первого, и решением каталога их было не разделить (ревью
+    2026-11-08)."""
+    owned = ont is not None and n.get("kind") in ont.kinds and ont.owned_by_service(n["kind"]) and n.get("service")
     if n.get("key"):
-        return n["key"]
-    if ont is not None and n.get("kind") in ont.kinds and ont.owned_by_service(n["kind"]) and n.get("service"):
+        return f"{n['key']}|{n['service']}" if owned else n["key"]
+    if owned:
         return f"{n['kind']}|{n['service']}|{norm_name(n['name'])}"
     return legacy_identity(n)
 
@@ -100,7 +104,11 @@ def _check_action(a: Dict[str, Any], ont: Optional[O.Ontology] = None) -> Option
         return "решение — объект {action, …, why}"
     act = a.get("action")
     need = {"merge": ("into", "names"), "split": ("node", "file", "name"), "rename": ("node", "name"),
-            "move": ("node", "service"), "drop": ("node",), "scope": ("include",), "revoke": ("index",)}
+            "move": ("node", "service"), "retype": ("node", "kind"), "drop": ("node",), "scope": ("include",),
+            "revoke": ("index",)}
+    # необязательные поля решения; прочее — отказ: `kind` в rename/move молча игнорировался, а решение
+    # писалось в журнал как принятое (ревью 2026-11-08)
+    extra = {"split": ("kind", "key"), "retype": ("role", "subkind")}
     if act is None and a.get("type") in need:
         return f"нет ключа action (передан type=«{a['type']}») — вид решения пишется в поле action"
     if act not in need:
@@ -108,6 +116,21 @@ def _check_action(a: Dict[str, Any], ont: Optional[O.Ontology] = None) -> Option
     miss = [f for f in need[act] if f not in a]
     if miss:
         return f"{act}: нет полей {', '.join(miss)}"
+    allowed = set(need[act]) | set(extra.get(act, ())) | {"action", "why"}
+    unknown = sorted(set(a) - allowed)
+    if unknown:
+        hint = " (вид узла меняет action retype)" if "kind" in unknown else ""
+        return f"{act}: лишние поля {', '.join(unknown)}{hint}"
+    if act != "revoke" and not (isinstance(a.get("why"), str) and a["why"].strip()):
+        return f"{act}: нет why — причина со слов пользователя (идёт в _graph/decisions.md)"
+    if act == "retype" and ont is not None:
+        if a["kind"] not in ont.kinds:
+            return f"retype: kind — один из {', '.join(ont.kinds)}"
+        spec = ont.kinds[a["kind"]]
+        if spec.get("roles") and a.get("role") not in spec["roles"]:
+            return f"retype: вид {a['kind']} — с role: {', '.join(spec['roles'])}"
+        if spec.get("subkinds") and a.get("subkind") not in spec["subkinds"]:
+            return f"retype: вид {a['kind']} — с subkind: {', '.join(spec['subkinds'])}"
     if act == "merge" and not (isinstance(a["names"], list) and a["names"]):
         return "merge: names — непустой список имён или id узлов"
     if act == "split" and a.get("kind") is not None and ont is not None and a["kind"] not in ont.kinds:
@@ -138,7 +161,8 @@ def decide(root: Path, actions: List[Dict[str, Any]], vault: str) -> Dict[str, A
     for a in actions:
         if a["action"] == "revoke":
             continue
-        rec = dict({k: a[k] for k in sorted(a)}, v=DECISION_V)
+        rec = dict({k: (unicodedata.normalize("NFC", a[k]) if k == "name" and isinstance(a[k], str) else a[k])
+                    for k in sorted(a)}, v=DECISION_V)
         if rec not in log and rec not in fresh:
             fresh.append(rec)
     nodes, _, _ = _collect(root, ont)
@@ -364,7 +388,7 @@ def _apply(nodes: Dict[str, Dict[str, Any]], log: List[Dict[str, Any]], ont: O.O
                      False)
             else:
                 nodes[ident] = new
-        elif act in ("rename", "move", "drop"):
+        elif act in ("rename", "move", "retype", "drop"):
             key = get(a["node"])
             if key is None:
                 continue
@@ -372,6 +396,19 @@ def _apply(nodes: Dict[str, Dict[str, Any]], log: List[Dict[str, Any]], ont: O.O
                 nodes[key]["name"] = a["name"]
             elif act == "move":
                 nodes[key]["service"] = a["service"]
+            elif act == "retype":
+                node = nodes[key]
+                if ont.owned_by_service(a["kind"]) and not node.get("service"):
+                    note(n, a, a["node"], f"вид {a['kind']} принадлежит сервису — сначала move (node, service)", strict)
+                    continue
+                node["kind"] = a["kind"]
+                for f in ("role", "subkind"):
+                    if a.get(f):
+                        node[f] = a[f]
+                    else:
+                        node.pop(f, None)
+                if not ont.owned_by_service(a["kind"]):
+                    node.pop("service", None)
             else:
                 nodes.pop(key)
     return problems
@@ -419,7 +456,7 @@ def build(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     for n in out:
         # без учёта регистра: «Задача А» и «задача а» — один файл на macOS/Windows и одна
         # ссылка [[…]] в Obsidian (его ссылки регистронезависимы)
-        names.setdefault(n["name"].casefold(), []).append(n)
+        names.setdefault(O.fold(n["name"]), []).append(n)
     collisions = []
     for k, v in names.items():
         if len(v) < 2:
@@ -593,10 +630,11 @@ def collision_names(cat: Dict[str, Any]) -> List[str]:
 def approved(root: Path) -> Tuple[bool, str]:
     """Утверждён ли снимок: согласие привязано к содержимому catalog.approved.json."""
     snap = Path(root) / APPROVED_REL
-    if not snap.is_file() and (Path(root) / CATALOG_REL).is_file():
+    if (Path(root) / CATALOG_REL).is_file():
         # согласие записано (record_approval --bind-file catalog.json), а graph_catalog после него
         # не звали — снимок делается здесь же: раньше graph_assign_start отвечал «нет снимка» сразу
-        # после записанного «да», и модель гадала, что ещё нужно
+        # после записанного «да», а при повторном утверждении — «stale, утверждают заново» по старому
+        # снимку, и человека спрашивали второй раз (ревью 2026-11-08)
         approval(root)
     if not snap.is_file():
         return False, "каталог не утверждён: нет снимка (покажи _graph/catalog.md и спроси пользователя)"

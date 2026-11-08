@@ -300,7 +300,7 @@ def stubs_decide(root: Path, cfg: Dict[str, Any], targets: List[Any], why: str) 
     qs_p = Path(root) / ".spec-graph" / "questions.json"
     qs = json.loads(qs_p.read_text(encoding="utf-8")) if qs_p.is_file() else []
     groups = {g["target"]: g for g in question_groups(qs)}
-    taken = {n["name"].casefold() for n in RS.vault_index(root, cfg)} | {n["name"].casefold() for n in AS.load_delta(root)}
+    taken = {O.fold(n["name"]) for n in RS.vault_index(root, cfg)} | {O.fold(n["name"]) for n in AS.load_delta(root)}
     errs, recs = [], []
     for i, t in enumerate(targets or []):
         t = {"name": t} if isinstance(t, str) else t if isinstance(t, dict) else {}
@@ -315,7 +315,7 @@ def stubs_decide(root: Path, cfg: Dict[str, Any], targets: List[Any], why: str) 
             errs.append(f"[{i}] «{name}»: вид заглушки — укажи kind ({', '.join(ont.target_kinds(g['edge']))})")
             continue
         bad = ont.check_name(kind, name)
-        if bad or name.casefold() in taken or "неоднозначно" in g["reason"]:
+        if bad or O.fold(name) in taken or "неоднозначно" in g["reason"]:
             errs.append(f"[{i}] «{name}»: " + ("; ".join(bad) or ("неоднозначная цель — узел есть, выбери его в связи"
                                                                if "неоднозначно" in g["reason"] else "имя занято")))
             continue

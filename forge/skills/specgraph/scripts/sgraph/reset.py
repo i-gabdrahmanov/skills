@@ -52,14 +52,20 @@ def archive(root: Path, cfg: Dict[str, Any], reason: str) -> Dict[str, Any]:
         shutil.move(str(p), str(dst / "state" / p.name))
         moved.append(f".spec-graph/{p.name}")
     vault = root / cfg["vault"]
-    if vault.is_dir() and any(vault.iterdir()):
-        dst.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(vault), str(dst / "vault"))
+    # .obsidian/ — настройки аналитика (плагины, Bases, горячие клавиши): остаются в vault, иначе «граф заново»
+    # сбрасывал Obsidian и слой видов уходил из Bases в Markdown (ревью 2026-11-08)
+    content = [p for p in sorted(vault.iterdir()) if p.name != ".obsidian"] if vault.is_dir() else []
+    if content:
+        (dst / "vault").mkdir(parents=True, exist_ok=True)
+        for p in content:
+            shutil.move(str(p), str(dst / "vault" / p.name))
         moved.append(cfg["vault"])
+        if not any(vault.iterdir()):
+            vault.rmdir()
     if not moved:
         return {"archived": None, "moved": [], "next": "архивировать нечего — граф и так пуст; graph_status"}
     (dst / "REASON.txt").write_text(reason.strip() + "\n", encoding="utf-8")
     rel = dst.relative_to(root).as_posix()
     return {"archived": rel, "moved": moved, "kept": sorted(k for k in KEEP if (state / k).exists()),
             "next": f"граф с нуля: graph_status (конфиг и источники прежние). Вернуть — перенести {rel}/state/* "
-                    f"обратно в .spec-graph/ и {rel}/vault в {cfg['vault']}"}
+                    f"обратно в .spec-graph/ и {rel}/vault/* в {cfg['vault']}/ (.obsidian/ остался на месте)"}

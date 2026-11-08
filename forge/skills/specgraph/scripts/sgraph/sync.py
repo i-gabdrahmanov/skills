@@ -41,8 +41,18 @@ def _targets(values: Any) -> List[str]:
     return [t for t in (F.link_target(v) for v in (values or []) if isinstance(v, str)) if t]
 
 
+class SyncError(Exception):
+    def __init__(self, message: str, code: str):
+        super().__init__(message)
+        self.code = code
+
+
 def sync(root: Path, cfg: Dict[str, Any], dry: bool = False) -> Dict[str, Any]:
     root = Path(root)
+    from . import split as SP
+    ren = SP.renamed(root, cfg)
+    if ren and not dry:
+        raise SyncError(SP.renamed_hint(ren), "E-sync-renamed")
     ont = O.load(root)
     vault = root / cfg["vault"]
     index = RS.vault_index(root, cfg)
@@ -141,5 +151,5 @@ def sync(root: Path, cfg: Dict[str, Any], dry: bool = False) -> Dict[str, Any]:
         synced_p.parent.mkdir(parents=True, exist_ok=True)
         FS.write_text(synced_p, json.dumps(new_synced, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     edges_total = sum(len(r) for by in forward.values() for r in by.values())
-    return {"notes": len(index), "written": written, "forward_edges": edges_total, "manual": manual,
+    return {"notes": len(index), "written": written, "forward_edges": edges_total, "manual": manual, "renamed": ren,
             "removed_by_human": removed_by_human, "manual_inverse": manual_inverse[:20], "journal_changed": journal_changed}

@@ -17,6 +17,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -31,6 +32,9 @@ _IMPACT = ("forward", "inverse", "both", "none")
 _EVIDENCE = ("required", "optional")
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 _NAME_MAX = 150
+# имя узла — имя файла заметки: предел ФС — 255 БАЙТ на Linux, кириллица — 2 байта на знак; запас под «.md»
+# и суффикс копии в retired
+NAME_MAX_BYTES = 200
 _WIN_RESERVED = {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)}
 
 
@@ -277,6 +281,9 @@ class Ontology:
             errors.append("лишние пробелы в имени")
         if len(name) > _NAME_MAX:
             errors.append(f"имя длиннее {_NAME_MAX} знаков")
+        elif len(name.encode("utf-8")) > NAME_MAX_BYTES:
+            errors.append(f"имя длиннее {NAME_MAX_BYTES} байт (≈{NAME_MAX_BYTES // 2} знаков кириллицы): это имя файла, на Linux "
+                          "предел — 255 байт")
         bad = sorted({c for c in name if c in self.forbidden or ord(c) < 32})
         if bad:
             errors.append("запрещённые символы в имени: " + " ".join(repr(c) for c in bad))
@@ -302,6 +309,13 @@ class Ontology:
         elif grammar == "topic" and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
             errors.append("имя топика — как в спеке: латиница, цифры, . _ -")
         return errors
+
+
+def fold(s: str) -> str:
+    """Ключ сравнения имён узлов и путей заметок: NFC + casefold. Ссылки Obsidian и файловые системы
+    macOS/Windows регистронезависимы, а APFS ещё и не различает NFC/NFD: «Приём» с «ё» из имени папки macOS
+    (NFD) и из текста (NFC) — для движка два узла, а на диске один файл (ревью 2026-11-08)."""
+    return unicodedata.normalize("NFC", s).casefold()
 
 
 _cache: Dict[str, Ontology] = {}

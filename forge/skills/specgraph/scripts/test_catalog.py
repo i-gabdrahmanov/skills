@@ -158,6 +158,7 @@ class Reports(_Proj):
                                                                                          "suggested_kind": "rabbit-op"}],
                  "nodes": [{"kind": "endpoint", "name": "upz-adapter POST api-v1-upz-tasks", "service": "task-service",
                             "key": "http:POST /api/v1/upz/tasks"},
+                           {"kind": "data", "subkind": "dto", "name": "pprbkid.task.closed.v1", "key": "kafka:pprbkid.task.closed.v1"},
                            {"kind": "screen", "name": "Укомплектование"}]}
         (self.root / SV.DRAFTS_REL / "draft-extra.json").write_text(json.dumps(extra, ensure_ascii=False), encoding="utf-8")
         # каталог читает черновики только сданных единиц текущей разведки — лишняя единица в очереди, сдана
@@ -169,7 +170,10 @@ class Reports(_Proj):
         self.assertTrue(d)
         T.call("graph_catalog", self.root, {})
         cat = self.cat()
-        self.assertTrue(any(c["field"] == "service" for c in cat["conflicts"]))
+        # тот же ключ у узла не того вида — противоречие; эндпойнт того же пути у другого сервиса — отдельный
+        # узел, и одно имя у двух узлов уходит человеку коллизией (ревью 2026-11-08)
+        self.assertTrue(any(c["field"] == "kind" for c in cat["conflicts"]))
+        self.assertTrue(any(c["name"] == "upz-adapter POST api-v1-upz-tasks" for c in cat["collisions"]))
         self.assertTrue(any(c["name"] == "Укомплектование" for c in cat["collisions"]))
         md = (self.root / "docs" / "graph" / "_graph" / "catalog.md").read_text(encoding="utf-8")
         self.assertIn("rabbit-op", md)

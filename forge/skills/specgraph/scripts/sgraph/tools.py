@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put, graph_edges_review, graph_edges_decide, graph_delta_decide, graph_stubs_decide, graph_validate, graph_obsidian, graph_find, graph_node, graph_neighbors, graph_path, graph_impact, graph_service_links, graph_check, graph_diag. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put, graph_edges_review, graph_edges_decide, graph_delta_decide, graph_stubs_decide, graph_validate, graph_obsidian, graph_queue_retry, graph_find, graph_node, graph_neighbors, graph_path, graph_impact, graph_service_links, graph_check, graph_diag. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -54,9 +54,12 @@ class ToolError(Exception):
     `codes` — машинные коды отказа (`E-…`) для счётчиков и диагностики: по ним видно, где модель
     буксует, без текста сообщения."""
 
-    def __init__(self, message: str, codes: Optional[List[str]] = None):
+    def __init__(self, message: str, codes: Optional[List[str]] = None, blameless: bool = False):
         super().__init__(message)
         self.codes = list(codes or [])
+        # не вина модели (согласие устарело, исходник не читается): попытка единицы не тратится, аренда
+        # остаётся — иначе три таких отказа бросали единицу навсегда (ревью 2026-11-08)
+        self.blameless = blameless
 
 
 _TYPES = {"string": str, "object": dict, "boolean": bool, "array": list}
@@ -203,6 +206,17 @@ def _queue_status(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return Q.status(root, _queue_arg(args))
 
 
+def _queue_retry(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    if not (args.get("why") or "").strip():
+        raise ToolError("повтор брошенных единиц — решение пользователя: why с его слов", ["E-retry-why"])
+    res = Q.retry(root, _queue_arg(args), args.get("items") or None)
+    if not res["revived"]:
+        raise ToolError("брошенных единиц " + ("с такими id " if args.get("items") else "") + "в очереди нет",
+                        ["E-retry-none"])
+    M.bump(root, f"queue.{args['queue']}.retried", len(res["revived"]))
+    return dict(res, next=f"цикл очереди {args['queue']} (graph_next batch): брошенные единицы снова в работе")
+
+
 def _need_cfg(root: Path) -> Dict[str, Any]:
     cfg, errors = C.load(root)
     if cfg is None:
@@ -316,7 +330,7 @@ def _assign_start(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
 def _assign_put(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     ok, why = CT.approved(root)
     if not ok:
-        raise ToolError(why, ["E-catalog-unapproved"])
+        raise ToolError(why, ["E-catalog-unapproved"], blameless=True)
     plan, errs = AS.put(root, args["item_id"], args)
     if errs:
         raise ToolError("раскладка не принята:\n" + "\n".join(f"- [{c}] {m}" for c, m in errs),
@@ -367,7 +381,10 @@ def _link_put(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _sync(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
-    return SY.sync(root, _need_cfg(root))
+    try:
+        return SY.sync(root, _need_cfg(root))
+    except SY.SyncError as e:
+        raise ToolError(str(e), [e.code])
 
 
 def _card_start(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -542,8 +559,9 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "fn": _catalog_decide,
         "description": "Записать решения ЧЕЛОВЕКА по каталогу (после его ответа): {action: merge, into, names}, "
                        "{action: split, node, file, name, kind?, key?}, {action: rename, node, name}, {action: move, node, "
-                       "service}, {action: drop, node}, {action: scope, include}, {action: revoke, index} (номер записи "
-                       "в _graph/decisions.md); у каждого — why. Узел — id `n-…` или имя, которое носит ровно один узел; "
+                       "service}, {action: retype, node, kind, role?, subkind?} (вид узла), {action: drop, node}, {action: scope, "
+                       "include}, {action: revoke, index} (номер записи в _graph/decisions.md); у каждого, кроме revoke, — "
+                       "why со слов пользователя; лишнее поле — отказ. Узел — id `n-…` или имя, которое носит ровно один узел; "
                        "неоднозначное или неприменимое решение — отказ с перечнем id, журнал не меняется.",
         "schema": {"type": "object", "properties": {"actions": {"type": "array", "items": {"type": "object"}}},
                    "required": ["actions"], "additionalProperties": False},
@@ -720,6 +738,15 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                                                     "blocks": {"type": "array", "items": {"type": "string"}}},
                    "additionalProperties": False},
     },
+    "graph_queue_retry": {
+        "fn": _queue_retry,
+        "description": "Вернуть в работу БРОШЕННЫЕ единицы очереди (после трёх отказов) — только по решению "
+                       "пользователя: попытки с нуля, единица снова pending. items — id единиц (пусто — все брошенные).",
+        "schema": {"type": "object",
+                   "properties": {"queue": _QUEUE_PROP, "items": {"type": "array", "items": {"type": "string"}},
+                                  "why": {"type": "string", "description": "решение пользователя своими словами"}},
+                   "required": ["queue", "why"], "additionalProperties": False},
+    },
     "graph_queue_status": {
         "fn": _queue_status,
         "description": "Сводка очереди: сколько единиц в каждом статусе, брошенные единицы и топ кодов отказа.",
@@ -770,8 +797,12 @@ def _call(name: str, root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
         try:
             res = fn(root, args)
         except B.SourceError as se:          # исходник не читается — отказ с именем файла, не трейсбек
-            raise ToolError(str(se), [se.code])
+            raise ToolError(str(se), [se.code], blameless=True)
     except ToolError as e:
+        if leased and e.blameless:
+            M.record_call(root, name, "rejected", codes=e.codes, refs=refs, duration_ms=elapsed())
+            raise ToolError(f"{e}\nэто не ошибка ответа: попытка не потрачена, аренда за тобой — сдай тот же "
+                            f"item_id «{args['item_id']}», когда причина будет снята", e.codes, blameless=True) from e
         if leased:
             st = Q.settle(root, queue, args["item_id"], False, e.codes, _cfg(root))
             if st["status"] == "abandoned":

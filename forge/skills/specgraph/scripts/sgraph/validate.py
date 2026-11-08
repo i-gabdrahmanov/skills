@@ -9,7 +9,7 @@
 В этом модуле нет ни одного имени вида или ребра (пинит test_validator.py).
 
 Ошибки (E-*): fm-parse, fm-key, name, path, key-dup, ghost, edge-kind, inverse, evidence, verbatim,
-coverage, source-changed (исходник изменён после скана), index, marker. Предупреждения (W-*): orphan, manual-inverse, unplaced, source-missing.
+coverage, source-changed (исходник изменён после скана), renamed (заметка переименована в Obsidian), index, marker. Предупреждения (W-*): orphan, manual-inverse, unplaced, source-missing.
 Плюс дыры полноты по правилам `completeness.json` (3.2): раздел «Дыры графа» по бизнес-операциям и вопросы
 в `_graph/open-questions.md`. Раздел «Перенос исходников» (3.5): по каждому файлу спеки — перенесён полностью
 (каждый блок назначен, дословность цела, 0 E-* в его заметках) или что мешает. `write=False` — ничего не
@@ -90,10 +90,10 @@ class _Run:
                          if kind else "нет ключа kind")
                 continue
             name = p.stem
-            if name.casefold() in seen:     # ссылки Obsidian регистронезависимы
-                self.add("E-name", rel, f"дубль имени «{name}»: уже есть {seen[name.casefold()]}")
+            if O.fold(name) in seen:     # ссылки Obsidian регистронезависимы
+                self.add("E-name", rel, f"дубль имени «{name}»: уже есть {seen[O.fold(name)]}")
                 continue
-            seen[name.casefold()] = rel
+            seen[O.fold(name)] = rel
             owner = _targets(data.get(self._structural_edge(kind) or "", []))
             nodes[name] = {"name": name, "kind": kind, "role": data.get("role"), "subkind": data.get("subkind"),
                            "key": data.get("key"), "service": owner[0] if owner else None, "path": rel,
@@ -133,9 +133,10 @@ class _Run:
         except O.OntologyError as e:
             self.add("E-path", rel, str(e))
         if n.get("key"):
-            k = str(n["key"])
+            # у видов сервиса ключ уникален в сервисе: один `GET /path` бывает у двух сервисов
+            k = str(n["key"]) + (f"|{n.get('service')}" if ont.owned_by_service(kind) else "")
             if k in keys:
-                self.add("E-key-dup", rel, f"ключ «{k}» уже у {keys[k]}")
+                self.add("E-key-dup", rel, f"ключ «{n['key']}» уже у {keys[k]}")
             else:
                 keys[k] = rel
         for msg in F.marker_errors(n["body"]):
@@ -155,7 +156,10 @@ class _Run:
                     continue
                 if a in nodes:
                     self.add("E-name", nodes[name]["path"], f"алиас «{a}» — имя другой заметки")
-                elif a in owner and owner[a] != name:
+                elif a in owner and owner[a] != name and not (nodes[name].get("key") and
+                                                               nodes[owner[a]].get("key") == nodes[name].get("key")):
+                    # алиас `METHOD /path` у эндпойнтов одного ключа в разных сервисах — не ошибка: резолвер
+                    # выбирает по сервису или честно отвечает ambiguous
                     self.add("E-name", nodes[name]["path"], f"алиас «{a}» уже у [[{owner[a]}]]")
                 else:
                     owner[a] = name
@@ -246,6 +250,9 @@ class _Run:
         for code, msg in SP.verify(self.root, self.cfg):
             path = msg.split(":", 1)[0] if code == "E-verbatim" else ""
             self.add(code, path, msg)
+        for r in SP.renamed(self.root, self.cfg):
+            self.add("E-renamed", r["note"], f"переименована в Obsidian: узел каталога «{r['node']}» — имя меняет "
+                                            "решение каталога (graph_catalog_decide rename) или верни имя")
         missing: Dict[str, List[str]] = {}
         for name, n in nodes.items():
             try:
