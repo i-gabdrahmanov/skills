@@ -36,6 +36,7 @@ from . import ontology as O
 
 REWRITES_REL = ".spec-graph/rewrites.json"
 COVERAGE_REL = ".spec-graph/coverage.json"
+RETIRED_REL = ".spec-graph/retired"
 _ANCHOR = re.compile(r"(?<!!)\[([^\]\n]+)\]\(#([^)\s]+)\)")
 _ATTACH = re.compile(r"(!?)\[([^\]\n]*)\]\((?!https?:|#|mailto:)([^)\s]+\.(?:png|jpe?g|gif|svg|webp|pdf|puml|json|txt))\)", re.I)
 
@@ -88,6 +89,25 @@ def _assignment(root: Path) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, D
             else:
                 owner[b] = remap[node]
     return owner, skip, unplaced
+
+
+def _follow_renames(nodes: List[Dict[str, Any]], owner: Dict[str, str]) -> Dict[str, set]:
+    """План раскладки называет узел по имени; rename в каталоге после раскладки имя меняет, а прежнее
+    остаётся в names_seen. Блок уходит узлу, который носил это имя и у которого этот файл — источник;
+    раньше такие блоки молча пропадали из vault (боевой прогон 2026-11-07). Неоднозначные — в ответ."""
+    names = {n["name"] for n in nodes}
+    lost: Dict[str, set] = {}
+    for b, name in list(owner.items()):
+        if name in names:
+            continue
+        rel = b.rsplit("#", 1)[0]
+        cand = [n["name"] for n in nodes if name in (n.get("names_seen") or [])
+                and any(s.get("file") == rel for s in n.get("sources") or [])]
+        if len(cand) == 1:
+            owner[b] = cand[0]
+        else:
+            lost.setdefault(name, set()).add(rel)
+    return lost
 
 
 # ─── ссылки ────────────────────────────────────────────────────────────────
@@ -183,11 +203,14 @@ def _note_text(node, ont, existing_text: Optional[str], groups: List[Tuple[str, 
     data, order = _fm_for(node, ont, existing_fm, sources)
     if not body.strip():
         body = f"# {node['name']}\n"
-    # снять прежние маркеры source*, чтобы их число совпало с текущими файлами-источниками
-    for b in F.blocks(body):
+    # снять прежние маркеры source*, чтобы их число совпало с текущими файлами-источниками;
+    # снизу вверх по одному разбору: срез верхнего блока сдвигает индексы нижних, и повторный
+    # graph_split по заметке с source-2…source-N оставлял непарный маркер (боевой прогон 2026-11-07)
+    lines = body.split("\n")
+    for b in reversed(F.blocks(body)):
         if b["name"].startswith("source") and b["name"] != "source":
-            lines = body.split("\n")
-            body = "\n".join(lines[:b["start"]] + lines[b["end"] + 1:])
+            del lines[b["start"]:b["end"] + 1]
+    body = "\n".join(lines)
     for k, (rel, blks, text) in enumerate(groups):
         name = "source" if k == 0 else f"source-{k + 1}"
         attrs = {"file": rel, "blocks": [b["id"] for b in blks], "sha1": _sha("".join(b["text"] for b in blks))}
@@ -209,6 +232,12 @@ def split(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     vault = Path(root) / cfg["vault"]
     nodes = _nodes(root)
     owner, skip, unplaced = _assignment(root)
+    lost = _follow_renames(nodes, owner)
+    if lost:
+        raise SplitError("раскладка ссылается на узлы, которых нет в утверждённом каталоге: "
+                         + "; ".join(f"«{k}» ({', '.join(sorted(v))})" for k, v in sorted(lost.items()))
+                         + " — каталог поменяли после раскладки, а узел по имени и файлу не однозначен; "
+                           "переразложи эти файлы или верни имя решением каталога", "E-split-unknown-node")
     files = sorted({b.rsplit("#", 1)[0] for b in list(owner) + list(skip) + list(unplaced)} |
                    {s["file"] for n in nodes for s in n.get("sources", [])})
     files_blocks = {rel: (B.load(root, rel) or B.scan_file(root, rel))["blocks"] for rel in files if (Path(root) / rel).is_file()}
@@ -252,15 +281,45 @@ def split(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
             unchanged += 1
     _write_unplaced(vault, files_blocks, unplaced)
     _write_index(vault, nodes, paths, ont)
-    known = {Path(v) for v in paths}
-    stray = sorted(str(q.relative_to(vault)) for q in vault.rglob("*.md")
-                   if not str(q.relative_to(vault)).startswith("_graph/") and q.relative_to(vault) not in known)
+    stray, retired = _retire_orphans(root, vault, {Path(v) for v in paths})
     FS.write_text((Path(root) / REWRITES_REL), json.dumps(rewrites, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
                                           encoding="utf-8")
     cov = coverage(root, cfg, files_blocks, owner, skip, unplaced)
     return {"notes": len(nodes), "written": written, "unchanged": unchanged, "rewrites": len(rewrites),
             "unplaced": sum(f["unplaced"] for f in cov["files"].values()),
-            "unassigned": sum(f["unassigned"] for f in cov["files"].values()), "stray_notes": stray[:20]}
+            "unassigned": sum(f["unassigned"] for f in cov["files"].values()), "stray_notes": stray[:20],
+            "retired": retired[:20]}
+
+
+def _engine_note(path: Path) -> bool:
+    try:
+        data, _ = F.read(path.read_bytes().decode("utf-8"))
+    except (F.FMError, UnicodeDecodeError):
+        return False
+    return bool(data.get("kind")) and "source" in data
+
+
+def _retire_orphans(root: Path, vault: Path, known) -> Tuple[List[str], List[str]]:
+    """Заметки vault вне каталога. Записанные движком (узел переименован/удалён решением каталога) —
+    в RETIRED_REL: иначе старое имя остаётся в vault рядом с новым, и одноимённые заметки снова роняют
+    graph_link_start и ссылки [[…]]. Заметки без frontmatter движка — человека, их только называем."""
+    stray, retired = [], []
+    for q in sorted(vault.rglob("*.md")):
+        rel = q.relative_to(vault)
+        if rel.parts[0] in ("_graph", "_attachments") or rel in known:
+            continue
+        if not _engine_note(q):
+            stray.append(rel.as_posix())
+            continue
+        dst = Path(root) / RETIRED_REL / rel
+        n = 1
+        while dst.exists():
+            dst = dst.with_name(f"{rel.stem}.{n}{rel.suffix}")
+            n += 1
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(q), str(dst))
+        retired.append(rel.as_posix())
+    return stray, retired
 
 
 def _write_unplaced(vault: Path, files_blocks, unplaced) -> None:

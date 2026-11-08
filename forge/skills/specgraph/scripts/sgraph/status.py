@@ -42,12 +42,28 @@ def status(root: Path) -> Dict[str, Any]:
                        f"({run['next_key']})")
     else:
         step = run["step"]
-        first = {"graph-map": "graph_survey (разведка), дальше по брифу шага",
+        first = {"graph-map": _map_next(root),
                  "graph-link": "graph_edges_mechanical, дальше по брифу шага",
                  "graph-check": "graph_check, дальше по брифу шага"}[step]
         out["next"] = (f"прогон {run['key']}, шаг {step}: {first}. Гейт шага прошёл — команда "
                        f"run.commands.gate, затем run.commands.close (шаг закрывает только гейт)")
     return out
+
+
+def _map_next(root: Path) -> str:
+    """Где шаг graph-map сейчас — по очередям, а не всегда с начала: после раскладки и нарезки статус
+    советовал «graph_survey (разведка)», и модель послабее начала бы шаг заново."""
+    from . import queue as Q
+    draft, assign = Q.status(root, "draft-file"), Q.status(root, "assign-section")
+    if not draft["total"]:
+        return "graph_survey (разведка), дальше по брифу шага"
+    if draft["pending"] or draft["leased"]:
+        return "цикл очереди draft-file (graph_next batch)"
+    if not assign["total"]:
+        return "graph_catalog — показ каталога и согласие пользователя, затем graph_assign_start"
+    if assign["pending"] or assign["leased"]:
+        return "цикл очереди assign-section (graph_next batch)"
+    return "graph_split (нарезка vault), затем гейт шага"
 
 
 ENGINE_SKILLS = Path(__file__).resolve().parents[3]          # …/skills (поставка)

@@ -11,7 +11,17 @@
   • решения каталога: неоднозначное имя — отказ с id, ссылка по id работает, split последнего файла —
     отказ, split в существующий узел сливает, а не затирает, `type` вместо `action` назван прямо,
     revoke снимает запись, записи прежнего формата применяются как раньше;
-  • согласие без повторного graph_catalog даёт снимок; кандидаты источников без gitignored-архивов.
+  • согласие без повторного graph_catalog даёт снимок; кандидаты источников без gitignored-архивов;
+  • повторный graph_split по заметке с source-2…source-N не оставляет непарных маркеров;
+  • одноимённые узлы не проходят утверждение каталога (раньше — падение на graph_link_start);
+  • rename в каталоге после раскладки: блоки идут за переименованием, заметка старого имени уходит из
+    vault в .spec-graph/retired, связи строятся; неоднозначное имя в плане — отказ, а не тихая потеря;
+  • ответ graph_next пачкой: бриф и инструмент — один раз, у единицы только item_id и input (413);
+  • graph_status на шаге graph-map ведёт по очередям, а не всегда к разведке; непринятые решения
+    каталога (decision_problems) — до согласия;
+  • одноимённые узлы разных сервисов и (для экранов/алгоритмов/шедулеров/kafka-операций) разных папок не
+    склеиваются, а дают коллизию с предложенными именами; общие виды (данные) склеиваются по имени; id
+    решений прежнего формата резолвятся.
 """
 from __future__ import annotations
 
@@ -32,7 +42,10 @@ from sgraph import catalog as CT  # noqa: E402
 from sgraph import config as C  # noqa: E402
 from sgraph import extract as X  # noqa: E402
 from sgraph import ontology as O  # noqa: E402
+from sgraph import fm as F  # noqa: E402
 from sgraph import queue as Q  # noqa: E402
+from sgraph import split as SP  # noqa: E402
+from sgraph import status as ST  # noqa: E402
 from sgraph import survey as SV  # noqa: E402
 from sgraph import tools as T  # noqa: E402
 
@@ -223,6 +236,7 @@ class CatalogDecisions(unittest.TestCase):
             encoding="utf-8")
         res = T.call("graph_catalog", self.root, {})
         self.assertTrue(res["decision_problems"])
+        self.assertTrue(res["next"].startswith("сначала decision_problems"), "к согласию — только разобрав их")
         renamed = next(n for n in self.nodes() if n["name"] == "Розыск ИД")
         self.assertEqual(renamed["kind"], "operation", "как раньше: последний вставленный одноимённый")
 
@@ -248,6 +262,235 @@ class Detect(unittest.TestCase):
                 (root / rel).parent.mkdir(parents=True, exist_ok=True)
                 (root / rel).write_text("# x\n", encoding="utf-8")
             self.assertEqual([c["root"] for c in C.detect(root)], ["docs/spec"])
+
+
+class Resplit(unittest.TestCase):
+    """«маркер graph:source-3 не закрыт»: старые блоки source-N снимались по индексам первого разбора,
+    после среза верхнего нижние указывали мимо — повторный graph_split падал на первой такой заметке."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ont = O.load(_project(self.tmp.name, {"a.md": "# A\n"}))
+        self.node = {"kind": "process", "name": "X"}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def groups(self, n):
+        return [(f"docs/spec/f{i}.md", [{"id": f"b{i}", "type": "para", "title": "", "text": f"текст {i}\n" * (i + 2)}],
+                 f"текст {i}\n" * (i + 2)) for i in range(n)]
+
+    def names(self, text):
+        return [b["name"] for b in F.blocks(F.read(text)[1])]
+
+    def test_same_sources_resplit_is_stable(self):
+        first = SP._note_text(self.node, self.ont, None, self.groups(4), None)
+        self.assertEqual(self.names(first), ["source", "source-2", "source-3", "source-4"])
+        self.assertEqual(SP._note_text(self.node, self.ont, first, self.groups(4), None), first)
+
+    def test_fewer_sources_drop_tail_blocks_and_keep_own_text(self):
+        first = SP._note_text(self.node, self.ont, None, self.groups(4), None)
+        fm, body = F.read(first)
+        first = F.write(fm, body + "\nзаметка аналитика\n", list(fm))
+        second = SP._note_text(self.node, self.ont, first, self.groups(2), None)
+        self.assertEqual(self.names(second), ["source", "source-2"])
+        self.assertNotIn("текст 3", second)
+        self.assertIn("заметка аналитика", second)
+
+
+class CollisionGate(unittest.TestCase):
+    """Два узла «Обработка ошибок от сервиса УПЗ» (kafka-операция и шедулер) прошли согласие, раскладку
+    и нарезку, а упали на graph_link_start: id единицы link-note — хеш имени."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = _project(self.tmp.name, {"a.md": "# A\n\nтекст\n"})
+        _draft(self.root, "draft-a", "a.md", [
+            {"kind": "screen", "name": "Розыск", "sections": []},
+            {"kind": "operation", "name": "Розыск", "key": "task:kid_search", "sections": []}])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_consent_does_not_pass_collisions(self):
+        res = T.call("graph_catalog", self.root, {})
+        self.assertIn("одинаковые имена", res["next"])
+        _record_consent(self.root)
+        ok, why = CT.approved(self.root)
+        self.assertFalse(ok)
+        self.assertIn("«Розыск»", why)
+        with self.assertRaises(T.ToolError):
+            T.call("graph_assign_start", self.root, {})
+
+    def test_rename_by_id_reopens_the_gate(self):
+        T.call("graph_catalog", self.root, {})
+        nodes = json.loads((self.root / CT.CATALOG_REL).read_text(encoding="utf-8"))["nodes"]
+        op = next(n for n in nodes if n["kind"] == "operation")
+        T.call("graph_catalog_decide", self.root,
+               {"actions": [{"action": "rename", "node": op["id"], "name": "Розыск (тип задачи)", "why": "x"}]})
+        _record_consent(self.root)
+        T.call("graph_catalog", self.root, {})
+        self.assertEqual(CT.approved(self.root), (True, ""))
+
+
+class RenameAfterAssign(unittest.TestCase):
+    """Ремонт коллизии в поле: rename по id после раскладки и нарезки, новое согласие, повторный split."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = K.make_project(Path(self.tmp.name) / "repo")
+        K.through_split(self.root)
+        self.vault = self.root / "docs" / "graph"
+        owners = {a["node"] for p in AS.load_plans(self.root) for a in p["assign"]}
+        cat = CT.load_approved(self.root)
+        self.node = next(n for n in cat["nodes"] if n["name"] in owners and n["kind"] != "service")
+        self.old = next(self.vault.rglob(f"{self.node['name']}.md"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def rename(self, name):
+        T.call("graph_catalog_decide", self.root,
+               {"actions": [{"action": "rename", "node": self.node["id"], "name": name, "why": "x"}]})
+        K.approve_catalog(self.root)
+
+    def test_blocks_follow_rename_and_old_note_retires(self):
+        body_before = F.read(self.old.read_text(encoding="utf-8"))[1]
+        self.rename(self.node["name"] + " (переименован)")
+        res = T.call("graph_split", self.root, {})
+        self.assertEqual(res["verify"]["errors"], 0, res["verify"])
+        self.assertFalse(self.old.exists())
+        self.assertIn(self.old.relative_to(self.vault).as_posix(), res["retired"])
+        self.assertTrue((self.root / SP.RETIRED_REL / self.old.relative_to(self.vault)).is_file())
+        new = next(self.vault.rglob(self.node["name"] + " (переименован).md"))
+        src = F.get_block(F.read(new.read_text(encoding="utf-8"))[1], "source")
+        self.assertEqual(src["content"], F.get_block(body_before, "source")["content"], "текст не потерян")
+        T.call("graph_link_start", self.root, {})
+
+    def test_ambiguous_plan_name_refused(self):
+        for p in sorted((self.root / AS.PLAN_REL).glob("*.json")):
+            plan = json.loads(p.read_text(encoding="utf-8"))
+            for a in plan["assign"]:
+                if a["node"] == self.node["name"]:
+                    a["node"] = "Узел, которого не было"
+            p.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
+        with self.assertRaises(T.ToolError) as cm:
+            T.call("graph_split", self.root, {})
+        self.assertIn("Узел, которого не было", str(cm.exception))
+
+    def test_duplicate_note_name_named_by_link_start(self):
+        twin = self.vault / "_twin" / self.old.name
+        twin.parent.mkdir()
+        twin.write_bytes(self.old.read_bytes())
+        with self.assertRaises(T.ToolError) as cm:
+            T.call("graph_link_start", self.root, {})
+        self.assertIn("две заметки", str(cm.exception))
+
+
+class CompactBatch(unittest.TestCase):
+    """24 ответа graph_next до первого 413 — 108 тыс. знаков в контексте оркестратора: бриф, инструмент,
+    очередь, прогресс и фраза next повторялись в каждой из 10 единиц пачки."""
+
+    def test_batch_of_ten_names_brief_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = _project(d, {"a.md": "# A\n"})
+            cfg = json.loads((root / ".spec-graph" / "config.json").read_text(encoding="utf-8"))
+            cfg["queue"] = {"parallel": 10}
+            (root / ".spec-graph" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+            Q.build(root, "assign-section", [{"id": f"assign-{i:012x}", "brief": "assign-section.md",
+                                              "tool": "graph_assign_put", "input": f"вход {i}\n"} for i in range(10)])
+            res = T.call("graph_next", root, {"queue": "assign-section", "batch": True})
+            self.assertEqual((res["brief"], res["tool"], len(res["units"])), ("assign-section.md", "graph_assign_put", 10))
+            self.assertEqual(set(res["units"][0]), {"item_id", "input"})
+            self.assertIn('"step_id": "graph-map"', res["next"])
+            self.assertLess(len(json.dumps(res, ensure_ascii=False)), 1800)
+
+
+class MapNext(unittest.TestCase):
+    def test_status_follows_map_progress(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = K.make_project(Path(d) / "repo")
+            self.assertIn("graph_survey", ST._map_next(root))
+            K.through_catalog(root)
+            self.assertIn("graph_assign_start", ST._map_next(root))
+            T.call("graph_assign_start", root, {})
+            self.assertIn("assign-section", ST._map_next(root))
+            K.run_queue(root, "assign-section", K.assign_answer(root))
+            self.assertIn("graph_split", ST._map_next(root))
+
+
+class NoGlueByHeading(unittest.TestCase):
+    """«Алгоритм обработки» склеил алгоритмы 4 операций rmoc-service, «UI-UX Описание» — 3 экрана,
+    шедулеры cars-service и shpi-service стали одним узлом с сервисом первого."""
+
+    FILES = {"rmoc/[kid_seizure] Изъятие/UI.md": "# A\n", "rmoc/[kid_seizure] Изъятие/README.md": "# A\n",
+             "rmoc/[kid_search] Розыск/UI.md": "# B\n", "specs/cars.md": "# C\n", "specs/shpi.md": "# D\n"}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = _project(self.tmp.name, self.FILES)
+        algo = {"kind": "algorithm", "name": "Алгоритм обработки", "service": "rmoc-service", "sections": []}
+        screen = {"kind": "screen", "name": "UI-UX Описание", "sections": []}
+        data = {"kind": "data", "subkind": "table", "name": "Таблица задач", "sections": []}
+        sched = {"kind": "scheduler", "name": "Получение данных по заявке по Rest", "sections": []}
+        reg = {"kind": "algorithm", "name": "Алгоритм регистрации", "service": "rmoc-service", "sections": []}
+        _draft(self.root, "d1", "rmoc/[kid_seizure] Изъятие/UI.md", [algo, screen, data, reg])
+        _draft(self.root, "d2", "rmoc/[kid_seizure] Изъятие/README.md", [screen])
+        _draft(self.root, "d3", "rmoc/[kid_search] Розыск/UI.md", [algo, screen, data])
+        _draft(self.root, "d4", "specs/cars.md", [dict(sched, service="cars-service")])
+        _draft(self.root, "d5", "specs/shpi.md", [dict(sched, service="shpi-service")])
+        self.res = T.call("graph_catalog", self.root, {})
+        self.cat = json.loads((self.root / CT.CATALOG_REL).read_text(encoding="utf-8"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def named(self, name):
+        return [n for n in self.cat["nodes"] if n["name"] == name]
+
+    def test_owned_kinds_split_by_service(self):
+        # одна папка specs/ — разводит именно сервис, а не правило папки
+        sched = self.named("Получение данных по заявке по Rest")
+        self.assertEqual(sorted(n["service"] for n in sched), ["cars-service", "shpi-service"])
+        self.assertFalse([c for c in self.cat["conflicts"] if c["field"] == "service"])
+
+    def test_folder_kinds_split_by_folder_and_merge_inside_it(self):
+        algo, screen = self.named("Алгоритм обработки"), self.named("UI-UX Описание")
+        self.assertEqual((len(algo), len(screen)), (2, 2))
+        seizure = next(n for n in screen if "kid_seizure" in n["sources"][0]["file"])
+        self.assertEqual(len(seizure["sources"]), 2, "UI.md и README.md одной операции — один экран")
+
+    def test_shared_kinds_still_merge_by_name(self):
+        self.assertEqual(len(self.named("Таблица задач")), 1)
+
+    def test_collisions_suggest_distinct_names_and_block_consent(self):
+        by = {c["name"]: c for c in self.cat["collisions"]}
+        self.assertEqual(sorted(by), ["UI-UX Описание", "Алгоритм обработки", "Получение данных по заявке по Rest"])
+        for c in by.values():
+            self.assertEqual(len(set(c["suggest"])), len(c["suggest"]), c)
+            self.assertEqual(len(c["ids"]), len(c["suggest"]))
+        self.assertIn("[kid_search] Розыск", " ".join(by["Алгоритм обработки"]["suggest"]))
+        self.assertIn("cars-service", " ".join(by["Получение данных по заявке по Rest"]["suggest"]))
+        self.assertIn("одинаковые имена", self.res["next"])
+
+    def test_rename_by_new_id_and_legacy_id(self):
+        cars = next(n for n in self.named("Получение данных по заявке по Rest") if n["service"] == "cars-service")
+        T.call("graph_catalog_decide", self.root,
+               {"actions": [{"action": "rename", "node": cars["id"], "name": "Опрос ЦАРС", "why": "x"}]})
+        legacy = CT.node_id(CT.legacy_identity({"kind": "algorithm", "name": "Алгоритм регистрации"}))
+        self.assertNotIn(legacy, [n["id"] for n in self.cat["nodes"]], "id сменился — проверяем именно старый")
+        T.call("graph_catalog_decide", self.root,
+               {"actions": [{"action": "rename", "node": legacy, "name": "Задачи", "why": "x"}]})
+        T.call("graph_catalog", self.root, {})
+        names = {n["name"] for n in json.loads((self.root / CT.CATALOG_REL).read_text(encoding="utf-8"))["nodes"]}
+        self.assertTrue({"Опрос ЦАРС", "Задачи"} <= names)
+
+    def test_legacy_id_shared_by_now_split_nodes_is_refused(self):
+        legacy = CT.node_id(CT.legacy_identity({"kind": "algorithm", "name": "Алгоритм обработки"}))
+        with self.assertRaises(T.ToolError) as cm:
+            T.call("graph_catalog_decide", self.root,
+                   {"actions": [{"action": "rename", "node": legacy, "name": "X", "why": "x"}]})
+        self.assertIn("прежнего формата", str(cm.exception))
 
 
 if __name__ == "__main__":

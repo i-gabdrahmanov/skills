@@ -338,7 +338,10 @@ def put(root: Path, item_id: str, args: Dict[str, Any]) -> Tuple[Dict[str, Any],
     # блок → самый внутренний раздел-кандидат, который есть в каталоге: его блоки — его узлу
     inner: Dict[str, Tuple[int, str]] = {}
     for c in cands:
-        if c.get("section") and c["name_hint"] in by_name:
+        # раздел — к своему узлу, только если этот узел из ЭТОГО файла: одноимённый узел другого файла
+        # («Алгоритм обработки» из [kid_seizure]) заставлял субагента уносить разделы в unplaced
+        if c.get("section") and c["name_hint"] in by_name and any(
+                s.get("file") == rel for s in by_name[c["name_hint"]].get("sources") or []):
             for b in c["blocks"]:
                 if b not in inner or len(c["blocks"]) < inner[b][0]:
                     inner[b] = (len(c["blocks"]), c["name_hint"])
@@ -361,7 +364,7 @@ def put(root: Path, item_id: str, args: Dict[str, Any]) -> Tuple[Dict[str, Any],
         for n in new_nodes:
             if n["name"] not in names:
                 rec = {k: n[k] for k in ("kind", "name", "service", "key", "role", "subkind", "why") if n.get(k)}
-                rec.update(id=CT.node_id(CT.identity(rec)), sources=[{"file": rel, "sections": []}],
+                rec.update(id=CT.node_id(CT.identity(rec, ont)), sources=[{"file": rel, "sections": []}],
                            proposed_by=item_id)
                 delta.append(rec)
         dp = Path(root) / DELTA_REL

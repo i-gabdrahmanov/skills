@@ -140,11 +140,23 @@ def _unit_next(u: Dict[str, Any]) -> str:
 def _next(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     if args.get("batch"):
         res = Q.lease_batch(root, _queue_arg(args), _cfg(root))
-        for u in res.get("units", []):
-            u["next"] = _unit_next(dict(u, queue=res.get("queue")))
-        res["next"] = ("очередь пуста — переходи к гейту шага" if res["status"] == Q.EMPTY else
-                       f"запусти {len(res['units'])} субагентов ОДНИМ ходом (каждому — свою единицу), дождись, пока "
-                       f"все сдадут результат, затем снова graph_next batch")
+        if res["status"] == Q.EMPTY:
+            res["next"] = "очередь пуста — переходи к гейту шага"
+            return res
+        # бриф и инструмент у единиц очереди общие — один раз на пачку, у единицы только своё: ответ
+        # пачки остаётся в контексте оркестратора до конца шага, и ≈4,5 тыс. знаков на пачку с
+        # повтором всего этого в каждой единице вели к 413 (боевой прогон 2026-11-07)
+        units = res["units"]
+        res.update(brief=units[0]["brief"], tool=units[0]["tool"], units=[
+            dict({"item_id": u["item_id"], "input": u["input"]},
+                 **({"attempt": u["attempt"]} if u["attempt"] > 1 else {}),
+                 **({"repeat": True} if u["repeat"] else {})) for u in units])
+        step = _QUEUE_STEP.get(str(res.get("queue") or ""), "")
+        tail = (f"; последней строкой каждый возвращает {{\"step_id\": \"{step}\", \"status\": \"unit\"}}"
+                if step else "")
+        res["next"] = (f"запусти {len(units)} субагентов ОДНИМ ходом, каждому — свою единицу: бриф {res['brief']}, "
+                       f"вход — его input; результат он сдаёт инструментом {res['tool']} со своим item_id{tail}. "
+                       f"Дождись, пока сдадут все, затем снова graph_next batch")
         return res
     res = Q.lease(root, _queue_arg(args), _cfg(root))
     if res.get("status") == Q.EMPTY:
@@ -203,11 +215,24 @@ def _catalog(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
            "report": f"{cfg['vault']}/_graph/catalog.md", "consent": st["state"], "key": st["key"]}
     if cat.get("problems"):
         res["decision_problems"] = [f"№{x['n']} {x['action']} «{x['ref']}»: {x['problem']}" for x in cat["problems"][:8]]
-    if st["state"] == "ok":
+    dup = CT.collision_names(cat)
+    if dup:
+        res["next"] = ("сначала одинаковые имена: " + ", ".join(f"«{x}»" for x in dup[:8]) + " — покажи пользователю "
+                       "раздел отчёта «Одинаковые имена у разных узлов» (там предложены имена), его выбор — "
+                       "graph_catalog_decide rename по id `n-…`, затем снова graph_catalog. Утверждать каталог с "
+                       "одноимёнными узлами бесполезно: дальше шага каталога движок не пустит")
+    elif st["state"] == "ok":
         res["next"] = "каталог утверждён (снимок catalog.approved.json) — дальше цикл очереди assign-section"
     else:
         res["next"] = ("покажи пользователю отчёт и спроси: утвердить каталог и scope или что поменять. Правки — "
                        "graph_catalog_decide, затем снова graph_catalog. Согласие: " + st["how"])
+    if cat.get("problems") and not dup:
+        # на боевом прогоне модель называла их «наследием, не блокируют» и шла к согласию — а это решения
+        # человека, которые НЕ применились (split «UI-UX Описание» так и не разделил экраны)
+        res["next"] = (f"сначала decision_problems ({len(cat['problems'])}): это решения пользователя, которые НЕ "
+                       "применились — каталог утвердится без них. Покажи каждое и спроси: переписать решение "
+                       "(подсказка в тексте проблемы) или снять — graph_catalog_decide revoke с index = номер №. "
+                       "Затем снова graph_catalog. ") + res["next"]
     return res
 
 
@@ -249,6 +274,9 @@ def _split(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     res["verify"] = {"errors": len(errs), "first": [f"[{c}] {m}" for c, m in errs[:10]]}
     res["next"] = ("нарезка цела — дальше гейт graph_gate.py map" if not errs else
                    "есть нарушения полноты/дословности — смотри verify.first; блоки без назначения — переразложить")
+    if res.get("retired"):
+        res["next"] += (f"; заметки узлов, которых нет в каталоге (переименованы/удалены решениями), убраны из vault "
+                        f"в {SP.RETIRED_REL}/ — назови их пользователю (поле retired)")
     return res
 
 

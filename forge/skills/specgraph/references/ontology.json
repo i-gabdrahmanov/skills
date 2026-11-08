@@ -6,12 +6,12 @@
   "kinds": {
     "process":   {"title_ru": "Бизнес-процесс", "path": "business/processes/{name}.md", "owner": "none", "name": "phrase"},
     "operation": {"title_ru": "Бизнес-операция (тип задачи)", "path": "business/operations/{name}.md", "owner": "none", "name": "phrase", "key": "task"},
-    "screen":    {"title_ru": "UI", "path": "ui/{name}.md", "owner": "none", "name": "phrase"},
+    "screen":    {"title_ru": "UI", "path": "ui/{name}.md", "owner": "none", "name": "phrase", "merge": "folder"},
     "service":   {"title_ru": "Сервис", "path": "services/{name}/{name}.md", "owner": "self", "name": "as_is"},
     "endpoint":  {"title_ru": "REST-эндпоинт", "path": "services/{service}/endpoints/{name}.md", "owner": "service", "name": "endpoint", "key": "http", "required": ["key", "method", "path"]},
-    "scheduler": {"title_ru": "Шедулер", "path": "services/{service}/schedulers/{name}.md", "owner": "service", "name": "phrase"},
-    "kafka-op":  {"title_ru": "Kafka-операция", "path": "services/{service}/kafka/{name}.md", "owner": "service", "name": "phrase", "roles": ["consume", "publish"], "required": ["role"]},
-    "algorithm": {"title_ru": "Алгоритм", "path": "services/{service}/algorithms/{name}.md", "owner": "service", "name": "phrase"},
+    "scheduler": {"title_ru": "Шедулер", "path": "services/{service}/schedulers/{name}.md", "owner": "service", "name": "phrase", "merge": "folder"},
+    "kafka-op":  {"title_ru": "Kafka-операция", "path": "services/{service}/kafka/{name}.md", "owner": "service", "name": "phrase", "merge": "folder", "roles": ["consume", "publish"], "required": ["role"]},
+    "algorithm": {"title_ru": "Алгоритм", "path": "services/{service}/algorithms/{name}.md", "owner": "service", "name": "phrase", "merge": "folder"},
     "topic":     {"title_ru": "Kafka-топик", "path": "topics/{name}.md", "owner": "none", "name": "topic", "key": "kafka", "required": ["key"]},
     "data":      {"title_ru": "Данные", "path": "data/{subkind}/{name}.md", "owner": "none", "name": "phrase", "subkinds": ["attributes", "table", "dto", "enum"], "required": ["subkind"]},
     "external":  {"title_ru": "Внешняя система", "path": "external/{name}.md", "owner": "none", "name": "as_is"}
