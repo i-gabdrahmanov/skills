@@ -22,7 +22,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 BASE = Path(__file__).resolve().parents[2] / "references" / "ontology.json"
 LOCAL_REL = ".spec-graph/ontology.local.json"
-_KIND_FIELDS = {"title_ru", "path", "owner", "name", "key", "required", "roles", "subkinds"}
+_KIND_FIELDS = {"title_ru", "path", "owner", "name", "key", "required", "roles", "subkinds", "merge"}
+_MERGE = ("name", "folder")
 _EDGE_FIELDS = {"title_ru", "from", "to", "inverse", "symmetric", "evidence", "impact", "same_service"}
 _GRAMMARS = ("phrase", "endpoint", "topic", "as_is")
 _OWNERS = ("none", "service", "self")
@@ -69,6 +70,8 @@ def self_check(data: Dict[str, Any]) -> List[str]:
             errors.append(f"{where}: path — относительный шаблон с {{name}} и .md")
         if k.get("owner") not in _OWNERS:
             errors.append(f"{where}: owner — {', '.join(_OWNERS)}")
+        if k.get("merge", "name") not in _MERGE:
+            errors.append(f"{where}: merge — {', '.join(_MERGE)}")
         if (k.get("owner") == "service") != ("{service}" in str(path)):
             errors.append(f"{where}: {{service}} в path ровно тогда, когда owner = service")
         if ("{subkind}" in str(path)) != bool(k.get("subkinds")):
@@ -213,6 +216,12 @@ class Ontology:
     def owned_by_service(self, kind: str) -> bool:
         """У вида есть сервис-владелец (путь заметки — под каталогом сервиса)."""
         return self.kinds[kind].get("owner") == "service"
+
+    def merges_by_folder(self, kind: str) -> bool:
+        """Одноимённые узлы вида без ключа склеиваются только в пределах одной папки (операции):
+        экран, алгоритм, шедулер описаны в своей операции, а общий заголовок («Алгоритм обработки»,
+        «UI-UX Описание») — ещё не один узел. Данные, внешние системы, процессы — общие по имени."""
+        return self.kinds.get(kind, {}).get("merge") == "folder"
 
     def fm_keys(self, kind: str, role: Optional[str] = None) -> List[str]:
         """Порядок ключей frontmatter заметки вида: скаляры, прямые рёбра, обратные рёбра.

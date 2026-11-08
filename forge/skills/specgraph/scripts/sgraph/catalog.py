@@ -59,8 +59,23 @@ def norm_name(name: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-def identity(n: Dict[str, Any]) -> str:
+def identity(n: Dict[str, Any], ont: Optional[O.Ontology] = None) -> str:
+    """Ключ узла; без ключа — вид и имя, у видов с сервисом-владельцем — и сервис: одноимённые шедулеры
+    cars-service и shpi-service склеивались в один узел с сервисом первого (боевой прогон 2026-11-07)."""
+    if n.get("key"):
+        return n["key"]
+    if ont is not None and n.get("kind") in ont.kinds and ont.owned_by_service(n["kind"]) and n.get("service"):
+        return f"{n['kind']}|{n['service']}|{norm_name(n['name'])}"
+    return legacy_identity(n)
+
+
+def legacy_identity(n: Dict[str, Any]) -> str:
+    """Ключ узла до 2026-11-08 (без сервиса и папки): id `n-…` в журнале решений резолвятся и по нему."""
     return n["key"] if n.get("key") else f"{n['kind']}|{norm_name(n['name'])}"
+
+
+def folder(rel: str) -> str:
+    return rel.rsplit("/", 1)[0] if "/" in rel else ""
 
 
 def node_id(ident: str) -> str:
@@ -126,7 +141,7 @@ def decide(root: Path, actions: List[Dict[str, Any]], vault: str) -> Dict[str, A
         rec = dict({k: a[k] for k in sorted(a)}, v=DECISION_V)
         if rec not in log and rec not in fresh:
             fresh.append(rec)
-    nodes, _, _ = _collect(root)
+    nodes, _, _ = _collect(root, ont)
     _apply(nodes, log, ont)
     problems = _apply(nodes, fresh, ont, base=len(log))
     errors = [f"actions «{fresh[p['n'] - len(log) - 1]['action']}» ({p['ref']}): {p['problem']}"
@@ -187,15 +202,20 @@ def _merge_into(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
     dst["from"] = sorted(set(dst["from"]) | set(src["from"]))
 
 
-def _collect(root: Path) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Узлы черновиков, склеенные по точной идентичности (до решений человека)."""
+def _collect(root: Path, ont: O.Ontology) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Узлы черновиков, склеенные по точной идентичности (до решений человека). Виды merge=folder
+    без ключа склеиваются только в пределах папки: из разных папок — разные узлы с одним именем,
+    т.е. коллизия, и её решает человек (rename или merge), а не склейка по заголовку."""
     drafts = SV.load_drafts(root)
     drafts.sort(key=lambda d: (d["file"], d["item_id"]))
     nodes: Dict[str, Dict[str, Any]] = {}
     conflicts, not_nodes = [], []
     for d in drafts:
         for n in d["nodes"]:
-            ident = identity(n)
+            ident = identity(n, ont)
+            if not n.get("key") and ont.merges_by_folder(n["kind"]) and ident in nodes and \
+                    folder(d["file"]) not in {folder(s["file"]) for s in nodes[ident]["sources"]}:
+                ident = f"{ident}@{folder(d['file'])}"
             rec = {"kind": n["kind"], "name": n["name"],
                    "sources": [{"file": d["file"], "sections": list(n.get("sections") or [])}],
                    "names_seen": [n["name"]], "from": [d["item_id"]]}
@@ -223,6 +243,13 @@ def _ref(nodes: Dict[str, Dict[str, Any]], ref: Any, strict: bool) -> Tuple[Opti
         for k in nodes:
             if node_id(k) == ref:
                 return k, None
+        # id, записанный до 2026-11-08: ключ узла тогда был без сервиса и папки
+        old = [k for k, n in nodes.items() if node_id(legacy_identity(n)) == ref]
+        if len(old) == 1:
+            return old[0], None
+        if old:
+            desc = "; ".join(f"{node_id(k)} — {nodes[k]['name']}, {nodes[k]['sources'][0]['file']}" for k in old)
+            return None, f"id «{ref}» прежнего формата теперь у {len(old)} узлов ({desc}) — укажи новый id"
     hits = [k for k, n in nodes.items() if n["name"] == ref]
     if not hits:
         return None, f"узла «{ref}» нет в каталоге (сейчас) — имя или id `n-…` из catalog.json"
@@ -280,7 +307,7 @@ def _apply(nodes: Dict[str, Dict[str, Any]], log: List[Dict[str, Any]], ont: O.O
             new.update(kind=kind, name=a["name"], sources=part, names_seen=[a["name"]], **{"from": []})
             if strict and a.get("key"):
                 new["key"] = a["key"]
-            ident = new["key"] if new.get("key") else f"{kind}|{norm_name(a['name'])}"
+            ident = identity(new, ont)
             if ident in nodes:
                 # тот же вид и имя (или ключ) — это тот же узел: источник сливается в него. Прежде
                 # узел перезаписывался, и его разделы пропадали из каталога (README kid_narochno).
@@ -310,9 +337,19 @@ def _scope(log: List[Dict[str, Any]]) -> Optional[List[str]]:
     return scope
 
 
+def _suggest(same: List[Dict[str, Any]], ont: O.Ontology) -> List[str]:
+    """Имена для одноимённых: по сервису или виду; не различают — по папке источника
+    («Алгоритм обработки ([kid_seizure] Изъятие…)»)."""
+    by_owner = [n.get("service") or ont.kinds[n["kind"]]["title_ru"].lower() for n in same]
+    if len(set(by_owner)) == len(same):
+        return [f"{n['name']} ({o})" for n, o in zip(same, by_owner)]
+    return [f"{n['name']} ({folder(n['sources'][0]['file']).rsplit('/', 1)[-1] or n['sources'][0]['file']})"
+            for n in same]
+
+
 def build(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     ont = O.load(root)
-    nodes, conflicts, not_nodes = _collect(root)
+    nodes, conflicts, not_nodes = _collect(root, ont)
     log = load_decisions(root)
     problems = _apply(nodes, log, ont)
     scope = _scope(log)
@@ -331,9 +368,8 @@ def build(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
         # без учёта регистра: «Задача А» и «задача а» — один файл на macOS/Windows и одна
         # ссылка [[…]] в Obsidian (его ссылки регистронезависимы)
         names.setdefault(n["name"].casefold(), []).append(n)
-    collisions = [{"name": v[0]["name"], "kinds": [n["kind"] for n in v],
-                   "suggest": [f"{n['name']} ({n.get('service') or ont.kinds[n['kind']]['title_ru'].lower()})"
-                               for n in v]}
+    collisions = [{"name": v[0]["name"], "kinds": [n["kind"] for n in v], "ids": [n["id"] for n in v],
+                   "suggest": _suggest(v, ont)}
                   for k, v in names.items() if len(v) > 1]
     review = []
     generic = PF.generic_words()
@@ -389,7 +425,9 @@ def _write_md(root: Path, cfg: Dict[str, Any], cat: Dict[str, Any], ont: O.Ontol
             ("Противоречия черновиков", cat["conflicts"],
              lambda r: f"- «{r['node']}»: {r['field']} = {r['values'][0]} / {r['values'][1]} ({', '.join(r['files'])})"),
             ("Одинаковые имена у разных узлов", cat["collisions"],
-             lambda r: f"- «{r['name']}»: предлагаю {' / '.join(r['suggest'])}"),
+             lambda r: f"- «{r['name']}»: предлагаю " + " / ".join(
+                 f"{x} (`{i}`)" if i else x for x, i in zip(r["suggest"], r.get("ids") or [""] * len(r["suggest"])))
+             + " — rename по id или merge, если это один узел"),
             ("Кандидаты, признанные «не узлом»", cat["not_nodes"],
              lambda r: f"- «{r.get('candidate')}» ({r['file']}): {r.get('reason')}"
                        + (f" — предложен вид «{r['suggested_kind']}»" if r.get("suggested_kind") else ""))):
@@ -414,6 +452,10 @@ def approval(root: Path) -> Dict[str, Any]:
     return st
 
 
+def collision_names(cat: Dict[str, Any]) -> List[str]:
+    return [c["name"] for c in cat.get("collisions") or []]
+
+
 def approved(root: Path) -> Tuple[bool, str]:
     """Утверждён ли снимок: согласие привязано к содержимому catalog.approved.json."""
     snap = Path(root) / APPROVED_REL
@@ -424,6 +466,12 @@ def approved(root: Path) -> Tuple[bool, str]:
         approval(root)
     if not snap.is_file():
         return False, "каталог не утверждён: нет снимка (покажи _graph/catalog.md и спроси пользователя)"
+    dup = collision_names(json.loads(snap.read_text(encoding="utf-8")))
+    if dup:
+        # имя узла — это имя заметки, ссылка [[…]] и id единицы link-note; одноимённые проходили
+        # раскладку и нарезку, а падали только на graph_link_start (боевой прогон 2026-11-07)
+        return False, ("в каталоге одинаковые имена у разных узлов: " + ", ".join(f"«{x}»" for x in dup)
+                       + " — переименуй (graph_catalog_decide rename по id `n-…`), graph_catalog и утверди заново")
     st = CS.state(root, CONSENT, snap)
     if st["state"] != "ok":
         return False, f"согласие {st['key']}: {st['state']} — каталог утверждают заново"

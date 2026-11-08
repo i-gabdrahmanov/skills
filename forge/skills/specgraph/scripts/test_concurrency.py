@@ -39,7 +39,7 @@ from pathlib import Path
 root = Path({root!r})
 unit = json.loads({unit!r})
 args = K.link_answer(root)({{"item_id": unit["item_id"]}})
-T.call(unit["tool"], root, dict(args, item_id=unit["item_id"]))
+T.call({tool!r}, root, dict(args, item_id=unit["item_id"]))
 """
 
 
@@ -70,7 +70,7 @@ class Parallel(unittest.TestCase):
             batches += 1
             self.assertLessEqual(len(res["units"]), 4)
             procs = [subprocess.Popen([sys.executable, "-X", "utf8", "-c",
-                                       WORKER.format(scripts=str(SCRIPTS), root=str(par), unit=json.dumps(u))],
+                                       WORKER.format(scripts=str(SCRIPTS), root=str(par), unit=json.dumps(u), tool=res["tool"])],
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                      for u in res["units"]]
             for p in procs:

@@ -95,6 +95,14 @@ def start(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     g = E.Graph(root, cfg)
     if not g.index:
         raise LinkError("в vault нет заметок — сначала шаг graph-map (graph_split)", "E-link-empty")
+    seen: Dict[str, str] = {}
+    for n in g.index:
+        other = seen.setdefault(n["name"], n["path"])
+        if other != n["path"]:
+            # id единицы — хеш имени; раньше здесь было голое «id link-… повторяется» из сборки очереди
+            raise LinkError(f"две заметки с именем «{n['name']}»: {other} и {n['path']} — имя узла уникально; "
+                            "лишняя — не из каталога (graph_split уносит такие в .spec-graph/retired) или "
+                            "переименуй узел решением каталога", "E-link-dup-name")
     ops = [n for n in g.index if n["kind"] in g.ont.target_kinds("creates_task")]
     budget = Q.settings(cfg)["budget_chars"] - brief_chars()
     specs = []

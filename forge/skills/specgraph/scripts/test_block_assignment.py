@@ -168,6 +168,28 @@ class Answers(_Proj):
                     T.call("graph_assign_put", self.root, dict(bad, item_id=unit["item_id"]))
                 self.assertIn(code, cm.exception.codes, str(cm.exception))
 
+    def test_split_rule_ignores_same_name_node_of_other_file(self):
+        """Боевой прогон 2026-11-07: раздел «Алгоритм обработки» файла А требовали отдать одноимённому
+        узлу файла Б — субагент уносил его в unplaced. Узел раздела должен быть из этого же файла."""
+        from unittest import mock
+        unit, it, good = self.lease("task-service.md")
+        sched = next(a for a in good["assign"] if a["node"] == "Шедулер закрытия регулярных задач")
+        bad = json.loads(json.dumps(good))
+        for x in bad["assign"]:
+            if x["node"] == "Шедулер формирования задачи укомплектования":
+                x["blocks"] += sched["blocks"]
+        bad["assign"] = [x for x in bad["assign"] if x["node"] != "Шедулер закрытия регулярных задач"]
+        cat = CT.load_approved(self.root)
+        for n in cat["nodes"]:
+            if n["name"] == "Шедулер закрытия регулярных задач":
+                n["sources"] = [{"file": "docs/spec/другой.md", "sections": []}]
+        self.reset(unit["item_id"])
+        with mock.patch.object(AS.CT, "load_approved", return_value=cat):
+            try:
+                T.call("graph_assign_put", self.root, dict(bad, item_id=unit["item_id"]))
+            except T.ToolError as e:
+                self.assertNotIn("E-assign-split", e.codes, str(e))
+
     def test_new_node_goes_to_delta_and_duplicate_passes(self):
         unit, it, good = self.lease("rmoc-service.md")
         svc = next(a for a in good["assign"] if a["node"] == "rmoc-service")
