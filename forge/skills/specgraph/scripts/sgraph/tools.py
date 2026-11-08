@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -95,6 +96,14 @@ def _status(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return ST.status(root)
 
 
+def _archive(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    from . import reset as RT
+    try:
+        return RT.archive(root, _need_cfg(root), args["reason"])
+    except RT.ResetError as e:
+        raise ToolError(str(e), [e.code])
+
+
 def _run_hint(root: Path) -> Optional[str]:
     """Команда заведения прогона, если активного нет. На боевом прогоне модель после graph_init сразу
     пошла в graph_survey: шаги не записывались, согласия легли под `-adhoc`."""
@@ -137,7 +146,25 @@ def _unit_next(u: Dict[str, Any]) -> str:
             f"с item_id «{u['item_id']}»{tail}")
 
 
+def _cursor(res: Dict[str, Any]) -> str:
+    """Меняется с каждой сданной единицей. Рантайм (qwen-code ≥0.21: shouldHaltOnTurnToolCallCap) рвёт
+    ход, где >100 вызовов и один вызов с теми же аргументами повторён ≥6 раз, — цикл очереди это ровно
+    один ход с graph_next {"batch": true, "queue": …} на каждую пачку («Loop detection», боевой прогон
+    2026-11-07, трижды). С after=<cursor> аргументы у каждого вызова свои; повтор того же cursor —
+    пачку не сдали, и тогда остановка рантайма по делу."""
+    ids = ",".join(u["item_id"] for u in res.get("units") or ([res] if res.get("item_id") else []))
+    return f"{res.get('progress', '')}#{hashlib.sha1(ids.encode('utf-8')).hexdigest()[:6]}"
+
+
 def _next(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    res = _next_raw(root, args)
+    if res.get("status") != Q.EMPTY:
+        res["cursor"] = _cursor(res)
+        res["next"] = res.get("next", "") + f" (в следующем graph_next передай after=«{res['cursor']}»)"
+    return res
+
+
+def _next_raw(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     if args.get("batch"):
         res = Q.lease_batch(root, _queue_arg(args), _cfg(root))
         if res["status"] == Q.EMPTY:
@@ -206,6 +233,25 @@ def _draft_put(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return {"accepted": True, "nodes": len(nodes), "not_nodes": len(not_nodes), "file": draft["file"]}
 
 
+_DECIDE_MAX = 12
+
+
+def _to_decide(cat: Dict[str, Any]) -> Dict[str, List[str]]:
+    """Что пользователю решать, строками — без таблицы узлов. Оркестратор показывал отчёт, читая
+    catalog.md целиком (376 узлов, четыре чтения подряд) — это ушло в контекст до конца шага (413)."""
+    out = {
+        "collisions": [f"«{c['name']}»: " + " / ".join(f"{x} (`{i}`)" for x, i in zip(c["suggest"], c.get("ids") or []))
+                       for c in cat["collisions"]],
+        "conflicts": [f"«{c['node']}»: {c['field']} = {c['values'][0]} / {c['values'][1]}" for c in cat["conflicts"]],
+        "same_node": [f"«{r['a']}» ≟ «{r['b']}» ({r['similarity']})" for r in cat["review"]],
+    }
+    res = {}
+    for k, rows in out.items():
+        if rows:
+            res[k] = rows[:_DECIDE_MAX] + ([f"… ещё {len(rows) - _DECIDE_MAX} — в отчёте"] if len(rows) > _DECIDE_MAX else [])
+    return res
+
+
 def _catalog(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     cfg = _need_cfg(root)
     cat = CT.build(root, cfg)
@@ -215,6 +261,7 @@ def _catalog(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
            "report": f"{cfg['vault']}/_graph/catalog.md", "consent": st["state"], "key": st["key"]}
     if cat.get("problems"):
         res["decision_problems"] = [f"№{x['n']} {x['action']} «{x['ref']}»: {x['problem']}" for x in cat["problems"][:8]]
+    res["to_decide"] = _to_decide(cat)
     dup = CT.collision_names(cat)
     if dup:
         res["next"] = ("сначала одинаковые имена: " + ", ".join(f"«{x}»" for x in dup[:8]) + " — покажи пользователю "
@@ -390,6 +437,15 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                        "запуска с кандидатами. Первый ход команды /graph.",
         "schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
+    "graph_archive": {
+        "fn": _archive,
+        "description": "Начать граф заново: состояние движка (.spec-graph/: каталог, решения, очереди, планы, "
+                       "рёбра) и vault переносятся в .spec-graph/archive/<метка>/; конфиг остаётся. Только по "
+                       "явной просьбе пользователя («заархивируй граф», «строим новый»). Живой прогон — отказ.",
+        "schema": {"type": "object",
+                   "properties": {"reason": {"type": "string", "description": "просьба пользователя своими словами"}},
+                   "required": ["reason"], "additionalProperties": False},
+    },
     "graph_init": {
         "fn": _init,
         "description": "Записать .spec-graph/config.json по ОТВЕТАМ пользователя (не по догадке). Существующий "
@@ -414,7 +470,9 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "schema": {"type": "object",
                    "properties": {"queue": _QUEUE_PROP,
                                   "batch": {"type": "boolean", "description": "пачка до queue.parallel единиц для "
-                                            "параллельных субагентов (висящие в аренде — первыми)"}},
+                                            "параллельных субагентов (висящие в аренде — первыми)"},
+                                  "after": {"type": "string", "description": "cursor из прошлого ответа graph_next "
+                                            "(передавай как есть)"}},
                    "required": ["queue"], "additionalProperties": False},
     },
     "graph_scan": {
