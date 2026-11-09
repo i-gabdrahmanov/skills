@@ -12,13 +12,16 @@
   • обратные ключи у ВСЕХ заметок пересчитываются из прямых целиком (устаревшие уходят сами); у
     симметричного ребра (`related`) — зеркало; ручная правка обратного ключа перезаписывается и попадает в
     отчёт `W-manual-inverse`;
-  • `belongs_to` ставит нарезка (из каталога) — синк его не трогает, но выводит из него `operations`.
+  • `belongs_to` ставит нарезка (из каталога) — синк его не трогает, но выводит из него `components`;
+  • пустые ключи-рёбра не пишутся; навигационные блоки (обзор сервиса `graph:overview`, ход процесса
+    `graph:flow`, overview.py) собираются из тех же рёбер при каждом синке.
 Повтор без изменений входа — 0 изменённых файлов. Заметки — байтами (CRLF исходника не трогаем).
 `dry=True` — ничего не пишет, только считает (гейт link проверяет так «синк чистый»).
 """
 from __future__ import annotations
 
 import json
+import re
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
@@ -27,6 +30,7 @@ from . import edges as E
 from . import fm as F
 from . import fsutil as FS
 from . import ontology as O
+from . import overview as OV
 from . import resolve as RS
 
 SYNCED_REL = ".spec-graph/synced.json"
@@ -34,11 +38,34 @@ _FIXED = ("belongs_to",)                  # ставит нарезка из к�
 
 
 def _cell(text: Any) -> str:
-    return str(text or "").replace("|", "\\|").replace("\n", " ").strip()
+    # уже экранированный `\|` (цитата из строки таблицы спеки) второй раз не экранируется: `\\|` в Obsidian —
+    # обратный слэш и граница ячейки, столбцы таблицы оснований съезжали (обратная связь 2026-11-09)
+    return re.sub(r"(?<!\\)\|", r"\\|", str(text or "")).replace("\n", " ").strip()
 
 
 def _targets(values: Any) -> List[str]:
     return [t for t in (F.link_target(v) for v in (values or []) if isinstance(v, str)) if t]
+
+
+def _put(data: "OrderedDict[str, Any]", key: str, links: List[str]) -> None:
+    """Ключ-ребро во frontmatter: пустой не пишется (и снимается, если был) — свойство без значения
+    аналитику ничего не говорит (обратная связь 2026-11-09)."""
+    if links:
+        data[key] = links
+    else:
+        data.pop(key, None)
+
+
+def _navigation(view: "OV.View", n: Dict[str, Any], body: str, text: str, ont: O.Ontology) -> str:
+    """Навигационные блоки (overview.py): у сервиса — обзор под именем вместо прежнего оглавления, у входов,
+    шагов и бизнес-операций — ход процесса над таблицей оснований."""
+    body = F.drop_block(body, "toc")
+    if ont.kinds[n["kind"]].get("owner") == "self":
+        return F.set_block(body, "overview", OV.service(view, n["name"], OV.purpose(text)), top=True)
+    fl = OV.flow(view, n["name"])
+    if fl is None:
+        return F.drop_block(body, "flow")
+    return F.set_block(body, "flow", fl, before="edges")
 
 
 class SyncError(Exception):
@@ -109,6 +136,15 @@ def sync(root: Path, cfg: Dict[str, Any], dry: bool = False) -> Dict[str, Any]:
         for edge in _FIXED:
             for t in _targets(data.get(edge)):
                 inverse.setdefault(t, {}).setdefault(ont.inverse_of(edge), set()).add(n["name"])
+    texts = {n["name"]: OV.note_text(notes[n["name"]][2]) for n in index}
+    view_fwd: Dict[str, Dict[str, List[str]]] = {}
+    for n in index:
+        name = n["name"]
+        by = {e: sorted(r) for e, r in forward.get(name, {}).items()}
+        for edge in _FIXED:
+            by[edge] = _targets(notes[name][1].get(edge))
+        view_fwd[name] = by
+    view = OV.View(ont, index, view_fwd, texts)
     written, manual_inverse, new_synced = 0, [], {}
     for n in index:
         name = n["name"]
@@ -120,7 +156,7 @@ def sync(root: Path, cfg: Dict[str, Any], dry: bool = False) -> Dict[str, Any]:
             vals = set(rows)
             if ont.is_symmetric(edge):
                 vals |= inverse.get(name, {}).get(edge, set())
-            data[edge] = [F.link(t) for t in sorted(vals)]
+            _put(data, edge, [F.link(t) for t in sorted(vals)])
         for key in order:
             edge = ont.edge_of_inverse(key)
             if edge is None or key in mine or (ont.is_symmetric(edge) and key in data and edge in mine):
@@ -129,7 +165,9 @@ def sync(root: Path, cfg: Dict[str, Any], dry: bool = False) -> Dict[str, Any]:
             have = sorted(_targets(data.get(key)))
             if key in data and have != want and have:
                 manual_inverse.append(f"{name}.{key}")
-            data[key] = [F.link(t) for t in want]
+            _put(data, key, [F.link(t) for t in want])
+        for key in ont.legacy_keys:
+            data.pop(key, None)
         new_synced[name] = {e: sorted(r) for e, r in mine.items() if r}
         table = ["| связь | цель | основание | пояснение | источник |", "|---|---|---|---|---|"]
         for edge, rows in mine.items():
@@ -141,6 +179,7 @@ def sync(root: Path, cfg: Dict[str, Any], dry: bool = False) -> Dict[str, Any]:
             body = F.set_block(body, "edges", "\n".join(table))
         elif F.get_block(body, "edges"):
             body = F.set_block(body, "edges", "_рёбер нет_")
+        body = _navigation(view, n, body, texts.get(name, ""), ont)
         new_text = F.write(data, body if body.endswith("\n") else body + "\n", order)
         if new_text != old_text:
             if not dry:

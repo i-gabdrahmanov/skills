@@ -18,6 +18,7 @@ from typing import Any, Dict, List
 from . import fm as F
 from . import fsutil as FS
 from . import ontology as O
+from . import process as PR
 
 RULES = Path(__file__).resolve().parents[2] / "references" / "completeness.json"
 QUESTIONS_NAME = "open-questions.md"
@@ -41,6 +42,14 @@ def self_check(rules: Dict[str, Any], ont: O.Ontology) -> List[str]:
         ids.add(rid)
         if not rid.startswith(("E-", "W-")) or {"E-": "error", "W-": "warning"}[rid[:2]] != r.get("severity"):
             errs.append(f"{rid}: префикс E-/W- и severity error/warning согласованы")
+        if "{name}" not in (r.get("question") or ""):
+            errs.append(f"{rid}: question с {{name}}")
+        if r.get("check") is not None:
+            if r["check"] not in PR.CHECKS:
+                errs.append(f"{rid}: проверки «{r['check']}» нет ({', '.join(PR.CHECKS)})")
+            if r.get("kind") or r.get("empty_all") or r.get("empty_any"):
+                errs.append(f"{rid}: у правила с check нет kind / empty_all / empty_any — оно про процесс, не про узел")
+            continue
         if r.get("kind") not in ont.kinds:
             errs.append(f"{rid}: kind «{r.get('kind')}» — не вид онтологии")
             continue
@@ -55,8 +64,11 @@ def self_check(rules: Dict[str, Any], ont: O.Ontology) -> List[str]:
         for k in keys:
             if k not in allowed:
                 errs.append(f"{rid}: ключа «{k}» нет у вида {r['kind']}")
-        if "{name}" not in (r.get("question") or ""):
-            errs.append(f"{rid}: question с {{name}}")
+        for t in r.get("targets") or []:
+            if t.get("kind") not in ont.kinds:
+                errs.append(f"{rid}: targets — «{t.get('kind')}» не вид онтологии")
+            elif t.get("role") is not None and t["role"] not in (ont.kinds[t["kind"]].get("roles") or []):
+                errs.append(f"{rid}: targets — роли «{t['role']}» у вида {t['kind']} нет")
         if not isinstance(r.get("min", 1), int) or r.get("min", 1) < 1:
             errs.append(f"{rid}: min — целое ≥ 1")
     return errs
@@ -67,8 +79,23 @@ def _links(v: Any) -> List[str]:
     return [t for t in (F.link_target(x) for x in vals) if t]
 
 
+def _counted(r: Dict[str, Any], links: List[str], nodes: Dict[str, Dict[str, Any]]) -> List[str]:
+    """Ссылки, которые правило считает: все или только на узлы видов `targets` (и их ролей)."""
+    want = r.get("targets")
+    if not want:
+        return links
+    return [t for t in links if t in nodes and any(
+        nodes[t]["kind"] == w["kind"] and w.get("role") in (None, nodes[t].get("role")) for w in want)]
+
+
+def _ops(name: str, nodes: Dict[str, Dict[str, Any]], group: str) -> List[str]:
+    n = nodes[name]
+    return [name] if n["kind"] == group else sorted(
+        t for v in n["data"].values() for t in _links(v) if t in nodes and nodes[t]["kind"] == group)
+
+
 def check(root: Path, nodes: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Дыры по правилам. nodes — узлы валидатора ({kind, role, path, data})."""
+    """Дыры по правилам. nodes — узлы валидатора ({kind, role, path, data, body})."""
     ont = O.load(root)
     rules = load()
     errs = self_check(rules, ont)
@@ -80,23 +107,26 @@ def check(root: Path, nodes: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
         n = nodes[name]
         data = n["data"]
         for r in rules["rules"]:
-            if n["kind"] != r["kind"] or (r.get("role") is not None and data.get("role") != r["role"]):
+            if r.get("check") or n["kind"] != r["kind"] or (r.get("role") is not None and data.get("role") != r["role"]):
                 continue
             if r.get("unless") and data.get(r["unless"]) is True:
                 continue
             need = r.get("min", 1)
             if "empty_all" in r:
-                hit = sum(len(_links(data.get(k))) for k in r["empty_all"]) < need
+                hit = sum(len(_counted(r, _links(data.get(k)), nodes)) for k in r["empty_all"]) < need
                 what = " / ".join(r["empty_all"])
             else:
-                short = [k for k in r["empty_any"] if len(_links(data.get(k))) < need]
+                short = [k for k in r["empty_any"] if len(_counted(r, _links(data.get(k)), nodes)) < need]
                 hit, what = bool(short), " / ".join(short)
             if not hit:
                 continue
-            ops = [name] if n["kind"] == group else sorted(
-                t for v in data.values() for t in _links(v) if t in nodes and nodes[t]["kind"] == group)
-            out.append({"code": r["id"], "path": n["path"], "msg": f"пусто: {what}", "name": name, "ops": ops,
-                        "question": r["question"].format(name=name)})
+            if r.get("targets"):
+                what += " (" + ", ".join(t["kind"] + (f":{t['role']}" if t.get("role") else "") for t in r["targets"]) + ")"
+            out.append({"code": r["id"], "path": n["path"], "msg": f"пусто: {what}", "name": name,
+                        "ops": _ops(name, nodes, group), "question": r["question"].format(name=name)})
+    for h in PR.check(ont, nodes, rules["rules"]):
+        if h["name"] in nodes:
+            out.append(dict(h, path=nodes[h["name"]]["path"], ops=_ops(h["name"], nodes, group)))
     return out
 
 

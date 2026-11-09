@@ -159,7 +159,7 @@ class Reports(_Proj):
                  "nodes": [{"kind": "endpoint", "name": "upz-adapter POST api-v1-upz-tasks", "service": "task-service",
                             "key": "http:POST /api/v1/upz/tasks"},
                            {"kind": "data", "subkind": "dto", "name": "pprbkid.task.closed.v1", "key": "kafka:pprbkid.task.closed.v1"},
-                           {"kind": "screen", "name": "Укомплектование"}]}
+                           {"kind": "external", "name": "Укомплектование"}]}
         (self.root / SV.DRAFTS_REL / "draft-extra.json").write_text(json.dumps(extra, ensure_ascii=False), encoding="utf-8")
         # каталог читает черновики только сданных единиц текущей разведки — лишняя единица в очереди, сдана
         qp = self.root / ".spec-graph" / "queue" / "draft-file.json"

@@ -1,5 +1,5 @@
 {
-  "_comment": "Obsidian-слой графа (задача 3.3, D12): только core-плагины. palette — цвета групп graph view по видам в порядке онтологии (0xRRGGBB); entries — точки входа _graph/Начало.md (вид и счётчики строки: ключ frontmatter и подпись); views — таблицы «вид → колонки-ключи frontmatter»: Bases-файлы .base, если плагин bases включён в .obsidian/core-plugins.json, иначе те же таблицы Markdown-заметками. group — колонка, по которой Markdown-вид делится на разделы. status_groups — группы graph view по статусу заметки (идут ПЕРВЫМИ: первая подходящая группа красит узел), заглушка серым — видно, где в спеке нет описания. Graph view рёбра не красит, поэтому maps — карты Canvas (core-плагин, открытый формат JSON Canvas): на каждый узел вида kind — его соседи на hops шагов, рёбра подписаны типом и окрашены edge_palette (порядок рёбер онтологии), узлы — цветом вида; belongs_to на картах не рисуется (он у каждого узла сервиса).",
+  "_comment": "Obsidian-слой графа (задача 3.3, D12): только core-плагины. palette — цвета групп graph view по видам в порядке онтологии (0xRRGGBB); entries — точки входа _graph/Начало.md (вид и счётчики строки: ключ frontmatter и подпись); views — таблицы «вид → колонки-ключи frontmatter»: Bases-файлы .base, если плагин bases включён в .obsidian/core-plugins.json, иначе те же таблицы Markdown-заметками. group — колонка, по которой Markdown-вид делится на разделы. status_groups — группы graph view по статусу заметки (идут ПЕРВЫМИ: первая подходящая группа красит узел), заглушка серым — видно, где в спеке нет описания. Graph view рёбра не красит, поэтому maps — карты Canvas (core-плагин, открытый формат JSON Canvas): на каждый узел вида kind — его соседи на hops шагов, рёбра подписаны типом и окрашены edge_palette (порядок рёбер онтологии), узлы — цветом вида; belongs_to на картах не рисуется (он у каждого узла сервиса). flow — навигационные блоки заметок (обратная связь аналитика 2026-11-09): graph:overview у сервиса и graph:flow у входов, шагов и бизнес-операций, собранные из рёбер. entries — входы: вид (и роль), чем запускается (trigger), откуда сигнал (via — ребро входа к источнику, source — ребро издателя источника) или кто вызывает (callers — ребро от вызывающего), group — подпись в обзоре сервиса, input: false — не вход, а выход; steps — виды шагов цепочки (у них блок «Где выполняется»), step_edge — ребро «запускает», outputs — рёбра «что делает сам» в порядке показа; lifecycle — вид бизнес-операции и рёбра её жизненного цикла.",
   "version": 1,
   "palette": [7950028, 14701138, 3381759, 10233776, 16750848, 5025616, 2201331, 15277667, 9159498, 6323595, 12434877, 16761095],
   "status_groups": [{"status": "stub", "rgb": 10395294, "title": "заглушка — описания в спеке нет"}],
@@ -9,12 +9,27 @@
     {"kind": "process", "counts": [{"key": "includes", "label": "операций"}]},
     {"kind": "operation", "counts": [{"key": "created_by", "label": "формируют"}, {"key": "closed_by", "label": "закрывают"},
                                      {"key": "screens", "label": "UI"}]},
-    {"kind": "service", "counts": [{"key": "operations", "label": "операций"}]}
+    {"kind": "service", "counts": [{"key": "components", "label": "составных частей"}]}
   ],
   "views": [
     {"file": "Бизнес-операции", "kind": "operation", "columns": ["key", "created_by", "closed_by", "screens", "related"]},
     {"file": "Шедулеры", "kind": "scheduler", "columns": ["belongs_to", "creates_task", "closes_task", "invokes"], "group": "belongs_to"},
     {"file": "Эндпойнты по сервисам", "kind": "endpoint", "columns": ["key", "called_by", "calls"], "group": "belongs_to"},
     {"file": "Kafka", "kind": "topic", "columns": ["key", "publishers", "consumers"]}
-  ]
+  ],
+  "flow": {
+    "step_edge": "invokes", "publish_edge": "publishes_to", "consume_edge": "consumes", "call_edge": "calls", "data_edge": "uses_data",
+    "outputs": ["creates_task", "closes_task", "publishes_to", "calls", "uses_data"],
+    "entries": [
+      {"kind": "endpoint", "group": "REST", "trigger": "Вызов REST", "callers": "calls", "callers_label": "вызывают",
+       "missing": "вызывающий в спеке не назван"},
+      {"kind": "kafka-op", "role": "consume", "group": "Kafka, чтение", "trigger": "Сообщение из топика", "via": "consumes",
+       "source": "publishes_to", "source_label": "публикует", "missing": "издатель в спеке не назван"},
+      {"kind": "scheduler", "group": "Шедулеры", "trigger": "Запуск по расписанию"},
+      {"kind": "kafka-op", "role": "publish", "group": "Kafka, отправка", "trigger": "Отправка сообщения", "callers": "invokes",
+       "callers_label": "запускают", "input": false}
+    ],
+    "steps": ["algorithm"], "steps_title": "Алгоритмы",
+    "lifecycle": {"kind": "operation", "make": "creates_task", "close": "closes_task", "ui": "ui_of", "process": "part_of"}
+  }
 }

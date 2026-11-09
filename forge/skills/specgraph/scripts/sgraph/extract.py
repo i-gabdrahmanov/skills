@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import blocks as B
 from . import fsutil as FS
 from . import keys as K
+from . import naming as NM
 from . import ontology as O
 from . import sqlref as SQ
 
@@ -66,6 +67,15 @@ def load_rules(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     for k in ("kafka_topic_re", "stop_headings", "group_suppress"):
         if k in proj:
             data[k] = proj[k]
+    nm = proj.get("naming")
+    if nm is not None:
+        if not isinstance(nm, dict):
+            raise ExtractError("extract.naming: объект")
+        base = data.get("naming") or {}
+        kinds = dict(base.get("kinds") or {})
+        for kind, spec in (nm.get("kinds") or {}).items():
+            kinds[kind] = dict(kinds.get(kind) or {}, **spec)
+        data["naming"] = dict(base, **{k: v for k, v in nm.items() if k != "kinds"}, kinds=kinds)
     ont = O.load()
     for r in rules.values():
         if r.get("match") not in MATCH_TYPES:
@@ -76,6 +86,11 @@ def load_rules(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             if f in r:
                 re.compile(r[f], re.I)
     re.compile(data["kafka_topic_re"])
+    for kind, spec in ((data.get("naming") or {}).get("kinds") or {}).items():
+        if kind not in ont.kinds:
+            raise ExtractError(f"naming.kinds: нет вида «{kind}» в онтологии")
+        for rx in spec.get("strip") or []:
+            re.compile(rx, re.I)
     data["rules"] = list(rules.values())
     return data
 
@@ -227,10 +242,14 @@ def extract_blocks(blocks: List[Dict[str, Any]], rel: str, cfg: Dict[str, Any],
     cands: List[Dict[str, Any]] = []
     by_section: Dict[int, List[Dict[str, Any]]] = {}
 
+    naming = NM.settings(rules)
+
     def add(rule, name, blk_ids, key=None, section=None, extra=None):
         kind = rule["kind"]
         if ont.kinds[kind].get("name") == "phrase":
             name = safe_name(name, ont.forbidden)
+            name = safe_name(NM.normalize(kind, rule.get("role"), name, NM.context(blocks, secs, section, rel, topic_re),
+                                          naming), ont.forbidden) or name
         c = {"kind": kind, "name_hint": name, "blocks": blk_ids, "rule": rule["id"],
              "confidence": rule.get("confidence", "medium")}
         for f in ("role", "subkind", "auto", "stub"):
@@ -351,8 +370,11 @@ def extract_blocks(blocks: List[Dict[str, Any]], rel: str, cfg: Dict[str, Any],
             return [j for j, s in enumerate(secs) if j != si and secs[si]["start"] < s["start"] < secs[si]["end"]]
         drop = []
         for si, cs in by_section.items():
-            if any(by_section.get(j) for j in descendants(si)):
-                drop += [c for c in cs if c.get("_heading_rule")]
+            # групповой заголовок — тот, под которым кандидаты ТОГО ЖЕ вида («Шедулеры» → шедулеры). Раньше
+            # подавлялся любой: обработчик сообщения с разделами алгоритмов внутри пропадал, и алгоритмы
+            # оставались без того, кто их запускает (History Service, обратная связь 2026-11-09)
+            inner = {(c["kind"], c.get("role")) for j in descendants(si) for c in by_section.get(j) or []}
+            drop += [c for c in cs if c.get("_heading_rule") and (c["kind"], c.get("role")) in inner]
         cands = [c for c in cands if not any(c is d for d in drop)]
 
     for r in rules_by_type.get("code_table", []):

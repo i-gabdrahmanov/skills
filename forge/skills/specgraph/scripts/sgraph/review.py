@@ -4,7 +4,8 @@
 `_graph/edges-review.md`, сгруппированный по смыслу:
   1. бизнес-операции: кто формирует, кто закрывает, UI, связанные операции, карточка;
   2. межсервисные вызовы и топики (кто кому и через что);
-  3. сомнительные предложения модели (confidence low/medium) с цитатами;
+  3. сомнительные предложения модели (confidence low/medium) и «запускает» правила только по имени в тексте
+     (R-edge-mention, medium: «в отличие от алгоритма X» — тоже упоминание) с цитатами;
   4. отклонённое: брошенные единицы очередей (коды проверок) и связи, отклонённые человеком;
   5. вопросы: неоднозначные цели, призраки, операции-заготовки (stub);
   6. узлы, добавленные раскладкой (`catalog.delta.json`), и решение по каждому;
@@ -161,8 +162,9 @@ def report(root: Path, cfg: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
     if topics:
         lines.append("")
 
-    lines += ["## 3. Сомнительные связи (уверенность модели low/medium)", ""]
-    doubt = sorted((x for x in live if x["origin"] == "model" and x.get("confidence") in ("low", "medium")),
+    lines += ["## 3. Сомнительные связи (уверенность модели low/medium; правило — только по имени в тексте)", ""]
+    doubt = sorted((x for x in live if (x["origin"] == "model" and x.get("confidence") in ("low", "medium"))
+                    or (x["origin"] == E.GUESS_ORIGIN and x.get("confidence") == E.GUESS_CONFIDENCE)),
                    key=lambda x: (x["from"], x["edge"], x["to"]))
     for x in doubt:
         lines.append(f"- `{edge_id(x)}` {F.link(x['from'])} — {ont.edges[x['edge']]['title_ru']} → {F.link(x['to'])} "

@@ -36,6 +36,16 @@ RESULT_REL = ".spec-graph/validate.json"
 TOP = 10
 _SKIP_DIRS = ("_graph", "_attachments")
 _CELL = re.compile(r"(?<!\\)\|")
+_WIKI = re.compile(r"(!?)\[\[([^\[\]|#\\]*)(#[^\[\]|\\]*)?(?:\\?\|[^\[\]]*)?\]\]")
+_MDINTERNAL = re.compile(r"(?<!!)\[[^\]\n]+\]\((?:#[^)\s]+|(?!https?:|mailto:)[^)\s#]+?\.md(?:#[^)\s]*)?)\)", re.I)
+_HEADING = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$", re.M)
+_DELIM = re.compile(r"^\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?$")
+_FENCED = re.compile(r"^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?^ {0,3}\1[ \t]*$", re.M | re.S)
+
+
+def _unfenced(body: str) -> str:
+    """Тело без код-блоков: пример ссылки или таблицы в коде — не разметка."""
+    return _FENCED.sub("", body.replace("\r\n", "\n"))
 
 
 def _targets(v: Any) -> List[str]:
@@ -230,6 +240,53 @@ class _Run:
             if not any(_targets(v) for k, v in n["data"].items() if k in ont.edge_keys() and k not in structural):
                 self.add("W-orphan", n["path"], "узел без рёбер (кроме принадлежности сервису)")
 
+    def links(self, nodes: Dict[str, Dict[str, Any]]) -> None:
+        """Ссылки тела, которые в Obsidian никуда не ведут (W-link-dead): `[[X]]` без заметки X, `[[X#Заголовок]]`
+        без такого заголовка (в том числе `[[#…]]` в своей заметке), вложение без файла в vault и
+        не переписанные нарезкой `[текст](#якорь)` / `[текст](файл.md)`. Аналитик видел ссылку, а переход
+        «оставлял на текущей странице» (обратная связь 2026-11-09)."""
+        heads = {name: {SP.loose(h) for h in _HEADING.findall(_unfenced(n["body"]))} for name, n in nodes.items()}
+        folded = {O.fold(k): k for k in nodes}
+        for name, n in sorted(nodes.items()):
+            body = _unfenced(n["body"])
+            bad = []
+            for m in _WIKI.finditer(body):
+                embed, target, head = m.group(1), m.group(2).strip(), (m.group(3) or "")[1:].strip()
+                if not target:
+                    if head and SP.loose(head) not in heads[name]:
+                        bad.append(m.group(0))
+                    continue
+                note = nodes.get(target) and target or folded.get(O.fold(target))
+                if note is None:
+                    if not ((self.vault / target).exists() or (self.vault / (target + ".md")).is_file()
+                            or (self.vault / "_attachments" / target).is_file()):
+                        bad.append(m.group(0))
+                elif head and SP.loose(head) not in heads[note]:
+                    bad.append(m.group(0))
+            bad += [m.group(0) for m in _MDINTERNAL.finditer(body)]
+            if bad:
+                self.add("W-link-dead", n["path"], f"{len(bad)} ссыл. никуда не ведут: " + ", ".join(sorted(set(bad))[:5]))
+
+    def tables(self, nodes: Dict[str, Dict[str, Any]]) -> None:
+        """Таблицы, которые Obsidian рисует криво: `|` алиаса ссылки внутри строки таблицы без `\\` делит ячейку
+        (W-table-pipe); таблица вплотную к абзацу без пустой строки — для Obsidian уже не таблица (W-table-blank)."""
+        for name, n in sorted(nodes.items()):
+            lines = _unfenced(n["body"]).split("\n")
+            pipe = blank = 0
+            for i, line in enumerate(lines):
+                if not line.lstrip().startswith("|"):
+                    continue
+                if any("|" in re.sub(r"\\\|", "", w) for w in re.findall(r"\[\[([^\]]*)\]\]", line)):
+                    pipe += 1
+                prev = lines[i - 1].strip() if i else ""
+                if prev and not prev.startswith("|") and not prev.startswith("#") and not prev.startswith("<!--") \
+                        and i + 1 < len(lines) and _DELIM.match(lines[i + 1].strip()):
+                    blank += 1
+            if pipe:
+                self.add("W-table-pipe", n["path"], f"строк таблиц с `|` в ссылке без экранирования: {pipe}")
+            if blank:
+                self.add("W-table-blank", n["path"], f"таблиц без пустой строки перед ними: {blank}")
+
     def index(self, nodes: Dict[str, Dict[str, Any]]) -> None:
         p = self.vault / "_graph" / "index.md"
         if not p.is_file():
@@ -269,6 +326,24 @@ class _Run:
         for rel, f in sorted(cov["files"].items()):
             if f["unplaced"]:
                 self.add("W-unplaced", rel, f"неразмещённых блоков: {f['unplaced']} (_graph/unplaced.md)")
+
+
+def guesses(root: Path, nodes: Dict[str, Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Связи, поставленные правилом только потому, что имя узла встретилось в тексте («в отличие от алгоритма
+    X…» — тоже упоминание) и ещё стоящие в свойствах. Общее «да» отчёту связей переводит их в accepted, но не
+    значит, что каждую смотрели, — поэтому список постоянный; уходит связь, только если её отклонили (сняли
+    из свойств или graph_edges_decide reject). Не нарушение — список на проверку."""
+    titles = {k: e["title_ru"] for k, e in O.load(root).edges.items()}
+    out = []
+    for x in E.load_all(root):
+        if x.get("origin") != E.GUESS_ORIGIN or x.get("confidence") != E.GUESS_CONFIDENCE or x.get("status") == "rejected":
+            continue
+        src = nodes.get(x.get("from", ""))
+        if src is None or x["to"] not in _targets(src["data"].get(x["edge"], [])):
+            continue
+        out.append({"from": x["from"], "edge": x["edge"], "title": titles.get(x["edge"], x["edge"]), "to": x["to"],
+                    "quote": x["quote"], "path": src["path"]})
+    return sorted(out, key=lambda g: (g["from"], g["edge"], g["to"]))
 
 
 def _transfer(run: "_Run", nodes: Dict[str, Dict[str, Any]], issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -315,12 +390,15 @@ def validate(root: Path, cfg: Dict[str, Any], scope: Optional[str] = None, write
     expected = run.edges(nodes)
     run.inverses(nodes, expected)
     run.orphans(nodes)
+    run.links(nodes)
+    run.tables(nodes)
     run.index(nodes)
     run.sources(nodes)
     holes = CM.check(root, nodes)
     questions = CM.write_questions(root, cfg, holes, write=write)
     issues = run.issues + [dict(h, hole=True) for h in holes]
     transfer = _transfer(run, nodes, issues)
+    guessed = guesses(root, nodes)
     if scope:
         issues = [i for i in issues if not i["path"] or i["path"].startswith(scope.rstrip("/"))]
     issues.sort(key=lambda i: (not i["code"].startswith("E-"), i["code"], i["path"], i["msg"]))
@@ -330,7 +408,7 @@ def validate(root: Path, cfg: Dict[str, Any], scope: Optional[str] = None, write
     errors = sum(v for k, v in counts.items() if k.startswith("E-"))
     warnings = sum(v for k, v in counts.items() if k.startswith("W-"))
     result = {"notes": len(nodes), "errors": errors, "warnings": warnings, "counts": dict(sorted(counts.items())),
-              "scope": scope or "", "issues": issues, "transfer": transfer}
+              "scope": scope or "", "issues": issues, "transfer": transfer, "guesses": guessed}
     report = _render_report(result)
     if write:
         rp = Path(root) / RESULT_REL
@@ -342,6 +420,7 @@ def validate(root: Path, cfg: Dict[str, Any], scope: Optional[str] = None, write
             FS.write_text(p, report, encoding="utf-8")
     top = [f"{i['code']} {i['path']}: {i['msg']}" if i["path"] else f"{i['code']}: {i['msg']}" for i in issues[:TOP]]
     out = {"notes": len(nodes), "errors": errors, "warnings": warnings, "counts": result["counts"], "top": top,
+           "guesses": len(guessed),
            "report": f"{cfg['vault']}/_graph/{REPORT_NAME}", "full": RESULT_REL,
            "transfer": [{"file": t["file"], "full": t["full"], "why": t["why"]} for t in transfer]}
     if not write:
@@ -380,6 +459,14 @@ def _render_report(result: Dict[str, Any]) -> str:
         lines.append(f"- {where}{i['msg']}")
     if not result["issues"]:
         lines.append("Нарушений нет.")
+    if result.get("guesses"):
+        lines += ["", "## Связи-догадки: проверьте", "", "Поставлены правилом R-edge-mention только потому, что имя узла "
+                  "встретилось в тексте, и утверждены общим «да» отчёту связей. Обычно это вызов, но бывает и «в отличие "
+                  "от …». Связи нет — удалите её из свойств заметки в Obsidian: следующий синк её больше не поставит.", "",
+                  "| откуда | связь | куда | где в тексте |", "|---|---|---|---|"]
+        cell = lambda t: re.sub(r"(?<!\\)\|", r"\\|", " ".join(t.split()))  # noqa: E731
+        for g in result["guesses"]:
+            lines.append(f"| {F.link(g['from'])} | {g['title']} | {F.link(g['to'])} | {cell(g['quote'][:160])} |")
     if result["transfer"]:
         lines += ["", "## Перенос исходников", "", "Перенесён полностью — каждый блок файла в заметке, в skip с причиной или в "
                   "_graph/unplaced.md, дословность цела, ошибок в его заметках нет. Удалять исходники — решение "

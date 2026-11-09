@@ -120,7 +120,7 @@ class Rules(unittest.TestCase):
         self.assertEqual(one("## Выдача\n\nКод типа: `ISSUE`.\n", rel="s/biz/ops.md")[0]["key"], "task:ISSUE")
         table = "| код типа | тип задачи |\n|---|---|\n| ISSUE | Выдача |\n| `RETURN` | Возврат |\n"
         self.assertEqual(self.kinds(table, rel="s/x/y.md"), [("operation", "", "Возврат"), ("operation", "", "Выдача")])
-        self.assertEqual(self.kinds("# Экран выдачи\n\nтекст\n", rel="s/ui/a.md"), [("screen", "", "Экран выдачи")])
+        self.assertEqual(self.kinds("# Экран выдачи\n\nтекст\n", rel="s/ui/a.md"), [("screen", "", "UI выдачи")])
         self.assertEqual(self.kinds("# Отчёт\n\nтекст\n", rel="s/ui/a.md"), [])
         self.assertEqual(self.kinds("# billing\n\n## Общее описание\n\nтекст\n", rel="s/billing/billing.md"),
                          [("service", "", "billing")])

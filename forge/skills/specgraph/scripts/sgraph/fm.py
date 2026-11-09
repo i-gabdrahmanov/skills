@@ -353,18 +353,43 @@ def marker_errors(body: str) -> List[str]:
     return errs
 
 
-def set_block(body: str, name: str, content: str, attrs: Optional[Dict[str, Any]] = None) -> str:
-    """Заменить содержимое блока (или добавить блок в конец тела); воздух вокруг маркеров — сам."""
+def set_block(body: str, name: str, content: str, attrs: Optional[Dict[str, Any]] = None,
+              top: bool = False, before: Optional[str] = None) -> str:
+    """Заменить содержимое блока (или добавить блок); воздух вокруг маркеров — сам. Нового блока место:
+    `top` — сразу под заголовком-именем заметки (первая строка `# …`), `before` — перед блоком с этим
+    именем (его нет — в конец), иначе — в конец тела."""
     block = "\n".join(["", _marker(name, False, attrs), "", content.strip("\n"), "", _marker(name, True), ""])
     lines = body.split("\n")
-    for b in blocks(body):
+    found = blocks(body)
+    for b in found:
         if b["name"] == name:
             head = "\n".join(lines[:b["start"]]).rstrip("\n")
             tail = "\n".join(lines[b["end"] + 1:]).lstrip("\n")
             out = head + "\n" + block + ("\n" + tail if tail else "")
             return out.lstrip("\n") if not head else out
+    cut = None
+    if top:
+        cut = next((i + 1 for i, l in enumerate(lines) if l.startswith("# ")), 0)
+    elif before:
+        cut = next((b["start"] for b in found if b["name"] == before), None)
+    if cut is not None:
+        head = "\n".join(lines[:cut]).rstrip("\n")
+        tail = "\n".join(lines[cut:]).lstrip("\n")
+        out = head + "\n" + block + ("\n" + tail if tail else "")
+        return out.lstrip("\n") if not head else out
     base = body.rstrip("\n")
     return (base + "\n" + block) if base else block.lstrip("\n")
+
+
+def drop_block(body: str, name: str) -> str:
+    """Убрать блок вместе с маркерами (его нет — тело как есть)."""
+    b = get_block(body, name)
+    if b is None:
+        return body
+    lines = body.split("\n")
+    head = "\n".join(lines[:b["start"]]).rstrip("\n")
+    tail = "\n".join(lines[b["end"] + 1:]).lstrip("\n")
+    return (head + "\n\n" + tail if head and tail else head + "\n" if head else tail)
 
 
 def get_block(body: str, name: str) -> Optional[Dict[str, Any]]:

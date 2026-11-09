@@ -178,12 +178,13 @@ class CatalogDecisions(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = _project(self.tmp.name, {"a.md": "# A\n", "b.md": "# B\n"})
         _draft(self.root, "draft-a", "a.md", [
-            {"kind": "screen", "name": "Розыск", "sections": []},
+            # внешние системы: у вида нет правил имён (naming.py) — имена черновика доходят до каталога как есть
+            {"kind": "external", "name": "Розыск", "sections": []},
             {"kind": "operation", "name": "Розыск", "key": "task:kid_searche", "sections": []},
-            {"kind": "screen", "name": "Общий экран", "sections": []}])
+            {"kind": "external", "name": "Общий экран", "sections": []}])
         _draft(self.root, "draft-b", "b.md", [
-            {"kind": "screen", "name": "Экран Б", "sections": []},
-            {"kind": "screen", "name": "Общий экран", "sections": []}])
+            {"kind": "external", "name": "Экран Б", "sections": []},
+            {"kind": "external", "name": "Общий экран", "sections": []}])
         self.cat = T.call("graph_catalog", self.root, {})
 
     def tearDown(self):
@@ -308,8 +309,10 @@ class CollisionGate(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = _project(self.tmp.name, {"a.md": "# A\n\nтекст\n"})
+        # внешняя система: у вида нет правил имён — коллизия доходит до каталога (шедулер боевого случая
+        # теперь называется «Шедулер обработки ошибок…», naming.py, и с обработчиком не сталкивается)
         _draft(self.root, "draft-a", "a.md", [
-            {"kind": "screen", "name": "Розыск", "sections": []},
+            {"kind": "external", "name": "Розыск", "sections": []},
             {"kind": "operation", "name": "Розыск", "key": "task:kid_search", "sections": []}])
 
     def tearDown(self):
@@ -451,36 +454,40 @@ class NoGlueByHeading(unittest.TestCase):
     def named(self, name):
         return [n for n in self.cat["nodes"] if n["name"] == name]
 
+    SCHED = "Шедулер получения данных по заявке по Rest"     # naming.py: «Получение данных…» — шедулер без слова «шедулер»
+
     def test_owned_kinds_split_by_service(self):
         # одна папка specs/ — разводит именно сервис, а не правило папки
-        sched = self.named("Получение данных по заявке по Rest")
+        sched = self.named(self.SCHED)
         self.assertEqual(sorted(n["service"] for n in sched), ["cars-service", "shpi-service"])
         self.assertFalse([c for c in self.cat["conflicts"] if c["field"] == "service"])
 
     def test_folder_kinds_split_by_folder_and_merge_inside_it(self):
-        algo, screen = self.named("Алгоритм обработки"), self.named("UI-UX Описание")
+        # общий заголовок шаблона уточнён папкой операции (naming.py) — одноимённых больше нет
+        algo = self.named("Алгоритм обработки (Изъятие)") + self.named("Алгоритм обработки (Розыск)")
+        screen = self.named("UI Изъятие") + self.named("UI Розыск")
         self.assertEqual((len(algo), len(screen)), (2, 2))
         seizure = next(n for n in screen if "kid_seizure" in n["sources"][0]["file"])
         self.assertEqual(len(seizure["sources"]), 2, "UI.md и README.md одной операции — один экран")
+        self.assertIn("UI-UX Описание", seizure["names_seen"], "прежнее имя — в names_seen")
 
     def test_shared_kinds_still_merge_by_name(self):
         self.assertEqual(len(self.named("Таблица задач")), 1)
 
     def test_collisions_suggest_distinct_names_and_block_consent(self):
         by = {c["name"]: c for c in self.cat["collisions"]}
-        self.assertEqual(sorted(by), ["UI-UX Описание", "Алгоритм обработки", "Получение данных по заявке по Rest"])
+        self.assertEqual(sorted(by), [self.SCHED], "общие заголовки уточнены папкой, коллизия — только у шедулеров")
         for c in by.values():
             self.assertEqual(len(set(c["suggest"])), len(c["suggest"]), c)
             self.assertEqual(len(c["ids"]), len(c["suggest"]))
-        self.assertIn("[kid_search] Розыск", " ".join(by["Алгоритм обработки"]["suggest"]))
-        self.assertIn("cars-service", " ".join(by["Получение данных по заявке по Rest"]["suggest"]))
+        self.assertIn("cars-service", " ".join(by[self.SCHED]["suggest"]))
         self.assertIn("одинаковые имена", self.res["next"])
         rows = self.res["to_decide"]["collisions"]
-        self.assertEqual(len(rows), 3, "что решать — в ответе, без чтения catalog.md")
+        self.assertEqual(len(rows), 1, "что решать — в ответе, без чтения catalog.md")
         self.assertTrue(all("`n-" in r for r in rows), rows)
 
     def test_rename_by_new_id_and_legacy_id(self):
-        cars = next(n for n in self.named("Получение данных по заявке по Rest") if n["service"] == "cars-service")
+        cars = next(n for n in self.named(self.SCHED) if n["service"] == "cars-service")
         T.call("graph_catalog_decide", self.root,
                {"actions": [{"action": "rename", "node": cars["id"], "name": "Опрос ЦАРС", "why": "x"}]})
         legacy = CT.node_id(CT.legacy_identity({"kind": "algorithm", "name": "Алгоритм регистрации"}))

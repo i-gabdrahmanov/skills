@@ -12,7 +12,8 @@
     узел в центре, кто на него ссылается — левее по шагам, на кого ссылается он — правее;
   • виды-таблицы `_graph/views/`: Bases (`.base`), если `bases` включён в `.obsidian/core-plugins.json`,
     иначе — те же таблицы Markdown-заметками (версия Obsidian в окружении неизвестна: слой по факту).
-Оглавление в заметке сервиса (маркер graph:toc) пишет нарезка (1.6). Что и куда — данными в
+Обзор сервиса (graph:overview) и ход процесса (graph:flow) пишет синк (overview.py), легенду свойств
+`_graph/Свойства.md` — этот слой. Что и куда — данными в
 `references/obsidian.json`; кода под конкретный вид здесь нет.
 """
 from __future__ import annotations
@@ -68,6 +69,38 @@ def self_check(layer: Dict[str, Any], ont: O.Ontology) -> List[str]:
     names = [v.get("file") for v in layer.get("views") or []]
     if len(names) != len(set(names)) or not all(isinstance(n, str) and n and "/" not in n for n in names):
         errs.append("views: file — уникальные имена без «/»")
+    errs += _flow_check(layer.get("flow"), ont)
+    return errs
+
+
+def _flow_check(fl: Any, ont: O.Ontology) -> List[str]:
+    """Раздел flow (навигационные блоки, overview.py): виды и роли — из онтологии, рёбра — её рёбра."""
+    if not isinstance(fl, dict):
+        return ["flow: объект (навигационные блоки заметок)"]
+    errs = []
+    for k in ("step_edge", "publish_edge", "consume_edge", "call_edge", "data_edge"):
+        if fl.get(k) not in ont.edges:
+            errs.append(f"flow.{k}: ребро онтологии")
+    for e in fl.get("outputs") or []:
+        if e not in ont.edges:
+            errs.append(f"flow.outputs: «{e}» — не ребро онтологии")
+    for i, e in enumerate(fl.get("entries") or []):
+        if e.get("kind") not in ont.kinds:
+            errs.append(f"flow.entries[{i}]: kind «{e.get('kind')}» — не вид онтологии")
+        elif e.get("role") is not None and e["role"] not in (ont.kinds[e["kind"]].get("roles") or []):
+            errs.append(f"flow.entries[{i}]: у вида {e['kind']} нет роли «{e['role']}»")
+        for k in ("via", "source", "callers"):
+            if e.get(k) is not None and e[k] not in ont.edges:
+                errs.append(f"flow.entries[{i}].{k}: ребро онтологии")
+        if not e.get("group") or not e.get("trigger"):
+            errs.append(f"flow.entries[{i}]: group и trigger — подписи")
+    for k in fl.get("steps") or []:
+        if k not in ont.kinds:
+            errs.append(f"flow.steps: «{k}» — не вид онтологии")
+    lc = fl.get("lifecycle") or {}
+    if lc.get("kind") not in ont.kinds or any(lc.get(k) not in ont.edges for k in ("make", "close", "ui")) \
+            or (lc.get("process") is not None and lc["process"] not in ont.edges):
+        errs.append("flow.lifecycle: kind — вид онтологии, make/close/ui/process — её рёбра")
     return errs
 
 
@@ -153,7 +186,8 @@ def _start(ont: O.Ontology, layer: Dict[str, Any], nodes: List[Dict[str, Any]], 
            mode: str) -> str:
     lines = ["# Начало", "", "Точка входа в граф спецификации. Заметки и связи строит движок spec-graph; правки "
              "человека — проза вне маркеров и свойства в Properties.",
-             f"Как ходить по графу и что можно править — [[_graph/{GUIDE_NAME[:-3]}|{GUIDE_NAME[:-3]}]].", ""]
+             f"Как ходить по графу и что можно править — [[_graph/{GUIDE_NAME[:-3]}|{GUIDE_NAME[:-3]}]]; "
+             f"что значит каждое свойство заметки — [[_graph/{PROPS_NAME[:-3]}|{PROPS_NAME[:-3]}]].", ""]
     for e in layer["entries"]:
         kind = e["kind"]
         mine = sorted((n for n in nodes if n["kind"] == kind), key=lambda n: n["name"])
@@ -168,14 +202,55 @@ def _start(ont: O.Ontology, layer: Dict[str, Any], nodes: List[Dict[str, Any]], 
     for g in groups:
         title = ont.kinds[g["kind"]]["title_ru"] if g.get("kind") else g["title"]
         lines.append(f"| {title} | {_hex(g['color']['rgb'])} | `{g['query']}` |")
-    lines += ["", "| ключ в свойствах | смысл | обратный ключ | цвет на картах |", "|---|---|---|---|"]
+    lines += ["", "| ключ в свойствах | смысл | обратный ключ | его смысл | цвет на картах |", "|---|---|---|---|---|"]
     colors = edge_colors(ont, layer)
     for name, spec in ont.edges.items():
-        inv = spec["inverse"] if spec["inverse"] != name else "— (симметрично)"
-        lines.append(f"| `{name}` | {spec['title_ru']} | `{inv}` | {colors[name]} |")
+        sym = spec["inverse"] == name
+        inv = "— (симметрично)" if sym else f"`{spec['inverse']}`"
+        lines.append(f"| `{name}` | {spec['title_ru']} | {inv} | {'' if sym else ont.key_ru(spec['inverse'])} | {colors[name]} |")
     view_ext = ".base" if mode == "bases" else ""
     lines += ["", "## Виды", ""] + [f"- [[_graph/views/{v['file']}{view_ext}|{v['file']}]]" for v in layer["views"]] + [""]
     return "\n".join(lines)
+
+
+PROPS_NAME = "Свойства.md"
+
+
+def _props(ont: O.Ontology) -> str:
+    """_graph/Свойства.md — что значит каждое свойство заметки (Properties): смысл, у каких видов, кто пишет.
+    Аналитик видел `creates_task`, `role`, `kind` без объяснения (обратная связь 2026-11-09)."""
+    lines = ["# Свойства заметок", "",
+             "Что значит каждое свойство (Properties) в заметках графа. Свойство без значения не пишется. Прямые связи "
+             "движок ставит по спеке с цитатой-основанием (таблица «связь | цель | основание» внизу заметки), "
+             "обратные выводит сам из прямых — их не правят. Свою связь можно добавить в Properties: синк примет её "
+             "как «внесено человеком»; удалённую из Properties связь движок больше не предложит.", "",
+             "## Виды узлов (`kind`)", "", "| kind | что это | где лежит |", "|---|---|---|"]
+    for k, spec in ont.kinds.items():
+        extra = ""
+        if spec.get("roles"):
+            extra = " · role: " + ", ".join(spec["roles"])
+        if spec.get("subkinds"):
+            extra = " · subkind: " + ", ".join(spec["subkinds"])
+        lines.append(f"| `{k}` | {spec['title_ru']}{extra} | `{spec['path']}` |")
+    lines += ["", "## Описание узла", "", "| свойство | смысл |", "|---|---|"]
+    for key in ont.scalars:
+        if key in ("blocks", "confidence"):
+            continue
+        lines.append(f"| `{key}` | {ont.key_ru(key) or '—'} |")
+    lines += ["", "## Связи — пишет движок по спеке", "", "| свойство | смысл | от каких видов | к каким |", "|---|---|---|---|"]
+    for name, e in ont.edges.items():
+        lines.append(f"| `{name}` | {e['title_ru']} | {', '.join(e['from'])} | {', '.join(e['to'])} |")
+    lines += ["", "## Обратные связи — выводятся из прямых", "", "| свойство | смысл | обратное к |", "|---|---|---|"]
+    for name, e in ont.edges.items():
+        if e["inverse"] != name:
+            lines.append(f"| `{e['inverse']}` | {ont.key_ru(e['inverse'])} | `{name}` |")
+    lines += ["", "## Флаги аналитика", "", "Ставятся в Properties вручную, когда дыра графа — не дыра, а так задумано:", "",
+              "| свойство | у какого вида | смысл |", "|---|---|---|"]
+    from . import completeness as CM
+    for r in CM.load()["rules"]:
+        if r.get("unless"):
+            lines.append(f"| `{r['unless']}: true` | {r['kind']} | {r.get('unless_ru') or r['question'].format(name='…')} |")
+    return "\n".join(lines) + "\n"
 
 
 def _key_title(ont: O.Ontology, key: str) -> str:
@@ -366,6 +441,9 @@ def build(root: Path, cfg: Dict[str, Any], dry: bool = False) -> Dict[str, Any]:
     sp = vault / "_graph" / START_NAME
     if _write(sp, _start(ont, layer, nodes, ours, mode), dry):
         changed.append(sp.relative_to(root).as_posix())
+    pp = vault / "_graph" / PROPS_NAME
+    if _write(pp, _props(ont), dry):
+        changed.append(pp.relative_to(root).as_posix())
     new_state = {"queries": [g["query"] for g in ours], "views": sorted(wanted), "mode": mode, "maps": sorted(wanted_maps)}
     if new_state != state and not dry:
         state_p.parent.mkdir(parents=True, exist_ok=True)

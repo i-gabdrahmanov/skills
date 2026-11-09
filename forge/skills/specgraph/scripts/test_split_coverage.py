@@ -77,17 +77,19 @@ class Fixture(_Split):
                          ("endpoint", "http:GET /api/v1/tasks", "GET", "/api/v1/tasks"))
         self.assertEqual(data["aliases"], ["GET /api/v1/tasks"])
         self.assertEqual(data["belongs_to"], ["[[task-service]]"])
-        self.assertEqual(data["called_by"], [])
+        self.assertNotIn("called_by", data, "пустой ключ-ребро не пишется")
         self.assertEqual(data["status"], "draft")
         src, _, head = data["source"][0].partition("#")
         self.assertTrue((self.root / src).is_file())
         self.assertEqual(head, "4.1 GET /api/v1/tasks — список задач сотрудника")
         op, _ = self.note("business/operations/Укомплектование.md")
         self.assertEqual(op["key"], "task:KOMPLEKT")
-        self.assertEqual((op["created_by"], op["closed_by"], op["screens"]), ([], [], []))
+        self.assertFalse({"created_by", "closed_by", "screens", "aliases"} & set(op), "пустые свойства не пишутся")
         svc, sbody = self.note("services/task-service/task-service.md")
-        toc = F.get_block(sbody, "toc")["content"]
-        self.assertIn("[[Шедулер закрытия регулярных задач]]", toc)
+        self.assertIsNone(F.get_block(sbody, "toc"), "строку ссылок по видам сменил обзор сервиса")
+        ov = F.get_block(sbody, "overview")["content"]
+        self.assertIn("[[Шедулер закрытия регулярных задач]]", ov)
+        self.assertLess(sbody.index("graph:overview:start"), sbody.index("graph:source:start"), "обзор — сразу под именем")
 
     def test_links_rewritten_and_reversible(self):
         _, body = self.note("services/task-service/algorithms/Алгоритм балансировки упаковок.md")
@@ -96,7 +98,7 @@ class Fixture(_Split):
         m = re.search(r"!\[\[([0-9a-f]{8}-task-flow\.png)\|Схема задач\]\]", sbody)
         self.assertTrue(m, sbody[:400])
         self.assertTrue((self.vault / "_attachments" / m.group(1)).is_file())
-        rewrites = json.loads((self.root / SP.REWRITES_REL).read_text(encoding="utf-8"))
+        rewrites = [r for r in json.loads((self.root / SP.REWRITES_REL).read_text(encoding="utf-8")) if "insert" not in r]
         self.assertEqual(len(rewrites), 2)
         self.assertEqual(SP.unrewrite(rewrites[0]["to"], rewrites), rewrites[0]["from"])
 

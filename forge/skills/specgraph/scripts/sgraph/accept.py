@@ -63,6 +63,7 @@ def run(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     rel = p.relative_to(Path(root)).as_posix()
     holes = {k: v for k, v in res["counts"].items() if k in {r["id"] for r in CM.load()["rules"]}}
     out = {"errors": res["errors"], "warnings": res["warnings"], "counts": res["counts"], "holes": holes,
+           "guesses": res.get("guesses", 0),
            "transfer": res["transfer"], "smoke": problems, "obsidian": layer["mode"], "report": rel,
            "consent": st["state"], "key": st["key"]}
     if res["errors"] or problems:
