@@ -10,8 +10,11 @@
 
 Механические правила ставят то, что видно по форме текста: обработчик (`kafka-op:consume`) читает топик
 из своего текста; фраза публикации «… в топик X» — `publishes_to`; `METHOD /path` эндпойнта ДРУГОГО
-сервиса (у экрана — любого) — `calls`; точное имя или алиас узла данных — `uses_data`. Строки разделов
-«См. также» не дают рёбер: ТЗ §3 — взаимодействие, а не упоминание.
+сервиса (у экрана — любого) — `calls`; точное имя или алиас узла данных — `uses_data`; таблица из SQL
+текста заметки (FROM/JOIN/UPDATE/INSERT/DELETE, без CTE) — `uses_data` к узлу с ключом `table:<имя>`, в
+`why` — чтение или запись; экран в папке `[код] Имя` — `ui_of` к операции `task:<код>` (структура спеки,
+не слово модели; цитата — строка с кодом из текста экрана или операции). Строки разделов «См. также» не
+дают рёбер: ТЗ §3 — взаимодействие, а не упоминание.
 
 Хранилище — `.spec-graph/edges/<id заметки>.json`: предложения {from, edge, to, quote, origin
 (rule:<id> | model | manual | improve), confidence, status proposed|accepted|rejected, why?}. Отклонённое
@@ -31,6 +34,7 @@ from . import fsutil as FS
 from . import keys as K
 from . import ontology as O
 from . import resolve as RS
+from . import sqlref as SQ
 
 EDGES_REL = ".spec-graph/edges"
 QUOTE_MIN = 20
@@ -46,6 +50,21 @@ def note_id(name: str) -> str:
 
 
 # ─── тексты заметок ────────────────────────────────────────────────────────
+
+def source_files(root: Path, cfg: Dict[str, Any], node: Dict[str, Any]) -> List[str]:
+    """Файлы-источники заметки — атрибут `file` маркеров graph:source*."""
+    p = Path(root) / cfg["vault"] / node["path"]
+    if not p.is_file():
+        return []
+    _, body = F.read(p.read_bytes().decode("utf-8"))
+    return [b["attrs"].get("file") for b in F.blocks(body) if b["name"].startswith("source") and b["attrs"].get("file")]
+
+
+def _cut(text: str, limit: int = 240) -> str:
+    """Цитата из оператора: пробелы схлопнуты, длинное — по границе слова (подстрока _ws текста)."""
+    t = _ws(text)
+    return t if len(t) <= limit else t[:limit].rsplit(" ", 1)[0]
+
 
 def source_text(root: Path, cfg: Dict[str, Any], node: Dict[str, Any]) -> str:
     """Исходный текст заметки — содержимое маркеров graph:source*."""
@@ -181,12 +200,38 @@ def mechanical(g: Graph) -> Dict[str, List[Dict[str, Any]]]:
     topic_re = re.compile(rules["kafka_topic_re"])
     stop = rules["stop_headings"]
     data_nodes = [n for n in g.index if n["kind"] in g.ont.target_kinds("uses_data")]
+    tables = {str(n.get("key"))[len("table:"):]: n for n in data_nodes if str(n.get("key") or "").startswith("table:")}
+    ops_by_code = {str(n.get("key"))[len("task:"):].lower(): n for n in g.index
+                   if n["kind"] in g.ont.target_kinds("ui_of") and str(n.get("key") or "").startswith("task:")}
     out: Dict[str, List[Dict[str, Any]]] = {}
     for n in g.index:
         text = g.text(n["name"])
         if not text:
             continue
         props = []
+        if g.ont.can_start("uses_data", n):
+            by_table: Dict[str, List[Dict[str, str]]] = {}
+            for ref in SQ.refs(text):
+                if ref["table"].lower() in tables:
+                    by_table.setdefault(ref["table"].lower(), []).append(ref)
+            for low, refs in by_table.items():
+                modes = {r["mode"] for r in refs}
+                first = next((r for r in refs if r["mode"] == "write"), refs[0])   # цитата — запись, если есть
+                props.append({"edge": "uses_data", "to": tables[low]["name"], "quote": _cut(first["statement"]),
+                              "origin": "rule:R-edge-sql", "confidence": "high",
+                              "why": "SQL: " + " и ".join(m for k, m in (("read", "чтение"), ("write", "запись")) if k in modes)})
+        if g.ont.can_start("ui_of", n) and ops_by_code:
+            for rel in source_files(g.root, g.cfg, n)[:1]:
+                for fc in X.folder_codes(rel, rules):
+                    op = ops_by_code.get(fc["code"].lower())
+                    if op is None:
+                        continue
+                    rx = re.compile(r"(?<![\w])" + re.escape(fc["code"]) + r"(?![\w])", re.I)
+                    quote = next((l.strip() for t in (text, g.text(op["name"])) for l in t.split("\n")
+                                  if rx.search(l) and len(_ws(l)) >= QUOTE_MIN), None)
+                    if quote:
+                        props.append({"edge": "ui_of", "to": op["name"], "quote": quote, "origin": "rule:R-edge-folder",
+                                      "confidence": "high", "why": f"экран в папке операции [{fc['code']}]"})
         for line in _lines(text, stop):
             q = line.strip()
             if len(_ws(q)) < QUOTE_MIN:

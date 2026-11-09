@@ -263,6 +263,38 @@ def status(root: Path, name: str, top: int = 5) -> Dict[str, Any]:
             "top_codes": [[k, v] for k, v in sorted(codes.items(), key=lambda kv: (-kv[1], kv[0]))[:top]]}
 
 
+def retry(root: Path, name: str, items: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Брошенные единицы (все или названные) — снова pending с нулём попыток. Пересборка очереди хранит
+    исход abandoned при том же входе, поэтому без этого единица, брошенная из-за неудачного ответа модели,
+    оставалась брошенной навсегда, а её блоки — без места (ревью 2026-11-08)."""
+    data = _load(root, name)
+    revived = []
+    for it in data["items"]:
+        if it["status"] == "abandoned" and (not items or it["id"] in items):
+            it.update(status="pending", attempts=0, lease_until=0, last_codes=[])
+            revived.append(it["id"])
+    if revived:
+        _save(root, name, data)
+    return {"queue": name, "revived": revived, **counts(data)}
+
+
+def done_ids(root: Path, name: str) -> Optional[set]:
+    """id сданных (done) единиц текущей очереди; None — очереди нет. Результаты единиц (черновики, планы)
+    лежат файлами по id и не удаляются при пересборке: читать надо только сданные единицы ЭТОЙ сборки —
+    иначе план исчезнувшей единицы перебивает новый, а единица с изменённым входом (pending) отдаёт
+    старый ответ (ревью 2026-11-08)."""
+    if not _path(root, name).is_file():
+        return None
+    return {it["id"] for it in _load(root, name)["items"] if it["status"] == "done"}
+
+
+def abandoned_items(root: Path, name: str) -> List[Dict[str, Any]]:
+    """Брошенные единицы очереди (пусто — очереди нет)."""
+    if not _path(root, name).is_file():
+        return []
+    return [it for it in _load(root, name)["items"] if it["status"] == "abandoned"]
+
+
 def closed(root: Path, name: str) -> Tuple[bool, List[str]]:
     """Гейт: очередь закрыта, если всё done или abandoned. Второе — брошенные единицы для отчёта."""
     data = _load(root, name)

@@ -29,6 +29,7 @@ sys.path.insert(0, str(SCRIPTS / "tools"))
 import _testkit as K  # noqa: E402
 import gen_variants as GV  # noqa: E402
 from sgraph import blocks as B  # noqa: E402
+from sgraph import extract as X  # noqa: E402
 from sgraph import queue as Q  # noqa: E402
 from sgraph import survey as SV  # noqa: E402
 from sgraph import tools as T  # noqa: E402
@@ -106,6 +107,9 @@ class Drafts(_Proj):
         self.assertEqual(len(done), 8)
         self.assertTrue(all(r["accepted"] for r in done))
         got = {(n["kind"], n["name"]) for d in SV.load_drafts(self.root) for n in d["nodes"]}
+        # узлы правил (auto) идут в каталог сами — черновик их повторять не обязан
+        got |= {(c["kind"], c["name_hint"]) for p in (self.root / X.CANDIDATES_REL).rglob("*.json")
+                for c in json.loads(p.read_text(encoding="utf-8"))["candidates"] if c.get("auto")}
         self.assertEqual(got, {(n["kind"], n["name"]) for n in G["nodes"]})
         self.assertEqual(T.call("graph_next", self.root, {"queue": "draft-file"})["status"], Q.EMPTY)
 
@@ -122,7 +126,7 @@ class Drafts(_Proj):
             "E-draft-key": lambda a: [n.pop("key") for n in a["nodes"] if n["kind"] == "endpoint"][:1],
             "E-draft-owner": lambda a: a["nodes"][0].pop("service"),
             "E-draft-section": lambda a: a["nodes"][0].__setitem__("sections", ["docs/spec/ui/регистрация.md#1"]),
-            "E-draft-candidate": lambda a: a["nodes"].pop(),
+            "E-draft-candidate": lambda a: a["nodes"].remove(next(n for n in a["nodes"] if n["kind"] == "scheduler")),
             "E-draft-dup": lambda a: a["nodes"].append(dict(a["nodes"][0])),
             "E-draft-text": lambda a: a["nodes"][0].__setitem__("why", "путь C:\\temp"),
         }

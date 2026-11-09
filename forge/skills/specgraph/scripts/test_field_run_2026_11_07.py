@@ -21,7 +21,10 @@
     каталога (decision_problems) — до согласия;
   • одноимённые узлы разных сервисов и (для экранов/алгоритмов/шедулеров/kafka-операций) разных папок не
     склеиваются, а дают коллизию с предложенными именами; общие виды (данные) склеиваются по имени; id
-    решений прежнего формата резолвятся.
+    решений прежнего формата резолвятся;
+  • цикл очереди не попадает под отсечку хода рантайма: у graph_next каждый раз свой after=cursor;
+  • graph_catalog отдаёт пункты решения (to_decide) — catalog.md целиком оркестратору не нужен;
+  • graph_archive: граф заново — состояние движка и vault в архив, конфиг остаётся; живой прогон — отказ.
 """
 from __future__ import annotations
 
@@ -402,8 +405,8 @@ class CompactBatch(unittest.TestCase):
             res = T.call("graph_next", root, {"queue": "assign-section", "batch": True})
             self.assertEqual((res["brief"], res["tool"], len(res["units"])), ("assign-section.md", "graph_assign_put", 10))
             self.assertEqual(set(res["units"][0]), {"item_id", "input"})
-            self.assertIn('"step_id": "graph-map"', res["next"])
-            self.assertLess(len(json.dumps(res, ensure_ascii=False)), 1800)
+            self.assertIn('"step_id": "graph-map"', res["prompt"])   # промпт субагента — один на пачку (2026-11-08)
+            self.assertLess(len(json.dumps(res, ensure_ascii=False)) - len(res["prompt"]), 1800)
 
 
 class MapNext(unittest.TestCase):
@@ -472,6 +475,9 @@ class NoGlueByHeading(unittest.TestCase):
         self.assertIn("[kid_search] Розыск", " ".join(by["Алгоритм обработки"]["suggest"]))
         self.assertIn("cars-service", " ".join(by["Получение данных по заявке по Rest"]["suggest"]))
         self.assertIn("одинаковые имена", self.res["next"])
+        rows = self.res["to_decide"]["collisions"]
+        self.assertEqual(len(rows), 3, "что решать — в ответе, без чтения catalog.md")
+        self.assertTrue(all("`n-" in r for r in rows), rows)
 
     def test_rename_by_new_id_and_legacy_id(self):
         cars = next(n for n in self.named("Получение данных по заявке по Rest") if n["service"] == "cars-service")
@@ -491,6 +497,103 @@ class NoGlueByHeading(unittest.TestCase):
             T.call("graph_catalog_decide", self.root,
                    {"actions": [{"action": "rename", "node": legacy, "name": "X", "why": "x"}]})
         self.assertIn("прежнего формата", str(cm.exception))
+
+
+def _turn_halts(calls) -> bool:
+    """qwen-code 0.21.14 shouldHaltOnTurnToolCallCap: >100 вызовов в ходе и один ключ (имя+аргументы)
+    повторён ≥ GLOBAL_DUPLICATE_THRESHOLD (6)."""
+    seen: dict = {}
+    for i, c in enumerate(calls, 1):
+        k = json.dumps(c, ensure_ascii=False, sort_keys=True)
+        seen[k] = seen.get(k, 0) + 1
+        if i > 100 and max(seen.values()) >= 6:
+            return True
+    return False
+
+
+class TurnCap(unittest.TestCase):
+    """«Loop detection has been disabled for this session» трижды за прогон: цикл очереди — один ход,
+    graph_next с одними и теми же аргументами на каждую пачку."""
+
+    def run_queue_turn(self, with_cursor: bool):
+        with tempfile.TemporaryDirectory() as d:
+            root = _project(d, {"a.md": "# A\n"})
+            cfg = json.loads((root / ".spec-graph" / "config.json").read_text(encoding="utf-8"))
+            cfg["queue"] = {"parallel": 10}
+            (root / ".spec-graph" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+            Q.build(root, "assign-section", [{"id": f"assign-{i:012x}", "brief": "assign-section.md",
+                                              "tool": "graph_assign_put", "input": f"вход {i}\n"} for i in range(140)])
+            calls, after = [], None
+            while True:
+                args = {"queue": "assign-section", "batch": True}
+                if with_cursor and after:
+                    args["after"] = after
+                calls.append(["graph_next", args])
+                res = T.call("graph_next", root, args)
+                if res["status"] == Q.EMPTY:
+                    return calls
+                after = res["cursor"]
+                for u in res["units"]:
+                    calls.append(["agent", u["item_id"]])
+                    Q.settle(root, "assign-section", u["item_id"], True)
+
+    def test_without_cursor_the_runtime_halts(self):
+        self.assertTrue(_turn_halts(self.run_queue_turn(False)), "модель рантайма воспроизводит обрыв")
+
+    def test_with_cursor_the_turn_survives(self):
+        self.assertFalse(_turn_halts(self.run_queue_turn(True)))
+
+    def test_cursor_repeats_when_nothing_was_settled(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = _project(d, {"a.md": "# A\n"})
+            Q.build(root, "assign-section", [{"id": "assign-000000000001", "brief": "assign-section.md",
+                                              "tool": "graph_assign_put", "input": "x"}])
+            a = T.call("graph_next", root, {"queue": "assign-section", "batch": True})
+            b = T.call("graph_next", root, {"queue": "assign-section", "batch": True, "after": a["cursor"]})
+            self.assertEqual(a["cursor"], b["cursor"], "не сдали — тот же cursor: остановка рантайма по делу")
+            self.assertIn(a["cursor"], a["next"])
+
+
+class ArchiveGraph(unittest.TestCase):
+    """«Заархивируй граф, строим новый»: модель унесла vault руками, журнал решений (36 записей) и очереди
+    остались и перешли в новый прогон непринятыми decision_problems."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = _project(self.tmp.name, {"a.md": "# A\n"})
+        _draft(self.root, "draft-a", "a.md", [{"kind": "screen", "name": "Экран", "sections": []}])
+        T.call("graph_catalog", self.root, {})
+        T.call("graph_catalog_decide", self.root,
+               {"actions": [{"action": "rename", "node": "Экран", "name": "Экран А", "why": "x"}]})
+        note = self.root / "docs" / "graph" / "ui" / "Экран А.md"
+        note.parent.mkdir(parents=True, exist_ok=True)
+        note.write_text("---\nkind: screen\n---\n", encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_moves_state_and_vault_keeps_config(self):
+        res = T.call("graph_archive", self.root, {"reason": "заархивируй граф, строим новый"})
+        arch = self.root / res["archived"]
+        self.assertTrue((arch / "state" / "decisions.json").is_file())
+        self.assertTrue((arch / "vault" / "ui" / "Экран А.md").is_file())
+        self.assertFalse((self.root / CT.DECISIONS_REL).exists())
+        self.assertFalse((self.root / "docs" / "graph").exists())
+        self.assertTrue((self.root / ".spec-graph" / "config.json").is_file())
+        self.assertTrue(T.call("graph_status", self.root, {})["initialized"])
+        self.assertEqual(T.call("graph_queue_status", self.root, {"queue": "draft-file"})["total"], 0)
+
+    def test_live_run_refused_with_abandon_command(self):
+        run = self.root / "ground" / "statements" / "specgraph" / "GRAPH-1"
+        run.mkdir(parents=True)
+        (run / "manifest.json").write_text(json.dumps({"steps": [{"id": "graph-map", "status": "pending"},
+                                                                 {"id": "graph-link", "status": "pending"},
+                                                                 {"id": "graph-check", "status": "pending"}]}),
+                                           encoding="utf-8")
+        with self.assertRaises(T.ToolError) as cm:
+            T.call("graph_archive", self.root, {"reason": "x"})
+        self.assertIn("abandon GRAPH-1", str(cm.exception))
+        self.assertTrue((self.root / CT.DECISIONS_REL).is_file(), "ничего не тронуто")
 
 
 if __name__ == "__main__":

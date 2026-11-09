@@ -84,7 +84,7 @@ class Step(_Base):
         self.assertEqual(code, 1)
         self.assertIn("согласие graph-edges-adhoc: none", out)
         res = K.approve_edges(self.root)
-        self.assertEqual((res["consent"], res["accepted"]), ("ok", 32))
+        self.assertEqual((res["consent"], res["accepted"]), ("ok", 33))   # + uses_data → task из SQL
         self.assertEqual(RV.pending(self.root), 0)
         self.assertEqual(self.gate(), (0, "✓ graph-link: связи решены, синк чистый, отчёт связей утверждён\n"))
 

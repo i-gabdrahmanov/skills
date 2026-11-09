@@ -4,7 +4,7 @@
 неизвестный или неверный аргумент называется отказом, а не молча игнорируется. Нарушения
 собираются в одно сообщение: слабой модели легче починить разом.
 
-Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put, graph_edges_review, graph_edges_decide, graph_delta_decide, graph_validate, graph_obsidian, graph_find, graph_node, graph_neighbors, graph_path, graph_impact, graph_service_links, graph_check, graph_diag. Остальные появляются по задачам docs/specgraph/; владельцы
+Сейчас: graph_status, graph_init, graph_next, graph_queue_status, graph_scan, graph_profile, graph_survey, graph_draft_put, graph_catalog, graph_catalog_decide, graph_assign_start, graph_assign_put, graph_split, graph_resolve, graph_edges_mechanical, graph_link_start, graph_link_put, graph_sync, graph_card_start, graph_card_put, graph_edges_review, graph_edges_decide, graph_delta_decide, graph_stubs_decide, graph_validate, graph_obsidian, graph_queue_retry, graph_find, graph_node, graph_neighbors, graph_path, graph_impact, graph_service_links, graph_check, graph_diag. Остальные появляются по задачам docs/specgraph/; владельцы
 продуктивных инструментов — `phase_tools` ветки specgraph в hooks/_branches.py.
 
 Каждый вызов считает `metrics` (задача 4.1): исход, коды отказа, id единиц работы (аргументы,
@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -53,9 +54,12 @@ class ToolError(Exception):
     `codes` — машинные коды отказа (`E-…`) для счётчиков и диагностики: по ним видно, где модель
     буксует, без текста сообщения."""
 
-    def __init__(self, message: str, codes: Optional[List[str]] = None):
+    def __init__(self, message: str, codes: Optional[List[str]] = None, blameless: bool = False):
         super().__init__(message)
         self.codes = list(codes or [])
+        # не вина модели (согласие устарело, исходник не читается): попытка единицы не тратится, аренда
+        # остаётся — иначе три таких отказа бросали единицу навсегда (ревью 2026-11-08)
+        self.blameless = blameless
 
 
 _TYPES = {"string": str, "object": dict, "boolean": bool, "array": list}
@@ -93,6 +97,14 @@ def _check_args(args: Dict[str, Any], schema: Dict[str, Any]) -> None:
 
 def _status(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return ST.status(root)
+
+
+def _archive(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    from . import reset as RT
+    try:
+        return RT.archive(root, _need_cfg(root), args["reason"])
+    except RT.ResetError as e:
+        raise ToolError(str(e), [e.code])
 
 
 def _run_hint(root: Path) -> Optional[str]:
@@ -137,7 +149,25 @@ def _unit_next(u: Dict[str, Any]) -> str:
             f"с item_id «{u['item_id']}»{tail}")
 
 
+def _cursor(res: Dict[str, Any]) -> str:
+    """Меняется с каждой сданной единицей. Рантайм (qwen-code ≥0.21: shouldHaltOnTurnToolCallCap) рвёт
+    ход, где >100 вызовов и один вызов с теми же аргументами повторён ≥6 раз, — цикл очереди это ровно
+    один ход с graph_next {"batch": true, "queue": …} на каждую пачку («Loop detection», боевой прогон
+    2026-11-07, трижды). С after=<cursor> аргументы у каждого вызова свои; повтор того же cursor —
+    пачку не сдали, и тогда остановка рантайма по делу."""
+    ids = ",".join(u["item_id"] for u in res.get("units") or ([res] if res.get("item_id") else []))
+    return f"{res.get('progress', '')}#{hashlib.sha1(ids.encode('utf-8')).hexdigest()[:6]}"
+
+
 def _next(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    res = _next_raw(root, args)
+    if res.get("status") != Q.EMPTY:
+        res["cursor"] = _cursor(res)
+        res["next"] = res.get("next", "") + f" (в следующем graph_next передай after=«{res['cursor']}»)"
+    return res
+
+
+def _next_raw(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     if args.get("batch"):
         res = Q.lease_batch(root, _queue_arg(args), _cfg(root))
         if res["status"] == Q.EMPTY:
@@ -152,10 +182,16 @@ def _next(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
                  **({"attempt": u["attempt"]} if u["attempt"] > 1 else {}),
                  **({"repeat": True} if u["repeat"] else {})) for u in units])
         step = _QUEUE_STEP.get(str(res.get("queue") or ""), "")
-        tail = (f"; последней строкой каждый возвращает {{\"step_id\": \"{step}\", \"status\": \"unit\"}}"
-                if step else "")
-        res["next"] = (f"запусти {len(units)} субагентов ОДНИМ ходом, каждому — свою единицу: бриф {res['brief']}, "
-                       f"вход — его input; результат он сдаёт инструментом {res['tool']} со своим item_id{tail}. "
+        # готовый промпт субагента — один раз на пачку: свои промпты оркестратора (10 штук на пачку) и
+        # пересказы субагентов копились в контексте по ≈8 тыс. токенов на пачку — 413 к 25-й пачке
+        # link-note (боевой прогон 2026-11-08), хотя сам ответ graph_next уже был компактным
+        res["prompt"] = (f"Ты исполняешь одну единицу очереди {res.get('queue')}. Прочитай бриф "
+                         f"{(LK.BRIEFS / res['brief']).as_posix()} и вход {{input}} и сделай по брифу; результат сдай "
+                         f"инструментом {res['tool']} с item_id «{{item_id}}». Весь твой ответ — одна строка "
+                         + (f'{{"step_id": "{step}", "status": "unit"}}' if step else "«готово»")
+                         + ", без пересказа.")
+        res["next"] = (f"запусти {len(units)} субагентов ОДНИМ ходом, каждому — свою единицу: промпт — поле prompt "
+                       f"как есть, {{item_id}} и {{input}} — его единицы; своего к промпту не дописывай. "
                        f"Дождись, пока сдадут все, затем снова graph_next batch")
         return res
     res = Q.lease(root, _queue_arg(args), _cfg(root))
@@ -168,6 +204,17 @@ def _next(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
 
 def _queue_status(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return Q.status(root, _queue_arg(args))
+
+
+def _queue_retry(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    if not (args.get("why") or "").strip():
+        raise ToolError("повтор брошенных единиц — решение пользователя: why с его слов", ["E-retry-why"])
+    res = Q.retry(root, _queue_arg(args), args.get("items") or None)
+    if not res["revived"]:
+        raise ToolError("брошенных единиц " + ("с такими id " if args.get("items") else "") + "в очереди нет",
+                        ["E-retry-none"])
+    M.bump(root, f"queue.{args['queue']}.retried", len(res["revived"]))
+    return dict(res, next=f"цикл очереди {args['queue']} (graph_next batch): брошенные единицы снова в работе")
 
 
 def _need_cfg(root: Path) -> Dict[str, Any]:
@@ -206,6 +253,28 @@ def _draft_put(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     return {"accepted": True, "nodes": len(nodes), "not_nodes": len(not_nodes), "file": draft["file"]}
 
 
+_DECIDE_MAX = 12
+
+
+def _to_decide(cat: Dict[str, Any]) -> Dict[str, List[str]]:
+    """Что пользователю решать, строками — без таблицы узлов. Оркестратор показывал отчёт, читая
+    catalog.md целиком (376 узлов, четыре чтения подряд) — это ушло в контекст до конца шага (413)."""
+    out = {
+        # просадка к прошлому каталогу и коды из спеки без узла — первыми строками решения человека
+        "drift": [f"{x} (база {cat['drift']['base']}) — решение или регрессия?" for x in (cat.get("drift") or {}).get("flags", [])],
+        "missing_codes": list(cat.get("missing_codes") or []),
+        "collisions": [f"«{c['name']}»: " + " / ".join(f"{x} (`{i}`)" for x, i in zip(c["suggest"], c.get("ids") or []))
+                       + (f" — {c['merge_hint']}" if c.get("merge_hint") else "") for c in cat["collisions"]],
+        "conflicts": [f"«{c['node']}»: {c['field']} = {c['values'][0]} / {c['values'][1]}" for c in cat["conflicts"]],
+        "same_node": [f"«{r['a']}» ≟ «{r['b']}» ({r['similarity']})" for r in cat["review"]],
+    }
+    res = {}
+    for k, rows in out.items():
+        if rows:
+            res[k] = rows[:_DECIDE_MAX] + ([f"… ещё {len(rows) - _DECIDE_MAX} — в отчёте"] if len(rows) > _DECIDE_MAX else [])
+    return res
+
+
 def _catalog(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     cfg = _need_cfg(root)
     cat = CT.build(root, cfg)
@@ -215,6 +284,7 @@ def _catalog(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
            "report": f"{cfg['vault']}/_graph/catalog.md", "consent": st["state"], "key": st["key"]}
     if cat.get("problems"):
         res["decision_problems"] = [f"№{x['n']} {x['action']} «{x['ref']}»: {x['problem']}" for x in cat["problems"][:8]]
+    res["to_decide"] = _to_decide(cat)
     dup = CT.collision_names(cat)
     if dup:
         res["next"] = ("сначала одинаковые имена: " + ", ".join(f"«{x}»" for x in dup[:8]) + " — покажи пользователю "
@@ -226,6 +296,11 @@ def _catalog(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     else:
         res["next"] = ("покажи пользователю отчёт и спроси: утвердить каталог и scope или что поменять. Правки — "
                        "graph_catalog_decide, затем снова graph_catalog. Согласие: " + st["how"])
+    flags = (cat.get("drift") or {}).get("flags") or []
+    if (flags or cat.get("missing_codes")) and st["state"] != "ok":
+        res["next"] = ("первыми покажи to_decide.drift и to_decide.missing_codes: каталог просел к прошлому или коды "
+                       "типов задач из спеки остались без узла — спроси, это решение (scope, слияние) или регрессия; "
+                       "регрессию не утверждай. ") + res["next"]
     if cat.get("problems") and not dup:
         # на боевом прогоне модель называла их «наследием, не блокируют» и шла к согласию — а это решения
         # человека, которые НЕ применились (split «UI-UX Описание» так и не разделил экраны)
@@ -255,7 +330,7 @@ def _assign_start(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
 def _assign_put(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     ok, why = CT.approved(root)
     if not ok:
-        raise ToolError(why, ["E-catalog-unapproved"])
+        raise ToolError(why, ["E-catalog-unapproved"], blameless=True)
     plan, errs = AS.put(root, args["item_id"], args)
     if errs:
         raise ToolError("раскладка не принята:\n" + "\n".join(f"- [{c}] {m}" for c, m in errs),
@@ -306,7 +381,10 @@ def _link_put(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _sync(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
-    return SY.sync(root, _need_cfg(root))
+    try:
+        return SY.sync(root, _need_cfg(root))
+    except SY.SyncError as e:
+        raise ToolError(str(e), [e.code])
 
 
 def _card_start(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -337,6 +415,13 @@ def _edges_decide(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
 def _delta_decide(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
     try:
         return RV.delta_decide(root, _need_cfg(root), args.get("decisions") or [])
+    except RV.ReviewError as e:
+        raise ToolError(str(e), [e.code])
+
+
+def _stubs_decide(root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return RV.stubs_decide(root, _need_cfg(root), args.get("targets") or [], args.get("why") or "")
     except RV.ReviewError as e:
         raise ToolError(str(e), [e.code])
 
@@ -387,8 +472,17 @@ TOOLS: Dict[str, Dict[str, Any]] = {
     "graph_status": {
         "fn": _status,
         "description": "Состояние spec-graph в проекте: инициализирован ли, а если нет — вопросы первого "
-                       "запуска с кандидатами. Первый ход команды /graph.",
+                       "запуска с кандидатами. Первый ход команды /forge-graph.",
         "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "graph_archive": {
+        "fn": _archive,
+        "description": "Начать граф заново: состояние движка (.spec-graph/: каталог, решения, очереди, планы, "
+                       "рёбра) и vault переносятся в .spec-graph/archive/<метка>/; конфиг остаётся. Только по "
+                       "явной просьбе пользователя («заархивируй граф», «строим новый»). Живой прогон — отказ.",
+        "schema": {"type": "object",
+                   "properties": {"reason": {"type": "string", "description": "просьба пользователя своими словами"}},
+                   "required": ["reason"], "additionalProperties": False},
     },
     "graph_init": {
         "fn": _init,
@@ -414,7 +508,9 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "schema": {"type": "object",
                    "properties": {"queue": _QUEUE_PROP,
                                   "batch": {"type": "boolean", "description": "пачка до queue.parallel единиц для "
-                                            "параллельных субагентов (висящие в аренде — первыми)"}},
+                                            "параллельных субагентов (висящие в аренде — первыми)"},
+                                  "after": {"type": "string", "description": "cursor из прошлого ответа graph_next "
+                                            "(передавай как есть)"}},
                    "required": ["queue"], "additionalProperties": False},
     },
     "graph_scan": {
@@ -463,8 +559,9 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "fn": _catalog_decide,
         "description": "Записать решения ЧЕЛОВЕКА по каталогу (после его ответа): {action: merge, into, names}, "
                        "{action: split, node, file, name, kind?, key?}, {action: rename, node, name}, {action: move, node, "
-                       "service}, {action: drop, node}, {action: scope, include}, {action: revoke, index} (номер записи "
-                       "в _graph/decisions.md); у каждого — why. Узел — id `n-…` или имя, которое носит ровно один узел; "
+                       "service}, {action: retype, node, kind, role?, subkind?} (вид узла), {action: drop, node}, {action: scope, "
+                       "include}, {action: revoke, index} (номер записи в _graph/decisions.md); у каждого, кроме revoke, — "
+                       "why со слов пользователя; лишнее поле — отказ. Узел — id `n-…` или имя, которое носит ровно один узел; "
                        "неоднозначное или неприменимое решение — отказ с перечнем id, журнал не меняется.",
         "schema": {"type": "object", "properties": {"actions": {"type": "array", "items": {"type": "object"}}},
                    "required": ["actions"], "additionalProperties": False},
@@ -564,6 +661,14 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "schema": {"type": "object", "properties": {"decisions": {"type": "array"}},
                    "required": ["decisions"], "additionalProperties": False},
     },
+    "graph_stubs_decide": {
+        "fn": _stubs_decide,
+        "description": "Решение пользователя по частым целям без узла (отчёт связей, раздел 5): targets [имя | {name, "
+                       "kind?, subkind?}], why — заглушка на каждую (узел без текста спеки, статус stub), вопросы к ним "
+                       "становятся связями. Вид по умолчанию: uses_data → таблица, calls → внешняя система.",
+        "schema": {"type": "object", "properties": {"targets": {"type": "array"}, "why": {"type": "string"}},
+                   "required": ["targets", "why"], "additionalProperties": False},
+    },
     "graph_validate": {
         "fn": _validate,
         "description": "Проверить граф: счётчики по кодам E-*/W-*, первые 10 нарушений с путями; полностью — "
@@ -633,6 +738,15 @@ TOOLS: Dict[str, Dict[str, Any]] = {
                                                     "blocks": {"type": "array", "items": {"type": "string"}}},
                    "additionalProperties": False},
     },
+    "graph_queue_retry": {
+        "fn": _queue_retry,
+        "description": "Вернуть в работу БРОШЕННЫЕ единицы очереди (после трёх отказов) — только по решению "
+                       "пользователя: попытки с нуля, единица снова pending. items — id единиц (пусто — все брошенные).",
+        "schema": {"type": "object",
+                   "properties": {"queue": _QUEUE_PROP, "items": {"type": "array", "items": {"type": "string"}},
+                                  "why": {"type": "string", "description": "решение пользователя своими словами"}},
+                   "required": ["queue", "why"], "additionalProperties": False},
+    },
     "graph_queue_status": {
         "fn": _queue_status,
         "description": "Сводка очереди: сколько единиц в каждом статусе, брошенные единицы и топ кодов отказа.",
@@ -680,8 +794,15 @@ def _call(name: str, root: Path, args: Dict[str, Any]) -> Dict[str, Any]:
                 raise ToolError(str(qe), [qe.code])
             leased = True
         fn: Callable[[Path, Dict[str, Any]], Dict[str, Any]] = tool["fn"]
-        res = fn(root, args)
+        try:
+            res = fn(root, args)
+        except B.SourceError as se:          # исходник не читается — отказ с именем файла, не трейсбек
+            raise ToolError(str(se), [se.code], blameless=True)
     except ToolError as e:
+        if leased and e.blameless:
+            M.record_call(root, name, "rejected", codes=e.codes, refs=refs, duration_ms=elapsed())
+            raise ToolError(f"{e}\nэто не ошибка ответа: попытка не потрачена, аренда за тобой — сдай тот же "
+                            f"item_id «{args['item_id']}», когда причина будет снята", e.codes, blameless=True) from e
         if leased:
             st = Q.settle(root, queue, args["item_id"], False, e.codes, _cfg(root))
             if st["status"] == "abandoned":

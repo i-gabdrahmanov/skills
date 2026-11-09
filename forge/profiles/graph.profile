@@ -8,6 +8,6 @@ skill config-helper
 # только скрипты: их импортируют хуки и брифы (pipeline_phases, resolve_phases, skill_paths,
 # init_pipeline_config, doctor) — без SKILL.md, чтобы Java-конвейер не светился скиллом
 skill-scripts feature-pipeline
-# /graph репо спеки запускает ветку specgraph напрямую (router не нужен)
+# /forge-graph репо спеки запускает ветку specgraph напрямую (router не нужен)
 commands spec-graph/commands
 mcp spec-graph

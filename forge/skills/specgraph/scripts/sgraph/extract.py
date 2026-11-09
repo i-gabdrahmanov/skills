@@ -19,6 +19,8 @@ from __future__ import annotations
 import copy
 import json
 import re
+import unicodedata
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -26,11 +28,12 @@ from . import blocks as B
 from . import fsutil as FS
 from . import keys as K
 from . import ontology as O
+from . import sqlref as SQ
 
 DEFAULTS = Path(__file__).resolve().parents[2] / "references" / "extract-defaults.json"
 CANDIDATES_REL = ".spec-graph/candidates"
 MATCH_TYPES = ("heading_http", "body_http_line", "openapi_fence", "heading_markers", "code_line", "code_table",
-               "file_title", "service_file", "topic_regex", "phrase")
+               "file_title", "service_file", "topic_regex", "phrase", "folder_code", "code_title", "sql_tables")
 _BOLD = re.compile(r"^\*\*([^*\n]+)\*\*\s*$")
 _CLEAN = (re.compile(r"^\[[^\]]+\]\s*"), re.compile(r"^(?:раздел|глава|section|chapter)\s+\d+(?:\.\d+)*\.?\s+", re.I),
           re.compile(r"^\d+(?:\.\d+)*\\?[.)]?\s+"))
@@ -69,7 +72,7 @@ def load_rules(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             raise ExtractError(f"правило {r.get('id')}: неизвестный тип матчера «{r.get('match')}»")
         if r.get("kind") not in ont.kinds:
             raise ExtractError(f"правило {r['id']}: нет вида «{r.get('kind')}» в онтологии")
-        for f in ("regex", "header_regex"):
+        for f in ("regex", "header_regex", "code_re", "key_regex"):
             if f in r:
                 re.compile(r[f], re.I)
     re.compile(data["kafka_topic_re"])
@@ -105,8 +108,13 @@ def safe_name(name: str, forbidden: str) -> str:
     """Имя кандидата, годное в имя узла (оно же имя файла заметки и ссылка [[…]]): разделители пути
     «/ \\ |» — в дефис («UI/UX Описание» → «UI-UX Описание»), прочие запрещённые — в пробел, без
     точки в конце. Модель берёт имя кандидата как есть — раньше «UI/UX» отбивал черновик."""
+    name = unicodedata.normalize("NFC", name)          # имена папок macOS бывают в NFD
     out = "".join("-" if c in "/\\|" else " " if c in forbidden else c for c in name)
-    return re.sub(r"\s+", " ", out).strip().rstrip(".").strip()
+    out = re.sub(r"\s+", " ", out).strip().rstrip(".").strip()
+    while len(out.encode("utf-8")) > O.NAME_MAX_BYTES:    # длинный заголовок — по границе слова, в пределах имени файла
+        cut = out.rsplit(" ", 1)[0] if " " in out else out[:-1]
+        out = cut.rstrip(" .,;:—-")
+    return out
 
 
 def sections(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -173,9 +181,43 @@ def _text(blocks, a, b):
     return "".join(blk["text"] for blk in blocks[a:b])
 
 
+_BRACKET = re.compile(r"^\[([^\]]+)\]\s*(.*)$")
+
+
+def folder_codes(rel: str, rules: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Коды папок пути `…/[код] Имя/…` по правилам folder_code: [{code, name, folder, rule}] — самая
+    внутренняя папка с кодом. Метки без кода (`[UI]`, `[СБОЛпро]`) правило не трогает: код задаёт `code_re`."""
+    out = []
+    parts = rel.split("/")[:-1]
+    for r in rules["rules"]:
+        if r.get("match") != "folder_code":
+            continue
+        code_re = re.compile(r.get("code_re") or r"[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+")
+        for i in range(len(parts) - 1, -1, -1):
+            m = _BRACKET.match(parts[i].strip())
+            if m and code_re.fullmatch(m.group(1).strip()) and clean_title(m.group(2)):
+                out.append({"code": m.group(1).strip(), "name": clean_title(m.group(2)),
+                            "folder": "/".join(parts[:i + 1]), "rule": r["id"]})
+                break
+    return out
+
+
+def corpus_info(files: List[str], rules: Dict[str, Any]) -> Dict[str, Any]:
+    """Сведения о корпусе для правил, которым мало одного файла: коды папок (`code_title` узнаёт их в
+    заголовках реестра) и списки файлов папок (у папки без README операция — без собственного текста)."""
+    codes: Dict[str, Dict[str, str]] = {}
+    folders: Dict[str, List[str]] = {}
+    for rel in sorted(files):
+        for fc in folder_codes(rel, rules):
+            codes.setdefault(fc["code"].lower(), fc)
+            folders.setdefault(fc["folder"], []).append(rel)
+    return {"codes": codes, "folders": folders}
+
+
 def extract_blocks(blocks: List[Dict[str, Any]], rel: str, cfg: Dict[str, Any],
-                   rules: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                   rules: Optional[Dict[str, Any]] = None, corpus: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     rules = rules or load_rules(cfg)
+    corpus = corpus or corpus_info([rel], rules)
     ont = O.load()
     svc = service_of(rel, cfg)
     secs = sections(blocks)
@@ -191,7 +233,7 @@ def extract_blocks(blocks: List[Dict[str, Any]], rel: str, cfg: Dict[str, Any],
             name = safe_name(name, ont.forbidden)
         c = {"kind": kind, "name_hint": name, "blocks": blk_ids, "rule": rule["id"],
              "confidence": rule.get("confidence", "medium")}
-        for f in ("role", "subkind"):
+        for f in ("role", "subkind", "auto", "stub"):
             if rule.get(f):
                 c[f] = rule[f]
         if ont.owned_by_service(kind) and svc:
@@ -206,6 +248,12 @@ def extract_blocks(blocks: List[Dict[str, Any]], rel: str, cfg: Dict[str, Any],
             same = (key and prev.get("key") == key) or (not key and prev["kind"] == kind and prev["name_hint"] == name)
             if same:
                 prev["blocks"] = prev["blocks"] + [b for b in blk_ids if b not in prev["blocks"]]
+                if prev.get("stub") and not rule.get("stub"):
+                    # таблица описана своим разделом — уже не заглушка: имя и раздел у описания
+                    prev.pop("stub")
+                    prev.update(name_hint=name, rule=rule["id"])
+                    if section is not None:
+                        prev["section"] = blocks[secs[section]["head"]]["id"]
                 return prev
         cands.append(c)
         if section is not None:
@@ -216,6 +264,22 @@ def extract_blocks(blocks: List[Dict[str, Any]], rel: str, cfg: Dict[str, Any],
     for r in rules["rules"]:
         rules_by_type.setdefault(r["match"], []).append(r)
 
+    # реестр типов задач: раздел, в заголовке которого код папки другой части спеки, и рядом (у того же
+    # родителя) ещё такие же — перечень типов. Одиночное упоминание кода в заголовке (шедулер «… код_операции»)
+    # реестром не считается: иначе раздел шедулера стал бы текстом операции
+    own_folders = {fc["folder"] for fc in folder_codes(rel, rules)}
+    code_sec: Dict[int, Dict[str, str]] = {}
+    for si, s in enumerate(secs):
+        if si == 0 and s["level"] == min((x["level"] for x in secs), default=1) or s["start"] in stop_idx:
+            continue
+        for low, fc in corpus.get("codes", {}).items():
+            if fc["folder"] not in own_folders and re.search(r"(?<![\w])" + re.escape(low) + r"(?![\w])",
+                                                              norm_ws(s["raw"]).lower()):
+                code_sec[si] = fc
+                break
+    siblings = Counter(secs[si]["parent"] for si in code_sec)
+    registry = {si: fc for si, fc in code_sec.items() if siblings[secs[si]["parent"]] >= 2}
+
     for si, s in enumerate(secs):
         if s["start"] in stop_idx:
             continue
@@ -223,6 +287,13 @@ def extract_blocks(blocks: List[Dict[str, Any]], rel: str, cfg: Dict[str, Any],
         span_text = _text(blocks, s["start"], s["end"])
         own = blocks[s["start"] + 1:s["own_end"]]
         taken = False
+        if si in registry:
+            fc = registry[si]
+            for r in rules_by_type.get("code_title", []):
+                title = clean_title(re.sub(r"[\[(`]?\s*" + re.escape(fc["code"]) + r"\s*[\])`]?", " ", s["raw"],
+                                           flags=re.I)).strip(" -—–:")
+                add(r, title or fc["name"], span_ids, f"{r.get('key_prefix', 'task')}:{fc['code']}", si)
+                taken = True
         for r in rules_by_type.get("heading_http", []):
             hits = K.find_http(s["title"])
             if hits:
@@ -257,10 +328,17 @@ def extract_blocks(blocks: List[Dict[str, Any]], rel: str, cfg: Dict[str, Any],
                 if any(_word_start(s["title"], mk) for mk in r.get("markers", [])):
                     if r.get("requires_topic") and not topic_re.search(span_text):
                         continue
-                    add(r, s["title"], span_ids, None, si, {"_heading_rule": True})
+                    key = None
+                    if r.get("key_regex"):
+                        km = re.search(r["key_regex"], s["title"])
+                        key = f"{r.get('key_prefix', 'table')}:{km.group(1).lower()}" if km else None
+                        if key is None and r.get("require_key"):
+                            continue
+                    add(r, km.group(1) if key else s["title"], span_ids, key, si, {"_heading_rule": True})
                     taken = True
                     break
-        for r in rules_by_type.get("code_line", []):
+        # код в строке раздела, уже занятого другим правилом (шедулер «Тип задачи: X»), — не текст операции
+        for r in [] if taken else rules_by_type.get("code_line", []):
             rx = re.compile(r["regex"], re.I)
             for b in own:
                 mm = rx.search(norm_ws(b["text"]))
@@ -287,7 +365,7 @@ def extract_blocks(blocks: List[Dict[str, Any]], rel: str, cfg: Dict[str, Any],
                 continue
             for row in lines[2:]:
                 cells = [norm_ws(c).strip().strip("`") for c in row.strip().strip("|").split("|")]
-                if len(cells) >= 2 and re.fullmatch(r"[A-Z][A-Z0-9_]+", cells[0]) and cells[1]:
+                if len(cells) >= 2 and re.fullmatch(r.get("code_re") or r"[A-Z][A-Z0-9_]+", cells[0]) and cells[1]:
                     add(r, cells[1], [b["id"]], f"{r.get('key_prefix', 'task')}:{cells[0]}")
 
     first_head = next((s for s in secs if blocks[s["head"]]["type"] == "heading"), None)
@@ -309,6 +387,24 @@ def extract_blocks(blocks: List[Dict[str, Any]], rel: str, cfg: Dict[str, Any],
                 continue
             for t in topic_re.findall(b["text"]):
                 add(r, t, [b["id"]], K.topic_key(t))
+    for r in rules_by_type.get("folder_code", []):
+        for fc in folder_codes(rel, {"rules": [r]}):
+            members = sorted(corpus.get("folders", {}).get(fc["folder"]) or [rel])
+            heads = [m for m in members if m.rsplit("/", 1)[-1].lower() in [h.lower() for h in r.get("head_files") or []]]
+            key = f"{r.get('key_prefix', 'task')}:{fc['code']}"
+            if heads and rel == heads[0]:
+                add(r, fc["name"], [b["id"] for b in blocks], key)
+            elif not heads and rel == members[0]:
+                # у папки нет README — операция есть (по структуре), своего текста нет: заглушка
+                add(dict(r, stub=True), fc["name"], [], key)
+    for r in rules_by_type.get("sql_tables", []):
+        for i, b in enumerate(blocks):
+            if i in stop_idx:
+                continue
+            for frag in SQ.fragments(b["text"]):
+                for st in SQ.statements(frag):
+                    for t, _mode in SQ.tables(st):
+                        add(r, t, [b["id"]], f"{r.get('key_prefix', 'table')}:{t.lower()}")
     for r in rules_by_type.get("phrase", []):
         rx = re.compile(r["regex"])
         for i, b in enumerate(blocks):
@@ -322,9 +418,10 @@ def extract_blocks(blocks: List[Dict[str, Any]], rel: str, cfg: Dict[str, Any],
     return {"file": rel, "service": svc, "candidates": cands}
 
 
-def extract_file(root: Path, rel: str, cfg: Dict[str, Any], rules: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def extract_file(root: Path, rel: str, cfg: Dict[str, Any], rules: Optional[Dict[str, Any]] = None,
+                 corpus: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     data = B.load(root, rel) or B.scan_file(root, rel)
-    res = extract_blocks(data["blocks"], rel, cfg, rules)
+    res = extract_blocks(data["blocks"], rel, cfg, rules, corpus)
     p = Path(root) / CANDIDATES_REL / (rel + ".json")
     p.parent.mkdir(parents=True, exist_ok=True)
     FS.write_text(p, json.dumps(res, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")

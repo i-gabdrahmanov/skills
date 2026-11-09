@@ -5,7 +5,7 @@
 #   bash install.sh forge    /path/to/back-repo     # бэк-репо: полный forge (профиль back)
 #   bash install.sh forge-ui /path/to/front-repo    # фронт-репо: forge-ui (профиль ui)
 #   bash install.sh spec-graph /path/to/spec-repo   # репо спеки: spec-graph (профиль graph)
-#   bash install.sh forge /path/to/repo --with-graph # спека лежит в репо кода: forge + граф спеки (/graph)
+#   bash install.sh forge /path/to/repo --with-graph # спека лежит в репо кода: forge + граф спеки (/forge-graph)
 #
 # Установки раздельные: одна поставка на репо (хуки control-plane у них общие — две поставки в
 # одном репо гоняли бы каждый хук дважды), вторая — отказ с подсказкой, как снять первую.
@@ -128,11 +128,11 @@ mkdir -p "$EXT_ROOT"
 STAGE="$(mktemp -d "$EXT_ROOT/.$KIND.new.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 if [ "$WITH_GRAPH" -eq 1 ]; then
-  # граф спеки в бэк-поставку (X.2, D2): профиль back без исключения specgraph + /graph + MCP spec-graph;
+  # граф спеки в бэк-поставку (X.2, D2): профиль back без исключения specgraph + /forge-graph + MCP spec-graph;
   # метка «with graph» — по ней update.sh переставит поставку с тем же флагом
   {
     forge_strip_comments "$PROFILE_FILE" | grep -vx 'exclude-skill specgraph'
-    printf '%s\n' "# --with-graph: спека в репо кода — скилл specgraph, команда /graph, MCP spec-graph" \
+    printf '%s\n' "# --with-graph: спека в репо кода — скилл specgraph, команда /forge-graph, MCP spec-graph" \
       "with graph" "commands spec-graph/commands" "mcp spec-graph"
   } > "$STAGE/.forge-profile"
   PROFILE_FILE="$STAGE/.forge-profile"

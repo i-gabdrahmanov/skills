@@ -188,7 +188,7 @@ BRANCHES = {
         },
         # Продуктивные инструменты движка spec-graph (MCP `spec-graph`): те, что СДАЮТ решение модели по единице очереди
         # (черновик узлов файла, раскладка блоков) — их вызывает субагент единицы, не главный агент. НЕ входят: graph_status,
-        # graph_init, graph_scan, graph_profile, graph_survey, graph_next, graph_queue_status, graph_catalog, graph_catalog_decide
+        # graph_init, graph_scan, graph_profile, graph_survey, graph_next, graph_queue_status, graph_queue_retry, graph_catalog, graph_catalog_decide
         # (решение человека вносит оркестратор), graph_assign_start, graph_split (механика без решений модели; пишет только
         # по утверждённому каталогу). graph-link — задачи 2.x.
         "phase_tools": {

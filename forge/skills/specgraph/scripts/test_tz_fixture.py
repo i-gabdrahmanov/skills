@@ -63,8 +63,11 @@ class Nodes(unittest.TestCase):
                 self.assertEqual(ONT.check_name(n["kind"], n["name"], n.get("service")), [])
                 path = ONT.path_for(n["kind"], n["name"], n.get("service"), n.get("subkind"))
                 self.assertTrue(path.endswith(".md"))
-                file = n["source"].split("#", 1)[0]
-                self.assertTrue((SRC / file).is_file(), file)
+                if n.get("stub"):          # заглушка: своего текста в спеке нет — и источника тоже
+                    self.assertNotIn("source", n)
+                else:
+                    file = n["source"].split("#", 1)[0]
+                    self.assertTrue((SRC / file).is_file(), file)
                 if ONT.kinds[n["kind"]].get("roles"):
                     self.assertIn(n.get("role"), ONT.kinds[n["kind"]]["roles"])
                 if ONT.kinds[n["kind"]]["owner"] == "service":
@@ -72,7 +75,7 @@ class Nodes(unittest.TestCase):
 
     def test_every_source_except_draft_gives_nodes(self):
         files = {p.relative_to(SRC).as_posix() for p in SRC.rglob("*.md")}
-        used = {n["source"].split("#", 1)[0] for n in G["nodes"]}
+        used = {n["source"].split("#", 1)[0] for n in G["nodes"] if not n.get("stub")}
         self.assertEqual(files - used, set(G["exclude"]))
 
 

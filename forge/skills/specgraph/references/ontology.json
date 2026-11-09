@@ -18,14 +18,14 @@
   },
   "edges": {
     "belongs_to":   {"title_ru": "принадлежит сервису", "from": ["endpoint", "scheduler", "kafka-op", "algorithm"], "to": ["service"], "inverse": "operations", "evidence": "optional", "impact": "none"},
-    "calls":        {"title_ru": "вызывает", "from": ["endpoint", "scheduler", "kafka-op", "algorithm", "screen"], "to": ["endpoint", "external"], "inverse": "called_by", "evidence": "required", "impact": "inverse"},
+    "calls":        {"title_ru": "вызывает", "from": ["endpoint", "scheduler", "kafka-op", "algorithm", "screen"], "to": ["endpoint", "external"], "inverse": "called_by", "evidence": "required", "impact": "inverse", "stub": {"kind": "external"}},
     "invokes":      {"title_ru": "запускает", "from": ["endpoint", "scheduler", "kafka-op", "algorithm"], "to": ["algorithm", "kafka-op:publish"], "inverse": "invoked_by", "evidence": "required", "impact": "inverse", "same_service": true},
     "publishes_to": {"title_ru": "публикует в топик", "from": ["endpoint", "scheduler", "algorithm", "kafka-op:publish"], "to": ["topic"], "inverse": "publishers", "evidence": "required", "impact": "forward"},
     "consumes":     {"title_ru": "читает топик", "from": ["kafka-op:consume"], "to": ["topic"], "inverse": "consumers", "evidence": "required", "impact": "inverse"},
     "creates_task": {"title_ru": "формирует задачу", "from": ["scheduler", "endpoint", "kafka-op"], "to": ["operation"], "inverse": "created_by", "evidence": "required", "impact": "forward"},
     "closes_task":  {"title_ru": "закрывает задачу", "from": ["scheduler", "endpoint", "kafka-op"], "to": ["operation"], "inverse": "closed_by", "evidence": "required", "impact": "forward"},
     "ui_of":        {"title_ru": "UI задачи", "from": ["screen"], "to": ["operation"], "inverse": "screens", "evidence": "required", "impact": "both"},
-    "uses_data":    {"title_ru": "использует данные", "from": ["endpoint", "scheduler", "kafka-op", "algorithm", "screen"], "to": ["data"], "inverse": "used_by", "evidence": "required", "impact": "inverse"},
+    "uses_data":    {"title_ru": "использует данные", "from": ["endpoint", "scheduler", "kafka-op", "algorithm", "screen"], "to": ["data"], "inverse": "used_by", "evidence": "required", "impact": "inverse", "stub": {"kind": "data", "subkind": "table", "key": "table"}},
     "related":      {"title_ru": "связана с операцией", "from": ["operation"], "to": ["operation"], "inverse": "related", "symmetric": true, "evidence": "required", "impact": "none"},
     "part_of":      {"title_ru": "входит в процесс", "from": ["operation", "process"], "to": ["process"], "inverse": "includes", "evidence": "required", "impact": "forward"}
   },

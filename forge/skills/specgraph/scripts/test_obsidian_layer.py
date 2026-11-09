@@ -25,6 +25,8 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 import _testkit as K  # noqa: E402
+
+G = json.loads((K.FIX / "expected" / "graph.json").read_text(encoding="utf-8"))
 from sgraph import fm as F  # noqa: E402
 from sgraph import obsidian as OB  # noqa: E402
 from sgraph import ontology as O  # noqa: E402
@@ -70,8 +72,9 @@ class GraphJson(_Base):
         res = self.build()
         self.assertEqual(res["mode"], "markdown")
         groups = self.graph_json()["colorGroups"]
-        self.assertEqual(len(groups), len(O.load().kinds))
+        self.assertEqual(len(groups), len(O.load().kinds) + 1)
         queries = [g["query"] for g in groups]
+        self.assertEqual(queries[0], "[status:stub]", "заглушка — первой группой: серая при любом виде")
         self.assertLess(queries.index('path:"services/" path:"/schedulers/"'), queries.index('path:"services/"'),
                         "узкий запрос раньше широкого: первая подходящая группа красит узел")
         self.assertEqual(self.build()["changed"], [])
@@ -185,6 +188,46 @@ class Data(unittest.TestCase):
         code = re.sub(r'"""[\s\S]*?"""', "", (SCRIPTS / "sgraph" / "obsidian.py").read_text(encoding="utf-8"))
         code = re.sub(r"""(\[\s*|\.get\(\s*|[{,]\s*)["'][\w-]+["'](\s*[\]:,)])""", "", code)
         self.assertEqual([m.group(0) for m in rx.finditer(code)], [])
+
+
+class Maps(_Base):
+    """Graph view не красит рёбра и не показывает их тип — карты Canvas: ребро подписано и окрашено."""
+
+    def canvas(self, name):
+        return json.loads((self.root / "docs" / "graph" / "_graph" / "maps" / f"{name}.canvas").read_text(encoding="utf-8"))
+
+    def test_operation_map(self):
+        res = self.build()
+        self.assertEqual(res["maps"], sum(1 for n in G["nodes"] if n["kind"] == "operation"))
+        m = self.canvas("Укомплектование")
+        x = {n["file"].rsplit("/", 1)[-1][:-3]: n["x"] for n in m["nodes"]}
+        self.assertEqual(x["Укомплектование"], 0)
+        self.assertGreater(x["Шедулер формирования задачи укомплектования"], 0, "кто формирует — правее операции")
+        self.assertGreater(x["upz-adapter POST api-v1-upz-tasks"], x["Шедулер формирования задачи укомплектования"],
+                           "что вызывает шедулер — ещё правее")
+        self.assertNotIn("task-service", x, "belongs_to на карте не рисуется")
+        layer = OB.load()
+        colors = OB.edge_colors(O.load(), layer)
+        labels = {(e["label"], e["color"]) for e in m["edges"]}
+        self.assertIn(("формирует задачу", colors["creates_task"]), labels)
+        self.assertIn(("UI задачи", colors["ui_of"]), labels)
+        stub = next(n for n in m["nodes"] if n["file"] == "data/table/task.md")
+        self.assertEqual(stub["color"], "#%06x" % layer["status_groups"][0]["rgb"], "заглушка серая и на карте")
+        start = (self.root / "docs" / "graph" / "_graph" / "Начало.md").read_text(encoding="utf-8")
+        self.assertIn("[[_graph/maps/Укомплектование.canvas|карта]]", start)
+        self.assertIn("| цвет на картах |", start)
+        self.assertEqual(self.build()["changed"], [], "повтор — 0 изменений")
+
+    def test_stale_map_removed(self):
+        self.build()
+        old = self.root / "docs" / "graph" / "_graph" / "maps" / "Старая операция.canvas"
+        st_p = self.root / ".spec-graph" / "obsidian.json"
+        st = json.loads(st_p.read_text(encoding="utf-8"))
+        st["maps"].append(old.name)
+        st_p.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+        old.write_text("{}", encoding="utf-8")
+        self.assertIn(old.relative_to(self.root).as_posix(), self.build()["changed"])
+        self.assertFalse(old.exists())
 
 
 if __name__ == "__main__":

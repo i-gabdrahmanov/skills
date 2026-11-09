@@ -9,7 +9,7 @@
 машины (корень проекта — `<проект>`, домашний каталог — `~`) — его можно вынести из окружения.
 
 Проверки: собранный extension цел (манифесты, MCP, hooks.json — forge_extension.check); в профиле поставки
-есть specgraph и MCP spec-graph; команда /graph на месте; хук graph-guard зарегистрирован; ссылка в
+есть specgraph и MCP spec-graph; команда /forge-graph на месте; хук graph-guard зарегистрирован; ссылка в
 рантайме (gigacode или qwen) ведёт на эту поставку; MCP spec-graph отвечает на initialize; движок
 импортируется и читает конфиг проекта.
 
@@ -74,10 +74,10 @@ def run(root: Path) -> Tuple[List[str], List[str]]:
         lines.append(f"- MCP spec-graph: в манифесте, {how}")
         if not ok:
             bad.append(f"MCP spec-graph {how}")
-    cmd = EXT / "commands" / "graph.md"
-    lines.append(f"- команда /graph: {'на месте' if cmd.is_file() else 'нет'}")
+    cmd = EXT / "commands" / "forge-graph.md"
+    lines.append(f"- команда /forge-graph: {'на месте' if cmd.is_file() else 'нет'}")
     if not cmd.is_file():
-        bad.append("нет команды commands/graph.md")
+        bad.append("нет команды commands/forge-graph.md")
     hooks = (EXT / "hooks" / FE.HOOKS_FILE).read_text(encoding="utf-8") if (EXT / "hooks" / FE.HOOKS_FILE).is_file() else ""
     lines.append(f"- хук graph-guard: {'зарегистрирован' if 'graph-guard.py' in hooks else 'нет'}")
     if "graph-guard.py" not in hooks:
@@ -103,7 +103,7 @@ def run(root: Path) -> Tuple[List[str], List[str]]:
         v = D._versions(root, O.load(root))
         lines.append(f"- движок: {v['engine']}; онтология: v{v['ontology']}, локальная: {v['ontology_local']}")
         if cfg is None:
-            lines.append(f"- конфиг .spec-graph/config.json: {'нет — первый запуск /graph' if not errors else 'с ошибками'}")
+            lines.append(f"- конфиг .spec-graph/config.json: {'нет — первый запуск /forge-graph' if not errors else 'с ошибками'}")
         else:
             env = D._environment(root, cfg)
             lines.append(f"- Obsidian: core-plugins.json — {env['obsidian_core_plugins']}; bases: {env['obsidian_bases']}; "

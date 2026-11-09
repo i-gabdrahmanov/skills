@@ -1,7 +1,10 @@
 {
-  "_comment": "Obsidian-слой графа (задача 3.3, D12): только core-плагины. palette — цвета групп graph view по видам в порядке онтологии (0xRRGGBB); entries — точки входа _graph/Начало.md (вид и счётчики строки: ключ frontmatter и подпись); views — таблицы «вид → колонки-ключи frontmatter»: Bases-файлы .base, если плагин bases включён в .obsidian/core-plugins.json, иначе те же таблицы Markdown-заметками. group — колонка, по которой Markdown-вид делится на разделы.",
+  "_comment": "Obsidian-слой графа (задача 3.3, D12): только core-плагины. palette — цвета групп graph view по видам в порядке онтологии (0xRRGGBB); entries — точки входа _graph/Начало.md (вид и счётчики строки: ключ frontmatter и подпись); views — таблицы «вид → колонки-ключи frontmatter»: Bases-файлы .base, если плагин bases включён в .obsidian/core-plugins.json, иначе те же таблицы Markdown-заметками. group — колонка, по которой Markdown-вид делится на разделы. status_groups — группы graph view по статусу заметки (идут ПЕРВЫМИ: первая подходящая группа красит узел), заглушка серым — видно, где в спеке нет описания. Graph view рёбра не красит, поэтому maps — карты Canvas (core-плагин, открытый формат JSON Canvas): на каждый узел вида kind — его соседи на hops шагов, рёбра подписаны типом и окрашены edge_palette (порядок рёбер онтологии), узлы — цветом вида; belongs_to на картах не рисуется (он у каждого узла сервиса).",
   "version": 1,
   "palette": [7950028, 14701138, 3381759, 10233776, 16750848, 5025616, 2201331, 15277667, 9159498, 6323595, 12434877, 16761095],
+  "status_groups": [{"status": "stub", "rgb": 10395294, "title": "заглушка — описания в спеке нет"}],
+  "edge_palette": ["#9e9e9e", "#1e88e5", "#8e24aa", "#fb8c00", "#43a047", "#00897b", "#e53935", "#d81b60", "#6d4c41", "#3949ab", "#c0ca33"],
+  "maps": {"kind": "operation", "dir": "maps", "hops": 2, "max_nodes": 60, "skip_edges": ["belongs_to"]},
   "entries": [
     {"kind": "process", "counts": [{"key": "includes", "label": "операций"}]},
     {"kind": "operation", "counts": [{"key": "created_by", "label": "формируют"}, {"key": "closed_by", "label": "закрывают"},

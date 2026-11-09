@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """diag_triage.py — черновик разбора пакета диагностики (задача 4.4): `diag_triage.py <diag.md> [--prev <diag.md>]`.
 
-Читает машинный блок пакета `/graph diag` (раздел 9) и печатает таблицу находок по классам директивы
+Читает машинный блок пакета `/forge-graph diag` (раздел 9) и печатает таблицу находок по классам директивы
 `docs/specgraph/FEEDBACK-DIRECTIVE.md`: правило, бриф, онтология, баг, окружение, данные — с серьёзностью
 P0–P3 и тем, чем находка подтверждена (числа и коды из пакета). С `--prev` — динамика против прошлого
 пакета: какие коды и промахи выросли, какие ушли. Это черновик для разработчика: решение о классе и правке
@@ -32,7 +32,7 @@ def load(path: Path) -> Dict[str, Any]:
     text = Path(path).read_text(encoding="utf-8")
     m = re.search(r"```json\n(.*?)\n```", text, re.S)
     if not m:
-        raise ValueError("нет машинного блока (раздел 9) — это пакет /graph diag?")
+        raise ValueError("нет машинного блока (раздел 9) — это пакет /forge-graph diag?")
     return json.loads(m.group(1))
 
 
@@ -115,7 +115,7 @@ def dynamics(data: Dict[str, Any], prev: Dict[str, Any]) -> List[Dict[str, str]]
 
 
 QUESTIONS = """Вопросы пользователю, когда пакета мало (данные спеки не просим):
-1. Что делали: команда (/graph, /graph diag), scope, на каком шаге остановились?
+1. Что делали: команда (/forge-graph, /forge-graph diag), scope, на каком шаге остановились?
 2. Что ожидали увидеть и что увидели (в ответе агента, в Obsidian)?
 3. Был ли вопрос к вам, который показался странным или лишним? На каком шаге?
 4. Что сказал гейт (строка «✗ … шаг не закрывается» и следующие две)?
@@ -135,7 +135,7 @@ def render(findings: List[Dict[str, str]], data: Dict[str, Any]) -> str:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Черновик разбора пакета /graph diag.")
+    ap = argparse.ArgumentParser(description="Черновик разбора пакета /forge-graph diag.")
     ap.add_argument("diag")
     ap.add_argument("--prev", default=None, help="прошлый пакет того же окружения — для динамики")
     ap.add_argument("--json", action="store_true", help="находки JSON-ом (для скриптов)")

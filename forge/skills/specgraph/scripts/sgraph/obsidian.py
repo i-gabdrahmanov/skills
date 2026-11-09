@@ -6,6 +6,10 @@
     ключи и группы пользователя сохраняются; свои запросы движок помнит в `.spec-graph/obsidian.json` и
     убирает только свои устаревшие; цвет, который пользователь поменял у нашей группы, остаётся;
   • `_graph/Начало.md` — входы (процессы, операции со счётчиками, сервисы), легенда цветов и ключей рёбер;
+  • группы по статусу (заглушка — серым) — первыми, раньше групп видов;
+  • `_graph/maps/<узел>.canvas` — карты Canvas (JSON Canvas): Graph view рёбра не красит и типа связи не
+    показывает, а на карте ребро подписано типом и окрашено, узлы — цветом вида. Раскладка детерминирована:
+    узел в центре, кто на него ссылается — левее по шагам, на кого ссылается он — правее;
   • виды-таблицы `_graph/views/`: Bases (`.base`), если `bases` включён в `.obsidian/core-plugins.json`,
     иначе — те же таблицы Markdown-заметками (версия Obsidian в окружении неизвестна: слой по факту).
 Оглавление в заметке сервиса (маркер graph:toc) пишет нарезка (1.6). Что и куда — данными в
@@ -13,6 +17,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -51,6 +56,15 @@ def self_check(layer: Dict[str, Any], ont: O.Ontology) -> List[str]:
             for k in counts + (it.get("columns") or []) + ([it["group"]] if it.get("group") else []):
                 if k not in allowed:
                     errs.append(f"{where}[{i}]: ключа «{k}» нет у вида {kind}")
+    for i, g in enumerate(layer.get("status_groups") or []):
+        if g.get("status") not in ont.statuses or not isinstance(g.get("rgb"), int):
+            errs.append(f"status_groups[{i}]: status — из статусов онтологии, rgb — 0xRRGGBB")
+    if len(layer.get("edge_palette") or []) < len(ont.edges):
+        errs.append(f"edge_palette: цвет на каждое ребро онтологии ({len(ont.edges)})")
+    m = layer.get("maps")
+    if m is not None and (m.get("kind") not in ont.kinds or not isinstance(m.get("hops"), int) or m["hops"] < 1
+                          or any(e not in ont.edges for e in m.get("skip_edges") or [])):
+        errs.append("maps: kind — вид онтологии, hops ≥ 1, skip_edges — рёбра онтологии")
     names = [v.get("file") for v in layer.get("views") or []]
     if len(names) != len(set(names)) or not all(isinstance(n, str) and n and "/" not in n for n in names):
         errs.append("views: file — уникальные имена без «/»")
@@ -88,12 +102,16 @@ def _query(template: str) -> Tuple[str, int]:
     return " ".join(f'path:"{s}"' for s in segs), len(segs)
 
 
-def color_groups(ont: O.Ontology, palette: List[int]) -> List[Dict[str, Any]]:
+def color_groups(ont: O.Ontology, palette: List[int], status_groups: Optional[List[Dict[str, Any]]] = None
+                 ) -> List[Dict[str, Any]]:
+    # группы статуса — первыми: первая подходящая группа красит узел, заглушка серая при любом виде
+    head = [{"query": f"[status:{g['status']}]", "color": {"a": 1, "rgb": g["rgb"]}, "status": g["status"],
+             "title": g.get("title", g["status"])} for g in status_groups or []]
     rows = []
     for i, (kind, spec) in enumerate(ont.kinds.items()):
         q, weight = _query(spec["path"])
         rows.append((-weight, i, {"query": q, "color": {"a": 1, "rgb": palette[i % len(palette)]}, "kind": kind}))
-    return [r[2] for r in sorted(rows, key=lambda r: (r[0], r[1]))]
+    return head + [r[2] for r in sorted(rows, key=lambda r: (r[0], r[1]))]
 
 
 def merge_graph_json(current: Optional[Dict[str, Any]], ours: List[Dict[str, Any]], prev_queries: List[str]
@@ -140,17 +158,21 @@ def _start(ont: O.Ontology, layer: Dict[str, Any], nodes: List[Dict[str, Any]], 
         kind = e["kind"]
         mine = sorted((n for n in nodes if n["kind"] == kind), key=lambda n: n["name"])
         lines += [f"## {ont.kinds[kind]['title_ru']} ({len(mine)})", ""]
+        maps = layer.get("maps") or {}
         for n in mine:
             counts = ", ".join(f"{c['label']}: {len(_links(n['data'].get(c['key'])))}" for c in e.get("counts") or [])
-            lines.append(f"- {F.link(n['name'])}" + (f" — {counts}" if counts else ""))
+            card = f" · [[_graph/{maps['dir']}/{n['name']}.canvas|карта]]" if maps.get("kind") == kind else ""
+            lines.append(f"- {F.link(n['name'])}" + (f" — {counts}" if counts else "") + card)
         lines += ([] if mine else ["- нет"]) + [""]
     lines += ["## Легенда", "", "| вид | цвет в графе | запрос группы |", "|---|---|---|"]
     for g in groups:
-        lines.append(f"| {ont.kinds[g['kind']]['title_ru']} | {_hex(g['color']['rgb'])} | `{g['query']}` |")
-    lines += ["", "| ключ в свойствах | смысл | обратный ключ |", "|---|---|---|"]
+        title = ont.kinds[g["kind"]]["title_ru"] if g.get("kind") else g["title"]
+        lines.append(f"| {title} | {_hex(g['color']['rgb'])} | `{g['query']}` |")
+    lines += ["", "| ключ в свойствах | смысл | обратный ключ | цвет на картах |", "|---|---|---|---|"]
+    colors = edge_colors(ont, layer)
     for name, spec in ont.edges.items():
         inv = spec["inverse"] if spec["inverse"] != name else "— (симметрично)"
-        lines.append(f"| `{name}` | {spec['title_ru']} | `{inv}` |")
+        lines.append(f"| `{name}` | {spec['title_ru']} | `{inv}` | {colors[name]} |")
     view_ext = ".base" if mode == "bases" else ""
     lines += ["", "## Виды", ""] + [f"- [[_graph/views/{v['file']}{view_ext}|{v['file']}]]" for v in layer["views"]] + [""]
     return "\n".join(lines)
@@ -201,6 +223,82 @@ def _base_view(ont: O.Ontology, view: Dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ─── карты Canvas ──────────────────────────────────────────────────────────
+
+_W, _H, _GX, _GY = 380, 140, 220, 50
+
+
+def edge_colors(ont: O.Ontology, layer: Dict[str, Any]) -> Dict[str, str]:
+    pal = layer.get("edge_palette") or ["#9e9e9e"]
+    return {e: pal[i % len(pal)] for i, e in enumerate(ont.edges)}
+
+
+def forward_edges(ont: O.Ontology, nodes: List[Dict[str, Any]], skip: List[str]) -> List[Tuple[str, str, str]]:
+    """Прямые рёбра vault по frontmatter (обратные ключи выводятся из них — не дублируем)."""
+    names = {n["name"] for n in nodes}
+    out = set()
+    for n in nodes:
+        for edge in ont.edges:
+            if edge in skip:
+                continue
+            for t in _links(n["data"].get(edge)):
+                if t in names and t != n["name"]:
+                    out.add(tuple(sorted((n["name"], t))) + (edge,) if ont.is_symmetric(edge) else (n["name"], t, edge))
+    return sorted(out)
+
+
+def _nid(name: str) -> str:
+    return hashlib.sha1(name.encode("utf-8")).hexdigest()[:16]
+
+
+def canvas(ont: O.Ontology, layer: Dict[str, Any], nodes: Dict[str, Dict[str, Any]], edges: List[Tuple[str, str, str]],
+           center: str, kind_rgb: Dict[str, int]) -> str:
+    """Карта узла, слева направо: колонка 0 — он сам; 1 — все его соседи (кто формирует, закрывает, его UI,
+    связанные); 2 и дальше — на что ссылаются соседи (что шедулер вызывает, публикует, читает). Узлы вида
+    карты (соседние операции) дальше не разворачиваются — их мир на их собственной карте. До hops шагов и
+    max_nodes узлов. Рёбра — все прямые между узлами карты."""
+    m = layer["maps"]
+    status_rgb = {g["status"]: g["rgb"] for g in layer.get("status_groups") or []}
+    col = {center: 0}
+    frontier = [center]
+    for step in range(1, m["hops"] + 1):
+        nxt = []
+        for x in frontier:
+            if step > 1 and nodes[x]["kind"] == m["kind"]:
+                continue
+            for a, b, _e in edges:
+                there = b if a == x else a if (b == x and step == 1) else None
+                if there is not None and there not in col and len(col) < m["max_nodes"]:
+                    col[there] = step
+                    nxt.append(there)
+        frontier = sorted(set(nxt))
+    order = {k: i for i, k in enumerate(ont.kinds)}
+    by_col: Dict[int, List[str]] = {}
+    for name, c in col.items():
+        by_col.setdefault(c, []).append(name)
+    out_nodes = []
+    pos = {}
+    for c, names in sorted(by_col.items()):
+        names.sort(key=lambda x: (order.get(nodes[x]["kind"], 99), x))
+        top = -(len(names) * (_H + _GY) - _GY) // 2
+        for i, name in enumerate(names):
+            pos[name] = (c * (_W + _GX), top + i * (_H + _GY))
+            out_nodes.append({"id": _nid(name), "type": "file", "file": nodes[name]["path"], "x": pos[name][0],
+                              "y": pos[name][1], "width": _W, "height": _H,
+                              "color": _hex(status_rgb.get(nodes[name]["data"].get("status"))
+                                            or kind_rgb.get(nodes[name]["kind"], 0x9e9e9e))})
+    colors = edge_colors(ont, layer)
+    out_edges = []
+    for a, b, e in edges:
+        if a in pos and b in pos:
+            right = pos[a][0] <= pos[b][0]
+            out_edges.append({"id": _nid(f"{a}|{e}|{b}"), "fromNode": _nid(a), "toNode": _nid(b),
+                              "fromSide": "right" if right else "left", "toSide": "left" if right else "right",
+                              "toEnd": "none" if ont.is_symmetric(e) else "arrow",
+                              "label": ont.edges[e]["title_ru"], "color": colors[e]})
+    return json.dumps({"nodes": out_nodes, "edges": out_edges}, ensure_ascii=False, indent=1) + "\n"
+
+
 def build(root: Path, cfg: Dict[str, Any], dry: bool = False) -> Dict[str, Any]:
     """Записать слой; dry — ничего не писать, только перечислить, что изменилось бы (гейт check)."""
     root = Path(root)
@@ -217,7 +315,7 @@ def build(root: Path, cfg: Dict[str, Any], dry: bool = False) -> Dict[str, Any]:
     state_p = root / STATE_REL
     state = json.loads(state_p.read_text(encoding="utf-8")) if state_p.is_file() else {}
     changed = []
-    ours = color_groups(ont, layer["palette"])
+    ours = color_groups(ont, layer["palette"], layer.get("status_groups"))
     gp = vault / ".obsidian" / "graph.json"
     try:
         current = json.loads(gp.read_text(encoding="utf-8")) if gp.is_file() else None
@@ -244,15 +342,33 @@ def build(root: Path, cfg: Dict[str, Any], dry: bool = False) -> Dict[str, Any]:
             if not dry:
                 p.unlink()
             changed.append(p.relative_to(root).as_posix())
+    maps = layer.get("maps")
+    wanted_maps = set()
+    if maps:
+        by_name = {n["name"]: n for n in nodes}
+        kind_rgb = {g["kind"]: g["color"]["rgb"] for g in ours if g.get("kind")}
+        edges = forward_edges(ont, nodes, maps.get("skip_edges") or [])
+        maps_dir = vault / "_graph" / maps["dir"]
+        for n in sorted((x for x in nodes if x["kind"] == maps["kind"]), key=lambda x: x["name"]):
+            p = maps_dir / f"{n['name']}.canvas"
+            wanted_maps.add(p.name)
+            if _write(p, canvas(ont, layer, by_name, edges, n["name"], kind_rgb), dry):
+                changed.append(p.relative_to(root).as_posix())
+        for old in state.get("maps") or []:              # карта переименованного/снятого узла — наша, снимаем
+            p = maps_dir / old
+            if old not in wanted_maps and p.is_file():
+                if not dry:
+                    p.unlink()
+                changed.append(p.relative_to(root).as_posix())
     gp2 = vault / "_graph" / GUIDE_NAME
     if _write(gp2, GUIDE.read_text(encoding="utf-8"), dry):
         changed.append(gp2.relative_to(root).as_posix())
     sp = vault / "_graph" / START_NAME
     if _write(sp, _start(ont, layer, nodes, ours, mode), dry):
         changed.append(sp.relative_to(root).as_posix())
-    new_state = {"queries": [g["query"] for g in ours], "views": sorted(wanted), "mode": mode}
+    new_state = {"queries": [g["query"] for g in ours], "views": sorted(wanted), "mode": mode, "maps": sorted(wanted_maps)}
     if new_state != state and not dry:
         state_p.parent.mkdir(parents=True, exist_ok=True)
         FS.write_text(state_p, json.dumps(new_state, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-    return {"mode": mode, "changed": changed, "groups": len(ours), "views": len(wanted),
+    return {"mode": mode, "changed": changed, "groups": len(ours), "views": len(wanted), "maps": len(wanted_maps),
             "start": sp.relative_to(root).as_posix()}

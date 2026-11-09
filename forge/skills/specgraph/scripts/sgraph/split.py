@@ -33,6 +33,7 @@ from . import fm as F
 from . import fsutil as FS
 from . import keys as K
 from . import ontology as O
+from . import queue as Q
 
 REWRITES_REL = ".spec-graph/rewrites.json"
 COVERAGE_REL = ".spec-graph/coverage.json"
@@ -80,6 +81,12 @@ def _assignment(root: Path) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, D
         for u in p["unplaced"]:
             for b in u["blocks"]:
                 unplaced[b] = u
+    # блоки брошенной единицы раскладки — в unplaced: решение по ним за человеком (graph_queue_retry или
+    # разбор unplaced.md), а не дыра покрытия, которую гейт map не пропустит никогда
+    for it in Q.abandoned_items(root, "assign-section"):
+        for blk in (it.get("refs") or {}).get("blocks") or []:
+            if blk not in owner and blk not in skip and blk not in unplaced:
+                unplaced[blk] = {"blocks": [blk], "reason": "единица раскладки брошена после трёх отказов"}
     _, remap = AS.delta_resolution(root)          # решения человека по узлам дельты (2.6)
     for b, node in list(owner.items()):
         if node in remap:
@@ -186,8 +193,10 @@ def _fm_for(node: Dict[str, Any], ont: O.Ontology, existing: "OrderedDict[str, A
             data[k] = [] if (k in ont.edges or ont.edge_of_inverse(k) or k == "aliases") else None
     if ont.owned_by_service(kind) and node.get("service"):
         data["belongs_to"] = [F.link(node["service"])]
-    if data.get("status") in (None, ""):
-        data["status"] = "draft"
+    if data.get("status") in (None, "") or (node.get("stub") and data.get("status") == "draft"):
+        data["status"] = "stub" if node.get("stub") else "draft"
+    elif data.get("status") == "stub" and not node.get("stub") and not ont.kinds[kind].get("key") == "task":
+        data["status"] = "draft"          # таблицу описали разделом — заглушка стала узлом; у операции stub ставит карточка
     data["source"] = sources
     data.pop("blocks", None)              # блоки — в атрибутах маркера source, во frontmatter не дублируются
     return data, order
@@ -228,6 +237,9 @@ def split(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     ok, why = CT.approved(root)
     if not ok:
         raise SplitError(why, "E-catalog-unapproved")
+    ren = renamed(root, cfg)
+    if ren:
+        raise SplitError(renamed_hint(ren), "E-split-renamed")
     ont = O.load(root)
     vault = Path(root) / cfg["vault"]
     nodes = _nodes(root)
@@ -239,7 +251,7 @@ def split(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
                          + " — каталог поменяли после раскладки, а узел по имени и файлу не однозначен; "
                            "переразложи эти файлы или верни имя решением каталога", "E-split-unknown-node")
     files = sorted({b.rsplit("#", 1)[0] for b in list(owner) + list(skip) + list(unplaced)} |
-                   {s["file"] for n in nodes for s in n.get("sources", [])})
+                   {s["file"] for n in nodes for s in n.get("sources", [])} | set(AS.expected_files(root, cfg)))
     files_blocks = {rel: (B.load(root, rel) or B.scan_file(root, rel))["blocks"] for rel in files if (Path(root) / rel).is_file()}
     hidx = _heading_index(files_blocks, owner)
     rewrites: List[Dict[str, Any]] = []
@@ -250,7 +262,9 @@ def split(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
             if b["id"] in owner:
                 run.setdefault(owner[b["id"]], []).append(b)
         for name, blks in run.items():
-            text = "".join(_rewrite(b["text"], b, rel, name, hidx, root, vault, rewrites) for b in blks)
+            # код-блок не переписывается: пример `[x](#y)` или `![](a.png)` внутри фенса — это код, а не ссылка
+            text = "".join(b["text"] if b["type"] == "fence" else _rewrite(b["text"], b, rel, name, hidx, root, vault, rewrites)
+                           for b in blks)
             per_node.setdefault(name, []).append((rel, blks, text))
     by_service: Dict[str, Dict[str, List[str]]] = {}
     for n in nodes:
@@ -260,10 +274,10 @@ def split(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     folded: Dict[str, str] = {}
     for n in nodes:
         path = ont.path_for(n["kind"], n["name"], n.get("service"), n.get("subkind"))
-        if path.casefold() in folded:    # macOS/Windows: регистр в имени файла не различается
-            raise SplitError(f"два узла в один файл {path}: «{folded[path.casefold()]}» и «{n['name']}»",
+        if O.fold(path) in folded:    # macOS/Windows: регистр (и NFC/NFD на APFS) в имени файла не различается
+            raise SplitError(f"два узла в один файл {path}: «{folded[O.fold(path)]}» и «{n['name']}»",
                              "E-split-path")
-        folded[path.casefold()] = n["name"]
+        folded[O.fold(path)] = n["name"]
         paths[path] = n["name"]
         toc = None
         if ont.kinds[n["kind"]]["owner"] == "self":
@@ -289,6 +303,46 @@ def split(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
             "unplaced": sum(f["unplaced"] for f in cov["files"].values()),
             "unassigned": sum(f["unassigned"] for f in cov["files"].values()), "stray_notes": stray[:20],
             "retired": retired[:20]}
+
+
+def renamed(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Заметки, переименованные в Obsidian: заметка движка вне каталога, чьи блоки принадлежат узлу каталога,
+    а её имя не из имён этого узла (names_seen) — не решение каталога. Без этой проверки синк превращал все
+    её связи в «внесено человеком» (цитаты пропадали), а нарезка уносила её в retired вместе с прозой
+    аналитика и создавала заметку прежнего имени — ссылки vault, обновлённые Obsidian, висли (ревью 2026-11-08)."""
+    if not (Path(root) / CT.APPROVED_REL).is_file():
+        return []
+    ont = O.load(root)
+    vault = Path(root) / cfg["vault"]
+    nodes = _nodes(root)
+    owner, _, _ = _assignment(root)
+    _follow_renames(nodes, owner)
+    by_name = {n["name"]: n for n in nodes}
+    expected = {ont.path_for(n["kind"], n["name"], n.get("service"), n.get("subkind")) for n in nodes}
+    out = []
+    for q in sorted(vault.rglob("*.md")) if vault.is_dir() else []:
+        rel = q.relative_to(vault)
+        if rel.parts[0] in ("_graph", "_attachments") or rel.as_posix() in expected:
+            continue
+        try:
+            data, body = F.read(read_note(q))
+            found = F.blocks(body)
+        except (F.FMError, ValueError, UnicodeDecodeError):
+            continue
+        if not data.get("kind"):
+            continue
+        ids = [b for blk in found if blk["name"].startswith("source") for b in blk["attrs"].get("blocks") or []]
+        node = next((owner[b] for b in ids if b in owner), None)
+        if node in by_name and q.stem != node and q.stem not in (by_name[node].get("names_seen") or []):
+            out.append({"note": rel.as_posix(), "name": q.stem, "node": node})
+    return out
+
+
+def renamed_hint(items: List[Dict[str, str]]) -> str:
+    return ("заметки переименованы в Obsidian: " + "; ".join(f"«{r['name']}» ({r['note']}) — узел каталога «{r['node']}»"
+                                                           for r in items[:5])
+            + ". Имя узла меняет решение каталога, не файл: верни имя в Obsidian или прими новое решением "
+              "graph_catalog_decide rename (node — прежнее имя, name — новое), затем graph_catalog и утверждение")
 
 
 def _engine_note(path: Path) -> bool:
@@ -357,8 +411,14 @@ def _write_index(vault: Path, nodes, paths, ont) -> None:
 def coverage(root: Path, cfg: Dict[str, Any], files_blocks=None, owner=None, skip=None, unplaced=None) -> Dict[str, Any]:
     if files_blocks is None:
         owner, skip, unplaced = _assignment(root)
-        files = sorted({b.rsplit("#", 1)[0] for b in list(owner) + list(skip) + list(unplaced)})
-        files_blocks = {rel: (B.load(root, rel) or B.scan_file(root, rel))["blocks"] for rel in files}
+        # и файлы, где нет ни одного назначения: файл без узлов иначе выпадал из покрытия целиком
+        files = sorted({b.rsplit("#", 1)[0] for b in list(owner) + list(skip) + list(unplaced)}
+                       | set(AS.expected_files(root, cfg)))
+        files_blocks = {}
+        for rel in files:
+            data = B.load(root, rel) or ((Path(root) / rel).is_file() and B.scan_file(root, rel)) or None
+            if data:
+                files_blocks[rel] = data["blocks"]
     out = {}
     for rel, blocks in files_blocks.items():
         ids = [b["id"] for b in blocks]
@@ -377,10 +437,16 @@ def coverage(root: Path, cfg: Dict[str, Any], files_blocks=None, owner=None, ski
 
 
 def verify(root: Path, cfg: Dict[str, Any]) -> List[Tuple[str, str]]:
-    """Ошибки полноты и дословности: E-coverage (блок нигде), E-verbatim (маркер ≠ исходнику)."""
+    """Ошибки полноты и дословности: E-coverage (блок нигде), E-verbatim (маркер ≠ исходнику),
+    E-source-changed (файл спеки изменился после скана — кэш блоков и vault устарели)."""
     errs: List[Tuple[str, str]] = []
     cov = coverage(root, cfg)
     for rel, f in cov["files"].items():
+        if B.changed_since_scan(root, rel):
+            # нарезка и сверка ниже — по кэшу блоков; без этой проверки правка спеки после разведки давала
+            # старый текст в vault при «дословно» и «перенесён полностью» (ревью 2026-11-08)
+            errs.append(("E-source-changed", f"исходник {rel} изменён после разведки: в vault — текст прежней "
+                                             "версии; graph_survey заново, затем шаги graph-map по изменённым единицам"))
         for b in f["unassigned_ids"]:
             errs.append(("E-coverage", f"блок {b} не назначен ни узлу, ни skip, ни unplaced"))
     rw_p = Path(root) / REWRITES_REL

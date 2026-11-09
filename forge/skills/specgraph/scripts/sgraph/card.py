@@ -138,13 +138,20 @@ def put(root: Path, cfg: Dict[str, Any], item_id: str, fields: Dict[str, Any]) -
             lines.append(f"**{title}:** " + " ".join(parts))
     body = F.set_block(body, "card", "\n\n".join(lines))
     stub = all(fields[k] == NONE for k, _ in FIELDS)
+    qs_p = Path(root) / ".spec-graph" / "questions.json"
+    qs = json.loads(qs_p.read_text(encoding="utf-8")) if qs_p.is_file() else []
+    q = {"note": note, "edge": "card", "target": "", "reason": "у бизнес-операции нет описания в спеке (ТЗ §4)", "quote": ""}
     if stub:
         data["status"] = "stub"
-        qs_p = Path(root) / ".spec-graph" / "questions.json"
-        qs = json.loads(qs_p.read_text(encoding="utf-8")) if qs_p.is_file() else []
-        q = {"note": note, "edge": "card", "target": "", "reason": "у бизнес-операции нет описания в спеке (ТЗ §4)", "quote": ""}
         if q not in qs:
             qs.append(q)
+            FS.write_text(qs_p, json.dumps(qs, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    elif data.get("status") == "stub":
+        # описание появилось (README папки, блоки дельты) — заготовка снимается здесь: нарезка у операции
+        # stub не трогает, и раньше операция оставалась «заготовкой» навсегда (ревью 2026-11-08)
+        data["status"] = "draft"
+        if q in qs:
+            qs.remove(q)
             FS.write_text(qs_p, json.dumps(qs, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     from . import ontology as O
     ont = O.load(root)

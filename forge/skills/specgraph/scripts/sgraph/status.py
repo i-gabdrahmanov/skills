@@ -1,4 +1,4 @@
-"""status.py — `graph_status`: где проект, что делать дальше. Первый ход команды /graph.
+"""status.py — `graph_status`: где проект, что делать дальше. Первый ход команды /forge-graph.
 
 Ответ короткий и однозначный (модель — GLM 5.3 Flash): инициализирован ли проект, а если нет —
 вопросы первого запуска с кандидатами и доказательствами. Дальше по мере задач здесь появятся шаг
@@ -6,8 +6,9 @@
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Union
 
 from . import VERSION
 from . import config as C
@@ -18,7 +19,9 @@ def status(root: Path) -> Dict[str, Any]:
     cfg, errors = C.load(root)
     if errors:
         return {"engine": VERSION, "initialized": False, "config": C.CONFIG_REL, "errors": errors,
-                "next": f"почини {C.CONFIG_REL} по списку errors (файл существует — graph_init его не перезапишет)"}
+                # «почини» вело модель в Edit, а запись в .spec-graph/ хук graph-guard закрывает — цикл отказов
+                "next": f"покажи пользователю errors: {C.CONFIG_REL} правит он сам (запись туда моделью закрыта, "
+                        f"graph_init существующий файл не перезапишет), затем снова graph_status"}
     if cfg is None:
         return {"engine": VERSION, "initialized": False, "config": C.CONFIG_REL,
                 "questions": [
@@ -72,14 +75,31 @@ STEPS = ("graph-map", "graph-link", "graph-check")
 _GATE_ARG = {"graph-map": "map", "graph-link": "link", "graph-check": "check"}
 
 
+_SHELL_SPECIAL = re.compile(r"[\s'\"$`&|;<>()*?!#~{}\[\]]")
+
+
+def q(path: Union[str, Path], inner: bool = False) -> str:
+    """Путь для готовой команды shell: прямые слэши (рантайм режет строку по POSIX, backslash съедается);
+    с пробелом или спецсимволом — в кавычках, внутри --cmd — в одинарных. Без кавычек каталог
+    «My Spec Repo» превращал `--project` в `…/My` и лишний аргумент `Spec` (ревью 2026-11-08)."""
+    s = str(path).replace("\\", "/")
+    if _SHELL_SPECIAL.search(s):
+        return f"'{s}'" if inner else f'"{s}"'
+    return s
+
+
 def _py(inner: bool = False) -> str:
-    """Интерпретатор движка (здоровый — им же запущен MCP), прямые слэши; внутри --cmd — в
-    одинарных кавычках, если в пути пробел."""
+    """Интерпретатор движка (здоровый — им же запущен MCP), прямые слэши, в кавычках при пробеле."""
     import sys
-    exe = Path(sys.executable).as_posix()
-    if " " in exe:
-        exe = f"'{exe}'" if inner else f'"{exe}"'
-    return f"{exe} -X utf8"
+    return f"{q(sys.executable, inner)} -X utf8"
+
+
+def script(rel: str) -> str:
+    """Запуск скрипта поставки: интерпретатор движка + абсолютный путь. Подсказки вида
+    «python3 <поставка>/…» модель достраивала сама — нашла копию поставки в ~/Downloads, голый
+    python3 по чужому пути политика shell форка отклоняла, согласие не записывалось (боевой
+    прогон 2026-11-08); тем же префиксом, что у гейта, вызов проходит."""
+    return f"{_py()} {q(ENGINE_SKILLS / rel)}"
 
 
 def run_info(root: Path) -> Dict[str, Any]:
@@ -106,17 +126,18 @@ def run_info(root: Path) -> Dict[str, Any]:
         live.append((mp.parent.name, pending[0] if pending else None))
     next_key = f"GRAPH-{max(nums) + 1 if nums else 1}"
     ps = ENGINE_SKILLS / "pipeline-state" / "scripts"
-    init = (f"{_py()} {ps / 'init.py'} --project {root} --skill specgraph --feature {{key}} "
-            f"--steps @{ENGINE_SKILLS / 'specgraph' / 'references' / 'manifest-steps.json'}")
+    steps = q(f"@{ENGINE_SKILLS / 'specgraph' / 'references' / 'manifest-steps.json'}")
+    init = (f"{_py()} {q(ps / 'init.py')} --project {q(root)} --skill specgraph --feature {{key}} "
+            f"--steps {steps}")
     active = next((r for r in live if r[1] is not None), None)
     if active is None:
         info: Dict[str, Any] = {"key": live[0][0] if live else None, "step": None, "next_key": next_key,
                                 "commands": {"init" if not live else "init_next": init.format(key=next_key)}}
         return info
     key, step = active
-    gate = (f"{_py()} {ps / 'record_gate.py'} --project {root} --skill specgraph --feature {key} "
-            f"--step-id {step} --cmd \"{_py(inner=True)} {ENGINE_SKILLS / 'specgraph' / 'scripts' / 'graph_gate.py'} "
-            f"{_GATE_ARG[step]} --project {root}\"")
-    close = (f"{_py()} {ps / 'update.py'} --project {root} --skill specgraph --feature {key} "
+    gate = (f"{_py()} {q(ps / 'record_gate.py')} --project {q(root)} --skill specgraph --feature {key} "
+            f"--step-id {step} --cmd \"{_py(inner=True)} {q(ENGINE_SKILLS / 'specgraph' / 'scripts' / 'graph_gate.py', True)} "
+            f"{_GATE_ARG[step]} --project {q(root, True)}\"")
+    close = (f"{_py()} {q(ps / 'update.py')} --project {q(root)} --skill specgraph --feature {key} "
              f"--step-id {step} --status completed")
     return {"key": key, "step": step, "next_key": next_key, "commands": {"gate": gate, "close": close}}

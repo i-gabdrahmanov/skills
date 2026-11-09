@@ -90,7 +90,7 @@ def _top(counter: Counter, n: int = 15) -> List[List[Any]]:
 
 def profile_md(root: Path, rel: str, masker: Masker) -> Dict[str, Any]:
     raw = (Path(root) / rel).read_bytes()
-    text = raw.decode("utf-8")
+    text = B.decode(raw, rel)
     blocks, warnings = B.parse(text, rel)
     types = Counter(b["type"] for b in blocks)
     levels = Counter(str(b["level"]) for b in blocks if b["type"] == "heading")

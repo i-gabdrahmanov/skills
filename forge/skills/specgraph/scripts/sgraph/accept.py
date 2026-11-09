@@ -73,7 +73,7 @@ def run(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
         out["next"] = (f"покажи пользователю сводку {rel}: счётчики, дыры по операциям (_graph/open-questions.md), "
                        f"перенос исходников; спроси, принимает ли он граф. «Да» — {st['how']}; затем снова graph_check.")
     else:
-        out["next"] = "python3 <поставка>/skills/specgraph/scripts/graph_gate.py check --project ."
+        out["next"] = "гейт шага: graph_status → run.commands.gate, затем run.commands.close"
     out["diag"] = auto_diag(root, cfg)
     return out
 

@@ -47,7 +47,7 @@ class Rules(_Base):
         got = {(p["from"], p["edge"], p["to"]) for p in E.load_all(self.root)}
         exp = {(e["from"], e["edge"], e["to"]) for e in G["edges"] if e["mechanical"] and e["edge"] != "belongs_to"}
         self.assertEqual(got, exp)
-        self.assertEqual(res["by_edge"], {"calls": 12, "consumes": 1, "publishes_to": 2, "uses_data": 3})
+        self.assertEqual(res["by_edge"], {"calls": 12, "consumes": 1, "publishes_to": 2, "uses_data": 4})
         again = T.call("graph_edges_mechanical", self.root, {})
         self.assertEqual(again["added"], 0, "повтор правил — без новых записей")
         for p in E.load_all(self.root):

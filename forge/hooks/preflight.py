@@ -704,7 +704,7 @@ _FORGE_MCP = {
                  "у forge-ui не будет движка (daiver_status/daiver_init/daiver_spec) — конвейер "
                  "фронт-репо не стартует"),
     "spec-graph": ("specgraph_mcp.py",
-                   "у spec-graph не будет движка (graph_status/graph_init) — /graph не стартует"),
+                   "у spec-graph не будет движка (graph_status/graph_init) — /forge-graph не стартует"),
 }
 
 
