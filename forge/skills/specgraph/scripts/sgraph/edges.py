@@ -13,8 +13,10 @@
 сервиса (у экрана — любого) — `calls`; точное имя или алиас узла данных — `uses_data`; таблица из SQL
 текста заметки (FROM/JOIN/UPDATE/INSERT/DELETE, без CTE) — `uses_data` к узлу с ключом `table:<имя>`, в
 `why` — чтение или запись; экран в папке `[код] Имя` — `ui_of` к операции `task:<код>` (структура спеки,
-не слово модели; цитата — строка с кодом из текста экрана или операции). Строки разделов «См. также» не
-дают рёбер: ТЗ §3 — взаимодействие, а не упоминание.
+не слово модели; цитата — строка с кодом из текста экрана или операции); раздел, вложенный в раздел
+другого узла, — `invokes` или `uses_data` от родителя (R-edge-nested); ссылка `[[…]]` или имя алгоритма в
+тексте — `invokes` (R-edge-mention). Строки разделов «См. также» не дают рёбер: ТЗ §3 — взаимодействие,
+а не упоминание.
 
 Хранилище — `.spec-graph/edges/<id заметки>.json`: предложения {from, edge, to, quote, origin
 (rule:<id> | model | manual | improve), confidence, status proposed|accepted|rejected, why?}. Отклонённое
@@ -66,13 +68,16 @@ def _cut(text: str, limit: int = 240) -> str:
     return t if len(t) <= limit else t[:limit].rsplit(" ", 1)[0]
 
 
-def source_text(root: Path, cfg: Dict[str, Any], node: Dict[str, Any]) -> str:
-    """Исходный текст заметки — содержимое маркеров graph:source*."""
+def source_text(root: Path, cfg: Dict[str, Any], node: Dict[str, Any], carved: bool = False) -> str:
+    """Исходный текст заметки — содержимое маркеров graph:source* без строк «↳ вынесено» нарезки (это
+    навигация, не текст спеки: ни цитатой, ни упоминанием она не служит); carved=True — как в заметке."""
+    from . import split as SP
     p = Path(root) / cfg["vault"] / node["path"]
     if not p.is_file():
         return ""
     _, body = F.read(p.read_bytes().decode("utf-8"))
-    return "\n".join(b["content"] for b in F.blocks(body) if b["name"].startswith("source"))
+    text = "\n".join(b["content"] for b in F.blocks(body) if b["name"].startswith("source"))
+    return text if carved else SP.strip_carved(text)
 
 
 class Graph:
@@ -203,6 +208,9 @@ def mechanical(g: Graph) -> Dict[str, List[Dict[str, Any]]]:
     tables = {str(n.get("key"))[len("table:"):]: n for n in data_nodes if str(n.get("key") or "").startswith("table:")}
     ops_by_code = {str(n.get("key"))[len("task:"):].lower(): n for n in g.index
                    if n["kind"] in g.ont.target_kinds("ui_of") and str(n.get("key") or "").startswith("task:")}
+    from . import split as SP
+    sp = g.root / SP.STRUCTURE_REL
+    structure = json.loads(sp.read_text(encoding="utf-8")) if sp.is_file() else {}
     out: Dict[str, List[Dict[str, Any]]] = {}
     for n in g.index:
         text = g.text(n["name"])
@@ -256,6 +264,7 @@ def mechanical(g: Graph) -> Dict[str, List[Dict[str, Any]]]:
                 if any(len(x) >= 8 and _ws(x) in _ws(line) for x in names):
                     props.append({"edge": "uses_data", "to": d["name"], "quote": q, "origin": "rule:R-edge-data",
                                   "confidence": "medium"})
+        props += _structural(g, n, text, structure)
         ok = []
         for p in props:
             norm, err = g.check(n["name"], p)
@@ -263,6 +272,64 @@ def mechanical(g: Graph) -> Dict[str, List[Dict[str, Any]]]:
                 ok.append(norm)
         if ok:
             out[n["name"]] = ok
+    return out
+
+
+# рёбра «родитель → вынесенный из его раздела узел»: какое ребро ставить, решает онтология (первое
+# допустимое по концам); порядок — от «запускает» к «использует данные»
+NESTED_EDGES = ("invokes", "uses_data")
+# упоминание узла ссылкой или именем в тексте — «запускает» (обработчик → алгоритм, алгоритм → алгоритм)
+MENTION_EDGES = ("invokes",)
+MENTION_MIN = 12
+# догадка: «запускает» только потому, что имя встретилось в тексте (ссылка `[[…]]` — high, не догадка)
+GUESS_ORIGIN, GUESS_CONFIDENCE = "rule:R-edge-mention", "medium"
+
+
+def _first_lines(text: str) -> str:
+    """Цитата для ребра по структуре: заголовок раздела и первая строка его текста (подстрока _ws текста)."""
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    if lines:
+        lines[0] = re.sub(r"^#{1,6}\s+", "", lines[0])     # разметка заголовка в ячейке таблицы — мусор
+    return _cut(" ".join(lines[:2]))
+
+
+def _structural(g: Graph, n: Dict[str, Any], text: str, structure: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Рёбра по структуре спеки, без модели (обратная связь аналитика 2026-11-09: после нарезки алгоритмы
+    обработчика лежали отдельно, и какое сообщение их запускает, было не восстановить):
+      • R-edge-nested — раздел узла вложен в раздел родителя (`structure.json` нарезки): обработчик сообщения
+        запускает вынесенный из его раздела алгоритм, эндпойнт использует описанное в его разделе DTO;
+        цитата — заголовок и первая строка вложенного раздела;
+      • R-edge-mention — текст узла ссылается на другой узел (`[[Алгоритм X…]]` после нарезки) или называет
+        его по имени: «запускает». Строки «См. также» не в счёт (как у прочих правил)."""
+    out = []
+    for child, st in structure.items():
+        if st.get("parent") != n["name"] or child not in g.by_name:
+            continue
+        target = g.by_name[child]
+        edge = next((e for e in NESTED_EDGES if g.ont.edge_allowed(e, n, target)[0]), None)
+        quote = _first_lines(g.text(child))
+        if edge and len(_ws(quote)) >= QUOTE_MIN:
+            out.append({"edge": edge, "to": child, "quote": quote, "origin": "rule:R-edge-nested", "confidence": "high",
+                        "why": f"раздел «{st.get('heading') or child}» вложен в раздел этого узла"})
+    rules = X.load_rules(g.cfg)
+    lines = _lines(text, rules["stop_headings"])
+    for t in g.index:
+        if t["name"] == n["name"]:
+            continue
+        edge = next((e for e in MENTION_EDGES if g.ont.edge_allowed(e, n, t)[0]), None)
+        if edge is None:
+            continue
+        names = [x for x in [t["name"]] + t["aliases"] if len(x) >= MENTION_MIN]
+        for line in lines:
+            q = line.strip()
+            low = q.lower()
+            if len(_ws(q)) < QUOTE_MIN:
+                continue
+            if f"[[{t['name']}" in q or any(x.lower() in low for x in names):
+                out.append({"edge": edge, "to": t["name"], "quote": q, "origin": "rule:R-edge-mention",
+                            "confidence": "high" if f"[[{t['name']}" in q else "medium",
+                            "why": "ссылка на раздел" if f"[[{t['name']}" in q else "упоминание по имени"})
+                break
     return out
 
 

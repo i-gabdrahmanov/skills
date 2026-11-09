@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import posixpath
 import re
 import shutil
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import unquote
 
 from . import assign as AS
 from . import blocks as B
@@ -33,12 +35,17 @@ from . import fm as F
 from . import fsutil as FS
 from . import keys as K
 from . import ontology as O
+from . import overview as OV
 from . import queue as Q
 
 REWRITES_REL = ".spec-graph/rewrites.json"
+STRUCTURE_REL = ".spec-graph/structure.json"
+DEAD_LINKS_REL = ".spec-graph/dead-links.json"
 COVERAGE_REL = ".spec-graph/coverage.json"
 RETIRED_REL = ".spec-graph/retired"
 _ANCHOR = re.compile(r"(?<!!)\[([^\]\n]+)\]\(#([^)\s]+)\)")
+_MDLINK = re.compile(r"(?<!!)\[([^\]\n]+)\]\((?!https?:|mailto:|#)([^)\s#]+?\.md)(#[^)\s]*)?\)", re.I)
+_HTML_TAG = re.compile(r"</?[A-Za-z][^<>]*>")
 _ATTACH = re.compile(r"(!?)\[([^\]\n]*)\]\((?!https?:|#|mailto:)([^)\s]+\.(?:png|jpe?g|gif|svg|webp|pdf|puml|json|txt))\)", re.I)
 
 
@@ -119,42 +126,126 @@ def _follow_renames(nodes: List[Dict[str, Any]], owner: Dict[str, str]) -> Dict[
 
 # ─── ссылки ────────────────────────────────────────────────────────────────
 
+_HTML_ANCHOR = re.compile(r"<a\s+(?:name|id)\s*=\s*[\"']([^\"']+)[\"'][^>]*>\s*</a>", re.I)
+_EMPTY_ANCHOR = re.compile(r"[ \t]*<a\s+(?:name|id)\s*=\s*[\"'][^\"']*[\"'][^>]*>\s*</a>[ \t]*", re.I)
+_LINK_UNSAFE = re.compile(r"[\[\]|#^]")
+
+
+def loose(anchor: str) -> str:
+    """Ключ якоря без пунктуации: слаггеры GitHub, IDEA и GitLab по-разному обходятся с тире, точками,
+    «ё» и повторными пробелами (`a — b` у GitHub — `a--b`, у нас было `a-b`), а якорь ещё бывает
+    %-кодирован. Несовпадение оставляло ссылку `[текст](#якорь)` как есть — в Obsidian она никуда не
+    ведёт, и переход «остаётся на текущей странице» (обратная связь аналитика 2026-11-09)."""
+    s = _HTML_TAG.sub("", unquote(anchor)).lower().replace("ё", "е")
+    return re.sub(r"[\W_]+", "", s)
+
+
+def heading_text(title: str) -> str:
+    """Текст заголовка, как его видит Obsidian после нарезки: без пустых HTML-якорей и без знаков, на
+    которых ссылка `[[#…]]` рвётся."""
+    t = _EMPTY_ANCHOR.sub(" ", title)
+    return re.sub(r"\s+", " ", _LINK_UNSAFE.sub(" ", t)).strip()
+
+
 def _heading_index(files_blocks: Dict[str, List[Dict[str, Any]]], owner: Dict[str, str]) -> Dict[Tuple[str, str], Tuple[str, str]]:
-    """(файл, slug) → (имя заметки, текст заголовка): по сырому заголовку и по очищенному от нумерации."""
+    """(файл, ключ якоря) → (имя заметки, текст заголовка): по сырому заголовку, по очищенному от нумерации
+    и по явным HTML-якорям (`<a name="x"></a>` в заголовке или отдельной строкой перед ним)."""
     idx = {}
     for rel, blocks in files_blocks.items():
+        pending: List[str] = []
         for b in blocks:
+            if b["type"] == "html":
+                pending += _HTML_ANCHOR.findall(b["text"])
+                continue
             if b["type"] == "heading" and b["id"] in owner:
-                for t in (b["title"], X.clean_title(b["title"])):
-                    idx.setdefault((rel, slug(t)), (owner[b["id"]], b["title"]))
+                head = heading_text(b["title"])
+                keys = [b["title"], X.clean_title(b["title"])] + _HTML_ANCHOR.findall(b["title"]) + pending
+                for t in keys:
+                    k = loose(t)
+                    if k:
+                        idx.setdefault((rel, k), (owner[b["id"]], head))
+            if b["type"] != "blank":
+                pending = []
     return idx
 
 
-def _rewrite(text: str, block: Dict[str, Any], rel: str, note: str, hidx, root: Path, vault: Path,
-             rewrites: List[Dict[str, Any]]) -> str:
-    def anchor(m):
-        target = hidx.get((rel, m.group(2).lower()))
-        if not target:
-            return m.group(0)
-        tnote, heading = target
-        new = f"[[#{heading}|{m.group(1)}]]" if tnote == note else f"[[{tnote}#{heading}|{m.group(1)}]]"
-        rewrites.append({"block": block["id"], "from": m.group(0), "to": new})
-        return new
+def _file_notes(files_blocks: Dict[str, List[Dict[str, Any]]], owner: Dict[str, str]) -> Dict[str, str]:
+    """Файл исходника → заметка, которой ведёт ссылка на файл целиком: владелец первого заголовка файла."""
+    out = {}
+    for rel, blocks in files_blocks.items():
+        first = next((b for b in blocks if b["type"] == "heading" and b["id"] in owner), None) \
+            or next((b for b in blocks if b["id"] in owner), None)
+        if first:
+            out[rel] = owner[first["id"]]
+    return out
 
-    def attach(m):
-        src = (Path(root) / rel).parent / m.group(3)
-        if not src.is_file():
-            return m.group(0)
-        name = f"{hashlib.sha1(str(src.relative_to(root)).encode('utf-8')).hexdigest()[:8]}-{src.name}"
-        dst = vault / "_attachments" / name
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if not dst.is_file() or dst.read_bytes() != src.read_bytes():
-            shutil.copyfile(src, dst)
-        new = f"![[{name}|{m.group(2)}]]" if m.group(1) else f"[[{name}|{m.group(2)}]]"
-        rewrites.append({"block": block["id"], "from": m.group(0), "to": new})
-        return new
 
-    return _ATTACH.sub(attach, _ANCHOR.sub(anchor, text))
+class _Links:
+    """Переписывание ссылок исходника под Obsidian. Всё переписанное — в rewrites, всё, что не нашло цели, —
+    в dead (отчёт нарезки и W-link-dead валидатора)."""
+
+    def __init__(self, root: Path, vault: Path, hidx, fidx, rewrites: List[Dict[str, Any]]):
+        self.root, self.vault, self.hidx, self.fidx, self.rewrites = root, vault, hidx, fidx, rewrites
+        self.dead: List[Dict[str, str]] = []
+
+    def _wiki(self, tnote: str, heading: Optional[str], label: str, note: str, sep: str) -> str:
+        if tnote == note:
+            return f"[[#{heading}{sep}{label}]]" if heading else label
+        return f"[[{tnote}#{heading}{sep}{label}]]" if heading else f"[[{tnote}{sep}{label}]]"
+
+    def rewrite(self, text: str, block: Dict[str, Any], rel: str, note: str) -> str:
+        # в строке таблицы `|` алиаса ссылки делит ячейку: Obsidian ждёт `[[цель\|текст]]`, иначе столбцы
+        # съезжают (таблицы ЦАРС и File Adapter, обратная связь 2026-11-09)
+        sep = "\\|" if block["type"] == "table" else "|"
+        bid = block["id"]
+
+        def record(old: str, new: str) -> str:
+            if new != old:
+                self.rewrites.append({"block": bid, "from": old, "to": new})
+            return new
+
+        def anchor(m):
+            target = self.hidx.get((rel, loose(m.group(2))))
+            if not target:
+                self.dead.append({"note": note, "block": bid, "link": m.group(0)})
+                return m.group(0)
+            return record(m.group(0), self._wiki(target[0], target[1], m.group(1), note, sep))
+
+        def mdlink(m):
+            path = unquote(m.group(2).split("?", 1)[0])
+            trel = posixpath.normpath(posixpath.join(posixpath.dirname(rel), path))
+            frag = (m.group(3) or "")[1:]
+            if frag:
+                target = self.hidx.get((trel, loose(frag)))
+                if target:
+                    return record(m.group(0), self._wiki(target[0], target[1], m.group(1), note, sep))
+            elif trel in self.fidx:
+                if self.fidx[trel] == note:
+                    return m.group(0)               # ссылка на свой же файл: вести некуда, не мёртвая
+                return record(m.group(0), self._wiki(self.fidx[trel], None, m.group(1), note, sep))
+            self.dead.append({"note": note, "block": bid, "link": m.group(0)})
+            return m.group(0)
+
+        def attach(m):
+            src = (Path(self.root) / rel).parent / m.group(3)
+            if not src.is_file():
+                return m.group(0)
+            name = f"{hashlib.sha1(str(src.relative_to(self.root)).encode('utf-8')).hexdigest()[:8]}-{src.name}"
+            dst = self.vault / "_attachments" / name
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if not dst.is_file() or dst.read_bytes() != src.read_bytes():
+                shutil.copyfile(src, dst)
+            new = f"![[{name}{sep}{m.group(2)}]]" if m.group(1) else f"[[{name}{sep}{m.group(2)}]]"
+            return record(m.group(0), new)
+
+        if block["type"] == "heading" and _EMPTY_ANCHOR.search(text):
+            # пустой HTML-якорь в заголовке — разметка оглавления, а не текст: с ним заголовок в Obsidian
+            # не совпадал с текстом ссылки [[#…]], и переход вёл в никуда
+            head, _, rest = text.partition("\n")
+            clean = re.sub(r"(#+)\s+", r"\1 ", _EMPTY_ANCHOR.sub(" ", head), count=1)
+            clean = re.sub(r"[ \t]{2,}", " ", clean).rstrip()
+            text = record(text, clean + ("\n" + rest if _ else ""))
+        return _ATTACH.sub(attach, _MDLINK.sub(mdlink, _ANCHOR.sub(anchor, text)))
 
 
 def read_note(path: Path) -> Optional[str]:
@@ -165,8 +256,128 @@ def read_note(path: Path) -> Optional[str]:
 
 def unrewrite(text: str, rewrites: List[Dict[str, Any]]) -> str:
     for r in rewrites:
-        text = text.replace(r["to"], r["from"])
+        if "insert" not in r:
+            text = text.replace(r["to"], r["from"])
     return text
+
+
+def replay(ids: List[str], texts: Dict[str, str], rewrites: List[Dict[str, Any]]) -> str:
+    """Текст маркера, который нарезка должна была записать по блокам исходника: переписывания блока —
+    по порядку записи, вставки (пустая строка у таблицы, строка «↳ вынесено») — на своём месте. Сверка
+    дословности сравнивает с этим текстом, а не откатывает заметку: откат вставки «пустая строка» по
+    тексту неоднозначен, по месту — точен."""
+    by_block: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rewrites:
+        by_block.setdefault(r["block"], []).append(r)
+    out = []
+    for b in ids:
+        mine = by_block.get(b, [])
+        t = texts.get(b, "")
+        for r in mine:
+            if "insert" not in r:
+                t = t.replace(r["from"], r["to"])
+        out += [r["text"] for r in mine if r.get("insert") == "before"] + [t] + \
+               [r["text"] for r in mine if r.get("insert") == "after"]
+    return "".join(out)
+
+
+CARVED = "<!-- graph:carved -->"
+CARVED_LINE = re.compile(r"^↳ [^\n]*" + re.escape(CARVED) + r"[ \t]*\r?$", re.M)
+
+
+def strip_carved(text: str) -> str:
+    """Текст заметки без строк «↳ вынесено»: это навигация нарезки, а не текст спеки — ни цитатой, ни
+    упоминанием для правил она не служит."""
+    return CARVED_LINE.sub("", text)
+
+
+def _ends_blank(text: str) -> bool:
+    return text.endswith("\n\n") or text.endswith("\n\r\n")
+
+
+def _structure(files_blocks: Dict[str, List[Dict[str, Any]]], owner: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
+    """Вложенность разделов, разнесённых по заметкам: узел → {file, order, heading, parent}, где parent —
+    узел ближайшего раздела-предка с другим владельцем. Так видно, из чего узел вынесен: алгоритм —
+    из обработчика сообщения, шедулер — из сервиса. Без этого после нарезки четыре алгоритма лежали
+    отдельно, и откуда они запускаются, было не восстановить (History Service, обратная связь 2026-11-09)."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for rel in sorted(files_blocks):
+        blocks = files_blocks[rel]
+        secs = X.sections(blocks)
+        for si, sec in enumerate(secs):
+            hb = blocks[sec["head"]]
+            node = owner.get(hb["id"])
+            if node is None or node in out:
+                continue
+            parent, p = None, sec["parent"]
+            while p is not None:
+                po = owner.get(blocks[secs[p]["head"]]["id"])
+                if po and po != node:
+                    parent = po
+                    break
+                p = secs[p]["parent"]
+            out[node] = {"file": rel, "order": sec["head"], "heading": sec["title"], "parent": parent,
+                         "section": secs[sec["parent"]]["head"] if sec["parent"] is not None else None}
+    return out
+
+
+def _carved(files_blocks: Dict[str, List[Dict[str, Any]]], owner: Dict[str, str],
+            structure: Dict[str, Dict[str, Any]]) -> Dict[Tuple[str, str], Dict[Optional[str], List[Tuple[str, Optional[str]]]]]:
+    """(файл, родитель) → {id блока родителя, перед которым строки «↳», или None — в конец: [(ребёнок,
+    подпись)]}. Подпись — заголовок вынесенного раздела, если он стоял не под последним видимым заголовком
+    родителя (раздел «5. Алгоритм …» после «4. REST API» иначе читался бы как часть REST API)."""
+    out: Dict[Tuple[str, str], Dict[Optional[str], List[Tuple[str, Optional[str]]]]] = {}
+    for child, st in sorted(structure.items(), key=lambda x: (x[1]["file"], x[1]["order"])):
+        parent = st["parent"]
+        if parent is None:
+            continue
+        blocks = files_blocks[st["file"]]
+        nxt = next((b["id"] for b in blocks[st["order"] + 1:] if owner.get(b["id"]) == parent), None)
+        last = max((i for i, b in enumerate(blocks[:st["order"]]) if b["type"] == "heading" and owner.get(b["id"]) == parent),
+                   default=None)
+        label = None if st.get("section") is None or st["section"] == last else st["heading"]
+        out.setdefault((st["file"], parent), {}).setdefault(nxt, []).append((child, label))
+    return out
+
+
+def _assemble(rel: str, note: str, blks: List[Dict[str, Any]], links: "_Links",
+              carved: Dict[Optional[str], List[Tuple[str, Optional[str]]]], rewrites: List[Dict[str, Any]]) -> str:
+    """Текст заметки из блоков одного файла: ссылки переписаны, у границы таблицы — пустая строка, там,
+    где вынесен раздел, — строка «↳ [[…]]». Obsidian не видит таблицу, вплотную прижатую к абзацу
+    (GitHub и IDEA видят), — столбцы «съезжали» (обратная связь 2026-11-09)."""
+    nl = "\r\n" if any("\r\n" in b["text"] for b in blks) else "\n"
+    out, prev = "", None
+
+    def insert(bid: str, where: str, text: str) -> None:
+        nonlocal out
+        rewrites.append({"block": bid, "insert": where, "text": text})
+        out += text
+
+    def carved_line(kids: List[Tuple[str, Optional[str]]]) -> str:
+        sep = "" if not out or _ends_blank(out) else (nl if out.endswith("\n") else nl + nl)
+        rows, plain = [], []
+        for k, label in kids:
+            if label is None:
+                plain.append(F.link(k))
+                continue
+            if plain:
+                rows.append(", ".join(plain))
+                plain = []
+            rows.append(f"«{label}» — {F.link(k)}")
+        rows += [", ".join(plain)] if plain else []
+        return sep + "".join(f"↳ {r} {CARVED}{nl}{nl}" for r in rows)
+
+    for b in blks:
+        t = b["text"] if b["type"] == "fence" else links.rewrite(b["text"], b, rel, note)
+        if b["id"] in carved:
+            insert(b["id"], "before", carved_line(carved[b["id"]]))
+        if out and prev is not None and (b["type"] == "table") != (prev == "table") and not _ends_blank(out):
+            insert(b["id"], "before", nl if out.endswith("\n") else nl + nl)
+        out += t
+        prev = b["type"]
+    if carved.get(None) and blks:
+        insert(blks[-1]["id"], "after", carved_line(carved[None]))
+    return out
 
 
 # ─── запись заметок ────────────────────────────────────────────────────────
@@ -188,22 +399,29 @@ def _fm_for(node: Dict[str, Any], ont: O.Ontology, existing: "OrderedDict[str, A
             data["method"], data["path"] = method, path
             if not data.get("aliases"):
                 data["aliases"] = [f"{method} {path}"]
-    for k in order:
-        if k not in data:
-            data[k] = [] if (k in ont.edges or ont.edge_of_inverse(k) or k == "aliases") else None
+    for k in list(data):
+        # пустые ключи-рёбра и пустые aliases не пишутся: свойство без значения аналитику ничего не говорит
+        # («метаданные ради метаданных», обратная связь 2026-11-09); человек добавит ключ в Properties сам
+        if data[k] == [] and (k in ont.edges or ont.edge_of_inverse(k) or k == "aliases" or k in ont.legacy_keys):
+            del data[k]
+    for k in ont.legacy_keys:
+        data.pop(k, None)
     if ont.owned_by_service(kind) and node.get("service"):
         data["belongs_to"] = [F.link(node["service"])]
     if data.get("status") in (None, "") or (node.get("stub") and data.get("status") == "draft"):
         data["status"] = "stub" if node.get("stub") else "draft"
     elif data.get("status") == "stub" and not node.get("stub") and not ont.kinds[kind].get("key") == "task":
         data["status"] = "draft"          # таблицу описали разделом — заглушка стала узлом; у операции stub ставит карточка
-    data["source"] = sources
+    if sources:
+        data["source"] = sources
+    else:
+        data.pop("source", None)          # своего текста нет (топик, заглушка) — пустое свойство не пишется
     data.pop("blocks", None)              # блоки — в атрибутах маркера source, во frontmatter не дублируются
     return data, order
 
 
 def _note_text(node, ont, existing_text: Optional[str], groups: List[Tuple[str, List[Dict[str, Any]], str]],
-               toc: Optional[str]) -> str:
+               overview: Optional[str]) -> str:
     existing_fm, body = (F.read(existing_text) if existing_text else (OrderedDict(), ""))
     sources = []
     for rel, blks, _ in groups:
@@ -228,8 +446,9 @@ def _note_text(node, ont, existing_text: Optional[str], groups: List[Tuple[str, 
         lines = body.split("\n")
         blk = F.get_block(body, "source")
         body = "\n".join(lines[:blk["start"]] + lines[blk["end"] + 1:])
-    if toc is not None:
-        body = F.set_block(body, "toc", toc)
+    body = F.drop_block(body, "toc")      # до 2026-11-09 — строка ссылок по видам; теперь обзор сервиса
+    if overview is not None and F.get_block(body, "overview") is None:
+        body = F.set_block(body, "overview", overview, top=True)   # полный обзор пишет синк по связям
     return F.write(data, body if body.endswith("\n") else body + "\n", order)
 
 
@@ -253,8 +472,10 @@ def split(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     files = sorted({b.rsplit("#", 1)[0] for b in list(owner) + list(skip) + list(unplaced)} |
                    {s["file"] for n in nodes for s in n.get("sources", [])} | set(AS.expected_files(root, cfg)))
     files_blocks = {rel: (B.load(root, rel) or B.scan_file(root, rel))["blocks"] for rel in files if (Path(root) / rel).is_file()}
-    hidx = _heading_index(files_blocks, owner)
     rewrites: List[Dict[str, Any]] = []
+    links = _Links(root, vault, _heading_index(files_blocks, owner), _file_notes(files_blocks, owner), rewrites)
+    structure = _structure(files_blocks, owner)
+    carved = _carved(files_blocks, owner, structure)
     per_node: Dict[str, List[Tuple[str, List[Dict[str, Any]], str]]] = {}
     for rel, blocks in files_blocks.items():
         run: Dict[str, List[Dict[str, Any]]] = OrderedDict()
@@ -263,13 +484,13 @@ def split(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
                 run.setdefault(owner[b["id"]], []).append(b)
         for name, blks in run.items():
             # код-блок не переписывается: пример `[x](#y)` или `![](a.png)` внутри фенса — это код, а не ссылка
-            text = "".join(b["text"] if b["type"] == "fence" else _rewrite(b["text"], b, rel, name, hidx, root, vault, rewrites)
-                           for b in blks)
+            text = _assemble(rel, name, blks, links, carved.get((rel, name), {}), rewrites)
             per_node.setdefault(name, []).append((rel, blks, text))
-    by_service: Dict[str, Dict[str, List[str]]] = {}
-    for n in nodes:
-        if n.get("service") and ont.owned_by_service(n["kind"]):
-            by_service.setdefault(n["service"], {}).setdefault(n["kind"], []).append(n["name"])
+    # обзор сервиса до связей — только состав по видам; входы, выходы и цепочки допишет синк
+    view = OV.View(ont, [{"name": n["name"], "kind": n["kind"], "role": n.get("role"), "service": n.get("service")}
+                         for n in nodes],
+                   {n["name"]: {"belongs_to": [n["service"]]} for n in nodes
+                    if n.get("service") and ont.owned_by_service(n["kind"])})
     paths, written, unchanged = {}, 0, 0
     folded: Dict[str, str] = {}
     for n in nodes:
@@ -279,14 +500,13 @@ def split(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
                              "E-split-path")
         folded[O.fold(path)] = n["name"]
         paths[path] = n["name"]
-        toc = None
+        ov = None
         if ont.kinds[n["kind"]]["owner"] == "self":
-            groups = by_service.get(n["name"], {})
-            toc = "\n".join(f"**{ont.kinds[k]['title_ru']}:** " + ", ".join(F.link(x) for x in sorted(v))
-                            for k, v in groups.items()) or "_операций нет_"
+            text = "".join(t for _, _, t in per_node.get(n["name"], []))
+            ov = OV.service(view, n["name"], OV.purpose(text))
         p = vault / path
         old = read_note(p)
-        new = _note_text(n, ont, old, per_node.get(n["name"], []), toc)
+        new = _note_text(n, ont, old, per_node.get(n["name"], []), ov)
         if new != old:
             p.parent.mkdir(parents=True, exist_ok=True)
             FS.write_bytes(p, new.encode("utf-8"))      # байты: дословность CRLF исходника не трогаем
@@ -298,11 +518,20 @@ def split(root: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
     stray, retired = _retire_orphans(root, vault, {Path(v) for v in paths})
     FS.write_text((Path(root) / REWRITES_REL), json.dumps(rewrites, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
                                           encoding="utf-8")
+    FS.write_text((Path(root) / STRUCTURE_REL), json.dumps(structure, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
+                  encoding="utf-8")
+    FS.write_text((Path(root) / DEAD_LINKS_REL), json.dumps(links.dead, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
+                  encoding="utf-8")
     cov = coverage(root, cfg, files_blocks, owner, skip, unplaced)
-    return {"notes": len(nodes), "written": written, "unchanged": unchanged, "rewrites": len(rewrites),
-            "unplaced": sum(f["unplaced"] for f in cov["files"].values()),
-            "unassigned": sum(f["unassigned"] for f in cov["files"].values()), "stray_notes": stray[:20],
-            "retired": retired[:20]}
+    out = {"notes": len(nodes), "written": written, "unchanged": unchanged, "rewrites": len(rewrites),
+           "unplaced": sum(f["unplaced"] for f in cov["files"].values()),
+           "unassigned": sum(f["unassigned"] for f in cov["files"].values()), "stray_notes": stray[:20],
+           "retired": retired[:20]}
+    if links.dead:
+        out["dead_links"] = {"count": len(links.dead), "top": [f"{d['note']}: {d['link']}" for d in links.dead[:10]],
+                             "hint": "ссылки исходника без цели (якорь или файл не нашёлся) — в Obsidian они никуда "
+                                     "не ведут; перечень — .spec-graph/dead-links.json, в отчёте проверки — W-link-dead"}
+    return out
 
 
 def renamed(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -345,12 +574,24 @@ def renamed_hint(items: List[Dict[str, str]]) -> str:
               "graph_catalog_decide rename (node — прежнее имя, name — новое), затем graph_catalog и утверждение")
 
 
-def _engine_note(path: Path) -> bool:
+def _engine_note(path: Path, vault: Optional[Path] = None, ont: Optional[O.Ontology] = None) -> bool:
+    """Заметка движка: вид онтологии и `source`, либо (у заметки без своего текста — топика, заглушки, где
+    пустой `source` не пишется) лежит ровно по пути онтологии для своего имени."""
     try:
         data, _ = F.read(path.read_bytes().decode("utf-8"))
     except (F.FMError, UnicodeDecodeError):
         return False
-    return bool(data.get("kind")) and "source" in data
+    if not data.get("kind"):
+        return False
+    if "source" in data:
+        return True
+    if vault is None or ont is None or data["kind"] not in ont.kinds:
+        return False
+    svc = next((F.link_target(x) for x in data.get("belongs_to") or [] if F.link_target(x)), None)
+    try:
+        return ont.path_for(data["kind"], path.stem, svc, data.get("subkind")) == path.relative_to(vault).as_posix()
+    except O.OntologyError:
+        return False
 
 
 def _retire_orphans(root: Path, vault: Path, known) -> Tuple[List[str], List[str]]:
@@ -362,7 +603,7 @@ def _retire_orphans(root: Path, vault: Path, known) -> Tuple[List[str], List[str
         rel = q.relative_to(vault)
         if rel.parts[0] in ("_graph", "_attachments") or rel in known:
             continue
-        if not _engine_note(q):
+        if not _engine_note(q, vault, O.load(root)):
             stray.append(rel.as_posix())
             continue
         dst = Path(root) / RETIRED_REL / rel
@@ -474,11 +715,9 @@ def verify(root: Path, cfg: Dict[str, Any]) -> List[Tuple[str, str]]:
                 data = B.load(root, rel) if rel else None
                 texts[rel] = {b["id"]: b["text"] for b in data["blocks"]} if data else {}
             src = "".join(texts[rel].get(b, "") for b in ids)
-            back = blk["content"]
-            for b in ids:
-                back = unrewrite(back, by_block.get(b, []))
             if not (Path(root) / rel).is_file():
                 continue
-            if back.strip("\n") != src.strip("\n") or _sha(src) != blk["attrs"].get("sha1"):
+            want = replay(ids, texts[rel], [r for b in ids for r in by_block.get(b, [])])
+            if blk["content"].strip("\n") != want.strip("\n") or _sha(src) != blk["attrs"].get("sha1"):
                 errs.append(("E-verbatim", f"{p.relative_to(vault)}: текст маркера {blk['name']} не равен блокам исходника"))
     return errs

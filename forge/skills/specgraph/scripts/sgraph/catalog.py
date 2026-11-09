@@ -248,15 +248,18 @@ def _collect(root: Path, ont: O.Ontology) -> Tuple[Dict[str, Dict[str, Any]], Li
             _merge_into(nodes[ident], rec)
         else:
             nodes[ident] = rec
+    namer = _Namer(root, ont)
     for d in drafts:
         for n in d["nodes"]:
+            raw = n["name"]
+            n = dict(n, name=namer(n, d["file"]))
             ident = identity(n, ont)
             if not n.get("key") and ont.merges_by_folder(n["kind"]) and ident in nodes and \
                     folder(d["file"]) not in {folder(s["file"]) for s in nodes[ident]["sources"]}:
                 ident = f"{ident}@{folder(d['file'])}"
             rec = {"kind": n["kind"], "name": n["name"],
                    "sources": [{"file": d["file"], "sections": list(n.get("sections") or [])}],
-                   "names_seen": [n["name"]], "from": [d["item_id"]]}
+                   "names_seen": [n["name"]] + ([raw] if raw != n["name"] else []), "from": [d["item_id"]]}
             for f in NODE_FIELDS:
                 if n.get(f):
                     rec[f] = n[f]
@@ -272,6 +275,44 @@ def _collect(root: Path, ont: O.Ontology) -> Tuple[Dict[str, Dict[str, Any]], Li
         for x in d.get("not_nodes") or []:
             not_nodes.append(dict(x, file=d["file"]))
     return nodes, conflicts, not_nodes
+
+
+class _Namer:
+    """Имя узла черновика по правилам naming.py (контекст — разделы-предки и топики его первого раздела).
+    Модель называет узел, как видит заголовок («Шаги обработки», «Гибридная почта — экран»); правило
+    приводит к одному формату детерминированно — и для черновиков, сданных до правила."""
+
+    def __init__(self, root: Path, ont: O.Ontology):
+        from . import blocks as B
+        from . import config as C
+        from . import extract as X
+        from . import naming as NM
+        self.root, self.ont, self.B, self.X, self.NM = Path(root), ont, B, X, NM
+        try:
+            rules = X.load_rules(C.load(root)[0] or {})
+        except X.ExtractError:                 # правила проекта битые — правила по умолчанию; ошибку покажет status
+            rules = X.load_rules({})
+        self.cfg = NM.settings(rules)
+        self.topic_re = re.compile(rules["kafka_topic_re"])
+        self._files: Dict[str, Any] = {}
+
+    def _file(self, rel: str):
+        if rel not in self._files:
+            data = self.B.load(self.root, rel)
+            blocks = data["blocks"] if data else []
+            secs = self.X.sections(blocks)
+            self._files[rel] = (blocks, secs, {blocks[sc["head"]]["id"]: i for i, sc in enumerate(secs)})
+        return self._files[rel]
+
+    def __call__(self, n: Dict[str, Any], rel: str) -> str:
+        name = n.get("name")
+        if not self.cfg or self.ont.kinds.get(n.get("kind"), {}).get("name") != "phrase" or not isinstance(name, str):
+            return name
+        blocks, secs, by_head = self._file(rel)
+        si = next((by_head[x] for x in n.get("sections") or [] if x in by_head), None)
+        ctx = self.NM.context(blocks, secs, si, rel, self.topic_re)
+        out = self.X.safe_name(self.NM.normalize(n["kind"], n.get("role"), name, ctx, self.cfg), self.ont.forbidden)
+        return out or name
 
 
 def _first_file(n: Dict[str, Any]) -> str:
@@ -315,14 +356,20 @@ def _ref(nodes: Dict[str, Dict[str, Any]], ref: Any, strict: bool) -> Tuple[Opti
         for k in nodes:
             if node_id(k) == ref:
                 return k, None
-        # id, записанный до 2026-11-08: ключ узла тогда был без сервиса и папки
-        old = [k for k, n in nodes.items() if node_id(legacy_identity(n)) == ref]
+        # id, записанный до 2026-11-08 (ключ узла тогда был без сервиса и папки), или по имени узла до правил
+        # имён naming.py (2026-11-09): прежнее имя — в names_seen
+        old = [k for k, n in nodes.items()
+               if any(node_id(f(dict(n, name=x))) == ref for x in [n["name"]] + list(n.get("names_seen") or [])
+                      for f in (legacy_identity, lambda m: identity(m, ont_cache())))]
         if len(old) == 1:
             return old[0], None
         if old:
             desc = "; ".join(f"{node_id(k)} — {nodes[k]['name']}, {_first_file(nodes[k])}" for k in old)
             return None, f"id «{ref}» прежнего формата теперь у {len(old)} узлов ({desc}) — укажи новый id"
     hits = [k for k, n in nodes.items() if n["name"] == ref]
+    if not hits:
+        # прежнее имя узла (до правил имён naming.py или rename): решение, записанное по нему, находит узел
+        hits = [k for k, n in nodes.items() if ref in (n.get("names_seen") or [])]
     if not hits:
         return None, f"узла «{ref}» нет в каталоге (сейчас) — имя или id `n-…` из catalog.json"
     if len(hits) > 1:
@@ -331,6 +378,16 @@ def _ref(nodes: Dict[str, Dict[str, Any]], ref: Any, strict: bool) -> Tuple[Opti
             return None, f"имя «{ref}» у {len(hits)} узлов ({desc}) — укажи id нужного"
         return hits[-1], f"имя «{ref}» у {len(hits)} узлов — применено к последнему ({node_id(hits[-1])}): {desc}"
     return hits[0], None
+
+
+_ONT: List[O.Ontology] = []
+
+
+def ont_cache() -> O.Ontology:
+    """Онтология для пересчёта id по прежним именам в _ref (базовая; локальные виды id не меняют)."""
+    if not _ONT:
+        _ONT.append(O.load())
+    return _ONT[0]
 
 
 def _apply(nodes: Dict[str, Dict[str, Any]], log: List[Dict[str, Any]], ont: O.Ontology,

@@ -147,8 +147,8 @@ class Views(_Base):
         start = first[OB.START_NAME].decode("utf-8")
         self.assertIn("- [[Укомплектование]] — формируют: 1, закрывают: 1, UI: 1", start)
         self.assertIn("- [[Регистрация]] — формируют: 0, закрывают: 1, UI: 1", start)
-        self.assertIn("- [[task-service]] — операций: 9", start)
-        self.assertIn("| `closes_task` | закрывает задачу | `closed_by` |", start)
+        self.assertIn("- [[task-service]] — составных частей: 9", start)
+        self.assertIn("| `closes_task` | закрывает задачу | `closed_by` | кто закрывает задачу этого типа |", start)
         self.assertIn("| Шедулер | #", start)
 
     def test_broken_layer_refused(self):
@@ -163,10 +163,11 @@ class Views(_Base):
             OB.load = orig
         self.assertFalse((self.vault / "_graph" / OB.START_NAME).exists())
 
-    def test_service_toc(self):
+    def test_service_overview(self):
         _, body = F.read(SP.read_note(self.vault / "services/task-service/task-service.md"))
-        toc = F.get_block(body, "toc")["content"]
-        self.assertIn("**Шедулер:** [[Шедулер закрытия задачи передачи упаковок в СЦ-архив]], [[Шедулер закрытия регулярных задач]]", toc)
+        ov = F.get_block(body, "overview")["content"]
+        self.assertIn("- Шедулеры — 4:", ov)
+        self.assertIn("  - [[Шедулер закрытия задачи передачи упаковок в СЦ-архив]] — закрывает задачу [[Передача упаковок в СЦ-архив]]", ov)
 
 
 class Data(unittest.TestCase):

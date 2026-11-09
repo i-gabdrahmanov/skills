@@ -25,7 +25,7 @@ BASE = Path(__file__).resolve().parents[2] / "references" / "ontology.json"
 LOCAL_REL = ".spec-graph/ontology.local.json"
 _KIND_FIELDS = {"title_ru", "path", "owner", "name", "key", "required", "roles", "subkinds", "merge"}
 _MERGE = ("name", "folder")
-_EDGE_FIELDS = {"title_ru", "from", "to", "inverse", "symmetric", "evidence", "impact", "same_service", "stub"}
+_EDGE_FIELDS = {"title_ru", "inverse_ru", "from", "to", "inverse", "symmetric", "evidence", "impact", "same_service", "stub"}
 _GRAMMARS = ("phrase", "endpoint", "topic", "as_is")
 _OWNERS = ("none", "service", "self")
 _IMPACT = ("forward", "inverse", "both", "none")
@@ -85,6 +85,11 @@ def self_check(data: Dict[str, Any]) -> List[str]:
         for f in k.get("required", []):
             if f not in scalars:
                 errors.append(f"{where}: обязательный ключ «{f}» не объявлен в scalar_keys")
+    for old, new in (data.get("legacy_keys") or {}).items():
+        if old in edges or any(e.get("inverse") == old for e in edges.values() if isinstance(e, dict)):
+            errors.append(f"legacy_keys: «{old}» — ключ действующего ребра")
+        if new not in edges and not any(e.get("inverse") == new for e in edges.values() if isinstance(e, dict)):
+            errors.append(f"legacy_keys: «{new}» — не ключ ребра")
     forward = set(edges)
     inverse = set()
     for name, e in edges.items():
@@ -166,6 +171,18 @@ class Ontology:
         self.forbidden = data.get("name_forbidden", "")
         self.scalars: List[str] = list(data.get("scalar_keys") or [])
         self._by_inverse = {e["inverse"]: n for n, e in self.edges.items()}
+        # прежние имена обратных ключей → нынешние: нарезка и синк убирают прежний ключ из заметки
+        self.legacy_keys: Dict[str, str] = dict(data.get("legacy_keys") or {})
+        self.keys_ru: Dict[str, str] = dict(data.get("keys_ru") or {})
+
+    def key_ru(self, key: str) -> str:
+        """Что значит ключ frontmatter — по-русски (легенда `_graph/Свойства.md`)."""
+        if key in self.edges:
+            return self.edges[key]["title_ru"]
+        edge = self.edge_of_inverse(key)
+        if edge:
+            return self.edges[edge].get("inverse_ru") or f"← {self.edges[edge]['title_ru']}"
+        return self.keys_ru.get(key, "")
 
     # — рёбра —
     def inverse_of(self, edge: str) -> str:

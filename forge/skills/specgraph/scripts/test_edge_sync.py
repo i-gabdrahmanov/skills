@@ -4,7 +4,7 @@
 Пинит на фикстуре (механика + ответы модели):
   • прямые ключи у владельца, таблица оснований graph:edges; у общего шедулера закрытия три closes_task, а у
     каждой из трёх операций выведен closed_by на него (ТЗ §5); related — с обеих сторон; belongs_to →
-    operations у сервиса;
+    components у сервиса;
   • повтор синка — 0 изменённых файлов (симметричное зеркало — не ручная ссылка);
   • снятое предложение снимает и обратный ключ;
   • правки человека в Obsidian: добавленная прямая ссылка — manual (с «внесено человеком»), убранная — предложение
@@ -63,7 +63,7 @@ class Sync(_Base):
         tr, _ = self.fm("business/operations/Передача упаковок в СЦ-архив.md")
         self.assertEqual(tr["related"], ["[[Укомплектование]]"])
         svc, _ = self.fm("services/rmoc-service/rmoc-service.md")
-        self.assertEqual(len(svc["operations"]), 3)
+        self.assertEqual(len(svc["components"]), 3)
         names = {p.stem for p in self.vault.rglob("*.md") if "_graph" not in p.parts}
         for p in self.vault.rglob("*.md"):
             if "_graph" in p.parts:
@@ -86,7 +86,7 @@ class Sync(_Base):
         E.save(self.root, "Шедулер закрытия регулярных задач", props)
         T.call("graph_sync", self.root, {})
         reg, _ = self.fm("business/operations/Регистрация.md")
-        self.assertEqual(reg["closed_by"], [])
+        self.assertEqual(reg.get("closed_by", []), [], "пустой ключ не пишется")
 
 
 class HumanEdits(_Base):
@@ -101,7 +101,7 @@ class HumanEdits(_Base):
         self.assertNotIn("[[Регистрация]]", data["closes_task"])
         self.assertIn("внесено человеком", F.get_block(body, "edges")["content"])
         reg, _ = self.fm("business/operations/Регистрация.md")
-        self.assertNotIn("[[Шедулер закрытия регулярных задач]]", reg["closed_by"])
+        self.assertNotIn("[[Шедулер закрытия регулярных задач]]", reg.get("closed_by", []))
         st = [p["status"] for p in E.load(self.root, "Шедулер закрытия регулярных задач") if p["to"] == "Регистрация"]
         self.assertEqual(st, ["rejected"])
         T.call("graph_sync", self.root, {})

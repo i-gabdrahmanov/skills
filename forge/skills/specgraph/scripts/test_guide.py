@@ -39,7 +39,7 @@ STEPS = [("Укомплектование", "closed_by", CLOSER), (CLOSER, "clos
          ("Шедулер формирования задачи передачи упаковок в СЦ-архив", "invokes", "Алгоритм балансировки упаковок"),
          ("Шедулер закрытия задачи передачи упаковок в СЦ-архив", "calls", "rmoc-service GET rmoc-packages"),
          (TRANSFER, "related", "Укомплектование"),
-         ("rmoc-service", "operations", "rmoc-service POST rmoc-packages-transfer"),
+         ("rmoc-service", "components", "rmoc-service POST rmoc-packages-transfer"),
          ("rmoc-service POST rmoc-packages-transfer", "called_by", "UI передачи упаковок"),
          ("UI передачи упаковок", "ui_of", TRANSFER)]
 _healthy = {}

@@ -17,17 +17,30 @@
     "external":  {"title_ru": "Внешняя система", "path": "external/{name}.md", "owner": "none", "name": "as_is"}
   },
   "edges": {
-    "belongs_to":   {"title_ru": "принадлежит сервису", "from": ["endpoint", "scheduler", "kafka-op", "algorithm"], "to": ["service"], "inverse": "operations", "evidence": "optional", "impact": "none"},
-    "calls":        {"title_ru": "вызывает", "from": ["endpoint", "scheduler", "kafka-op", "algorithm", "screen"], "to": ["endpoint", "external"], "inverse": "called_by", "evidence": "required", "impact": "inverse", "stub": {"kind": "external"}},
-    "invokes":      {"title_ru": "запускает", "from": ["endpoint", "scheduler", "kafka-op", "algorithm"], "to": ["algorithm", "kafka-op:publish"], "inverse": "invoked_by", "evidence": "required", "impact": "inverse", "same_service": true},
-    "publishes_to": {"title_ru": "публикует в топик", "from": ["endpoint", "scheduler", "algorithm", "kafka-op:publish"], "to": ["topic"], "inverse": "publishers", "evidence": "required", "impact": "forward"},
-    "consumes":     {"title_ru": "читает топик", "from": ["kafka-op:consume"], "to": ["topic"], "inverse": "consumers", "evidence": "required", "impact": "inverse"},
-    "creates_task": {"title_ru": "формирует задачу", "from": ["scheduler", "endpoint", "kafka-op"], "to": ["operation"], "inverse": "created_by", "evidence": "required", "impact": "forward"},
-    "closes_task":  {"title_ru": "закрывает задачу", "from": ["scheduler", "endpoint", "kafka-op"], "to": ["operation"], "inverse": "closed_by", "evidence": "required", "impact": "forward"},
-    "ui_of":        {"title_ru": "UI задачи", "from": ["screen"], "to": ["operation"], "inverse": "screens", "evidence": "required", "impact": "both"},
-    "uses_data":    {"title_ru": "использует данные", "from": ["endpoint", "scheduler", "kafka-op", "algorithm", "screen"], "to": ["data"], "inverse": "used_by", "evidence": "required", "impact": "inverse", "stub": {"kind": "data", "subkind": "table", "key": "table"}},
-    "related":      {"title_ru": "связана с операцией", "from": ["operation"], "to": ["operation"], "inverse": "related", "symmetric": true, "evidence": "required", "impact": "none"},
-    "part_of":      {"title_ru": "входит в процесс", "from": ["operation", "process"], "to": ["process"], "inverse": "includes", "evidence": "required", "impact": "forward"}
+    "belongs_to":   {"title_ru": "принадлежит сервису", "from": ["endpoint", "scheduler", "kafka-op", "algorithm"], "to": ["service"], "inverse": "components", "inverse_ru": "состав сервиса: его эндпойнты, шедулеры, Kafka-операции, алгоритмы", "evidence": "optional", "impact": "none"},
+    "calls":        {"title_ru": "вызывает", "from": ["endpoint", "scheduler", "kafka-op", "algorithm", "screen"], "to": ["endpoint", "external"], "inverse": "called_by", "inverse_ru": "кто вызывает (экраны и сервисы)", "evidence": "required", "impact": "inverse", "stub": {"kind": "external"}},
+    "invokes":      {"title_ru": "запускает", "from": ["endpoint", "scheduler", "kafka-op", "algorithm"], "to": ["algorithm", "kafka-op:publish"], "inverse": "invoked_by", "inverse_ru": "кем запускается (обработчик, шедулер, эндпойнт или другой алгоритм)", "evidence": "required", "impact": "inverse", "same_service": true},
+    "publishes_to": {"title_ru": "публикует в топик", "from": ["endpoint", "scheduler", "algorithm", "kafka-op:publish"], "to": ["topic"], "inverse": "publishers", "inverse_ru": "кто публикует в топик", "evidence": "required", "impact": "forward"},
+    "consumes":     {"title_ru": "читает топик", "from": ["kafka-op:consume"], "to": ["topic"], "inverse": "consumers", "inverse_ru": "кто читает топик", "evidence": "required", "impact": "inverse"},
+    "creates_task": {"title_ru": "формирует задачу", "from": ["scheduler", "endpoint", "kafka-op"], "to": ["operation"], "inverse": "created_by", "inverse_ru": "кто формирует задачу этого типа", "evidence": "required", "impact": "forward"},
+    "closes_task":  {"title_ru": "закрывает задачу", "from": ["scheduler", "endpoint", "kafka-op"], "to": ["operation"], "inverse": "closed_by", "inverse_ru": "кто закрывает задачу этого типа", "evidence": "required", "impact": "forward"},
+    "ui_of":        {"title_ru": "UI задачи", "from": ["screen"], "to": ["operation"], "inverse": "screens", "inverse_ru": "экраны, где пользователь работает с задачей", "evidence": "required", "impact": "both"},
+    "uses_data":    {"title_ru": "использует данные", "from": ["endpoint", "scheduler", "kafka-op", "algorithm", "screen"], "to": ["data"], "inverse": "used_by", "inverse_ru": "где используются данные", "evidence": "required", "impact": "inverse", "stub": {"kind": "data", "subkind": "table", "key": "table"}},
+    "related":      {"title_ru": "связана с операцией", "from": ["operation"], "to": ["operation"], "inverse": "related", "inverse_ru": "связанные бизнес-операции (в обе стороны)", "symmetric": true, "evidence": "required", "impact": "none"},
+    "part_of":      {"title_ru": "входит в процесс", "from": ["operation", "process"], "to": ["process"], "inverse": "includes", "inverse_ru": "что входит в процесс", "evidence": "required", "impact": "forward"}
   },
-  "scalar_keys": ["kind", "subkind", "role", "key", "method", "path", "aliases", "status", "source", "blocks", "confidence"]
+  "scalar_keys": ["kind", "subkind", "role", "key", "method", "path", "aliases", "status", "source", "blocks", "confidence"],
+  "keys_ru": {
+    "kind": "вид узла: каким элементом системы заметка является (значения и их смысл — в таблице видов)",
+    "subkind": "у данных — разновидность: attributes (динамические атрибуты), table (таблица БД), dto, enum",
+    "role": "у Kafka-операции — направление: consume — читает сообщения из топика, publish — отправляет в топик",
+    "key": "уникальный ключ узла по спеке: http:<METHOD> <путь>, kafka:<топик>, task:<код типа задачи>, table:<таблица>",
+    "method": "у эндпойнта — HTTP-метод", "path": "у эндпойнта — путь",
+    "aliases": "другие имена заметки для поиска (у эндпойнта — «METHOD /путь»)",
+    "status": "состояние: draft — из спеки, ещё не принято; stable — принято; stub — заглушка, описания в спеке нет; deprecated — устарело; external — внешнее",
+    "source": "откуда текст заметки: файл спеки и раздел",
+    "blocks": "служебное: блоки исходника (в заметке не пишется)",
+    "confidence": "служебное: уверенность в связи"
+  },
+  "legacy_keys": {"operations": "components"}
 }

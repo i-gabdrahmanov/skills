@@ -165,7 +165,7 @@ class Rejected(_Base):
         T.call("graph_edges_mechanical", self.root, {})
         T.call("graph_sync", self.root, {})
         data, _ = F.read(SP.read_note(self.vault / "business/operations/Регистрация.md"))
-        self.assertEqual(data["closed_by"], [])
+        self.assertEqual(data.get("closed_by", []), [])
         self.assertIn("регистрацию закрывает пользователь", T.call("graph_edges_review", self.root, {}) and self.report())
 
     def test_decide_needs_known_edge_and_why(self):
