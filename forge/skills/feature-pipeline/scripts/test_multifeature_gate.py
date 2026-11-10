@@ -20,6 +20,7 @@ REPO = Path(__file__).resolve().parents[3]
 INIT = REPO / "skills/pipeline-state/scripts/init.py"
 UPDATE = REPO / "skills/pipeline-state/scripts/update.py"
 ADD = REPO / "skills/feature-pipeline/scripts/add_steps.py"
+PAUSE = REPO / "skills/pipeline-state/scripts/pause.py"
 
 sys.path.insert(0, str(REPO / "skills/feature-pipeline/scripts"))
 import pipeline_phases as _pp  # noqa: E402
@@ -57,8 +58,9 @@ class MultiFeatureGate(unittest.TestCase):
 
     def _setup_feature(self, feat):
         (self.proj / "docs/feature-pipeline" / feat).mkdir(parents=True, exist_ok=True)
-        _run([INIT, "--project", self.proj, "--skill", "feature-pipeline",
-              "--feature", feat, "--steps", json.dumps(STATIC)], self.proj)
+        r = _run([INIT, "--project", self.proj, "--skill", "feature-pipeline",
+                  "--feature", feat, "--steps", json.dumps(STATIC)], self.proj)
+        self.assertEqual(r.returncode, 0, f"init {feat}: {r.stderr}")
         _run([ADD, "--skill", "feature-pipeline", "--feature", feat,
               "--steps", json.dumps(DYN)], self.proj)
         jdir = self.proj / "ground/statements/feature-pipeline" / feat / "judges"
@@ -109,26 +111,43 @@ class MultiFeatureGate(unittest.TestCase):
                       "--output-json", json.dumps({"step_id": sid})], self.proj)
             self.assertEqual(r.returncode, 0, f"{feat}/{sid}: {r.stderr or r.stdout}")
 
+    def _pause(self, feat):
+        """Пауза по согласию пользователя: маркер pause-<feat> (как его пишет record_approval)."""
+        key = f"pause-{feat}"
+        appr = self.proj / "ground/approvals"
+        appr.mkdir(parents=True, exist_ok=True)
+        (appr / f"{key}.json").write_text(json.dumps(
+            {"produced_by": "record_approval", "key": key, "approved_by": "user",
+             "reason": "test"}), encoding="utf-8")
+        r = _run([PAUSE, "--project", self.proj, "pause", feat, "--reason", "другая фича"],
+                 self.proj)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_two_features_isolated(self):
+        # Живым прогон в репозитории может быть один: вторую фичу начинают, поставив первую
+        # на паузу (init.py иначе отказывает). Изоляция фазового состояния — в обе стороны.
         self._setup_feature("KID-1")
+        self._pause("KID-1")
         self._setup_feature("KID-2")
 
         # Кэша фазовой машины на диске нет вообще — ни общего, ни пофичного.
         self.assertEqual(list(self.proj.glob("ground/phases/**/gate.json")), [])
 
-        # завершаем KID-1 полностью
-        self._close_all("KID-1")
-        self.assertEqual(self._gate("KID-1")["current_phase"], "")
-
-        # KID-2 не затронута настройкой KID-1
-        self.assertNotEqual(self._gate("KID-2")["current_phase"], "",
-                            "фазовое состояние KID-2 затронуто работой KID-1 (C1 регресс)")
-
-        # завершаем KID-2 — KID-1 остаётся завершённой
+        # завершаем KID-2 полностью
         self._close_all("KID-2")
         self.assertEqual(self._gate("KID-2")["current_phase"], "")
-        self.assertEqual(self._gate("KID-1")["current_phase"], "",
-                         "после работы KID-2 состояние KID-1 изменилось (C1 регресс)")
+
+        # KID-1 не затронута работой KID-2
+        self.assertNotEqual(self._gate("KID-1")["current_phase"], "",
+                            "фазовое состояние KID-1 затронуто работой KID-2 (C1 регресс)")
+
+        # возвращаем KID-1 и завершаем — KID-2 остаётся завершённой
+        r = _run([PAUSE, "--project", self.proj, "resume", "KID-1"], self.proj)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self._close_all("KID-1")
+        self.assertEqual(self._gate("KID-1")["current_phase"], "")
+        self.assertEqual(self._gate("KID-2")["current_phase"], "",
+                         "после работы KID-1 состояние KID-2 изменилось (C1 регресс)")
 
 
 if __name__ == "__main__":

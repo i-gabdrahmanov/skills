@@ -335,8 +335,9 @@ def _check_ambiguous_active_run(project_root, warnings: list) -> None:
     проверка появилась: пользователь снёс чужие прогоны `rm -rf` — единственным, что
     сработало, — потому что узнать о них было нечем.
 
-    Только WARNING: два живых прогона законны (фикс внутри стори), и решать, какой лишний,
-    может только пользователь.
+    Только WARNING: решать, какой из них отложить или бросить, может только пользователь.
+    Новый такой пары init.py уже не создаст (exit 3, пока сосед не на паузе), но старые
+    состояния и прогоны, приехавшие с `git pull`, сюда ещё попадают.
     """
     try:
         from _project import resolve_active_run
@@ -349,10 +350,11 @@ def _check_ambiguous_active_run(project_root, warnings: list) -> None:
     warnings.append(
         f"активный прогон неоднозначен — кандидаты: {names}. Активным считается "
         f"{run['skill']}/{run['feature']} (свежайший по mtime), и гейты поедут по нему. "
-        f"Какой прогон брошен, знает только пользователь — сам не снимай, спроси его "
-        f"(список: archive.py status). По его явному ответу — pipeline-state/scripts/"
-        f"archive.py abandon <feature> --skill <S> --reason \"<почему>\": это R4, нужен "
-        f"approval-маркер abandon-<feature> с его цитатой (вернуть — archive.py restore). "
+        f"Что с лишним, знает только пользователь — сам не снимай, спроси его (список: "
+        f"pause.py status): отложить — pipeline-state/scripts/pause.py pause <feature> "
+        f"--reason \"<…>\" --evidence \"<его ответ дословно>\" (R4; вернуть — pause.py "
+        f"resume); брошен — archive.py abandon <feature> --skill <S> --reason \"<почему>\" "
+        f"(R4, маркер abandon-<feature>; вернуть — archive.py restore). "
         f"Руками из ground/statements/ не удаляй."
     )
 

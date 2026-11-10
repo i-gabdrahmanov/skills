@@ -12,6 +12,7 @@ from typing import Any, Dict, Union
 
 from . import VERSION
 from . import config as C
+from . import fsutil as FS
 
 
 def status(root: Path) -> Dict[str, Any]:
@@ -38,7 +39,11 @@ def status(root: Path) -> Dict[str, Any]:
            "sources": [s["root"] for s in cfg["sources"]]}
     run = run_info(root)
     out["run"] = run
-    if run.get("key") is None:
+    if run.get("paused") and run.get("step") is None:
+        out["next"] = (f"прогон {run['paused'][0]} на паузе. Спроси пользователя: вернуться к нему "
+                       f"(run.commands.resume) или начать новый ({run['next_key']}, команда "
+                       f"run.commands.{'init' if run.get('key') is None else 'init_next'})")
+    elif run.get("key") is None:
         out["next"] = (f"заведи прогон {run['next_key']}: выполни команду run.commands.init, затем снова graph_status")
     elif run.get("step") is None:
         out["next"] = (f"прогон {run['key']} завершён; новый прогон по спеке — команда run.commands.init_next "
@@ -111,12 +116,16 @@ def run_info(root: Path) -> Dict[str, Any]:
     import json
     import re
     base = Path(root) / "ground" / "statements" / "specgraph"
-    nums, live = [], []
+    nums, live, paused = [], [], []
     for d in list(base.glob("GRAPH-*")) + list((Path(root) / "ground" / "archive").glob("**/GRAPH-*")):
         m = re.fullmatch(r"GRAPH-(\d+)", d.name)
         if m:
             nums.append(int(m.group(1)))
     for mp in sorted(base.glob("GRAPH-*/manifest.json"), key=lambda x: x.stat().st_mtime, reverse=True):
+        if FS.run_paused(mp.parent):
+            # на паузе (pause.py): хуки его не видят, update.py шаги не двигает — активным не считаем
+            paused.append(mp.parent.name)
+            continue
         try:
             steps = json.loads(mp.read_text(encoding="utf-8")).get("steps") or []
         except (OSError, ValueError):
@@ -133,6 +142,10 @@ def run_info(root: Path) -> Dict[str, Any]:
     if active is None:
         info: Dict[str, Any] = {"key": live[0][0] if live else None, "step": None, "next_key": next_key,
                                 "commands": {"init" if not live else "init_next": init.format(key=next_key)}}
+        if paused:
+            info["paused"] = paused
+            info["commands"]["resume"] = (f"{_py()} {q(ps / 'pause.py')} --project {q(root)} resume "
+                                          f"{paused[0]}")
         return info
     key, step = active
     gate = (f"{_py()} {q(ps / 'record_gate.py')} --project {q(root)} --skill specgraph --feature {key} "

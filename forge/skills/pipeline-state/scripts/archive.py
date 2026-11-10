@@ -85,6 +85,7 @@ import _branches as BR  # noqa: E402 — реестр плоских веток 
 # _util при импорте кладёт hooks/ в sys.path — оттуда берём ЕДИНЫЙ предикат живости прогона
 # (тот же, которым резолвят активную фичу хуки и config.py), а не вторую его копию здесь.
 import _config_loader as _CL  # noqa: E402
+from _project import run_paused as _run_paused  # noqa: E402 — пауза (pause.py) снимает с резолва
 
 META_NAME = "archive-meta.json"
 
@@ -809,7 +810,9 @@ def status(project) -> dict:
                     manifest_path(project, skill, feature), what="manifest.json")))
             except Exception:  # noqa: BLE001 — битый/пропавший манифест: считаем живым
                 live = True
-            stateless.append({"skill": skill, "feature": feature, "live": live,
+            paused = _run_paused(state_dir(project, skill, feature))
+            stateless.append({"skill": skill, "feature": feature, "live": live and not paused,
+                              "paused": paused,
                               "state": _rel(state_dir(project, skill, feature),
                                             ground_dir(project))})
             continue
@@ -859,7 +862,8 @@ def _print_status(data: dict) -> None:
               f"либо брошен на старте:")
         for r in orphans:
             print(f"   {'⚠' if r['live'] else '·'} {r['skill']}/{r['feature']}  {r['state']}"
-                  f"{'  (числится живым — участвует в резолве активной фичи)' if r['live'] else ''}")
+                  f"{'  (числится живым — участвует в резолве активной фичи)' if r['live'] else ''}"
+                  f"{'  (на паузе — вернуть: pause.py resume)' if r.get('paused') else ''}")
         print("   Который из них идёт — знает пользователь; лишний не удаляй, а сними с активных.")
         print("   Убрать штатно: /forge-archive abandon <feature> --skill <S> "
               "--reason \"<почему>\" — по его явному ответу (R4: маркер abandon-<feature>)")

@@ -90,6 +90,7 @@ forge/
 | `config.py repin` — переснять политику идущего прогона | `policy-repin-<feature>` |
 | `config.py set` по переключателю enforcement (`quality.tdd`, `coverage_threshold`, `security.*`, …) | `policy-downgrade-<параметр>` |
 | `archive.py abandon` / `put --force` — снять прогон с активных | `abandon-<feature>` / `archive-force-<slug>` |
+| `pause.py pause` — поставить прогон на паузу, чтобы переключиться на другую задачу (гейты его фазы не действуют; `resume` свободен) | `pause-<feature>` — цитата прямо в команде: `--evidence "<ответ>"` (тратится на одну паузу) |
 | `config.py risk list-remove` / `cap-set`, `phase disable` обязательной фазы — ослабить политику мимо `set` | `policy-downgrade-risk.<ключ>` / `policy-downgrade-phase.<фаза>` |
 | `git reset --hard`, `clean -f`, `checkout .` / `restore .`, `stash drop\|clear` — стереть незакоммиченное целиком | `git-discard` (тратится на одну команду) |
 | `check_acceptance` — засчитать критерий приёмки ручной проверкой вместо теста | `acceptance-<ID>` |

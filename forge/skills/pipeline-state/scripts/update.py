@@ -45,7 +45,7 @@ from _util import (gate_result_path, judges_dir, load_project_config, origins_di
                    task_docs_dir as _task_docs_dir)
 import forge_events as FE  # журнал evidence (импорт _util уже положил hooks/ в sys.path)
 import _branches as BR  # реестр плоских веток (fix, tech) — hooks/, как forge_events
-from _project import exclusive_lock, safe_component, install_rel as _install_rel  # noqa: E402
+from _project import exclusive_lock, safe_component, install_rel as _install_rel, run_paused  # noqa: E402
 
 # Соглашение «какие фазы обязаны идти через субагента» — ЕДИНЫЙ источник pipeline_phases
 # (co-located feature-pipeline). best-effort импорт + inline-fallback, чтобы переименование
@@ -804,6 +804,14 @@ def main():
 
     if not manifest_path.exists():
         print(f"ERROR: manifest not found at {manifest_path}. Run init.py first.", file=sys.stderr)
+        sys.exit(3)
+
+    # Прогон на паузе выпал из резолва — гейты его фазы не действуют. Двигать его шаги в этом
+    # состоянии = вести прогон без enforcement, ровно то, чего пауза разрешать не должна.
+    if run_paused(pdir):
+        print(f"ERROR: прогон {args.skill}/{args.feature} на паузе — шаги не двигаются. "
+              f"Вернуть его: pause.py resume {args.feature} (если идёт другой прогон — сначала "
+              f"спроси пользователя, что с ним).", file=sys.stderr)
         sys.exit(3)
 
     # Чтение → гейты → запись манифеста — под замком прогона. Параллельные шаги (04-test-T1,

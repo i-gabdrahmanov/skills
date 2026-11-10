@@ -41,6 +41,10 @@ Inputs format (JSON object, опционально):
 
 If manifest already exists, fails with non-zero exit (use update.py for changes).
 Caller should call read.py first and decide what to do.
+
+Идёт другой живой прогон (любой namespace, не на паузе) → exit 3: что с ним делать — пауза
+(pause.py, R4 по согласию), продолжить его или бросить — решает пользователь. --force это не
+снимает: он пересоздаёт ЭТОТ слаг, а не чужой прогон.
 """
 import argparse
 import json
@@ -83,6 +87,8 @@ from _util import (repo_root, feature_docs_dir, safe_slug, safe_load_json,  # no
 # «снимок поверх снимка», а digest считаем по тому же каноникализованному виду, что и
 # preflight при сверке дрейфа.
 from _config_loader import load_project_config, policy_digest  # noqa: E402
+# Живые соседи (не на паузе) — один обход прогонов с резолвером хуков, не своя копия.
+from _project import live_runs  # noqa: E402
 
 
 def load_json_arg(value: str):
@@ -274,6 +280,27 @@ def main():
         print(f"ERROR: --inputs must be a JSON object, got {type(inputs_data).__name__}",
               file=sys.stderr)
         sys.exit(2)
+
+    # Другой живой прогон — новый не стартует. Активный прогон один на репозиторий: хуки
+    # резолвят его по всем namespace (_project.resolve_active_run), и при двух живых гейты
+    # фазы одного применялись к работе другого, а выбор между ними делал mtime. Что делать со
+    # старым, решает пользователь (пауза — R4); --force это не снимает: он про ЭТОТ слаг.
+    others = live_runs(project, exclude=(args.skill, args.feature))
+    if others:
+        names = "; ".join(
+            f"{o['skill']}/{o['feature']}" + (f" (шаг {o['step']}, {o['status']})" if o.get("step") else "")
+            for o in others)
+        first = others[0]["feature"]
+        print(f"ERROR: идёт другой прогон: {names}. Новый прогон не стартует, пока тот не на "
+              f"паузе — иначе гейты одного поедут по стейту другого.\n"
+              f"   Спроси пользователя ОДНИМ вопросом, что делаем с {first}:\n"
+              f"   (1) «Да, {first} на паузу — начать новую» → pause.py pause {first} --reason "
+              f"\"<на что переключаемся>\" --evidence \"<его ответ дословно>\" и повтори "
+              f"init.py;\n"
+              f"   (2) «Продолжить {first}» → новый прогон не начинай, веди {first} дальше;\n"
+              f"   (3) «Бросить {first}» → archive.py abandon {first} (R4, маркер abandon-{first}).\n"
+              f"   Сам не выбирай. Список прогонов — pause.py status.", file=sys.stderr)
+        sys.exit(3)
 
     pdir = pipeline_dir(project, args.skill, args.feature)
     manifest_path = pdir / "manifest.json"

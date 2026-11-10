@@ -286,6 +286,27 @@ def manifest_path(root: Path, skill: str, feature: str) -> Path:
     return state_dir(root, skill, feature) / "manifest.json"
 
 
+PAUSE_MARKER = "paused.json"
+
+
+def pause_marker_path(root: Path, skill: str, feature: str) -> Path:
+    """paused.json — прогон на паузе (пишет и снимает ТОЛЬКО pipeline-state/scripts/pause.py)."""
+    return state_dir(root, skill, feature) / PAUSE_MARKER
+
+
+def run_paused(run_dir: Path) -> bool:
+    """Стоит ли прогон в каталоге run_dir на паузе.
+
+    Засчитывается только маркер с провенансом pause.py: пауза снимает с прогона enforcement
+    всех хуков, и рукописный paused.json (state-write-guard его и так режет) не должен этого
+    добиваться. Нечитаемый маркер — не пауза: прогон остаётся под гейтами (fail-closed)."""
+    try:
+        data = json.loads((Path(run_dir) / PAUSE_MARKER).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("produced_by") == "pause"
+
+
 def step_output_path(root: Path, skill: str, feature: str, step_id: str) -> Path:
     """<step-id>.json — содержательный выход субагента."""
     return state_dir(root, skill, feature) / f"{safe_component(step_id)}.json"
@@ -477,10 +498,15 @@ def manifest_for(root: Path, skill: str, feature: str) -> dict:
         return {}
 
 
-def iter_runs(root: Path, skill: Optional[str] = None) -> list:
+def iter_runs(root: Path, skill: Optional[str] = None, include_paused: bool = False) -> list:
     """[(mtime, skill, feature, manifest_path)] прогонов ground/statements/<skill>/<feature>/,
     новые первыми. `archived/` пропускается: туда init.py --force ВЫТЕСНЯЕТ прогон при
     переиспользовании слага, активным он уже не считается.
+
+    Прогоны на паузе (paused.json от pause.py) пропускаются по умолчанию: пауза и есть
+    «этот прогон сейчас не активен», и выпасть он обязан у ВСЕХ резолверов сразу — иначе
+    гейты его фазы продолжали бы применяться к другой задаче. Видеть их нужно только
+    самому pause.py и init.py (кого предложить на паузу) — им include_paused=True.
 
     Единственный обход дерева прогонов для всех кросс-namespace резолверов ниже. До этого
     обход был скопирован в load_active_manifest, active_feature_with_skill и
@@ -504,6 +530,8 @@ def iter_runs(root: Path, skill: Optional[str] = None) -> list:
                 try:
                     mt = mp.stat().st_mtime      # нет файла → OSError → прогоном не считается
                 except OSError:
+                    continue
+                if not include_paused and run_paused(d):
                     continue
                 out.append((mt, sname, d.name, mp))
     except OSError:
@@ -565,6 +593,37 @@ def resolve_active_run(root, skill: Optional[str] = None) -> dict:
     return {"path": mp, "skill": sk, "feature": ft,
             "live": [(s, f) for _, s, f, _ in live],
             "ambiguous": len(candidates) > 1}
+
+
+def live_runs(root, exclude: "tuple[str, str] | None" = None) -> list:
+    """Живые прогоны НЕ на паузе, кроме exclude=(skill, feature): [{"skill", "feature",
+    "step", "status"}], свежие первыми. `step` — первый незакрытый шаг (где прогон стоит).
+
+    Это те, кто перехватил бы резолв активного прогона у нового: init.py отказывает, пока
+    такой есть, а pause.py resume — пока он есть у возвращаемого. Битый манифест считается
+    живым: молча пропустить чужой прогон опаснее, чем лишний раз спросить."""
+    try:
+        from _config_loader import run_is_live, _LIVE_STEP_STATUSES
+    except Exception:  # noqa: BLE001 — предиката нет: не гейтим (fail-open, как резолвер)
+        return []
+    out = []
+    for _mt, sk, ft, mp in iter_runs(Path(root)):
+        if exclude and (sk, ft) == tuple(exclude):
+            continue
+        try:
+            man = json.loads(mp.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            out.append({"skill": sk, "feature": ft, "step": None, "status": "манифест нечитаем"})
+            continue
+        if not run_is_live(man):
+            continue
+        open_steps = [s for s in man.get("steps", [])
+                      if isinstance(s, dict) and s.get("status") in _LIVE_STEP_STATUSES]
+        cur = next((s for s in open_steps if s.get("status") == "in_progress"), None) \
+            or (open_steps[0] if open_steps else {})
+        out.append({"skill": sk, "feature": ft, "step": cur.get("id"),
+                    "status": cur.get("status")})
+    return out
 
 
 def load_active_manifest(root: Optional[Path] = None, skill: Optional[str] = None) -> tuple[Path | None, dict]:

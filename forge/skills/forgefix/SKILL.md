@@ -115,6 +115,8 @@ Project-wide `quality.*`/`security.*` эта ветка не пишет вовс
 python3 <project>/.gigacode/skills/pipeline-state/scripts/init.py --project <toplevel> --skill forgefix --feature <KEY|slug> --steps @<project>/.gigacode/skills/forgefix/references/manifest-steps.json
 ```
 
+**`init.py` → exit 3 «идёт другой прогон»** — в репозитории уже идёт прогон: спроси пользователя, что с ним (на паузу / продолжить / бросить — router §0, вопрос и команды есть в сообщении `init.py`). Сам не выбирай.
+
 **Шаг 2 — per-feature (`inputs.*`/`decisions.*` → `manifest.json`), ПОСЛЕ `init.py`**
 (`--project` ДО подкоманды `set`; `--skill`/`--feature` обязательны; `auto_max_risk` —
 sensitive, нужен `--confirm`):

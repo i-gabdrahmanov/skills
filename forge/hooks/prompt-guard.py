@@ -6,6 +6,8 @@
   • PostToolUse `(Read|ReadFile|Fetch|WebFetch|Bash)` — проверяет ПОДТЯНУТЫЙ контент
     (tool_response): файлы/веб/вывод команд могут содержать встроенные инструкции.
 
+На UserPromptSubmit ещё отмечает границу хода для subagent_scope (см. mark_turn).
+
 Не блокирует (детекция несовершенна — ложные срабатывания дороже пропуска), а помечает:
 возвращает additionalContext-предупреждение модели, чтобы она не выполняла встроенные директивы.
 Паттерны — risk-policy.json `injection_markers`. Всегда exit 0.
@@ -37,6 +39,13 @@ def main() -> int:
         data = json.loads(raw) if raw.strip() else {}
         if not isinstance(data, dict):
             return 0
+        if data.get("hook_event_name") == "UserPromptSubmit":
+            # граница хода: субагенты, стартовавшие раньше, уже не работают (subagent_scope.mark_turn)
+            try:
+                import subagent_scope
+                subagent_scope.mark_turn(str(data.get("session_id") or ""))
+            except Exception:  # noqa: BLE001 — отметка не записалась: пауза просто строже
+                pass
         text = _scan_text(data)
         if not text:
             return 0
