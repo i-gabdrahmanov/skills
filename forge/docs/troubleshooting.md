@@ -50,7 +50,7 @@ python3 $F/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
 ### A2. `preflight.py` → exit 1 (ENFORCEMENT OFF)
 **Действие:** не ведите пайплайн вслепую. Перепроверьте установку (user-guide §3) → `preflight.py` снова.
 Продолжайте только после exit 0.
-**Не путайте с exit 2** (`init_needed`: `ground/pipeline.json` нет/неполон) — это не поломка
+**Не путайте с exit 2** (`init_needed`: `ground/policy.json` нет/неполон) — это не поломка
 энфорсмента, а неинициализированный конфиг. Инициализируйте его и перезапустите preflight до exit 0.
 
 ### A3. Гейты не находят скиллы (`../skills`)
@@ -73,8 +73,8 @@ python3 $F/skills/pipeline-state/scripts/read.py --skill feature-pipeline --list
 
 ### B1. `gate-guard`: «критичность не задана» / блок R2+
 **Причина:** не пройден гейт критичности после BRD → `gate-guard` блокирует любое R2+ действие.
-**Фикс:** ответьте на вопрос о критичности; конвейер запишет `autonomy.{criticality,auto_max_risk}`
-в `ground/pipeline.json`. После этого порог применяется per-feature.
+**Фикс:** ответьте на вопрос о критичности; конвейер запишет `decisions.criticality` и `decisions.auto_max_risk`
+в `ground/statements/<skill>/<feature>/manifest.json`. Порог применяется к этой фиче.
 
 ### B2. `tdd-guard`: блок записи в `src/main`
 **Причина:** шаг `04-test-<id>` ещё `pending` — нельзя писать код, пока RED-тесты не написаны/не падают.

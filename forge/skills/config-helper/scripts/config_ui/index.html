@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Настройки Forge</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+<header><div class="wrap"><h1>Настройки Forge</h1><p id="project"></p></div></header>
+<main class="wrap">
+  <div class="toolbar">
+    <label>Поиск <input id="search" type="search" placeholder="Название или ключ"></label>
+    <label>Область <select id="scope"><option value="">Все настройки</option>
+      <option>Проект</option><option>Гейты</option><option>Установка</option><option>Фича</option>
+    </select></label>
+    <label>Фича <select id="feature"><option value="">Выберите фичу</option></select></label>
+    <label class="check"><input id="changed" type="checkbox"> Только изменённые</label>
+  </div>
+  <p id="status" role="status"></p>
+  <p id="live"></p>
+  <section id="settings" aria-label="Параметры"></section>
+  <section id="structures" aria-label="Фазы и политика рисков"></section>
+</main>
+<footer><div class="wrap toolbar">
+  <button id="reload">Перечитать файлы</button>
+  <button id="discard" disabled>Отменить правки</button>
+  <label>Файл для сохранения <select id="files" aria-label="Файл для сохранения"></select></label>
+  <button id="preview" class="primary" disabled>Предпросмотр</button>
+</div></footer>
+<dialog id="confirmation" aria-labelledby="confirm-title"><h2 id="confirm-title">Подтверждение изменений</h2>
+  <p id="target"></p><div id="diff"></div><p id="save-error" role="alert"></p>
+  <div class="toolbar"><button id="close" autofocus>Назад</button><button id="save" class="primary">Сохранить</button></div>
+</dialog>
+</html>

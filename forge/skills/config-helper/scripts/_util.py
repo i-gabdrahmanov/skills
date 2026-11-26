@@ -7,6 +7,7 @@ import json
 import math
 import os
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Tuple
@@ -40,11 +41,17 @@ def atomic_write(path, data: Any) -> None:
     """Пишет JSON в .tmp, затем os.replace — конфиг не бьётся при обрыве."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False, allow_nan=False)
-        f.write("\n")
-    os.replace(tmp, p)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{p.name}.", suffix=".tmp", dir=p.parent)
+    tmp = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False, allow_nan=False)
+            f.write("\n")
+        if p.exists():
+            tmp.chmod(p.stat().st_mode & 0o777)
+        os.replace(tmp, p)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def backup(path, project_root) -> Optional[str]:

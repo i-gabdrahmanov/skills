@@ -27,6 +27,12 @@
 `policy_snapshot` поверх файла. Правка `policy.json` посреди прогона применится со
 СЛЕДУЮЩЕГО; применить к идущему — `config.py repin` (R4, approval).
 
+## Настройка оператором
+
+Команда `forge-config` открывает в браузере параметры проекта, гейтов, риска и
+выбранной фичи. После установки добавьте в PATH каталог `bin` поставки. Для
+автоматизации используйте `config.py` из `skills/config-helper/scripts/` поставки.
+
 ## Как скиллы это потребляют
 
 Скиллы читают эффективный конфиг через `_config_loader.load_project_config` (он и делает
@@ -77,12 +83,14 @@
 
 ### Вызов resolve_phases.py
 
+`<extension>` — каталог установленной поставки в `.gigacode/extensions/`.
+
 ```bash
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/resolve_phases.py \
-    --project <project> --feature <slug> --gates <project>/ground/feature-gates.json [--list]
+python3 <extension>/skills/feature-pipeline/scripts/resolve_phases.py \
+    --project <project> --feature <slug> --gates <project>/ground/feature-gates.json
 ```
 
-Возвращает JSON:
+По умолчанию возвращает JSON. Флаг `--list` включает текстовый вывод.
 ```json
 {
   "phases": [
@@ -91,18 +99,17 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/resolve_phases.py \
     {"id": "02-design", "skill": "tech-design", "gates": ["design"], "description": "..."}
   ],
   "skipped": [
-    {"id": "02-eval-plan", "reason": "enabled_by(quality.eval_enabled) = false"},
-    {"id": "04-tdd", "reason": "skip_if(tdd_enabled) = false"}
+    {"id": "02-eval-plan", "reason": "enabled_by(quality.eval_enabled) = false"}
   ],
-  "total": 5,
-  "skipped_count": 2
+  "total": 3,
+  "skipped_count": 1
 }
 ```
 
 ## Инициализация
 
 ```bash
-python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.py   # создать (не перезапишет); корень — git toplevel/cwd сам
+python <extension>/skills/feature-pipeline/scripts/init_pipeline_config.py   # создать (не перезапишет); корень — git toplevel/cwd сам
     # --print   показать детект без записи
     # --update  обновить только авто-детект-поля, сохранив заполненное вручную
     # --force   перезаписать целиком
@@ -113,7 +120,10 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
 (по `group`). Незаполняемое автоматически ставит в `null` и собирает в `_incomplete` —
 оркестратор по этому списку понимает, о чём спросить.
 
-## Схема (v1)
+## Исторический пример схемы v1
+
+Актуальный проект использует `policy.json` со схемой `feature-pipeline/config@2`.
+Поля `inputs.*` и `decisions.*` хранятся в манифесте фичи.
 
 ```jsonc
 {
@@ -233,7 +243,7 @@ python <project>/.gigacode/skills/feature-pipeline/scripts/init_pipeline_config.
 гоняет гейт в фазе **verify (05)** на изменённых файлах фичи; `error` валит фазу:
 
 ```bash
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_architecture.py \
+python3 <extension>/skills/feature-pipeline/scripts/check_architecture.py \
     --root <project> --base <branch-base> \
     --pipeline-config <project>/ground/policy.json [--strict] [--json]
 # exit 2 → есть нарушения слоёв (error); --strict делает warning тоже блокирующими.
@@ -261,7 +271,7 @@ eval**, которую `check_taskplan`/`check_sdd` проверяли лишь 
 `quality.traceability_check: true`; гоняется после генерации eval-plan (фаза 02-eval-plan/verify):
 
 ```bash
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_traceability.py \
+python3 <extension>/skills/feature-pipeline/scripts/check_traceability.py \
     "<папка фичи>/task-plan.json" --sdd "<папка фичи>/sdd.md" \
     --eval-plan "<папка фичи>/eval-plan.json" [--strict] [--json]
 ```
@@ -296,7 +306,7 @@ warning (возможно делегирование в хелпер). Вклю�
 в фазе **test/verify** на изменённых тест-файлах:
 
 ```bash
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_tautological_tests.py \
+python3 <extension>/skills/feature-pipeline/scripts/check_tautological_tests.py \
     --root <project> --base <branch-base> [--strict] [--json]
 ```
 
@@ -499,8 +509,7 @@ exit 3. Мастер при этом не трогается вообще; де�
 `feature-pipeline` ссылается на `../minor-defect-fix/references/*` (общие jira/bitbucket/
 coverage воркфлоу). `install.sh forge` кладёт ВСЕ скиллы поставки в один extension проекта
 (`<project>/.gigacode/extensions/forge/skills/`), поэтому `minor-defect-fix` и `pipeline-state` лежат
-рядом и вызываются по пути `<project>/.gigacode/skills/<skill>/scripts/` (в установленной поставке он
-уже переписан под каталог extension'а) — отдельная глобальная установка не нужна.
+рядом и вызываются по пути `<extension>/skills/<skill>/scripts/`.
 
 ---
 

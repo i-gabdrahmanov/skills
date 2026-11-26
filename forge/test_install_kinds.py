@@ -90,6 +90,24 @@ class InstallKinds(unittest.TestCase):
         self.assertEqual(stale, [], "в текстах остались пути старой раскладки")
         self.assertEqual(sorted(missing), [], "тексты называют файлы, которых в поставке нет")
 
+    def test_config_command_install_update_uninstall(self):
+        target = self._front_repo()
+        nested = target / "nested"
+        nested.mkdir()
+        command_dir = target / ".gigacode/extensions/forge-ui/bin"
+        install = ["bash", str(REPO / "install.sh"), "forge-ui", str(target), "--no-link"]
+        update = ["bash", str(REPO / "update.sh"), str(target), "--no-pull", "--no-link"]
+        for action in (install, update):
+            result = _run(action)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            result = _run(["bash", "-c", 'export PATH="$1:$PATH"; forge-config --help',
+                           "bash", str(command_dir)], cwd=nested)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("--project", result.stdout)
+        result = _run(["bash", str(REPO / "uninstall.sh"), "forge-ui", str(target), "--no-link"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((command_dir / "forge-config").exists())
+
     def test_forge_ui(self):
         tgt = self._front_repo()
         r = _run(["bash", str(REPO / "install.sh"), "forge-ui", str(tgt), "--no-link"])

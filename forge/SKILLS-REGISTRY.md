@@ -3,7 +3,7 @@
 Концепция (стр. 180, 294): AGENTS.md / skills / evals — это **supply chain**. У каждого артефакта
 должен быть **owner**, **validity** (срок переоценки), **scope** (где применим) и **eval coverage**.
 Иначе они тихо устаревают и начинают вредить. Этот реестр — лёгкая реализация: один источник правды
-по жизненному циклу скиллов forge (без правки 19 frontmatter).
+по жизненному циклу скиллов forge (без правки frontmatter).
 
 - **Owner**: `@team` — заменить на реального владельца на целевой машине.
 - **Validity**: дата следующей ревизии (пересмотреть актуальность к этой дате).
@@ -16,7 +16,7 @@
 | feature-pipeline | @team | 2026-12 | Java/Spring фичи end-to-end до верифицированного артефакта (режим full; доставка — на пользователе) | gate-скрипты + hooks/evals |
 | forgefix | @team | 2026-12 | минорный дефект (режим fix: диагностика→**гейт фикс-плана**→RED воспроизводит баг→минимальный фикс→verify→точечная дельта спеки внутри папки стори; доставка — на пользователе) | check_fix_scope.py + find_spec_anchor.py + record_approval (fix-plan) + record_gate (RED/GREEN/verify) + check_fix_delta.py |
 | forgetech | @team | 2026-12 | техзадача без изменения поведения (режим tech: апгрейд библиотек/конфиг; tech-sdd.md+change-plan.json→**утверждение плана (sha256)**→снимок «до»→правка в targets→точный diff+регресс→report.md; доставка — на пользователе) | check_tech_scope.py + check_tech_sdd.py + check_invariants.py (snapshot/expect/compare) + tech_report.py + test_forgetech.py |
-| forgeui | @team | 2026-12 | forge-ui — фронт-часть стори во ФРОНТ-репо (профиль поставки `ui`): `ui-spec.md` → дизайн по макету → сборка → проверка против макета; движок по спеке daiver (Python stdlib, MCP `forge-ui`). Исполняются `ui-spec`, `ui-design` и `ui-build` (гейты design / build); `ui-verify` — exit 3 «не реализовано» | check_ui_spec.py + ui_gate.py + test_daiver_specs.py, test_check_ui_spec.py, test_daiver_config.py, hooks/test_daiver_mcp.py, test_deploy_profiles.py |
+| forgeui | @team | 2026-12 | forge-ui — фронт-часть стори во ФРОНТ-репо (профиль поставки `ui`): `ui-spec.md` → дизайн по макету → сборка → проверка против макета; движок по спеке daiver (Python stdlib, MCP `forge-ui`). Исполняются `ui-spec`, `ui-design` и `ui-build` (гейты design / build); `ui-verify` — exit 3 «не реализовано» | check_ui_spec.py + ui_gate.py + test_daiver_specs.py, test_check_ui_spec.py, test_daiver_config.py, hooks/test_daiver_mcp.py, test_install_kinds.py |
 | pipeline-state | @team | 2026-12 | оркестраторы >3 субагентов | test_archive.py + косвенно через evals |
 | project-grounder | @team | 2026-12 | фаза 1: инвентарь для гейтов дизайна (своих скриптов нет — зовёт system-analyst) | ensure_inventory.py, verify_coverage.py |
 | system-analyst | @team | 2026-12 | скан Java/Spring сервиса; требования-мастер (spec_cli/merge/check) и ресерч ФОРМЫ спеки проекта (analyze_spec → spec-conventions.json, spec_grammar) | verify_coverage.py, test_spec_grammar.py, test_analyze_spec.py |
@@ -31,7 +31,8 @@
 | brd-interview | @team | 2026-12 | сбор требований интервью | — |
 | brd-grounder | @team | 2026-12 | grounding для BRD | — |
 | business-requirements | @team | 2026-12 | BRD из идеи | — |
-| config-helper | @team | 2026-12 | настройка параметров forge (pipeline/gates/risk) | test_config.py |
+| config-helper | @team | 2026-12 | CLI и `forge-config` для настроек проекта, гейтов, риска и фичи | test_config.py, test_forge_config.py, test_install_kinds.py |
+| specgraph | @team | 2026-12 | граф Markdown-спецификации в Obsidian, `/forge-graph` и MCP `spec-graph` | test_specgraph_mcp.py, test_graph_config.py, test_install_kinds.py |
 | harness-verifier | @team | 2026-12 | семантическая верификация харнеса (скиллы+хуки) перед релизом | методический (бриф+чек-лист) |
 | pdf / pptx | @team | 2026-12 | работа с PDF/PPTX — внешние скиллы рантайма, каталогов в `skills/` этого репо НЕТ (не деплоятся Forge) | — |
 

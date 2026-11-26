@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$ROOT/hooks/_pick_python.sh"
+forge_pick_python || {
+  echo "forge-config: требуется рабочий Python 3.9+" >&2
+  exit 1
+}
+exec "${PY[@]}" -X utf8 "$ROOT/skills/config-helper/scripts/forge_config.py" "$@"

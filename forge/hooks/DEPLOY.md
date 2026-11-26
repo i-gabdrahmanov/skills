@@ -7,18 +7,19 @@ R0–R5, evidence bundle, security-хуки, информационный учё
 состояние берут из `<project>/ground/...`, гейты ищут по `../skills/...`, политику — из
 `risk-policy.json` рядом.
 
-> **Модель установки — extension внутри проекта.** Канон: `bash install.sh forge|forge-ui <project>`
+> **Модель установки — extension внутри проекта.** Канон: `bash install.sh forge|forge-ui|spec-graph <project>`
 > → `<project>/.gigacode/extensions/<kind>/` (манифест, `hooks/` + `hooks/hooks.json`, `skills/`,
-> `commands/`) + ссылка в `~/.gigacode/extensions` (`gigacode extensions link`), включение — только
+> `commands/`, `bin/forge-config`) + ссылка в `~/.gigacode/extensions` (`gigacode extensions link`), включение — только
 > для этого workspace. Старую co-located раскладку (`.gigacode/{hooks,skills,commands}` + блок hooks в
 > `settings.json`) `install.sh` снимает сам; остатки на user-уровне (`~/.gigacode/skills|hooks`) —
 > `cleanup-legacy.sh`. Подробно — INSTALL.md.
 
-Этот файл — **единственный источник правды по составу хуков**. README.md, INSTALL.md и
-FORGE.md ссылаются на него односторонне. Дрейф «доки ↔ проводка» пинится
-`hooks/test_docs_hooks_consistency.py` (fail на любом расхождении).
+Эталон проводки — [settings.hooks.json](settings.hooks.json). Тест
+`test_docs_hooks_consistency.py` сверяет эталон с цепочками в FORGE.md и проверяет
+перечень зарегистрированных хуков. Для блокирующих PreToolUse установщик включает
+режим `_run_hook.py --blocking`. Исключение или неожиданный код обработчика дают exit 2.
 
-## Состав хуков (17 шт.)
+## Состав хуков (18 шт.)
 
 | Скрипт | Событие | Назначение | Блок |
 |---|---|---|---|
@@ -26,6 +27,7 @@ FORGE.md ссылаются на него односторонне. Дрейф �
 | `tdd-guard.py` | PreToolUse Write/Edit + Bash | форсит TDD (блок `src/main` пока RED pending) + тест-стратегию (блок `@DataJpaTest`/`@SpringBootTest` при `test_layer=service-unit` — только для файлов в `src/test/`) | exit 2 |
 | `tech-guard.py` | PreToolUse Write/Edit + Bash | tech-ветка (`forgetech`): запись в файл проекта (вне `docs/`, `ground/`, выходных каталогов сборки) только на шаге `tech-apply`, при согласии `tech-plan-<F>`, привязанном к sha256 текущего `change-plan.json`, после снимка «до» (`check_invariants.py snapshot`) и только в `targets` плана. Вне прогона forgetech — noop | exit 2 |
 | `ui-guard.py` | PreToolUse Write/Edit + Bash + Read/Grep | ui-ветка (`forgeui`, forge-ui во фронт-репо): запреты daiver слоя F кодом. (1) `read_file`/`grep_search`/`read_many_files` и shell-читатели не пускаются к канону и сырым экспортам макета (`*.canonical.json`, `visual-requirements.pixso*.json`, `visual-requirements.json\|html` и любой файл с головой Pixso DSL `{"dsl":{"converterVersion"`); в shell разрешены только перечисление и измерение (ls, stat, wc, file, shasum); отказ называет `daiver_outline`/`daiver_section`/`daiver_source_nodes`. (2) Запись в `project.outputDir` (из `.daiver/config.yaml`) — только на шаге `ui-build`; на `ui-verify` правка = переоткрытие `ui-build` (подсказка как у sod-enforcer). (3) Запись на `ui-build` — только при действительной подписи плана: `plan_contract.signature_state` (согласие `ui-plan-<KEY>`, привязанное к lock'у, собранному из текущих артефактов); вердикт кешируется в `ground/statements/forgeui/<KEY>/ui-guard-cache.json` по снимку stat'ов входов. (4) Инлайн-`<svg` (и data-URI svg) в кодовых файлах outputDir — отказ, кроме помеченного плейсхолдера арта. Вне прогона forgeui — noop; внутри — fail-closed | exit 2 |
+| `graph-guard.py` | PreToolUse Write/Edit + Bash | защищает заметки, связи и служебные данные spec-graph. Изменения проходят через инструменты `graph_*` | exit 2 |
 | `eval-guard.py` | PreToolUse Write/Edit + Bash | блок записи в `src/main`, пока pre-write eval задачи (`compile`) не пройден (Eval-Driven). `coverage`/`test_pass` выполнимы только ПОСЛЕ кода — их держат гейты закрытия шага | exit 2 |
 | `destructive-blocker.py` | PreToolUse `run_shell_command` | чёрный список (`rm -rf /`, force-push `-f`/`--force`, DROP, base64→sh, xargs rm, rmtree корня) | exit 2 |
 | `fork-syntax-guard.py` | PreToolUse `run_shell_command` | инструктивный блок синтаксиса, который режет нативный сейфти форка (`$(...)`, backticks, `find -exec`, `ls -R`) — объясняет замену (Glob/Grep/Read) вместо молчаливого deny | exit 2 |
@@ -100,7 +102,7 @@ Write/Edit-цепочка матчит ещё и `mcp__.*`: создание з�
 | Каталог | Зачем |
 |---|---|
 | исходный репо `forge/` (родитель `hooks/`) | **source-of-truth**: `hooks/` + `skills/` + `commands/` + профили; отсюда `install.sh` собирает поставку |
-| `<project>/.gigacode/extensions/<forge\|forge-ui>/` | установленный extension: манифест, `hooks/` + `hooks/hooks.json`, `skills/`, `commands/` — каталог целиком форжевый |
+| `<project>/.gigacode/extensions/<forge\|forge-ui\|spec-graph>/` | установленный extension: манифест, `hooks/` + `hooks/hooks.json`, `skills/`, `commands/` — каталог целиком форжевый |
 | `~/.gigacode/extensions/<forge-…-хеш>/` | только ссылка рантайма на каталог выше (`{type: link, source}`) |
 | `<project>/.gigacode/{hooks,skills,commands}` + `settings.json`, `~/.gigacode/skills\|hooks` | старые раскладки; ПЕРЕКРЫВАЮТ extension (project > extension) и задваивают хуки; в проекте снимает `install.sh`, на user-уровне — `cleanup-legacy.sh` |
 
@@ -112,15 +114,17 @@ Write/Edit-цепочка матчит ещё и `mcp__.*`: создание з�
 ```bash
 bash install.sh forge    /path/to/back-repo
 bash install.sh forge-ui /path/to/front-repo
+bash install.sh spec-graph /path/to/spec-repo
 ```
 
 `install.sh` снимает старую раскладку (если была), собирает поставку по профилю и подменяет ею
 каталог extension'а целиком, пишет манифест и `hooks/hooks.json` (`forge_extension.py build`),
 ставит ссылку и включает extension только для этого workspace (`forge_extension.py link`; с другими
 forge-проектами машины — взаимно выключен), кладёт блок в `.gitignore`, прогоняет `preflight.py`
-(advisory). Подробнее — INSTALL.md §1.
+и продолжает установку при кодах 0 и 2. При ошибке проверки обновление восстанавливает
+предыдущий каталог поставки. [Установка](../INSTALL.md#1-установка).
 
-Снять — `bash uninstall.sh forge|forge-ui /path/to/repo` (ссылка в рантайме + каталог extension'а).
+Снять — `bash uninstall.sh forge|forge-ui|spec-graph /path/to/repo` (ссылка в рантайме + каталог extension'а).
 Проект переехал или сменился python — `bash .gigacode/extensions/<kind>/deploy-local.sh`.
 
 > ⚠️ **Не копируй скиллы и хуки вручную по отдельности.** Провальный прогон pprb-kid
@@ -223,6 +227,7 @@ Exit-коды:
 - Нестабилен один хук — убери его строку из события в `hooks/hooks.json` extension'а (переустановка
   вернёт). Чтобы выключить хук во ВСЕХ установках, убери строку из эталона `settings.hooks.json`
   в исходнике и переустанови (`update.sh`).
-- Политику рисков менять в `risk-policy.json` без правки кода: да/нет конкретному
-  действию определяется regex-паттернами (`destructive_blacklist`, `pii_patterns` и т.д.).
+- Настройки проекта, гейтов, риска и выбранной фичи доступны оператору в `forge-config`.
+  CLI для этих операций — `config.py` скилла `config-helper`. Оба интерфейса применяют
+  штатные проверки и правила подтверждения Forge. [Запуск](../INSTALL.md#браузерный-конфигуратор-forge).
 - Диагностику без запуска пайплайна — `preflight.py` (см. выше).

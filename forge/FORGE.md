@@ -11,7 +11,7 @@
 `SKILLS-REGISTRY.md` — реестр скиллов (owner/validity/evals). **FORGE.md — архитектура и
 история решений**, не дубль остальных. Ростер хуков тут не дублируется (полный — в DEPLOY.md).
 
-Канон установки — `install.sh forge|forge-ui <project>`: extension ВНУТРИ проекта
+Канон установки — `install.sh forge|forge-ui|spec-graph <project>`: extension ВНУТРИ проекта
 (`<project>/.gigacode/extensions/<kind>/`) плюс ссылка на него в рантайме ([BR-22], 2026-10-30).
 Прежние раскладки: extension в `~/.gigacode/extensions` (снят 2026-08-28 — shell вне проекта) и
 project-модель `deploy.sh` → `.gigacode/{hooks,skills}` + `settings.json` (до 0.5; `install.sh`
@@ -49,7 +49,7 @@ git-история и `tasks/`.
 
 ## Архитектура PDLC v3.5
 
-Pipeline = оркестратор + control-plane из 17 хуков + 20 скиллов; общее состояние —
+Pipeline = оркестратор + control-plane из 18 хуков и набор скиллов по профилю; общее состояние —
 `<project>/ground/`, артефакты фаз — `<project>/docs/feature-pipeline/...`. PDLC v3.5 ввёл
 risk ladder, evidence bundle и security-гейты; доставка (commit/push/PR/отчёт) остаётся на
 пользователе — пайплайн её не делает и не гейтит.
@@ -59,18 +59,25 @@ risk ladder, evidence bundle и security-гейты; доставка (commit/pu
 | Слой | Расположение | Зачем |
 |---|---|---|
 | Source | исходный репо (родитель `hooks/`) | source-of-truth; отсюда `install.sh` собирает поставку |
-| Install | `<project>/.gigacode/extensions/<forge\|forge-ui>/` | extension целиком: манифест, `hooks/` + `hooks/hooks.json`, `skills/`, `commands/`, `deploy-local.sh` |
+| Install | `<project>/.gigacode/extensions/<forge\|forge-ui\|spec-graph>/` | extension целиком: манифест, `hooks/` + `hooks/hooks.json`, `skills/`, `commands/`, `bin/forge-config`, `deploy-local.sh` |
 | Link | `~/.gigacode/extensions/<forge-…-хеш>/` | только ссылка рантайма (`{type: link, source}`) на каталог выше |
 
-`install.sh forge|forge-ui <project>` собирает поставку по **профилю** (`profiles/back.profile` —
-бэк-репо, все скиллы кроме `forgeui`; `profiles/ui.profile` — фронт-репо, `forgeui` + общий
-control-plane, без Java-скиллов) и подменяет ею каталог extension'а целиком. Одна поставка на репо.
+`install.sh forge|forge-ui|spec-graph <project>` собирает поставку по **профилю** (`profiles/back.profile` —
+бэк-репо, без `forgeui` и по умолчанию без `specgraph`; `profiles/ui.profile` — фронт-репо,
+`forgeui` и общий control-plane; `profiles/graph.profile` — `specgraph` и общий control-plane) и подменяет ею каталог extension'а целиком. Одна поставка на репо.
 `hooks/forge_extension.py` пишет манифест (MCP профиля) и `hooks/hooks.json` из `settings.hooks.json`
 с абсолютными путями и здоровым интерпретатором; каждый хук идёт через `_run_hook.py` (вне своего
 проекта — молча 0), ставит ссылку и включает extension только для этого workspace. Тексты брифов
-при установке называют пути поставки. `preflight.py` (advisory) проверяет готовность; exit 1 =
-ENFORCEMENT OFF. Артефакты фаз — в `<project>/docs/feature-pipeline/...`; `state-write-guard`
+при установке называют пути поставки. `preflight.py` проверяет готовность. Код 1 блокирует установку, код 2 указывает на необходимость
+инициализации проекта. Артефакты фаз — в `<project>/docs/feature-pipeline/...`; `state-write-guard`
 блокирует запись в каталог харнеса, пока идёт прогон.
+
+### Настройки оператора
+
+`forge-config` запускает локальный браузерный редактор из установленной поставки. Форма
+строится из реестра `config-helper`, а запись использует правила его CLI. Настройки политики
+проекта применяются к следующим прогонам. Текущий прогон использует свой снимок, который
+можно обновить штатной командой `config.py repin` с approval.
 
 ### Risk ladder R0–R5
 
@@ -159,8 +166,8 @@ resolve_phases; копий кортежей `fix-*`/`tech-*` по коду не�
 | Guidance (скиллы) | `<project>/.gigacode/extensions/<kind>/skills/` | SKILL.md, брифы `references/phases/*.md`, скрипты фаз. Реестр → `SKILLS-REGISTRY.md`. |
 
 Тяжёлые гейты (`check_taskplan`, `check_coverage`, coverage-judge) запускает **оркестратор**
-как execution-gate (`record_gate.py`), а хуки — лёгкие file-reads. Это закрывает
-ограничение «command-хуки fail-open при таймауте >60с».
+как execution-gate (`record_gate.py`). Хуки оставляют тяжёлые вычисления за пределами
+обработки событий PreToolUse.
 
 ### Структура хуков (пин docs↔settings)
 
@@ -398,11 +405,11 @@ python3 skills/feature-pipeline/scripts/init_pipeline_config.py \
 5. Прогоните `python3 skills/config-helper/scripts/config.py --project <root> validate --strict`
    для верификации.
 
-### Dual-read shims (текущее состояние, удалено в v3.0)
+### Совместимость со старой раскладкой данных
 
-До v3.0 код читает оба пути (v2 приоритет, v1 fallback). После v3.0:
+Сейчас код читает оба пути. Приоритет у v2, fallback у v1. Ниже запланированное поведение после удаления fallback:
 
-- `ground/pipeline.json` ИГНОРИРУЕТСЯ — проекты на v2-лейауте молча получат `{}`.
+- `ground/pipeline.json` ИГНОРИРУЕТСЯ — проект только с v1-файлом получит пустую конфигурацию.
 - Per-feature manifest — единственный авторитетный источник.
 - `set_criticality.py` пишет ТОЛЬКО в `manifest.json`; legacy keypath-вызовы
   (`set autonomy.auto_max_risk=R2`) → `exit 3`.
@@ -641,10 +648,12 @@ git-история и связанные `tasks/`.
   `-y`/YOLO и `--experimental-hooks` в gigacode 26.9 нет — сессия с ними не стартует) — иначе
   рантайм не даёт его выполнить, и модель уходит делать работу фазы сама (прямо в блок
   inline-phase-guard). Отсюда канон запуска — **интерактив** (`gigacode` → `/forge <задача>`);
-  headless описан отдельным режимом с `--allowed-tools` и предзаписью решений (INSTALL.md §4). Отказ
+  headless описан отдельным режимом с `--allowed-tools` и предзаписью решений (INSTALL.md §3). Отказ
   inline-phase-guard различает «actor-сигнал работает» и «`SubagentStart` не приходил вовсе»,
   чтобы вторая причина не читалась как первая и не уводила в цикл перезапусков (tasks/008).
-- **Гейт-хуки fail-OPEN при таймауте/краше** (>60с). Тяжёлые гейты запускает оркестратор.
+- **Сбой блокирующего PreToolUse**. `_run_hook.py --blocking` переводит исключение или
+  неожиданный код хука в exit 2. Принудительная остановка по таймауту зависит от рантайма.
+  Тяжёлые гейты запускает оркестратор.
 - **Extensions — только из `~/.gigacode/extensions`, включение — правилами путей.** `disable --scope
   user` = «выключен под `$HOME`»: в проекте вне `$HOME` без forge extension другого проекта остаётся
   включённым — хуки там молчат (`_run_hook.py`), но `/forge` и MCP-серверы видны ([BR-22]).

@@ -1,11 +1,12 @@
-# Установка forge и forge-ui (extension в проекте)
+# Установка Forge в проект
 
-Forge ставится в проект **extension'ом GigaCode**, и поставок две, установки раздельные:
+Forge ставится в проект **extension'ом GigaCode** в одной из трёх поставок.
 
 | Поставка | Куда | Что внутри | Команда |
 |---|---|---|---|
 | **forge** | бэк-репо (Java/Spring) | весь конвейер: спека → дизайн → TDD, `/forge`, `/forge-fix`, `/forge-tech`, `/forge-spec`, `/forge-merge`, `/forge-archive`; MCP `forge-master` | `bash install.sh forge <repo>` |
 | **forge-ui** | фронт-репо | фронт-часть стори: макет → UI-код → проверка против макета, `/forge`; MCP `forge-ui` (движок `daiver_*`) | `bash install.sh forge-ui <repo>` |
+| **spec-graph** | репо спецификации | граф Markdown-спецификации для Obsidian, `/forge-graph`, MCP `spec-graph` | `bash install.sh spec-graph <repo>` |
 
 Одна поставка на репо: хуки control-plane у них общие, и две поставки в одном репо выполняли бы
 каждый хук дважды. `install.sh` на второй отказывает и подсказывает, как снять первую.
@@ -16,12 +17,13 @@ Forge ставится в проект **extension'ом GigaCode**, и пост�
 ## Как это устроено
 
 ```
-<repo>/.gigacode/extensions/forge/          ← каталог целиком форжевый (forge-ui — свой, рядом не ставится)
+<repo>/.gigacode/extensions/<поставка>/   ← каталог поставки внутри проекта
     gigacode-extension.json  qwen-extension.json   манифест: имя, версия, MCP-серверы поставки
     hooks/  hooks/hooks.json                        control-plane и его подключение
     skills/<скилл>/…  commands/*.md                 скиллы и слэш-команды поставки
+    bin/forge-config                               браузерный конфигуратор
     deploy-local.sh  .forge-profile  .forge-deployed
-~/.gigacode/extensions/forge-<repo>-<хеш>/        ← только ССЫЛКА на каталог выше (gigacode extensions link)
+~/.gigacode/extensions/<поставка>-<repo>-<хеш>/        ← только ССЫЛКА на каталог выше (gigacode extensions link)
 ```
 
 - **Файлы — в проекте.** GigaCode режет shell к скриптам вне каталога проекта, а гейты forge зовут
@@ -30,7 +32,7 @@ Forge ставится в проект **extension'ом GigaCode**, и пост�
   каталога проекта в его коде есть, но не вызывается). `gigacode extensions link <каталог>` кладёт туда
   запись `{type: link, source: <каталог>}`, и рантайм читает манифест, хуки, скиллы и команды по пути
   источника.
-- **Имя уникально на проект**: `forge-<каталог>-<хеш пути>`. Реестр ссылок общий на пользователя,
+- **Имя уникально на поставку и проект**. Формат `<поставка>-<каталог>-<хеш пути>`. Реестр ссылок общий на пользователя,
   а два extension'а с одним именем рантайм не ставит («already installed»).
 - **Включён только здесь.** Установщик выключает extension под `$HOME` (`disable --scope user`) и
   включает для этого workspace (`enable --scope workspace`). С другими forge-проектами машины он
@@ -39,7 +41,7 @@ Forge ставится в проект **extension'ом GigaCode**, и пост�
   сессии не внутри проекта extension'а, хук выходит с 0, ничего не делая. Это страховка на случай,
   если правила включения не сработали (см. «Ограничения»).
 - **Пути — абсолютные.** Интерпретатор и пути к хукам и MCP-серверам зашиты в манифест и `hooks.json`
-  при установке. Проект переехал — `bash .gigacode/extensions/<forge|forge-ui>/deploy-local.sh`.
+  при установке. Проект переехал — `bash .gigacode/extensions/<forge|forge-ui|spec-graph>/deploy-local.sh`.
 
 ## 0. Требования
 
@@ -68,7 +70,7 @@ bash install.sh forge      /path/to/back-repo --with-graph   # спека леж
    форж-своё: по исходнику, реестру прошлой установки (`.forge-deployed`) и `tombstones.txt`.
    Самописные скиллы, хуки и команды оператора остаются. `settings.json` бэкапится, чужие хуки и MCP
    в нём остаются.
-2. **Собирает поставку по профилю** (`profiles/back.profile` / `profiles/ui.profile`) во временный
+2. **Собирает поставку по профилю** (`back`, `ui` или `graph` из `profiles/`) во временный
    каталог и подменяет им прежний **целиком**. Снятое из репо в проекте не остаётся.
    Локальный `minor-defect-fix/config.json` переживает обновление.
 3. **Манифест и `hooks/hooks.json`** (`hooks/forge_extension.py build`). Тексты брифов называют пути
@@ -92,7 +94,8 @@ bash install.sh forge      /path/to/back-repo --with-graph   # спека леж
 
    > Если `ground/` уже попал в историю, `.gitignore` его не уберёт. Снять с учёта, сохранив на диске:
    > `git rm -r --cached ground && git add ground/policy.json`.
-5. **Проверяет поставку через preflight.** Код 1 прерывает установку. Код 2 означает, что нужно инициализировать проект.
+5. **Проверяет поставку через preflight.** Установка продолжается при кодах 0 и 2. Код 2
+   означает, что нужно инициализировать проект. Другие коды прерывают установку.
 6. **Ссылка в рантайме** и включение только для этого workspace (`forge_extension.py link`).
    `--no-link` — пропустить (CI, ручная установка). `--runtime qwen` или `FORGE_RUNTIME=qwen` — дев-машина.
 
@@ -154,10 +157,10 @@ python3 /path/to/repo/.gigacode/extensions/forge/hooks/preflight.py --project /p
   выполни `init_command` из вывода.
 
 Предупреждение «extension не найден среди ссылок рантайма» — ссылка не поставлена:
-`bash .gigacode/extensions/<forge|forge-ui>/deploy-local.sh`.
+`bash .gigacode/extensions/<forge|forge-ui|spec-graph>/deploy-local.sh`.
 
-Проверить, что рантайм видит extension: `gigacode extensions list` из корня проекта. Там должно быть
-`forge-<repo>-<хеш>` с «Включено (Рабочее пространство): true» и командами `/forge…`.
+Проверить, что рантайм видит extension: `gigacode extensions list` из корня проекта. В списке ищи
+имя из `gigacode-extension.json` с включением на уровне рабочего пространства.
 
 ## 3. Запуск
 
@@ -216,7 +219,7 @@ bash update.sh forge-ui /path/to/repo      # поставку назвать я�
 ## 5. Снятие
 
 ```bash
-bash uninstall.sh forge /path/to/repo       # или forge-ui; без имени — то, что стоит
+bash uninstall.sh forge /path/to/repo       # или forge-ui/spec-graph; без имени — то, что стоит
 bash uninstall.sh forge /path/to/repo --purge-state   # + ground/ и git-refs чекпойнтов refs/forge/*
 ```
 
@@ -253,3 +256,32 @@ bash cleanup-legacy.sh --apply --backup-dir /tmp/forge-bak  # корп-конт�
   команды для ручного подключения.
 - **Нестандартный python**: поставь нужный первым в `PATH` и перезапусти
   `bash .gigacode/extensions/<поставка>/deploy-local.sh`. Без записи: `… deploy-local.sh --check`.
+
+## Браузерный конфигуратор Forge
+
+Установщик печатает команду `export PATH=…` для каталога `bin` установленной поставки.
+Выполни её в своей оболочке или добавь в конфигурацию оболочки. Пример для поставки `forge`:
+
+```bash
+export PATH="/path/to/project/.gigacode/extensions/forge/bin:$PATH"
+cd /path/to/project
+forge-config
+```
+
+Можно запустить из вложенного каталога, указать другой проект через
+`forge-config --project /path/to/project` или добавить `--no-browser`. Python выбирает свободный
+порт на `127.0.0.1`, исключая `8080` и `8084`, печатает URL и открывает браузер.
+Команда входит во все три поставки и запускается независимо от сессии GigaCode.
+Если браузер не открылся, вставь URL вручную.
+Остановить сервер можно через Ctrl+C в терминале.
+
+Выбери область или введи название настройки, ключ либо псевдоним в поиск. Кнопка «?»
+открывает подсказку. Для параметров фичи сначала выбери существующий манифест. Перед записью
+проверь имя файла и diff. Если файл изменился с момента открытия формы, перечитай его и
+перепроверь сохранённый в форме черновик.
+
+Редактор читает старый `ground/pipeline.json`, если `ground/policy.json` отсутствует. Для
+сохранения политики сначала выполни штатную инициализацию или миграцию
+`init_pipeline_config.py --migrate`. Подтверждения Forge для защищённых операций действуют
+и в браузере. Установочная политика рисков лежит в поставке. При обновлении она заменяется
+версией из новой поставки. [Какие настройки доступны](docs/forge-config.md).
