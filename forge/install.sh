@@ -195,6 +195,7 @@ for cdir in $(profile_values commands); do
 done
 for d in FORGE.md SKILLS-REGISTRY.md; do [ -f "$SRC/$d" ] && cp "$SRC/$d" "$STAGE/$d"; done
 cp "$SRC/deploy-local.sh" "$STAGE/deploy-local.sh"
+copy_tree "$SRC/bin" "$STAGE/bin"
 [ "$PROFILE_FILE" = "$STAGE/.forge-profile" ] || cp "$PROFILE_FILE" "$STAGE/.forge-profile"
 FORGE_REV="$(git -C "$SRC" describe --tags --match 'forge/v*' --always --dirty 2>/dev/null || echo unknown)"
 {
@@ -249,6 +250,7 @@ fi
 NAME="$("${PY[@]}" -X utf8 -c 'import json,sys; print(json.loads(sys.argv[1])["name"])' "$BUILT")"
 echo "  ✓ поставка на месте: skills [$(echo $DEPLOYED_SKILLS)], commands [$(echo $DEPLOYED_COMMANDS)]"
 echo "  ✓ манифест и hooks/hooks.json собраны: extension $NAME (rev $FORGE_REV)"
+printf '  forge-config: export PATH=%q:"$PATH"\n' "$EXT/bin"
 
 # 4. .gitignore проекта (блок с маркерами — его снимает uninstall.sh)
 GI_BEGIN="# >>> forge: рабочие данные пайплайна >>>"

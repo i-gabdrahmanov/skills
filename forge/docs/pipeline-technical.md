@@ -111,7 +111,7 @@ State намеспейсится по фиче: `<project>/ground/statements/fea
 `state-write-guard` режет unlink.
 
 > **`ground/` — рантайм-каталог данных в ЦЕЛЕВОМ проекте, не в source-репо Forge.** Его создаёт
-> `init.py` (`mkdir(parents=True)`), а `init_pipeline_config.py` кладёт туда `pipeline.json`.
+> `init.py` (`mkdir(parents=True)`), а `init_pipeline_config.py` кладёт туда `policy.json`.
 > Отсутствие `ground/` в репозитории Forge — норма, а не дефект: там лежат только `hooks/`+`skills/`,
 > а `ground/` появляется в проекте при первом прогоне. Все пути `ground/...` ниже подразумевают
 > `<project>/ground/...`.
@@ -192,7 +192,7 @@ sequenceDiagram
   run_judge.py brd <slug> --from-output <verdict.json> --project-root <project>
   run_judge.py brd <slug> --recheck --project-root <project>
   ```
-- **Гейт 1** + **выбор критичности** → пишет `autonomy.{criticality,auto_max_risk}` в `pipeline.json`
+- **Гейт 1** + **выбор критичности** → пишет `decisions.criticality` и `decisions.auto_max_risk` в манифест фичи
   (low→R2 / medium→R1 / high→R0). До выбора `gate-guard` блокирует любое R2+.
 
 ### Фаза 1 — Инвентарь (`01-grounding`)
@@ -278,11 +278,12 @@ Jira делает пользователь сам (forge-no-delivery). Соот�
 | Хук | Событие | Назначение | Блок |
 |---|---|---|---|
 | `gate-guard` (+`risk_ladder`, `risk-policy.json`) | PreToolUse Bash/Write/Edit/Read | risk ladder R0–R5, deny-first, форсит выбор критичности; на read-инструментах — только фазовый гейт (блок чтения `src/` до grounding), ladder к чтению неприменим | exit 2 |
-| `tdd-guard` | PreToolUse Write/Edit | блок `src/main` пока RED-тест задачи (`04-test-<id>`) не completed; блок `@DataJpaTest`/`@SpringBootTest` при `test_layer=service-unit` | exit 2 |
+| `tdd-guard` | PreToolUse Write/Edit/Bash | блок `src/main` пока RED-тест задачи (`04-test-<id>`) не completed; блок `@DataJpaTest`/`@SpringBootTest` при `test_layer=service-unit` | exit 2 |
 | `tech-guard` | PreToolUse Write/Edit/Bash | tech-ветка: запись в файл проекта только на `tech-apply`, по согласию `tech-plan-<F>` на ТЕКУЩИЙ `change-plan.json` (sha256), после снимка «до», только в `targets` | exit 2 |
 | `ui-guard` | PreToolUse Write/Edit/Bash/Read/Grep | ui-ветка (forge-ui): канон и сырые экспорты макета не читаются (`daiver_outline`/`daiver_section`/`daiver_source_nodes` вместо чтения); запись в `project.outputDir` только на `ui-build` и только при действительной подписи плана (`signature_state`, вердикт кешируется), инлайн-`<svg` в модуле запрещён; вне forgeui — noop | exit 2 |
-| `eval-guard` | PreToolUse Write/Edit | блок `src/main` пока **pre-write** eval'ы задачи (`compile`) не passed в кэше `evals.json` (read-only; прогон — `run_pending_evals.py`). `coverage`/`test_pass` требуют уже написанного кода и форсятся при закрытии шага | exit 2 |
-| `sod-enforcer` | PreToolUse Write/Edit/Bash | separation of duties: роль из активного шага манифеста (test не пишет src/main, design не коммитит/пушит/билдит — gradle, mvn, линтеры, npm/pnpm/yarn/npx, tsc, vite, playwright) | exit 2 |
+| `graph-guard` | PreToolUse Write/Edit/Bash | защищает заметки и служебные данные spec-graph | exit 2 |
+| `eval-guard` | PreToolUse Write/Edit/Bash | блок `src/main` пока **pre-write** eval'ы задачи (`compile`) не passed в кэше `evals.json` (read-only; прогон — `run_pending_evals.py`). `coverage`/`test_pass` требуют уже написанного кода и форсятся при закрытии шага | exit 2 |
+| `sod-enforcer` | PreToolUse Write/Edit/Bash | separation of duties: роль из активного шага манифеста (test не пишет src/main, design не запускает сборку — gradle, mvn, линтеры, npm/pnpm/yarn/npx, tsc, vite, playwright) | exit 2 |
 | `inline-phase-guard` | PreToolUse Write/Edit/Bash/MCP | actor-guard: ГЛАВНЫЙ агент (пустой `agent_type`) не производит артефакты/код subagent-фазы inline и не вызывает продуктивные MCP-инструменты шага (`phase_tools` реестра веток); снимается override `subagent-origin` | exit 2 |
 | `destructive-blocker` | PreToolUse Bash | чёрный список (`rm -rf /`, force-push, DROP) | exit 2 |
 | `pii-boundary` | PreToolUse Write/Edit/Bash | блок записи PII/scope вне секретов; мок-данные макета (`mocks.ts` модуля forge-ui) — только дословно из канона трека | exit 2 |
@@ -295,20 +296,17 @@ Jira делает пользователь сам (forge-no-delivery). Соот�
 | `context-injector` | SubagentStart | инъекция grounding-excerpt/conventions | — |
 | `phase-gate` | Stop | блок завершения с висящим шагом (`in_progress` либо `pending` с уже записанным gate-result/origin); одноразово на сессию | block |
 
-**Порядок (sequential) PreToolUse Bash:** destructive-blocker → fork-syntax-guard →
-pii-boundary → sod-enforcer → state-write-guard → inline-phase-guard → gate-guard.
-**Write/Edit:** pii-boundary → tdd-guard → eval-guard → sod-enforcer → state-write-guard →
-inline-phase-guard → gate-guard.
-**Read/Grep/Glob:** grounding-evidence → gate-guard (только фазовый гейт `01-grounding`).
-Источник истины — `hooks/settings.hooks.json`.
+Группы PreToolUse выполняются последовательно в порядке из [эталона проводки](../hooks/settings.hooks.json).
+Полный ростер и правила подключения описаны в [документации хуков](../hooks/DEPLOY.md).
 
 > Гарантию «фаза выполнена ЧЕРЕЗ субагента» держит не PreToolUse-хук (он срабатывает и внутри
 > субагента → заблокировал бы его), а `update._check_subagent_origin` на закрытии шага: фазы из
 > SUBAGENT_PHASE_PREFIXES закрываются completed только записью от SubagentStop (state-recorder).
 
-> ⚠️ Гейт-хуки **fail-OPEN** при таймауте/краше (>60с убивается → действие проходит). Поэтому тяжёлые
-> гейты (`check_taskplan`/`check_coverage`/`check_build`) гоняет ОРКЕСТРАТОР как execution-gate, а хуки лёгкие
-> (file-reads) — страховка. Не клади тяжёлый subprocess в hook hot-path.
+> `_run_hook.py --blocking` завершает блокирующий хук с кодом 2 при исключении или
+> неожиданном коде выхода. Таймаут с принудительной остановкой процесса обрабатывает
+> рантайм. Тяжёлые проверки (`check_taskplan`, `check_coverage`, `check_build`)
+> оркестратор запускает отдельными гейтами.
 
 ---
 

@@ -205,6 +205,9 @@ def _validate_approval_item(item: dict, idx: int, total: int) -> tuple[str, dict
     norm_key = safe_key(key)
     if not norm_key:
         raise ValueError(f"запись #{idx + 1}/{total}: key {key!r} после нормализации пуст")
+    if norm_key.lower().startswith("design-approved-"):
+        raise ValueError(f"запись #{idx + 1}/{total}: утверждение техдизайна записывается отдельно "
+                         "с --design-sha256")
     if not reason or not isinstance(reason, str) or not reason.strip():
         raise ValueError(f"запись #{idx + 1}/{total}: обязательное поле reason "
                          f"(непустая строка) для ключа {key!r}")
@@ -314,6 +317,12 @@ def cmd_single(args) -> int:
         return 2
 
     project = Path(args.project or repo_root()).resolve()
+    design_approval = key.lower().startswith("design-approved-")
+    design_digest = getattr(args, "design_sha256", None)
+    if design_approval != bool(design_digest):
+        print("ERROR: --design-sha256 обязателен для design-approved-<slug> и допустим только с ним",
+              file=sys.stderr)
+        return 2
     record = {
         "approved_by": args.approver or args.approved_by or "user",
         "reason": args.reason.strip(),
@@ -350,8 +359,20 @@ def cmd_single(args) -> int:
     # Иначе после правки привязанного файла «да» пользователя молча терялось (активно старое,
     # устаревшее согласие), и шаг, ждущий согласия на текущий файл, не закрывался никогда.
     with _approvals_lock(project):
+        if design_approval:
+            try:
+                current = FE.design_approval_digest(project, key[len("design-approved-"):])
+            except (OSError, ValueError) as exc:
+                print(f"ERROR: не удалось вычислить версию техдизайна: {exc}", file=sys.stderr)
+                return 2
+            if current != design_digest:
+                print("ERROR: версия техдизайна изменилась. Покажи актуальные артефакты и спроси заново.",
+                      file=sys.stderr)
+                return 2
+            record["design_sha256"] = current
         active = FE.approval(project, key) if key in _active_approval_keys(project) else None
-        rebind = bool(active and record.get("bound_sha256") and active.get("bound_sha256") != record["bound_sha256"])
+        binding = "design_sha256" if design_approval else "bound_sha256"
+        rebind = bool(active and record.get(binding) and active.get(binding) != record[binding])
         if active and not rebind:
             out = FE.approvals_path(project)
             print(f"[record_approval] approval '{key}' уже активен — пропущено (идемпотентность) → {out}")
@@ -477,14 +498,27 @@ def main() -> int:
     p.add_argument("--bind-file", default=None,
                    help="Привязать согласие к содержимому файла (sha256): правка файла после "
                         "согласия его аннулирует. Нужен для tech-plan-<F> (change-plan.json)")
+    p.add_argument("--design-digest", metavar="SLUG",
+                   help="Вывести версию tech-design.md и task-plan.json без записи согласия")
+    p.add_argument("--design-sha256", help="Версия, показанная пользователю при утверждении техдизайна")
     p.add_argument("--batch", help="Batch-режим: путь к YAML/JSON со списком approval'ов "
                                    "(см. саммари в шапке скрипта)")
     p.add_argument("--json", action="store_true")
     args = p.parse_args()
 
+    if args.design_digest is not None:
+        if args.key or args.batch or args.design_sha256 is not None:
+            p.error("--design-digest несовместим с --key, --batch и --design-sha256")
+        try:
+            print(FE.design_approval_digest(Path(args.project or repo_root()).resolve(), args.design_digest))
+        except (OSError, ValueError) as exc:
+            print(f"ERROR: не удалось вычислить версию техдизайна: {exc}", file=sys.stderr)
+            return 2
+        return 0
+
     # Batch имеет приоритет; --batch несовместим с одиночными --key/--reason.
     if args.batch:
-        if args.key or args.reason or args.approved_by or args.approver or getattr(args, "bind_file", None):
+        if args.key or args.reason or args.approved_by or args.approver or args.bind_file or args.design_sha256:
             print("ERROR: --batch несовместим с --key/--reason/--approver "
                   "(они берутся из файла)", file=sys.stderr)
             return 2

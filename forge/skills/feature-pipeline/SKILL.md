@@ -540,7 +540,7 @@ UI-часть стори (макеты, экраны) — **не повод др
 | 00-brd | `references/phases/00-brd.md` | ⛔ ОТКЛЮЧЕНА (`BRD_ENABLED=False`) — `resolve_phases` пропускает |
 | 01-grounding | `references/phases/01-grounding.md` | grounding-excerpt готов |
 | 02-sdd | `references/phases/02-sdd.md` | check_sdd_doc + Гейт SDD + гейт критичности |
-| 02-design | `references/phases/02-design.md` | check_taskplan + Гейт 2 |
+| 02-design | `references/phases/02-design.md` | `design-judge: PASS` + `design-approved-<slug>` (Гейт 2) |
 | 02-eval-plan | `references/phases/02-eval-plan.md` | eval-judge |
 | 03-jira | `references/phases/03-jira.md` | Гейт 3 + check_jira |
 | 04-tdd | `references/phases/04-tdd.md` | red/build/reuse-judge + record_gate per-task |

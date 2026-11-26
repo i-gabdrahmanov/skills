@@ -3,14 +3,14 @@
 Харнес (обвязка) для реализации фич в Java/Spring через **feature pipeline** в рантайме
 **GigaCode** (`gigacode`, база `~/.gigacode`). Этот каталог — **source-of-truth**:
 код, доки и тесты форжа живут здесь и отсюда же ставятся в проект extension'ом GigaCode:
-`bash install.sh forge <бэк-репо>` или `bash install.sh forge-ui <фронт-репо>` — каталог
-`<project>/.gigacode/extensions/<forge|forge-ui>/` плюс ссылка на него в рантайме.
+`bash install.sh <поставка> <проект>`. Доступны `forge` для бэк-репо, `forge-ui` для фронт-репо
+и `spec-graph` для репо спецификации. Код лежит в `<project>/.gigacode/extensions/<поставка>/`.
 
 Принцип (PDLC v3.5): **Pipeline > model; hooks = enforcement; skills = guidance**.
 Правила качества форсит рантайм (хуки с `exit 2`), а не «добрая воля» модели —
 пропустить тесты, выкатить без проверок или сделать рискованное «молча» нельзя.
 
-> **Канон установки — `bash install.sh forge|forge-ui <project>`** (раздельные поставки, одна на
+> **Канон установки — `bash install.sh forge|forge-ui|spec-graph <project>`** (раздельные поставки, одна на
 > репо; см. [INSTALL.md](INSTALL.md)). Файлы extension'а лежат В ПРОЕКТЕ (GigaCode режет shell к
 > скриптам вне каталога проекта), в `~/.gigacode/extensions/` — только ссылка. Старую раскладку
 > (≤ 0.5: `.gigacode/{skills,hooks,commands}` + блок hooks в `settings.json`) `install.sh` снимает
@@ -22,7 +22,7 @@
 forge/
 ├── hooks/
 │   ├── settings.hooks.json   # эталон блока hooks (${PYTHON}, ${PROJECT_ROOT}) → hooks/hooks.json extension'а
-│   ├── settings.mcp.json     # эталон MCP-серверов (forge-master, forge-ui) → манифест extension'а
+│   ├── settings.mcp.json     # эталон MCP-серверов (forge-master, forge-ui, spec-graph) → манифест extension'а
 │   ├── forge_extension.py    # сборка манифеста/hooks.json, ссылка в рантайме (link/unlink), check
 │   ├── _run_hook.py          # запуск хука только в своём проекте (вне его — молча 0)
 │   ├── *.py                  # хук-скрипты + зависимости (_project.py, risk_ladder.py, forge_events.py)
@@ -40,14 +40,16 @@ forge/
 │   ├── forge-merge.md      # /forge-merge → свести дельту с мастером и убрать доки в архив
 │   └── forge-archive.md    # /forge-archive → архив доков готовых строек: status/put/list/restore
 ├── skills/
-│   ├── 21 скилл/SKILL.md          # router, feature-pipeline, forgefix, forgetech, forgeui, sdd, …
+│   ├── 22 скилла/SKILL.md          # router, feature-pipeline, forgefix, forgetech, forgeui, sdd, …
 │   ├── SKILLS-REGISTRY.md         # реестр с owner/validity/evals
 │   └── run_all_tests.py           # единый CI-вход: скиллы + хуки + корень
 ├── forge-ui/               # поставка фронт-репо: /forge фронта (commands/)
-├── profiles/               # профили поставки: back (install.sh forge) | ui (install.sh forge-ui)
+├── spec-graph/             # команда /forge-graph для репо спеки или forge --with-graph
+├── bin/forge-config        # браузерный конфигуратор
+├── profiles/               # профили back, ui, graph
 ├── docs/                   # user-guide, troubleshooting, pipeline-*, v2/; daiver/ — спека daiver + образец Pixso
 ├── tasks/                  # открытые задачи/наблюдения (см. tasks/*.md)
-├── install.sh              # поставить forge | forge-ui в <project>/.gigacode/extensions/<kind>/ + ссылка
+├── install.sh              # поставить forge | forge-ui | spec-graph в <project>/.gigacode/extensions/<kind>/ + ссылка
 │                           #   + блок ground/* и .gigacode/ в .gitignore; снимает старую раскладку
 ├── deploy-local.sh         # кладётся в extension: перепечь манифест/hooks.json и ссылку (переезд проекта)
 ├── update.sh               # git pull + install.sh той поставки, что стоит
@@ -62,20 +64,21 @@ forge/
 
 ## Состав
 
-- **Скиллы:** 21 (`router`, `feature-pipeline`, `forgefix`, `forgetech`, `forgeui`, `sdd`, `tech-design`,
+- **Скиллы:** 22 (`router`, `feature-pipeline`, `forgefix`, `forgetech`, `forgeui`, `sdd`, `tech-design`,
   `jira-task-writer`, `java-spring-dev`, `test-writer`, `system-analyst`, `project-grounder`,
   `pipeline-state`, `brd-grounder`, `brd-interview`, `business-requirements`, `defect-analyzer`,
-  `bugfix-developer`, `minor-defect-fix`, `config-helper`, `harness-verifier`).
+  `bugfix-developer`, `minor-defect-fix`, `config-helper`, `harness-verifier`, `specgraph`).
   Полный реестр с owner/validity/evals — [`SKILLS-REGISTRY.md`](SKILLS-REGISTRY.md).
 - **Команды:** 6 в бэк-репо (`/forge`, `/forge-fix`, `/forge-tech`, `/forge-spec`, `/forge-merge`,
-  `/forge-archive`); во фронт-репо одна — `/forge` (forge-ui, `forge-ui/commands/`).
+  `/forge-archive`); во фронт-репо одна — `/forge` (forge-ui, `forge-ui/commands/`). В репо спеки — `/forge-graph`. Команда также
+  доступна в бэк-репо при установке `forge --with-graph`.
 - **forge-ui (фронт-репо):** у стори бывает бэк-часть, фронт-часть или обе. Фронт-часть строит
   ветка `forgeui` во фронт-репо: `ui-spec.md` → дизайн по макету → сборка → проверка против макета;
   ставится `bash install.sh forge-ui <front-repo>`. Задачи — `docs/forge-ui/`, решения — `tasks/019-forge-ui.md`.
-- **Хуки:** 17 (`gate-guard`, `tdd-guard`, `tech-guard`, `ui-guard`, `eval-guard`, `sod-enforcer`, `inline-phase-guard`,
+- **Хуки:** 18 (`gate-guard`, `tdd-guard`, `tech-guard`, `ui-guard`, `eval-guard`, `sod-enforcer`, `inline-phase-guard`,
   `state-write-guard`, `pii-boundary`, `destructive-blocker`, `fork-syntax-guard`,
   `grounding-evidence`, `prompt-guard`, `file-journal`, `state-recorder`, `context-injector`,
-  `phase-gate`) + `preflight.py` для самопроверки.
+  `phase-gate`, `graph-guard`) + `preflight.py` для самопроверки.
 
 ## Что именно форсится (R4-классы)
 
@@ -115,8 +118,8 @@ forge/
 ## Тесты
 
 ```bash
-python3 skills/run_all_tests.py          # весь набор: скиллы + хуки + корень (119 файлов тестов)
-python3 skills/run_all_tests.py --skill hooks   # только control-plane (31)
+python3 skills/run_all_tests.py          # весь набор: скиллы + хуки + корень
+python3 skills/run_all_tests.py --skill hooks   # только control-plane
 bash hooks/run-hook-tests.sh             # юнит-тесты хуков + eval-набор
 ```
 Пол интерпретатора — **Python 3.9** (`hooks/test_python_floor.py` держит его кодом: всё дерево
@@ -142,19 +145,23 @@ gigacode
 ```
 
 Дальше в сессии — команда `/forge <ключ Jira или описание>`: `router` классифицирует задачу и
-уводит в fix / full. **Headless для пайплайна не годится** без разрешённых заранее инструментов
+выбирает fix, full или tech. **Headless для пайплайна не годится** без разрешённых заранее инструментов
 (`--allowed-tools` с `agent`, `skill`, `run_shell_command`) и предзаписи решений: иначе рантайм
-не даёт выполнить `agent`, фаза уходит inline и упирается в `inline-phase-guard` (см. INSTALL.md §4).
+не даёт выполнить `agent`, фаза уходит inline и упирается в `inline-phase-guard` (см. INSTALL.md §3).
 Флаги прежних инструкций не передавайте — в gigacode 26.9 флагов `--experimental-hooks` и `-y`
 нет: с ними сессия не стартует (`Unknown arguments`, exit 1).
 
+**Настройки.** После установки добавь напечатанный каталог `bin` в PATH и запусти
+`forge-config` из проекта. Редактор открывается в браузере и показывает параметры,
+подсказки и изменения перед сохранением. [Запуск и области настройки](INSTALL.md#браузерный-конфигуратор-forge).
+
 **Обновление** — `bash update.sh /path/to/repo` (git pull + install.sh той поставки, что стоит).
-**Снятие** — `bash uninstall.sh forge|forge-ui /path/to/repo` (ссылка в рантайме + каталог
+**Снятие** — `bash uninstall.sh forge|forge-ui|spec-graph /path/to/repo` (ссылка в рантайме + каталог
 extension'а; `--purge-state` дополнительно сносит `ground/` и git-refs чекпойнтов).
 
 ## Раскладка: extension внутри проекта
 
-- **Файлы — в `<project>/.gigacode/extensions/<forge|forge-ui>/`**, каталог целиком форжевый: install
+- **Файлы — в `<project>/.gigacode/extensions/<forge|forge-ui|spec-graph>/`**, каталог целиком форжевый: install
   подменяет его целиком, uninstall сносит целиком. Co-located `.gigacode/{skills,hooks,commands}`
   остаются оператору.
 - **Подключение — манифест и `hooks/hooks.json`**, их собирает `hooks/forge_extension.py` из

@@ -15,16 +15,15 @@ description: >
 
 # config-helper — безопасная настройка параметров forge
 
-Все настройки конвейера лежат в трёх файлах, и менять их руками рискованно (сломать enum,
-выйти за диапазон, затереть соседний ключ — а от этих значений зависят хуки безопасности).
-Этот скилл превращает свободный запрос пользователя в детерминированный вызов скрипта.
+Скилл переводит запрос пользователя в вызов `config.py` для настройки проекта,
+гейтов, политики рисков или конкретной фичи. Оператор может открыть те же группы
+настроек в браузере командой `forge-config` из каталога проекта.
 
 ## ⚠️ Железное правило
 
 **Ты (модель) НИКОГДА не редактируешь `ground/policy.json` (legacy: `pipeline.json`), `feature-gates.json` или
-`risk-policy.json` через Edit/Write.** Любое изменение — только через `config.py`. Скрипт —
-единственный, кто пишет в конфиг: он валидирует значение по реестру, делает бэкап и пишет
-атомарно. Твоя задача — понять намерение, выбрать параметр и вызвать скрипт.
+`risk-policy.json` через Edit/Write.** Для изменения используй `config.py`. Он проверяет
+значение по реестру, делает бэкап и пишет атомарно.
 
 ## Что где живёт
 
@@ -32,18 +31,20 @@ description: >
 |---|---|---|
 | `pipeline` | `ground/policy.json` (v2; legacy-имя `pipeline.json` всё ещё читается через dual-read для обратной совместимости, но deprecated — будет удалено в v3.0) | quality, project, sdd, autonomy, docs, master, spec, adr, conventions, jira, harness, phases_override |
 | `gates` | `ground/feature-gates.json` | bool-фиче-флаги рантайма (tdd_enforced, eval_driven_dev, security_review, …) |
-| `risk` 🔒 | `.gigacode/hooks/risk-policy.json` (в source-layout forge — фолбэк `hooks/risk-policy.json`) | autonomy_auto_max, default_level, destructive_blacklist, agent_caps (advanced, чувствительно) |
+| `risk` 🔒 | `<extension>/hooks/risk-policy.json` (в исходниках Forge — `hooks/risk-policy.json`) | autonomy_auto_max, default_level, destructive_blacklist, agent_caps (advanced, чувствительно) |
+| `manifest` | `ground/statements/<skill>/<feature>/manifest.json` | `inputs.*`, `decisions.*` конкретной фичи |
 
-Реестр допустимых параметров — `references/params-registry.json`. Скрипт пишет **только**
-то, что описано в реестре (fail-closed).
+Здесь `<extension>` означает каталог установленной поставки в `.gigacode/extensions/`.
+Допустимые параметры `set` описаны в `references/params-registry.json`. Операции с
+фазами и списками политики рисков доступны в подкомандах `phase` и `risk`.
 
 ## Алгоритм работы
 
 1. **Найди параметр.** Запусти `list` и сопоставь запрос пользователя с `id` по полям
    `title` / `description` / `aliases`. Команды (полные пути — рантайм режет `$()`):
    ```bash
-   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <project> list
-   python3 <project>/.gigacode/skills/config-helper/scripts/config.py --project <project> list --category quality --json
+   python3 <extension>/skills/config-helper/scripts/config.py --project <project> list
+   python3 <extension>/skills/config-helper/scripts/config.py --project <project> list --category quality --json
    ```
    `--project` можно опустить — скрипт сам возьмёт git toplevel / cwd.
 
@@ -74,9 +75,9 @@ description: >
 
 | Команда | Назначение |
 |---|---|
-| `list [--category C] [--file pipeline\|gates\|risk] [--json]` | каталог: id, текущее значение, источник (file/default), диапазон/enum, 🔒 |
+| `list [--category C] [--file pipeline\|policy\|gates\|risk\|manifest] [--json]` | каталог: id, текущее значение, источник (file/default), диапазон/enum, 🔒 |
 | `get <id>` | текущее значение + default + источник |
-| `set <id> <value> [--dry-run] [--confirm]` | валидирует, бэкапит, пишет атомарно; печатает было→стало |
+| `set <id> <value> [--dry-run] [--confirm] [--skill S --feature F]` | валидирует, бэкапит, пишет атомарно; печатает было→стало |
 | `phase <enable\|disable\|add> <phase-id> [--enabled-by EXPR] [--skill S] [--gates G...] [--desc D] [--after ID]` | мержит фазу в `phases_override`; для `add` `--after` задаёт позицию новой фазы (без него — в конец) |
 | `risk <list-add\|list-remove> <key> <pattern> --confirm` | правка списков risk-policy (destructive_blacklist и др.); `list-remove` — **R4**: маркер `policy-downgrade-risk.<key>` |
 | `risk cap-set <agent-regex> <R-level> --confirm` | separation-of-duties: кап риска по типу агента — **R4**: маркер `policy-downgrade-risk.agent_caps` |
@@ -86,7 +87,7 @@ Exit-коды: `0` ок · `1` валидация/блок (sensitive без `--
 `2` ошибка аргументов либо R4 без approval-маркера · `3` файл/параметр не найден.
 `--confirm` — подтверждение намерения, а не согласие человека: ослабление политики
 (`risk list-remove`, `cap-set`, `phase disable` обязательной фазы) требует маркера
-`python3 <project>/.gigacode/skills/pipeline-state/scripts/record_approval.py --key <ключ> --evidence "<дословная фраза пользователя>"`,
+`python3 <extension>/skills/pipeline-state/scripts/record_approval.py --key <ключ> --approved-by user --reason "<почему>" --evidence "<дословная фраза пользователя>"`,
 одноразового.
 
 ### validate — конфиг проверяется на чтение, а не только на запись
@@ -114,7 +115,7 @@ python3 .../config.py validate --strict   # preflight: варнинги = оши
 ## Поведение при отсутствии файла
 
 - `feature-gates.json` нет → `set` создаёт его со всеми дефолтами и применяет изменение.
-- `ground/policy.json` (или legacy `pipeline.json`) нет → `set` просит сначала запустить `init_pipeline_config.py` (exit 3).
+- `ground/policy.json` нет, в том числе когда есть только legacy `pipeline.json` → `set` просит сначала запустить `init_pipeline_config.py` (exit 3).
 - Идёт прогон → `set` project-wide ключа всё равно пройдёт (exit 0), но предупредит: прогон
   зафиксировал политику снимком на `init.py` и правку не увидит. Настройка применится со
   следующего прогона; применить к текущему — `repin`.
@@ -156,7 +157,7 @@ python3 .../config.py validate --strict   # preflight: варнинги = оши
 | «какая у нас команда сборки» | `set quality.build_command './gradlew build'` — это ФАКТ о проекте, не гейт: свободно |
 | «применить настройку к идущему прогону» 🔒 | `repin --skill <S> --feature <F>` — **R4**: сначала `repin --dry-run` (покажи пользователю расхождение), затем после явного «да» `record_approval.py --key policy-repin-<feature> --approved-by user --reason "<почему>" --evidence "<его дословная фраза>"`, и только потом `repin`. Маркер одноразовый |
 | «включи security review» | `set security_review true` |
-| «разреши авто-аппрув до R2» 🔒 | `python3 <project>/.gigacode/skills/feature-pipeline/scripts/set_criticality.py --criticality low --skill <skill> --feature <feature>` (фича-уровень; порог R2) — для project-wide уровня: `set risk.autonomy_auto_max R2 --confirm` |
+| «разреши авто-аппрув до R2» 🔒 | `python3 <extension>/skills/feature-pipeline/scripts/set_criticality.py --criticality low --skill <skill> --feature <feature>` (фича-уровень; порог R2) — для project-wide уровня: `set risk.autonomy_auto_max R2 --confirm` |
 | «доки клади в отдельный репо /abs/spec» | `set docs.mode separate-repo` + `set docs.repo_path /abs/spec` |
 | «настрой Jira, ключ NPF» | `set jira.enabled true` + `set jira.project_key NPF` |
 | «отключи фазу tdd в пайплайне» 🔒 | `phase disable 04-tdd` — **R4** (обязательная фаза): после явного «да» `record_approval.py --key policy-downgrade-phase.04-tdd --approved-by user --reason "<почему>" --evidence "<его фраза>"`, затем команда. Опциональные (`03-jira`, `02-eval-plan`) выключаются свободно |

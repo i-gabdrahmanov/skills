@@ -281,10 +281,11 @@ def _check_subagent_origin(step: dict, closed_by: str, project: Path, skill: str
     )
 
 
-# Доко-фазы, закрытие которых требует человеческого утверждения дока (Гейт 1 / Гейт SDD).
+# Доко-фазы, закрытие которых требует человеческого утверждения документа.
 # Префикс id шага → имя дока. Ключ маркера: <doc>-approved-<feature>. Плоские ветки
 # (ui-spec → ui-spec-approved-<feature>) — из реестра _branches, не копией здесь.
-_DOC_APPROVAL_STEPS = (("00-brd", "brd"), ("02-sdd", "sdd")) + tuple(BR.doc_approvals().items())
+_DOC_APPROVAL_STEPS = (("00-brd", "brd"), ("02-sdd", "sdd"),
+                       ("02-design", "design")) + tuple(BR.doc_approvals().items())
 
 
 def _approval_marker_valid(project: Path, key: str) -> bool:
@@ -297,9 +298,9 @@ def _approval_marker_valid(project: Path, key: str) -> bool:
 
 
 def _check_doc_approval(step: dict, project: Path, skill: str, feature: str):
-    """Гарантия «BRD/SDD утверждён человеком» — на EVIDENCE, не на словах модели.
+    """Проверяет обязательное согласие пользователя перед закрытием документной фазы.
 
-    Закрыть 00-brd/02-sdd можно только при маркере <doc>-approved-<feature> (record_approval
+    Для закрытия нужен маркер <doc>-approved-<feature> (record_approval
     после явного «да» пользователя). На прогонах модель не задавала вопросов
     вообще — теперь без утверждения фаза не закрывается детерминированно.
     Escape-hatch: override doc-approved-<step_id> (создание — R4 через override_judge)."""
@@ -307,13 +308,31 @@ def _check_doc_approval(step: dict, project: Path, skill: str, feature: str):
     doc = next((d for p, d in _DOC_APPROVAL_STEPS if step_id.startswith(p)), None)
     if doc is None:
         return
+    document = "tech-design.md" if doc == "design" else f"{doc}.md"
     key = f"{doc}-approved-{feature}"
-    if _approval_marker_valid(project, key):
+    approval = FE.approval(project, key)
+    problem = f"нет валидного approval-маркера '{key}' в ground/approvals.jsonl"
+    version_hint = ""
+    version_arg = ""
+    if doc == "design":
+        version_hint = (f"Сначала получи версию через record_approval.py --project {project} "
+                        f"--design-digest {feature} и покажи её в вопросе как design-sha256=<хеш>. ")
+        version_arg = " --design-sha256 <показанный-хеш>"
+        if approval:
+            try:
+                current = FE.design_approval_digest(project, feature)
+            except (OSError, ValueError) as exc:
+                problem = f"не удалось сверить версию техдизайна: {exc}"
+            else:
+                if approval.get("design_sha256") == current:
+                    return
+                problem = f"маркер '{key}' не подтверждает текущие tech-design.md и task-plan.json"
+    elif approval:
         return
     ov = _load_override(project, skill, feature, f"doc-approved-{step_id}")
     if ov:
         step.setdefault("override_warnings", [])
-        msg = (f"⚠️  шаг '{step_id}' закрыт без утверждения {doc}.md — пропущено вручную. "
+        msg = (f"⚠️  шаг '{step_id}' закрыт без утверждения {document} — пропущено вручную. "
                f"Причина: {ov.get('reason', '?')}")
         if msg not in step["override_warnings"]:
             step["override_warnings"].append(msg)
@@ -321,12 +340,12 @@ def _check_doc_approval(step: dict, project: Path, skill: str, feature: str):
         return
     record_script = Path(__file__).resolve().parent / "record_approval.py"
     raise StepGateBlocked(
-        f"Шаг {step_id} нельзя закрыть: {doc}.md не утверждён пользователем "
-        f"(нет валидного approval-маркера '{key}' в ground/approvals.jsonl).\n"
-        f"   Порядок: (1) спроси пользователя («утверждаем {doc.upper()}?»); "
+        f"Шаг {step_id} нельзя закрыть: {document} не утверждён пользователем "
+        f"({problem}).\n"
+        f"   Порядок: (1) {version_hint}Спроси пользователя («утверждаем {document} для {feature}?»); "
         f"(2) ТОЛЬКО после явного «да»:\n"
         f"   python3 {record_script} --project {project} --key {key} "
-        f"--approved-by user --reason \"<кто/почему>\"\n"
+        f"--approved-by user --reason \"<кто/почему>\" --evidence \"<дословный ответ>\"{version_arg}\n"
         f"   (3) повтори update.py. Молча закрывать доко-фазу нельзя. Если утверждение "
         f"объективно неприменимо:\n"
         + _override_hint(f"doc-approved-{step_id}", feature, step_id,
@@ -867,7 +886,7 @@ def _apply(args, project: Path, pdir: Path, manifest_path: Path) -> None:
         _check_grounding_substance(step, project, args.skill, args.feature)
         _check_required_decisions(step, project, args.skill, args.feature)
         _check_step_artifacts(step, project, args.skill, args.feature)
-    # Утверждение BRD/SDD человеком — не «гейт закрытия», и --skip-judges его не снимает: флаг
+    # Утверждение документа проверяется и при --skip-judges: флаг
     # обещает обойти судей, gate-result, origin, решения и артефакты, а 02-sdd с ним
     # закрывался без sdd-approved (боевой прогон v0.4.6). Восстановлению статусов после
     # init.py --force это не мешает — маркер утверждения лежит в проектном журнале.
@@ -875,7 +894,7 @@ def _apply(args, project: Path, pdir: Path, manifest_path: Path) -> None:
         _check_doc_approval(step, project, args.skill, args.feature)
 
     # Fallback=STOP: обязательный шаг нельзя тихо пропустить (skipped) без override
-    if not args.skip_judges and args.status == "skipped":
+    if args.status == "skipped" and (not args.skip_judges or args.step_id.startswith("02-design")):
         _check_required_skip(step, project, args.skill, args.feature)
 
     step["status"] = args.status

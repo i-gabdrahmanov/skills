@@ -1,0 +1,34 @@
+:root { color-scheme: light; font: 16px/1.45 system-ui, sans-serif; color: #192423; background: #f4f7f6; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+header { background: #153630; color: white; padding: 1.4rem 0; }
+.wrap { width: min(72rem, 100% - 2rem); margin: auto; }
+h1, h2, h3, p { margin: 0 0 .5rem; }
+h1 { font-size: 1.8rem; }
+h2 { font-size: 1.2rem; margin-top: 1rem; }
+#project, #target, code { overflow-wrap: anywhere; }
+main { padding: 1rem 0 2rem; }
+.toolbar { display: flex; gap: .75rem; flex-wrap: wrap; align-items: end; }
+label { display: grid; gap: .22rem; font-size: .9rem; }
+.check { display: flex; align-items: center; padding: .5rem 0; }
+input, select, textarea, button { font: inherit; color: inherit; }
+input, select, textarea, button { border: 1px solid #70847e; border-radius: .35rem; background: #fff; padding: .38rem .55rem; max-width: 100%; }
+button:not(:disabled) { cursor: pointer; }
+:focus-visible { outline: 3px solid #147764; outline-offset: 2px; }
+button:disabled, input:disabled, select:disabled, textarea:disabled { opacity: .6; }
+.primary { background: #175c4d; color: white; }
+.row, .panel { background: white; border: 1px solid #d3dfdb; border-radius: .5rem; padding: .8rem; margin-bottom: .45rem; }
+.row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .7rem; align-items: start; }
+.meta { font-size: .83rem; color: #415650; overflow-wrap: anywhere; }
+.help { display: inline; position: relative; margin-left: .35rem; }
+.help button { padding: 0 .38rem; border-radius: 50%; }
+.help span { position: absolute; z-index: 1; left: 0; top: 1.5rem; display: block; width: min(18rem, 57vw); padding: .65rem; background: #153630; color: white; border-radius: .4rem; font-size: .86rem; }
+[hidden] { display: none !important; }
+#status, #live { margin-top: .6rem; }
+.error, #save-error { color: #98292e; }
+footer { position: sticky; bottom: 0; padding: .65rem 0; background: #e6efec; border-top: 1px solid #b9cbc4; }
+dialog { width: min(49rem, 100% - 2rem); border: 1px solid #70847e; border-radius: .55rem; }
+dialog::backdrop { background: #12272288; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #edf3f1; padding: .45rem; }
+summary { cursor: pointer; font-weight: 650; }
+@media (max-width: 600px) { .row { grid-template-columns: 1fr; } }

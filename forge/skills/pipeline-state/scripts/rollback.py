@@ -307,7 +307,7 @@ def archive_evidence(project: Path, skill: str, feature: str, reset_steps: list[
         for name in (f"{o}.json" for o in step_overrides):
             _archive_move(fdir / "overrides" / name, dest, f"overrides/{name}", moved)
         # doc-approvals: утверждение дока снимается вместе с откатом его фазы
-        for prefix, doc in (("00-brd", "brd"), ("02-sdd", "sdd")):
+        for prefix, doc in (("00-brd", "brd"), ("02-sdd", "sdd"), ("02-design", "design")):
             if sid.startswith(prefix):
                 for marker in (f"{doc}-approved-{feature}", f"{doc}-review-{feature}"):
                     FE.revoke_approval(project, marker, reason=f"откат шага {sid}")

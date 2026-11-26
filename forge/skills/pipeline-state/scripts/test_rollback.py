@@ -101,6 +101,7 @@ def _write_evidence(tmp: Path) -> None:
     (ap / f"sdd-approved-{FEATURE}.json").write_text(json.dumps({
         "produced_by": "record_approval", "key": f"sdd-approved-{FEATURE}",
     }), encoding="utf-8")
+    _write_approval(tmp, f"design-approved-{FEATURE}")
 
 
 def _journal(tmp: Path, *paths: str, op: str = "write") -> None:
@@ -160,6 +161,7 @@ class TStateSurgery(unittest.TestCase):
         self.assertEqual(_step(self.tmp, "04-build-T1")["status"], "pending")
         self.assertEqual(_step(self.tmp, "04-test-T1")["status"], "completed")
         self.assertEqual(_step(self.tmp, "02-design")["status"], "completed")
+        self.assertTrue((self.tmp / "ground" / "approvals" / f"design-approved-{FEATURE}.json").is_file())
 
     def test_counters_zeroed_and_recorded(self):
         r = self._rollback()
@@ -184,6 +186,8 @@ class TStateSurgery(unittest.TestCase):
         self.assertTrue((arch / "judges" / "sdd-judge.json").exists())
         self.assertTrue((arch / "gates" / "04-build-T1.json").exists())
         self.assertTrue((arch / "approvals" / f"sdd-approved-{FEATURE}.json").exists())
+        self.assertTrue((arch / "approvals" / f"design-approved-{FEATURE}.json").exists())
+        self.assertFalse((self.tmp / "ground" / "approvals" / f"design-approved-{FEATURE}.json").exists())
 
     def test_approval_marker_consumed(self):
         key = f"rollback-{FEATURE}-02-sdd"

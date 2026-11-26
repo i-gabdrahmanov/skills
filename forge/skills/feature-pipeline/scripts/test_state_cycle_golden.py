@@ -22,6 +22,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 INIT = REPO / "skills/pipeline-state/scripts/init.py"
 UPDATE = REPO / "skills/pipeline-state/scripts/update.py"
+RECORD_APPROVAL = REPO / "skills/pipeline-state/scripts/record_approval.py"
+STATE_RECORDER = REPO / "hooks/state-recorder.py"
 ADD_STEPS_FP = REPO / "skills/feature-pipeline/scripts/add_steps.py"
 
 sys.path.insert(0, str(REPO / "skills/feature-pipeline/scripts"))
@@ -59,7 +61,10 @@ class GoldenStateCycle(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.proj = Path(self._tmp.name)
-        (self.proj / "docs/feature-pipeline" / SLUG).mkdir(parents=True)
+        self.docs = self.proj / "docs/feature-pipeline" / SLUG
+        self.docs.mkdir(parents=True)
+        (self.docs / "tech-design.md").write_text("# Исходный дизайн\n", encoding="utf-8")
+        (self.docs / "task-plan.json").write_text('{"tasks":[{"id":"TASK1"}]}', encoding="utf-8")
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -67,7 +72,18 @@ class GoldenStateCycle(unittest.TestCase):
     def _state_dir(self, feature=SLUG):
         return self.proj / "ground/statements/feature-pipeline" / feature
 
-    def _write_verdicts(self, feature=SLUG):
+    def _design_digest(self):
+        r = _run([RECORD_APPROVAL, "--project", self.proj, "--design-digest", SLUG], self.proj)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
+
+    def _approve_design(self, digest):
+        return _run([RECORD_APPROVAL, "--project", self.proj, "--key", f"design-approved-{SLUG}",
+                     "--approved-by", "user", "--reason", "Гейт 2",
+                     "--evidence", f"Да, утверждаю техдизайн для {SLUG}",
+                     "--design-sha256", digest], self.proj)
+
+    def _write_verdicts(self, feature=SLUG, *, approved_docs=("brd", "sdd")):
         jdir = self._state_dir(feature) / "judges"
         jdir.mkdir(parents=True, exist_ok=True)
         for name in JUDGE_VERDICTS:
@@ -77,10 +93,10 @@ class GoldenStateCycle(unittest.TestCase):
                 "blocking_issues": [],
             }), encoding="utf-8")
         # маркеры утверждения доков (их пишет record_approval после «да» пользователя) —
-        # update._check_doc_approval не закроет 00-brd/02-sdd без них
+        # update._check_doc_approval не закроет документные фазы без них
         appr = self.proj / "ground/approvals"
         appr.mkdir(parents=True, exist_ok=True)
-        for doc in ("brd", "sdd"):
+        for doc in approved_docs:
             key = f"{doc}-approved-{feature}"
             (appr / f"{key}.json").write_text(json.dumps(
                 {"produced_by": "record_approval", "key": key, "approved_by": "user",
@@ -106,6 +122,8 @@ class GoldenStateCycle(unittest.TestCase):
 
         # 3. вердикты судей (passed=true) — иначе update.py не закроет шаги
         self._write_verdicts()
+        approved = self._approve_design(self._design_digest())
+        self.assertEqual(approved.returncode, 0, approved.stderr)
 
         # 4. закрываем все шаги БЕЗ --skip-judges
         odir = self._state_dir() / "_origins"
@@ -148,18 +166,65 @@ class GoldenStateCycle(unittest.TestCase):
         self.assertTrue(all(p["status"] == "completed" for p in gate["phases"]),
                         f"не все фазы completed: {[(p['id'], p['status']) for p in gate['phases']]}")
 
+    def test_design_requires_its_own_approval(self):
+        r = _run([INIT, "--project", self.proj, "--skill", "feature-pipeline",
+                  "--feature", SLUG, "--steps", json.dumps([{"id": "02-design", "depends_on": []}])],
+                 self.proj)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self._write_verdicts()
+        recorded = subprocess.run([sys.executable, str(STATE_RECORDER)], cwd=self.proj,
+                                  input=json.dumps({"hook_event_name": "SubagentStop", "cwd": str(self.proj),
+                                                    "last_assistant_message": json.dumps({
+                                                        "step_id": "02-design", "status": "unit-done"})}),
+                                  capture_output=True, text=True, timeout=60)
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        update = [UPDATE, "--project", self.proj, "--skill", "feature-pipeline",
+                  "--feature", SLUG, "--step-id", "02-design", "--status", "completed"]
+        denied = _run(update, self.proj)
+        self.assertEqual(denied.returncode, 2, denied.stderr)
+        self.assertIn(f"design-approved-{SLUG}", denied.stderr)
+        manifest = json.loads((self._state_dir() / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["steps"][0]["status"], "pending")
+        self._write_verdicts(approved_docs=("design",))
+        legacy = _run(update, self.proj)
+        self.assertEqual(legacy.returncode, 2, legacy.stderr)
+        self.assertIn("не подтверждает текущие", legacy.stderr)
+
+        digest = self._design_digest()
+        approved = self._approve_design(digest)
+        self.assertEqual(approved.returncode, 0, approved.stderr)
+        for name, contents in (("tech-design.md", "# Новый дизайн\n"),
+                               ("task-plan.json", '{"tasks":[{"id":"TASK2"}]}')):
+            with self.subTest(name=name):
+                (self.docs / name).write_text(contents, encoding="utf-8")
+                stale = _run(update, self.proj)
+                self.assertEqual(stale.returncode, 2, stale.stderr)
+                self.assertIn("не подтверждает текущие", stale.stderr)
+                refused = self._approve_design(digest)
+                self.assertEqual(refused.returncode, 2, refused.stderr)
+                self.assertIn("версия техдизайна изменилась", refused.stderr)
+                digest = self._design_digest()
+                approved = self._approve_design(digest)
+                self.assertEqual(approved.returncode, 0, approved.stderr)
+        closed = _run(update, self.proj)
+        self.assertEqual(closed.returncode, 0, closed.stderr)
+
     def test_step_blocked_without_verdict(self):
         """02-design нельзя закрыть, пока нет design-judge.json (enforcement жив)."""
         r = _run([INIT, "--project", self.proj, "--skill", "feature-pipeline",
                   "--feature", "KID-2",
                   "--steps", json.dumps([{"id": "02-design", "depends_on": []}])], self.proj)
         self.assertEqual(r.returncode, 0, r.stderr)
+        origins = self._state_dir("KID-2") / "_origins"
+        origins.mkdir()
+        (origins / "02-design.json").write_text('{"step_id":"02-design"}', encoding="utf-8")
         # без вердикта design-judge
         r = _run([UPDATE, "--project", self.proj, "--skill", "feature-pipeline",
                   "--feature", "KID-2", "--step-id", "02-design", "--status", "completed",
                   "--output-json", json.dumps({"step_id": "02-design"})], self.proj)
         self.assertNotEqual(r.returncode, 0,
                             "02-design закрылся без вердикта судьи — enforcement сломан")
+        self.assertIn("Вердикт 'design-judge' не найден", r.stderr)
 
 
 if __name__ == "__main__":

@@ -169,7 +169,7 @@ def resolve_file(project: Path, file_key: str) -> Path:
         # gigacode_dir()/hooks): extension — .gigacode/extensions/<kind>/hooks, старая
         # раскладка — .gigacode/hooks, source-layout forge — hooks/.
         cands = [project / ".gigacode" / "extensions" / k / "hooks" / "risk-policy.json"
-                 for k in ("forge", "forge-ui")]
+                 for k in ("forge", "forge-ui", "spec-graph")]
         cands += [project / ".gigacode" / "hooks" / "risk-policy.json",
                   project / "hooks" / "risk-policy.json"]
         for cand in cands:
@@ -180,7 +180,7 @@ def resolve_file(project: Path, file_key: str) -> Path:
             own.resolve().relative_to(project.resolve())
             return own
         except ValueError:
-            return cands[2]
+            return cands[3]
     raise ValueError(f"неизвестный file-key: {file_key}")
 
 
@@ -275,20 +275,26 @@ def current_value(project: Path, params: list, entry: dict):
         data = None
         src_hint = "unknown"
 
-    if isinstance(data, dict):
-        # Сначала новый путь (напр. inputs.story → inputs.story в манифесте).
-        found, val = dig(data, entry["path"])
+    legacy_data = None
+    if fk == "manifest" and isinstance(data, dict) and legacy_path_for(entry["path"]):
+        found, value = dig(data, entry["path"])
         if found:
-            return val, f"file:{src_hint}"
-        # Для manifest-* путей — fallback на legacy pipeline.json.
-        if fk == "manifest":
-            legacy = legacy_path_for(entry["path"])
-            if legacy:
-                legacy_data = load_json(project / "ground" / "pipeline.json")
-                if isinstance(legacy_data, dict):
-                    lf, lv = dig(legacy_data, legacy)
-                    if lf:
-                        return lv, "file:pipeline.json (legacy fallback)"
+            return value, f"file:{src_hint}"
+        legacy_data = load_json(project / "ground" / "pipeline.json")
+    return setting_value(entry, data, src_hint, legacy_data)
+
+
+def setting_value(entry, data, src_hint, legacy_data=None):
+    """Effective value from already-read configuration documents."""
+    if isinstance(data, dict):
+        found, value = dig(data, entry["path"])
+        if found:
+            return value, f"file:{src_hint}"
+        legacy = legacy_path_for(entry["path"]) if entry["file"] == "manifest" else None
+        if legacy and isinstance(legacy_data, dict):
+            found, value = dig(legacy_data, legacy)
+            if found:
+                return value, "file:pipeline.json (legacy fallback)"
     return entry.get("default"), "default"
 
 
@@ -400,7 +406,7 @@ def _live_run(project: Path):
     return run["skill"], run["feature"]
 
 
-def cmd_set(project: Path, params: list, args) -> int:
+def cmd_set(project: Path, params: list, args, *, staged=None) -> int:
     e = find_entry(params, args.id)
     if e is None:
         print(json.dumps({"error": f"параметр '{args.id}' не найден в реестре. "
@@ -515,7 +521,7 @@ def cmd_set(project: Path, params: list, args) -> int:
                          ensure_ascii=False))
         return 2
 
-    data = load_json(target)
+    data = staged if staged is not None else load_json(target)
 
     if data is None:
         if file_key == "gates":
@@ -543,7 +549,7 @@ def cmd_set(project: Path, params: list, args) -> int:
         old_found, old_val = dig(data, sub_path)
         old_display = old_val if old_found else e.get("default")
 
-    if args.dry_run:
+    if args.dry_run and staged is None:
         print(json.dumps({"dry_run": True, "id": e["id"], "file": str(target),
                           "old": old_display, "new": new_val,
                           "section": section_name}, ensure_ascii=False))
@@ -557,6 +563,13 @@ def cmd_set(project: Path, params: list, args) -> int:
         }, ensure_ascii=False))
         return 1
 
+    if staged is not None:
+        if section_name is None:
+            _apply_setting(staged, file_key, sub_path, new_val)
+        else:
+            assign(staged.setdefault(section_name, {}), sub_path, new_val)
+        return 0
+
     bak = backup(target, project)
     if file_key == "manifest":
         # Манифест пишут и параллельные update.py (закрытие шагов): read-modify-write под его
@@ -567,6 +580,16 @@ def cmd_set(project: Path, params: list, args) -> int:
                           "section": section_name, "old": old_display, "new": new_val,
                           "backup": bak}, ensure_ascii=False))
         return 0
+    _apply_setting(data, file_key, sub_path, new_val)
+    atomic_write(target, data)
+
+    print(json.dumps({"status": "applied", "id": e["id"], "file": str(target),
+                      "section": section_name, "old": old_display, "new": new_val,
+                      "backup": bak}, ensure_ascii=False))
+    return 0
+
+
+def _apply_setting(data, file_key, sub_path, new_val):
     assign(data, sub_path, new_val)
     if file_key == "gates":
         assign(data, "_meta.updated_at", iso_now())
@@ -586,12 +609,6 @@ def cmd_set(project: Path, params: list, args) -> int:
                 data.pop("_incomplete", None)
             elif keep != inc:
                 data["_incomplete"] = keep
-    atomic_write(target, data)
-
-    print(json.dumps({"status": "applied", "id": e["id"], "file": str(target),
-                      "section": section_name, "old": old_display, "new": new_val,
-                      "backup": bak}, ensure_ascii=False))
-    return 0
 
 
 # ── phase ─────────────────────────────────────────────────────────────────────
@@ -640,19 +657,23 @@ def _spend_structure_consent(project: Path, key: "str | None", what: str) -> Non
         FE.revoke_approval(project, key, reason=f"согласие потрачено: {what}")
 
 
+def phase_resolver():
+    fp = str(Path(__file__).resolve().parents[2] / "feature-pipeline" / "scripts")
+    if fp not in sys.path:
+        sys.path.append(fp)
+    import resolve_phases
+    return resolve_phases
+
+
 def _mandatory_phase(phase_id: str) -> bool:
-    """Обязательная фаза (resolve_phases.mandatory_phase_ids); список не загрузился — любая."""
+    """При ошибке загрузки считаем фазу обязательной."""
     try:
-        fp = str(Path(__file__).resolve().parents[2] / "feature-pipeline" / "scripts")
-        if fp not in sys.path:
-            sys.path.append(fp)
-        import resolve_phases as _rp
-        return phase_id in _rp.mandatory_phase_ids()
+        return phase_id in phase_resolver().mandatory_phase_ids()
     except Exception:  # noqa: BLE001
         return True
 
 
-def cmd_phase(project: Path, params: list, args) -> int:
+def cmd_phase(project: Path, params: list, args, *, staged=None, preview=False, deferred=None) -> int:
     # phases_override — общая конфигурация (какие фазы включены в принципе), → policy.json.
     # Как и quality.*: пишется всегда, идущий прогон идёт по снимку (см. cmd_set).
     _live = _live_run(project)
@@ -661,7 +682,7 @@ def cmd_phase(project: Path, params: list, args) -> int:
               f"снимком политики на init.py и этой правкой не изменится. Применить сейчас: "
               f"config.py repin --skill {_live[0]} --feature {_live[1]}", file=sys.stderr)
     target = resolve_file(project, "policy")
-    data = load_json(target)
+    data = staged if staged is not None else load_json(target)
     if data is None:
         print(json.dumps({"error": f"{target} не найден. Сначала init_pipeline_config.py"},
                          ensure_ascii=False))
@@ -674,7 +695,7 @@ def cmd_phase(project: Path, params: list, args) -> int:
     # Выключить ОБЯЗАТЕЛЬНУЮ фазу (или сделать её условной через --enabled-by) — снять её
     # проверки во всех следующих прогонах. Включение и опциональные фазы свободны.
     consent = None
-    if _mandatory_phase(args.phase_id) and (
+    if not preview and _mandatory_phase(args.phase_id) and (
             args.action == "disable" or getattr(args, "enabled_by", None) is not None):
         what = f"phase {args.action} {args.phase_id}"
         consent = _structure_consent(project, f"policy-downgrade-phase.{args.phase_id}", what)
@@ -702,6 +723,11 @@ def cmd_phase(project: Path, params: list, args) -> int:
             existing["after"] = args.after
 
     data["phases_override"] = overrides
+    if staged is not None:
+        if consent:
+            deferred.append((consent, what))
+        return 0
+
     bak = backup(target, project)
     atomic_write(target, data)
     _spend_structure_consent(project, consent, f"phase {args.action} {args.phase_id}")
@@ -715,7 +741,7 @@ def cmd_phase(project: Path, params: list, args) -> int:
 _RISK_LIST_KEYS = {"destructive_blacklist", "pii_patterns", "injection_markers"}
 
 
-def cmd_risk(project: Path, params: list, args) -> int:
+def cmd_risk(project: Path, params: list, args, *, staged=None, preview=False, deferred=None) -> int:
     if not args.confirm:
         print(json.dumps({"blocked": True,
                           "reason": "правка risk-policy требует --confirm"},
@@ -723,14 +749,14 @@ def cmd_risk(project: Path, params: list, args) -> int:
         return 1
 
     target = resolve_file(project, "risk")
-    data = load_json(target)
+    data = staged if staged is not None else load_json(target)
     if data is None:
         print(json.dumps({"error": f"{target} не найден"}, ensure_ascii=False))
         return 3
 
     # Ослабление (убрать паттерн, поднять cap роли) — R4; добавить паттерн — усиление, свободно.
     consent = None
-    if args.action in ("list-remove", "cap-set"):
+    if not preview and args.action in ("list-remove", "cap-set"):
         what = f"risk {args.action} {args.key}"
         scope = "agent_caps" if args.action == "cap-set" else args.key
         consent = _structure_consent(project, f"policy-downgrade-risk.{scope}", what)
@@ -773,6 +799,11 @@ def cmd_risk(project: Path, params: list, args) -> int:
         print(json.dumps({"error": f"неизвестное risk-действие {args.action}"},
                          ensure_ascii=False))
         return 2
+
+    if staged is not None:
+        if consent:
+            deferred.append((consent, what))
+        return 0
 
     bak = backup(target, project)
     atomic_write(target, data)

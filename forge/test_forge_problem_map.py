@@ -26,7 +26,7 @@ class ForgeContracts(unittest.TestCase):
             source = Path(tmp) / "source"
             source.mkdir()
             for name in ("install.sh", "_deployed_manifest.sh", "profiles", "skills",
-                         "spec-graph", "deploy-local.sh"):
+                         "spec-graph", "deploy-local.sh", "bin"):
                 (source / name).symlink_to(ROOT / name)
             shutil.copytree(ROOT / "hooks", source / "hooks")
             project = Path(tmp) / "My Project"

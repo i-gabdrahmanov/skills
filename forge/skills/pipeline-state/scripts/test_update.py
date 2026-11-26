@@ -361,13 +361,14 @@ def main() -> int:
     # 22b. Утверждение SDD человеком --skip-judges не снимает: флаг обещает обойти судей,
     #      gate-result, origin, решения и артефакты, а 02-sdd закрывался без sdd-approved
     #      (боевой прогон v0.4.6, F-3).
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td)
-        _write_manifest(p, [{"id": "02-sdd", "status": "pending"}])
-        _approval(p, "skip-judges-demo")
-        rc, out = run(p, "02-sdd", "--skip-judges")
-        check("--skip-judges без sdd-approved → 02-sdd не закрывается",
-              rc != 0 and "sdd-approved-demo" in out, f"rc={rc} {out}")
+    for doc in ("sdd", "design"):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td)
+            _write_manifest(p, [{"id": f"02-{doc}", "status": "pending"}])
+            _approval(p, "skip-judges-demo")
+            rc, out = run(p, f"02-{doc}", "--skip-judges")
+            check(f"--skip-judges без {doc}-approved → 02-{doc} не закрывается",
+                  rc != 0 and f"{doc}-approved-demo" in out, f"rc={rc} {out}")
 
     with tempfile.TemporaryDirectory() as td:
         p = Path(td)

@@ -35,6 +35,7 @@ Append-only лог даёт то же свойство другим примит
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -43,8 +44,8 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _project import (append_locked, approvals_dir, gate_result_path, ground_dir,  # noqa: E402
-                      judge_path, origin_path, override_path, state_dir)
+from _project import (append_locked, approvals_dir, feature_docs_dir, gate_result_path,  # noqa: E402
+                      ground_dir, judge_path, origin_path, override_path, safe_slug, state_dir)
 
 EVENTS_FILE = "events.jsonl"
 APPROVALS_FILE = "approvals.jsonl"
@@ -400,7 +401,7 @@ CONSENT_PREFIXES = ("gate-override", "rollback", "skip-judges", "policy-repin",
                     # держалась одной прозой (аудит 2026-11-07). jira-plan — перед созданием задач во
                     # внешнем трекере (необратимо), fix-plan — утверждение фикс-плана, brd/sdd-approved —
                     # закрытие документных гейтов. UI-ключи (ui-spec-approved-*) — отдельной задачей.
-                    "jira-plan", "fix-plan", "brd-approved", "sdd-approved")
+                    "jira-plan", "fix-plan", "brd-approved", "sdd-approved", "design-approved")
 
 
 def consent_required(key: str) -> bool:
@@ -473,8 +474,16 @@ def consent_quote_problem(quote: str) -> Optional[str]:
 
 def file_sha256(path: Path) -> str:
     """sha256 содержимого файла (привязка согласия/снимка к конкретной версии артефакта)."""
-    import hashlib
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def design_approval_digest(project: Path, feature: str) -> str:
+    """SHA-256 пары канонических артефактов 02-design для этой фичи."""
+    directory = feature_docs_dir(project) / safe_slug(feature)
+    return hashlib.sha256(
+        bytes.fromhex(file_sha256(directory / "tech-design.md"))
+        + bytes.fromhex(file_sha256(directory / "task-plan.json"))
+    ).hexdigest()
 
 
 def revoke_approval(root: Path, key: str, reason: str = "") -> dict:
