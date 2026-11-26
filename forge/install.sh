@@ -24,9 +24,9 @@
 #      (снятое из репо не переживает обновление; локальный config.json minor-defect-fix —
 #      переживает).
 #   2. Манифест + hooks/hooks.json с зашитым интерпретатором и абсолютными путями.
-#   3. Ссылка в рантайме + включение только для этого workspace (--no-link — пропустить).
 #   4. .gitignore: ground/* (кроме policy.json) и .gigacode/.
-#   5. preflight (advisory).
+#   5. preflight: 1 — отказ, 2 — нужна инициализация.
+#   6. Ссылка в рантайме (--no-link — пропустить).
 #
 # Флаги:
 #   --runtime gigacode|qwen   чей CLI ставит ссылку (по умолчанию gigacode, нет его — qwen;
@@ -205,14 +205,42 @@ FORGE_REV="$(git -C "$SRC" describe --tags --match 'forge/v*' --always --dirty 2
 chmod +x "$STAGE/hooks/"*.py "$STAGE/hooks/"*.sh "$STAGE/deploy-local.sh" 2>/dev/null || true
 
 # 2. манифест + hooks.json — пути уже конечные (каталог $EXT), поэтому собираем ПОСЛЕ подмены
-OLD=""
-if [ -d "$EXT" ]; then
-  OLD="$EXT_ROOT/.$KIND.old.$$"
-  mv "$EXT" "$OLD"
+# Serialize replacement for this workspace (including different profiles).
+LOCK="$EXT_ROOT/.forge-install.lock"
+if ! mkdir "$LOCK"; then
+  echo "install.sh: уже идёт установка или остался lock: $LOCK" >&2
+  exit 1
 fi
+OLD="$STAGE.previous"
+SWAPPED=0
+finish_install() {
+  local rc=$?
+  trap - EXIT
+  if [ "$rc" -ne 0 ] && [ -d "$OLD" ]; then
+    if [ -d "$EXT" ]; then mv "$EXT" "$STAGE" || exit 1; fi
+    mv "$OLD" "$EXT" || exit 1
+    echo "install.sh: восстановлена предыдущая поставка $EXT" >&2
+  elif [ "$rc" -eq 0 ]; then
+    rm -rf "$OLD"
+  elif [ "$SWAPPED" -eq 1 ]; then
+    echo "install.sh: первая установка не завершена; диагностика доступна в $EXT" >&2
+  fi
+  rm -rf "$STAGE"
+  rmdir "$LOCK"
+  exit "$rc"
+}
+trap finish_install EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+for OTHER in forge forge-ui spec-graph; do
+  if [ "$OTHER" != "$KIND" ] && [ -d "$EXT_ROOT/$OTHER" ]; then
+    echo "install.sh: уже установлена другая поставка: $OTHER" >&2
+    exit 2
+  fi
+done
+if [ -d "$EXT" ]; then mv "$EXT" "$OLD"; fi
 mv "$STAGE" "$EXT"
-trap - EXIT
-[ -n "$OLD" ] && rm -rf "$OLD"
+SWAPPED=1
 if ! BUILT="$("${PY[@]}" -X utf8 "$EXT/hooks/forge_extension.py" build --ext "$EXT" --project "$TARGET" \
                --kind "$KIND" --version "$FORGE_REV")"; then
   echo "install.sh: манифест/hooks.json не собрались — поставка лежит в $EXT, но рантайму не подключена." >&2
@@ -221,15 +249,6 @@ fi
 NAME="$("${PY[@]}" -X utf8 -c 'import json,sys; print(json.loads(sys.argv[1])["name"])' "$BUILT")"
 echo "  ✓ поставка на месте: skills [$(echo $DEPLOYED_SKILLS)], commands [$(echo $DEPLOYED_COMMANDS)]"
 echo "  ✓ манифест и hooks/hooks.json собраны: extension $NAME (rev $FORGE_REV)"
-
-# 3. ссылка в рантайме + включение только для этого workspace (+ взаимное выключение с другими
-#    forge-проектами машины) — hooks/forge_extension.py link
-if [ "$NO_LINK" -eq 1 ]; then
-  echo "  (--no-link: рантайм не тронут; подключить: bash $EXT/deploy-local.sh)"
-else
-  "${PY[@]}" -X utf8 "$EXT/hooks/forge_extension.py" link --ext "$EXT" --project "$TARGET" --runtime "$RUNTIME" \
-    || echo "  (ссылка не поставлена целиком — см. строки выше; повторить: bash $EXT/deploy-local.sh)"
-fi
 
 # 4. .gitignore проекта (блок с маркерами — его снимает uninstall.sh)
 GI_BEGIN="# >>> forge: рабочие данные пайплайна >>>"
@@ -270,7 +289,7 @@ if [ -f "$TARGET/ground/policy.json" ] && [ -f "$EXT/skills/config-helper/script
     || echo "  (migrate-deprecated не выполнился — проверь: config.py validate)"
 fi
 
-# 5. диагностика (advisory)
+# 5. Проверка файлов перед подключением
 echo
 echo "== preflight =="
 if "${PY[@]}" -X utf8 "$EXT/hooks/preflight.py" --project "$TARGET"; then
@@ -280,6 +299,16 @@ else
   if [ "$rc" -eq 2 ]; then
     echo "  (проект ещё не инициализирован — ground/policy.json заведёт init_command из вывода выше)"
   else
-    echo "  (preflight сообщил о проблемах — см. вывод выше)"
+    echo "install.sh: preflight не пройден (rc=$rc)" >&2
+    exit "$rc"
   fi
+fi
+
+# 6. ссылка в рантайме + включение только для этого workspace (+ взаимное выключение с другими
+#    forge-проектами машины) — hooks/forge_extension.py link
+if [ "$NO_LINK" -eq 1 ]; then
+  echo "  (--no-link: рантайм не тронут; подключить: bash $EXT/deploy-local.sh)"
+else
+  "${PY[@]}" -X utf8 "$EXT/hooks/forge_extension.py" link --ext "$EXT" --project "$TARGET" --runtime "$RUNTIME" \
+    || { echo "install.sh: подключение к рантайму не завершено" >&2; exit 1; }
 fi

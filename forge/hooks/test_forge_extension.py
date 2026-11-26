@@ -284,6 +284,21 @@ class Link(unittest.TestCase):
         self.assertIn((("extensions", "disable", "--scope", "workspace", nb), os.path.realpath(self.a)), dis)
         self.assertTrue(any("выключены друг у друга" in l for l in lines))
 
+    def test_peer_disable_failure_is_reported(self):
+        FX.link(FX.ext_dir(self.a, "forge"), self.a)
+        run = FX._run
+
+        def fail_peer(cli, args, **kwargs):
+            if args[:3] == ["disable", "--scope", "workspace"]:
+                return subprocess.CompletedProcess(args, 1)
+            return run(cli, args, **kwargs)
+
+        with mock.patch.object(FX, "_run", side_effect=fail_peer):
+            ok, lines = FX.link(FX.ext_dir(self.b, "forge-ui"), self.b)
+        self.assertFalse(ok)
+        self.assertTrue(any("не удалось отключить" in line for line in lines))
+        self.assertFalse(any("выключены друг у друга" in line for line in lines))
+
     def test_relink_recognises_its_own_link_and_replaces_a_stale_one(self):
         FX.link(FX.ext_dir(self.a, "forge"), self.a)
         ok, lines = FX.link(FX.ext_dir(self.a, "forge"), self.a)

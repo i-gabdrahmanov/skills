@@ -10,14 +10,8 @@ fail-CLOSED: exit 1 рантайм читает как «хук не возра�
     [destructive-blocker] DENY: бандл forge не грузится (No module named 'risk_ladder').
       ... перезапусти: bash .gigacode/deploy-local.sh      ← и она же не проходит
 
-Починить бандл из сессии было нельзя — только руками в терминале. Здесь узкая форточка:
-команды ВОССТАНОВЛЕНИЯ (deploy-local.sh / install.sh / preflight.py / doctor.py / проверка
-версии интерпретатора) пропускаются с предупреждением, всё остальное по-прежнему exit 2.
-
-Маржинальный риск нулевой: при сломанном бандле enforcement и так не работает — вопрос лишь
-в том, может ли агент его починить. Форточка узкая по построению: команда должна СОСТОЯТЬ из
-одного восстановительного вызова — любой разделитель (`;`, `&&`, `|`, `&`, подстановка) её
-закрывает, чтобы `bash deploy-local.sh; rm -rf ~` не проехал под видом починки.
+При сбое импорта остаются доступны проверка версии Python, диагностика и deploy-local.sh
+именно этой поставки. Переустановку из другого дерева оператор запускает в терминале.
 
 Модуль намеренно stdlib-only и без синтаксиса новее 3.9: он грузится ровно тогда, когда
 остальной бандл уже не грузится. Если не загрузится и он — вызывающий хук остаётся при
@@ -26,18 +20,9 @@ fail-CLOSED: exit 1 рантайм читает как «хук не возра�
 from __future__ import annotations
 
 import json
-import re
+import shlex
+from pathlib import Path
 import sys
-
-# Разделители/подстановки: их наличие снимает статус «одна восстановительная команда».
-_COMPOUND_RE = re.compile(r"[;&|\n]|\$\(|`|\|\|")
-
-# Что считаем восстановлением. Только то, что чинит или ДИАГНОСТИРУЕТ бандл.
-_RECOVERY_RE = re.compile(
-    r"(?:^|[\s/\\])(?:deploy-local\.sh|deploy\.sh|install\.sh|update\.sh|preflight\.py|doctor\.py)\b"
-    r"|(?:^|\s)(?:python3?|py)(?:\s+-[A-Za-z]+)*\s+(?:-V|--version)\s*$"
-    r"|(?:^|\s)(?:python3?|py)\s+-c\s+['\"]?import\s+(?:sys|risk_ladder|_project)\b"
-)
 
 def install_rel() -> str:
     """Каталог установки forge от корня проекта — для подсказок: `.gigacode/extensions/<kind>`
@@ -83,11 +68,25 @@ def _command_from_stdin() -> str:
 
 def is_recovery_command(command: str) -> bool:
     """Одна-единственная команда восстановления бандла (без цепочек и подстановок)."""
-    if not command or not command.strip():
+    if not command or any(c in command for c in ";&|<>$`\n\r"):
         return False
-    if _COMPOUND_RE.search(command):
+    try:
+        args = shlex.split(command)
+        if len(args) < 2:
+            return False
+        program, argument, *options = args
+        if program in ("python", "python3", "py") and argument in ("-V", "--version"):
+            return not options
+        base = Path(__file__).resolve().parents[1]
+        script = Path(argument).resolve()
+        if program == "bash" and script == base / "deploy-local.sh":
+            return options in ([], ["--check"], ["--no-link"])
+        if program in ("python", "python3", "py") and script in (
+                base / "hooks/preflight.py", base / "skills/feature-pipeline/scripts/doctor.py"):
+            return not options or (options == ["--project", "."])
         return False
-    return bool(_RECOVERY_RE.search(command))
+    except (ValueError, OSError, RuntimeError):
+        return False
 
 
 def bundle_denied(hook: str, err: object) -> int:

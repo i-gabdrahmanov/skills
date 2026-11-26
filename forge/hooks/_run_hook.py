@@ -61,7 +61,11 @@ def main(argv) -> None:
         print("[forge] _run_hook.py: не передан хук — hooks/hooks.json собран неверно; "
               "перезапусти deploy-local.sh extension'а", file=sys.stderr)
         sys.exit(2)
-    hook = Path(argv[1])
+    blocking = argv[1] == "--blocking"
+    args = argv[2:] if blocking else argv[1:]
+    if not args:
+        sys.exit(2)
+    hook = Path(args[0])
     try:
         foreign = is_foreign(install_root(Path(__file__).resolve()), session_dir())
     except Exception:  # noqa: BLE001 — сбой проверки не снимает enforcement
@@ -71,8 +75,19 @@ def main(argv) -> None:
     if not hook.is_file():
         print(f"[forge] хук не найден: {hook} — перезапусти deploy-local.sh extension'а", file=sys.stderr)
         sys.exit(2)
-    sys.argv = [str(hook)] + list(argv[2:])
-    runpy.run_path(str(hook), run_name="__main__")
+    sys.argv = [str(hook)] + list(args[1:])
+    try:
+        runpy.run_path(str(hook), run_name="__main__")
+    except SystemExit as exc:
+        if not blocking or exc.code in (None, 0, 2):
+            raise
+        print(f"[forge] {hook.name}: unexpected exit {exc.code}", file=sys.stderr)
+        sys.exit(2)
+    except Exception as exc:
+        if not blocking:
+            raise
+        print(f"[forge] {hook.name}: ошибка проверки: {exc}", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":
