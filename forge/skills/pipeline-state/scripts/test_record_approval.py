@@ -695,6 +695,23 @@ class TestConsentEvidenceRequired(unittest.TestCase):
         # атомарность: не записалась ни одна строка, включая валидную первую
         self.assertIsNone(FE.approval(self.project, "fix-plan-ok"))
 
+    def test_design_approval_rejects_batch_and_missing_version(self):
+        key = "design-approved-STOR-1"
+        evidence = "Да, утверждаю техдизайн для STOR-1"
+        r = self._run("--key", key, "--evidence", evidence)
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("--design-sha256", r.stderr)
+
+        batch = self.project / "design.json"
+        batch.write_text(json.dumps([{"key": key, "approver": "user", "reason": "Гейт 2",
+                                      "evidence": evidence, "design_sha256": "a" * 64}]), encoding="utf-8")
+        r = subprocess.run([sys.executable, str(SCRIPTS / "record_approval.py"),
+                            "--project", str(self.project), "--batch", str(batch)],
+                           capture_output=True, text=True, cwd=SCRIPTS, timeout=30)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("записывается отдельно", r.stderr)
+        self.assertIsNone(FE.approval(self.project, key))
+
     def test_consent_class_is_case_insensitive(self):
         r = self._run("--key", "GATE-OVERRIDE Blue Judge")
         self.assertEqual(r.returncode, 2, r.stdout)

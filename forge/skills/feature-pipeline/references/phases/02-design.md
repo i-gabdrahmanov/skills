@@ -5,7 +5,7 @@
 > SKILL.md §0.6, override — SKILL.md §0.6.1. Нумерация секций ниже — историческая (§ из
 > монолитного SKILL.md), внутри брифа она самодостаточна.
 >
-> **Гейт закрытия фазы:** check_taskplan PASS + Гейт 2 (пользователь утвердил дизайн); закрой шаг 02-design
+> **Гейт закрытия фазы:** `design-judge: PASS` и маркер утверждения `design-approved-<slug>`.
 
 ### 5b. Фаза 02-design — Tech Design → Гейт 2
 
@@ -68,8 +68,8 @@ Gate (обязательно, перед завершением):
   Должен быть PASS (check_taskplan + check_sdd-линковка; при adr.enabled — ещё check_adr: состав ADR
   + резолв ссылок ADR-NNNN). Сохраняет вердикт design-judge в журнал прогона (events.jsonl).
 
-Выходной JSON:
-  {"step_id": "02-design", "status": "completed", "path": "...", "gates": {"design-judge": "PASS"}}
+Выходной JSON (state-recorder фиксирует работу субагента, шаг закрывает оркестратор после утверждения):
+  {"step_id": "02-design", "status": "unit-done", "path": "...", "gates": {"design-judge": "PASS"}}
 """
 )
 ```
@@ -87,13 +87,35 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py design 
 
 #### 5b.3 Гейт 2 — утверждение дизайна
 
-Покажи резюме: затронутые модули, новые/изменяемые сущности, нужны ли
-миграции, число задач, главный риск. Спроси: «делаем так / правки?».
+Сними версию пары артефактов перед вопросом:
+
+```bash
+python3 <project>/.gigacode/skills/pipeline-state/scripts/record_approval.py \
+    --project <project> --design-digest <slug>
+```
+
+Покажи пути к `tech-design.md` и `task-plan.json` и резюме: затронутые модули,
+новые/изменяемые сущности, нужны ли миграции, число задач, главный риск.
+Включи в текст вопроса строку `design-sha256=<хеш>` с полным выводом команды.
+Спроси: «Утверждаем техдизайн для <slug> или нужны правки?» Если используешь
+`ask_user_question`, предложи ответ «Да, утверждаю техдизайн для <slug>».
 - Правки дизайна → верни `tech-design` на доработку (SDD и BRD не трогаем).
 - Если правка по сути меняет **спецификацию** (новый сценарий/контракт) → откат к бриф `02-sdd.md` §5a (SDD).
 - Если на гейте всплыло **новое бизнес-требование** → откат к фазе 0 (BRD).
 
-После «да»: заведи шаги фазы Build **одной командой** — список выводится из
+После явного согласия запиши его. `--evidence` содержит дословный ответ пользователя.
+Если Forge не смог сверить ответ с транскриптом, остановись на Гейте 2.
+
+```bash
+python3 <project>/.gigacode/skills/pipeline-state/scripts/record_approval.py \
+    --project <project> --key design-approved-<slug> --approved-by user \
+    --design-sha256 <показанный-хеш> \
+    --reason "Техдизайн утверждён пользователем" --evidence "<его дословный ответ>"
+```
+
+Если файлы изменились, заново проверь дизайн, покажи актуальную версию и получи новое согласие.
+
+После успешной записи согласия заведи шаги фазы Build **одной командой** — список выводится из
 `task-plan.json`, руками его не пиши:
 
 ```bash
@@ -124,7 +146,7 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/add_steps.py \
 > теперь отбивает с exit 2: такой шаг не станет готовым никогда, и раньше пайплайн от этого
 > вставал молча (`next_runnable` пуст, причина ниоткуда не видна).
 
-Обнови `02-design` только при `pass` execution-gates, передав артефакты:
+Закрой `02-design` после `design-judge: PASS` и записи утверждения, передав артефакты:
 
 ```bash
 python3 <project>/.gigacode/skills/pipeline-state/scripts/update.py \

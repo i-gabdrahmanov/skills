@@ -34,7 +34,12 @@ async function request(path, payload) {
     headers: {"Content-Type": "application/json", "X-Forge-Session": catalog.session},
     body: JSON.stringify(payload)
   };
-  const response = await fetch(path, options);
+  let response;
+  try {
+    response = await fetch(path, options);
+  } catch {
+    throw new Error("Нет связи с конфигуратором. Если сервер остановился, запустите forge-config снова.");
+  }
   const data = await response.json();
   if (!response.ok) {
     const error = new Error(data.error);

@@ -627,6 +627,7 @@ _CONSENT_ACTION_WORDS = (
     ("fix-plan", ("план", "plan", "фикс", "fix", "правим", "регресс", "root cause")),
     ("brd-approved", ("brd", "утверд", "требован", "документ")),
     ("sdd-approved", ("sdd", "спек", "утверд", "требован", "документ")),
+    ("design-approved", ("дизайн", "tech design", "tech-design", "технический проект")),
 )
 # Классы, где согласие обязано назвать цель (ключ прогона), а не только действие.
 _CONSENT_NAMES_TARGET = frozenset({"pause"})
@@ -655,6 +656,8 @@ def _action_named(key: str, text: str) -> bool:
     if words is None:
         return True                       # класс без словаря — привязка не применяется
     tail = k[len(cls) + 1:] if k.startswith(cls + "-") else ""
+    if cls == "design-approved":
+        return any(w in t for w in words) and bool(tail) and _quote_in(tail, t)
     if cls in _CONSENT_NAMES_TARGET:
         # Действие над КОНКРЕТНЫМ прогоном: слова класса мало, нужен и сам прогон. Иначе
         # «да, на паузу» про один прогон выписывало паузу любому другому.
@@ -686,7 +689,8 @@ def _ledger_load(path: str) -> dict:
 def _ledger_problem(transcript_path: str, uid: str, key: str) -> "str | None":
     used = _ledger_load(_consent_ledger_path(transcript_path)).get(uid) or []
     cls = _consent_class(key)
-    other = [k for k in used if _consent_class(k) != cls]
+    other = [k for k in used if _consent_class(k) != cls or
+             (cls == "design-approved" and k != key)]
     if other:
         return (f"этот ответ пользователя уже засчитан согласием на «{other[0]}». Одно «да» — "
                 f"одно действие: спроси отдельно, назвав, что снимается сейчас.")
@@ -836,13 +840,14 @@ def check_record_approval(command: str, root: Path, transcript_path: str,
         evidence = _opt_value(argv, "--evidence")
         head = (f"запись согласия по ключу '{key}' снимает enforcement — цитата пользователя "
                 f"обязательна. ")
-        problem = _quote_denial(key, evidence, transcript_path)
+        problem = _quote_denial(key, evidence, transcript_path,
+                                design_digest=_opt_value(argv, "--design-sha256"))
         return head + problem + tail if problem else None
     except Exception as e:
         return f"deny-first: ошибка проверки record_approval ({e})."
 
 
-def _quote_denial(key: str, evidence: str, transcript_path: str) -> str | None:
+def _quote_denial(key: str, evidence: str, transcript_path: str, *, design_digest: str = "") -> str | None:
     """Сверка цитаты --evidence для согласия по ключу key: причина отказа (с заглавной) или
     None. Общая для record_approval.py и скриптов, принимающих цитату сами (pause.py) —
     одна проверка на оба входа, иначе второй вход стал бы обходом первого. На успехе
@@ -850,9 +855,15 @@ def _quote_denial(key: str, evidence: str, transcript_path: str) -> str | None:
     if len(evidence) < _EVIDENCE_MIN_CHARS:
         return (f"В команде нет --evidence (или он короче {_EVIDENCE_MIN_CHARS} "
                 f"символов: «да»/«ок» цитатой не считаются).")
+    design_approval = _consent_class(key) == "design-approved"
+    design_override = key.startswith(("gate-override-doc-approved-02-design",
+                                      "gate-override-step-skip-02-design"))
     dialog = _transcript_dialog(transcript_path)
     utterances = dialog[0] if dialog else None
     if utterances is None:
+        if design_approval or design_override:
+            return ("Транскрипт пользователя недоступен или не распознан. "
+                    "Утверждение техдизайна требует проверяемого ответа пользователя.")
         # Сверить не с чем. Не запираем единственный аварийный выход наглухо:
         # --evidence уже обязателен, скрипт проверит, что это согласие, и
         # цитата уйдёт в журнал под аудит.
@@ -865,7 +876,19 @@ def _quote_denial(key: str, evidence: str, transcript_path: str) -> str | None:
     if problem:
         return problem[0].upper() + problem[1:]
     last, asked = utterances[-1], dialog[1][-1]
-    if not _action_named(key, f"{asked}\n{last}"):
+    if design_approval:
+        shown = set(re.findall(r"\bdesign-sha256=([0-9a-f]{64})\b", asked))
+        if not design_digest or shown != {design_digest}:
+            return ("Версия из --design-sha256 должна совпадать с единственной версией "
+                    "design-sha256=<хеш> в вопросе перед ответом. Покажи текущую версию и спроси снова.")
+        if not _action_named(key, asked):
+            return "В вопросе перед ответом должны быть названы техдизайн и слаг этой фичи."
+    if design_approval or design_override:
+        if _norm_ws(evidence) != _norm_ws(last):
+            return "Для техдизайна передай последнюю реплику пользователя целиком."
+        if FE.NEGATION_WORDS.intersection(FE.consent_words(last)):
+            return "В ответе о техдизайне есть отрицание. Нужен однозначный ответ пользователя."
+    if not design_approval and not _action_named(key, f"{asked}\n{last}"):
         return (f"Ответ пользователя «{last[:80]}» дан не на вопрос об этом действии: "
                 f"ни вопрос перед ним, ни сам ответ не называют, что снимается "
                 f"('{key}'). «Да» на другой вопрос согласием на это не считается.")

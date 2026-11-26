@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from socket import create_connection
 import tempfile
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -165,12 +166,49 @@ class ConfigEditor(unittest.TestCase):
             opened.assert_called_once()
             self.assertEqual(requested, [(f"http://127.0.0.1:{server.server_port}/", 200)])
 
+    def test_request_extends_idle_timeout_and_port_is_released(self):
+        timeout = ui.IDLE_TIMEOUT_SECONDS
+        clock = 0
+        finished = Event()
+        with patch.object(ui, "monotonic", side_effect=lambda: clock), ui.bind_server() as server:
+            address = server.server_address
+            process_request = server.process_request_thread
+
+            def signal_completion(*args):
+                process_request(*args)
+                finished.set()
+
+            with patch.object(server, "process_request_thread", side_effect=signal_completion):
+                thread = Thread(target=server.serve_forever)
+                thread.start()
+                try:
+                    clock = timeout - 1
+                    with urlopen(f"http://{address[0]}:{address[1]}/", timeout=5) as response:
+                        self.assertEqual(response.status, 200)
+                    self.assertTrue(finished.wait(5))
+
+                    clock = timeout
+                    server.service_actions()
+                    self.assertFalse(server.idle_expired)
+
+                    clock = 2 * timeout - 1
+                    thread.join(5)
+                    self.assertFalse(thread.is_alive())
+                    self.assertTrue(server.idle_expired)
+                finally:
+                    if thread.is_alive():
+                        server.shutdown()
+                        thread.join(5)
+
+        with self.assertRaises(ConnectionRefusedError):
+            create_connection(address, timeout=5).close()
+
     def test_rejects_both_reserved_port_assignments(self):
         from unittest.mock import Mock
 
         servers = [SimpleNamespace(server_port=port, server_close=Mock())
                    for port in (8080, 8084, 12345)]
-        with patch.object(ui, "ThreadingHTTPServer", side_effect=servers) as bind:
+        with patch.object(ui, "ConfigServer", side_effect=servers) as bind:
             self.assertIs(ui.bind_server(), servers[2])
         self.assertEqual(bind.call_count, 3)
         for server in servers[:2]:

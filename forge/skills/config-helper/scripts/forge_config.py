@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 import secrets
 from threading import Lock, Thread
+from time import monotonic
 from urllib.parse import parse_qs, urlsplit
 import webbrowser
 
@@ -26,6 +27,7 @@ MASK = "••••••"
 FILES = {"pipeline": "Проект", "policy": "Проект", "gates": "Гейты",
          "risk": "Установка", "manifest": "Фича"}
 LEVELS = [f"R{level}" for level in range(6)]
+IDLE_TIMEOUT_SECONDS = 15 * 60
 
 
 class FieldError(ValueError):
@@ -360,9 +362,42 @@ class Handler(BaseHTTPRequestHandler):
         self.api(response)
 
 
+class ConfigServer(ThreadingHTTPServer):
+    def __init__(self, address, handler):
+        self.idle_expired = False
+        self._activity_lock = Lock()
+        self._last_activity = monotonic()
+        self._active_requests = 0
+        super().__init__(address, handler)
+
+    def process_request_thread(self, request, client_address):
+        with self._activity_lock:
+            expired = self.idle_expired
+            if not expired:
+                self._active_requests += 1
+        if expired:
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            with self._activity_lock:
+                self._last_activity = monotonic()
+                self._active_requests -= 1
+
+    def service_actions(self):
+        with self._activity_lock:
+            if (self.idle_expired or self._active_requests
+                    or monotonic() - self._last_activity < IDLE_TIMEOUT_SECONDS):
+                return
+            self.idle_expired = True
+        # shutdown() waits for serve_forever() to exit, so call it from another thread.
+        Thread(target=self.shutdown, daemon=True).start()
+
+
 def bind_server():
     while True:
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server = ConfigServer(("127.0.0.1", 0), Handler)
         if server.server_port not in {8080, 8084}:
             return server
         server.server_close()
@@ -399,6 +434,8 @@ def main():
             server.serve_forever()
         except KeyboardInterrupt:
             pass
+        if server.idle_expired:
+            print(f"forge-config: сервер остановлен после {IDLE_TIMEOUT_SECONDS // 60} минут без запросов.")
 
 
 if __name__ == "__main__":

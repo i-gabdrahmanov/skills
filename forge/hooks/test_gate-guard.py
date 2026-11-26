@@ -990,10 +990,56 @@ class TConsentIsExternal(unittest.TestCase):
 
     def test_plan_approvals_need_evidence(self):
         """Аудит 2026-11-07: согласия плана/документа выписывались без слов пользователя."""
-        for key in ("fix-plan-STOR-1", "jira-plan-f1", "sdd-approved-f1", "brd-approved-f1"):
+        for key in ("fix-plan-STOR-1", "jira-plan-f1", "sdd-approved-f1", "brd-approved-f1",
+                    "design-approved-f1"):
             with self.subTest(key=key):
                 self.assertEqual(self._run(self.RA.format(key=key)).returncode, 2)
         self.assertEqual(self._run(self.RA.format(key="human-approval")).returncode, 0)
+
+    def test_design_approval_needs_verifiable_transcript(self):
+        reply = "Да, утверждаю техдизайн для STOR-1"
+        with tempfile.TemporaryDirectory() as d:
+            unrecognized = Path(d) / "unrecognized.jsonl"
+            unrecognized.write_text('{}\n', encoding="utf-8")
+            for key in ("design-approved-STOR-1", "gate-override-doc-approved-02-design",
+                        "gate-override-step-skip-02-design"):
+                cmd = self.RA.format(key=key) + f' --evidence "{reply}"'
+                for path in (None, str(unrecognized)):
+                    with self.subTest(key=key, path=path):
+                        blocked = self._run(cmd, path)
+                        self.assertEqual(blocked.returncode, 2, blocked.stderr)
+                        self.assertIn("Транскрипт", blocked.stderr)
+
+    def test_design_approval_checks_complete_reply_and_feature(self):
+        reply = "Да, утверждаю техдизайн для STOR-10"
+        refusal = reply + ", но пока не внедряй"
+        digest = "a" * 64
+        ask = f"Утверждаем техдизайн для STOR-10? design-sha256={digest}"
+        with tempfile.TemporaryDirectory() as d:
+            approved = self._quote(d, [reply], reply, key="design-approved-STOR-10",
+                                   design_digest=digest, question=ask)
+            self.assertEqual(approved.returncode, 0, approved.stderr)
+            for actual, evidence, key in (
+                (reply, reply, "design-approved-STOR-1"),
+                (reply + ", но нужен ещё цикл правок", reply, "design-approved-STOR-10"),
+                (refusal, refusal, "design-approved-STOR-10"),
+            ):
+                with self.subTest(actual=actual, key=key):
+                    self.assertEqual(self._quote(d, [actual], evidence, key=key,
+                                                 design_digest=digest, question=ask).returncode, 2)
+
+    def test_design_reply_only_approves_the_version_shown_in_the_question(self):
+        digest = "a" * 64
+        changed = "b" * 64
+        reply = "Да, утверждаю техдизайн для STOR-10"
+        ask = f"Утверждаем техдизайн для STOR-10? design-sha256={digest}"
+        with tempfile.TemporaryDirectory() as d:
+            for question, cli_digest in (("", digest), (ask, changed), (ask, "")):
+                with self.subTest(cli_digest=cli_digest):
+                    blocked = self._quote(d, [reply], reply, key="design-approved-STOR-10",
+                                          design_digest=cli_digest, question=question)
+                    self.assertEqual(blocked.returncode, 2, blocked.stderr)
+                    self.assertIn("верси", blocked.stderr)
 
     def test_banners_do_not_ship_a_ready_bypass(self):
         """Баннер R4-гейта не должен быть копипастом: без --evidence команда всё равно не поедет."""
@@ -1005,11 +1051,14 @@ class TConsentIsExternal(unittest.TestCase):
 
     # ── Цитата обязана быть СОГЛАСИЕМ на это действие (боевой прогон v0.4.6) ──────────
 
-    def _quote(self, d, user_texts, evidence, key="git-discard", extra=()):
+    def _quote(self, d, user_texts, evidence, key="git-discard", extra=(), *, design_digest="", question=""):
         """record_approval с цитатой против транскрипта из реплик `user_texts` (по порядку)."""
         cmd = self.RA.format(key=key) + f' --evidence "{evidence}"'
+        if design_digest:
+            cmd += f" --design-sha256 {design_digest}"
         p = Path(d) / "transcript.jsonl"
-        lines = [self._qwen("user", [{"text": t}]) for t in user_texts] + list(extra) + [
+        before = [self._qwen("assistant", [{"text": question}])] if question else []
+        lines = before + [self._qwen("user", [{"text": t}]) for t in user_texts] + list(extra) + [
             self._qwen("assistant", [{"functionCall": {"name": "run_shell_command",
                                                        "args": {"command": cmd}}}])]
         p.write_text("\n".join(lines) + "\n", encoding="utf-8")
