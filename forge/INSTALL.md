@@ -73,9 +73,7 @@ bash install.sh forge      /path/to/back-repo --with-graph   # спека леж
    Локальный `minor-defect-fix/config.json` переживает обновление.
 3. **Манифест и `hooks/hooks.json`** (`hooks/forge_extension.py build`). Тексты брифов называют пути
    поставки: `.gigacode/skills/…` → `.gigacode/extensions/<поставка>/skills/…`.
-4. **Ссылка в рантайме** и включение только для этого workspace (`forge_extension.py link`).
-   `--no-link` — пропустить (CI, ручная установка). `--runtime qwen` или `FORGE_RUNTIME=qwen` — дев-машина.
-5. **`.gitignore`** — блок между маркерами:
+4. **`.gitignore`** — блок между маркерами:
 
    ```gitignore
    # >>> forge: рабочие данные пайплайна >>>
@@ -94,7 +92,11 @@ bash install.sh forge      /path/to/back-repo --with-graph   # спека леж
 
    > Если `ground/` уже попал в историю, `.gitignore` его не уберёт. Снять с учёта, сохранив на диске:
    > `git rm -r --cached ground && git add ground/policy.json`.
-6. **`preflight.py`** (advisory).
+5. **Проверяет поставку через preflight.** Код 1 прерывает установку. Код 2 означает, что нужно инициализировать проект.
+6. **Ссылка в рантайме** и включение только для этого workspace (`forge_extension.py link`).
+   `--no-link` — пропустить (CI, ручная установка). `--runtime qwen` или `FORGE_RUNTIME=qwen` — дев-машина.
+
+При ошибке сборки, проверки или подключения обновление возвращает прежний каталог extension и ненулевой код. Изменения настроек workspace, уже выполненные внешним CLI, могут потребовать повторного подключения.
 
 После установки **перезапусти сессию gigacode** в проекте: рантайм читает extensions на старте.
 

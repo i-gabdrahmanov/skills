@@ -151,9 +151,8 @@ def _find_foreign_hook_paths(settings: dict, project_root=None, prefixes=None) -
     def _walk(node, path=""):
         if isinstance(node, str) and path.endswith("command"):
             # Хук — последний токен команды (интерпретатор ± "-X utf8" — перед ним).
-            m = re.search(r"(\S+\.py)\s*$", node)
-            if m:
-                p = m.group(1)
+            _, p = _split_command(node.replace("\\", "/"))
+            if p:
                 if not _inside(p):
                     found.append(p)
         elif isinstance(node, dict):
@@ -215,15 +214,14 @@ def _iter_hook_commands(hooks_block: dict) -> list:
 
 def _split_command(command: str):
     """(интерпретатор, путь_скрипта) из строки command. Любой элемент может быть None."""
-    script = None
-    m = re.search(r"(\S+\.py)\s*$", command or "")
-    if m:
-        script = m.group(1)
-    interp = None
-    mi = re.match(r'\s*(?:"([^"]+)"|(\S+))', command or "")
-    if mi:
-        interp = mi.group(1) or mi.group(2)
-    return interp, script
+    import shlex
+    try:
+        parts = shlex.split(command or "")
+    except ValueError:
+        return None, None
+    if not parts:
+        return None, None
+    return parts[0], parts[-1] if parts[-1].endswith(".py") else None
 
 
 def _check_commands_runnable(hooks_block: dict, wiring_src: str, hooks_dir, errors: list) -> None:

@@ -2,7 +2,7 @@
 #
 # deploy-local.sh — перепекает подключение extension'а forge/forge-ui ПРЯМО В ПРОЕКТЕ.
 #
-# Живёт в <project>/.gigacode/extensions/<forge|forge-ui>/ (кладётся туда install.sh). Его зовут,
+# Живёт в <project>/.gigacode/extensions/<forge|forge-ui|spec-graph>/ (кладётся туда install.sh). Его зовут,
 # когда подключение устарело: проект переехал или переклонирован в другую папку (пути в
 # манифесте и hooks/hooks.json абсолютные), сменился интерпретатор, хуки не грузятся.
 #
@@ -23,8 +23,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # = <project>/.gigacode/extensions/<kind>
 KIND="$(basename "$DIR")"
 case "$KIND" in
-  forge|forge-ui) ;;
-  *) echo "deploy-local.sh: лежит не в .gigacode/extensions/<forge|forge-ui>/ ($DIR) — переустанови: bash install.sh" >&2
+  forge|forge-ui|spec-graph) ;;
+  *) echo "deploy-local.sh: лежит не в .gigacode/extensions/<forge|forge-ui|spec-graph>/ ($DIR) — переустанови: bash install.sh" >&2
      exit 2 ;;
 esac
 PROJECT_ROOT="$(cd "$DIR/../../.." && pwd)"

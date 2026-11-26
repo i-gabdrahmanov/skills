@@ -106,22 +106,21 @@ def _cmd_path(p) -> str:
 
 def build_hooks(template: dict, ext: Path, project_root: str, python_cmd: str) -> dict:
     """Блок hooks эталона → `<python> <ext>/hooks/_run_hook.py <ext>/hooks/<хук>.py`."""
-    hooks_prefix = _cmd_path(ext / "hooks") + "/"
-    root = _cmd_path(project_root)
-    via_runner = f"{RHP.PYTHON_PLACEHOLDER} {hooks_prefix}{RUNNER} {hooks_prefix}"
-
-    def _walk(node):
-        if isinstance(node, str):
-            return (node.replace(f"{RHP.PYTHON_PLACEHOLDER} {RHP.PLACEHOLDER}/.gigacode/hooks/", via_runner)
-                    .replace(RHP.PLACEHOLDER + "/.gigacode/hooks/", hooks_prefix)
-                    .replace(RHP.PLACEHOLDER, root).replace(RHP.PYTHON_PLACEHOLDER, python_cmd))
-        if isinstance(node, dict):
-            return {k: _walk(v) for k, v in node.items()}
-        if isinstance(node, list):
-            return [_walk(i) for i in node]
-        return node
-
-    return _walk(template)
+    hooks = json.loads(json.dumps(template))
+    for event, groups in hooks.items():
+        for group in groups:
+            for hook in group["hooks"]:
+                # Parse the template before substituting paths containing whitespace.
+                executable, script = shlex.split(hook["command"])
+                if executable != RHP.PYTHON_PLACEHOLDER or not script.startswith(
+                        RHP.PLACEHOLDER + "/.gigacode/hooks/"):
+                    raise ValueError(f"unexpected hook command: {hook['command']}")
+                args = [_cmd_path(ext / "hooks" / RUNNER)]
+                if event == "PreToolUse" and hook["name"] != "grounding-evidence":
+                    args.append("--blocking")
+                args.append(_cmd_path(ext / "hooks" / Path(script).name))
+                hook["command"] = python_cmd + " " + shlex.join(args)
+    return hooks
 
 
 def build_mcp(template: dict, names: list, ext: Path, project_root: str, python_exe: str) -> dict:
@@ -201,6 +200,21 @@ def _scripts_of(command: str) -> list:
     return [p for p in parts if p.endswith(".py")]
 
 
+def _wiring_signature(groups):
+    """Compare registration and script argv independently of the diagnostic interpreter."""
+    normalized = []
+    for group in groups:
+        entries = []
+        for hook in group.get("hooks", []):
+            argv = shlex.split(hook["command"])
+            # Interpreter selection is validated separately by preflight.
+            scripts = tuple(os.path.realpath(arg) if arg.endswith(".py") else arg
+                            for arg in argv[1:])
+            entries.append((hook.get("type"), hook.get("name"), scripts))
+        normalized.append((group.get("matcher"), group.get("sequential"), entries))
+    return normalized
+
+
 def check(ext: Path, project_root) -> list:
     """Что не так с собранным extension'ом (пусто — всё на месте)."""
     ext = Path(ext)
@@ -234,6 +248,15 @@ def check(ext: Path, project_root) -> list:
         return problems + [f"hooks/{HOOKS_FILE}: не читается ({e}) — хуки не подключены"]
     if not hooks:
         problems.append(f"hooks/{HOOKS_FILE}: блок hooks пуст — enforcement выключен")
+    try:
+        template = json.loads((ext / "hooks/settings.hooks.json").read_text(encoding="utf-8"))
+        expected = build_hooks(template["hooks"], ext, str(project_root), RHP.find_python_cmd())
+        for event in sorted(set(expected) | set(hooks)):
+            if (event not in expected or event not in hooks or
+                    _wiring_signature(expected[event]) != _wiring_signature(hooks[event])):
+                problems.append(f"{event}: регистрация отличается от шаблона — запусти deploy-local.sh")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        problems.append(f"ошибка эталона подключения: {exc}")
     prefix = _cmd_path(ext / "hooks") + "/"
     real_prefix = _cmd_path(os.path.realpath(str(ext / "hooks"))) + "/"   # /var ↔ /private/var (macOS) и т.п.
     for event, groups in hooks.items():
@@ -335,10 +358,19 @@ def link(ext: Path, project_root, preferred: str = "") -> "tuple[bool, list]":
         lines.append(f"⚠ не удалось ограничить extension этим workspace — вручную: {tag} extensions disable --scope user "
                      f"{name}; (cd {root} && {tag} extensions enable --scope workspace {name})")
     for peer, peer_root in forge_peers(home, name):
-        _run(cli, ["disable", "--scope", "workspace", peer], cwd=root)
+        scopes = [(root, peer)]
         if peer_root.is_dir():
-            _run(cli, ["disable", "--scope", "workspace", name], cwd=peer_root)
-        lines.append(f"✓ {peer} ({peer_root}) и {name} выключены друг у друга")
+            scopes.append((peer_root, name))
+        peer_ok = True
+        for workspace, extension in scopes:
+            result = _run(cli, ["disable", "--scope", "workspace", extension], cwd=workspace)
+            if result.returncode:
+                ok = peer_ok = False
+                lines.append(f"⚠ не удалось отключить {extension} в {workspace} (rc={result.returncode})")
+            else:
+                lines.append(f"✓ {extension} отключён в {workspace}")
+        if peer_ok and len(scopes) == 2:
+            lines.append(f"✓ {peer} и {name} выключены друг у друга")
     home_s = str(Path.home())
     if not os.path.realpath(str(root)).startswith(os.path.realpath(home_s) + os.sep):
         lines.append(f"⚠ проект вне $HOME: в проектах вне $HOME без forge extension может остаться включённым "
