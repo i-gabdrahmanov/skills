@@ -112,6 +112,11 @@
     "abandon_prefix": "abandon",
     "put_force_prefix": "archive-force"
   },
+  "run_pause": {
+    "_comment": "Поставить прогон на паузу (pipeline-state/scripts/pause.py pause <feature>) — R4-класс, deny-first: прогон на паузе выпадает из резолва активного у всех хуков (paused.json, _project.iter_runs), и гейты его фазы перестают действовать. Нужна, чтобы переключиться на другую задачу; самовыписанная пауза = модель сняла с себя TDD/SoD. Согласие одной командой: --evidence с ответом пользователя (gate-guard сверяет его с транскриптом той же проверкой, что record_approval; pause.py пишет согласие в журнал сам) либо готовый маркер pause-<feature>. Согласие ОДНОРАЗОВОЕ и обязано назвать сам прогон (ключ в вопросе или ответе), а не только паузу. Пока работает субагент, стартовавший в этом ходе, — отказ: его результат в паузный прогон уже не ляжет (субагент прошлого хода, прерванный без SubagentStop, не держит). Импорт модуля pause мимо скрипта (python -c / -m) — отказ. resume и status свободны (возвращают enforcement / только читают). Второй слой — pause.py сверяет согласие сам; update.py шаги прогона на паузе не двигает.",
+    "command_pattern": "pause\\.py",
+    "approval_prefix": "pause"
+  },
   "git_discard": {
     "_comment": "git-команды, стирающие незакоммиченную работу ЦЕЛИКОМ: reset --hard, clean -f, checkout/restore всего дерева (`.`, `:/`) или checkout -f, switch --discard-changes, stash drop|clear — R4-класс (gate-guard.check_git_discard). Доставку (commit/push) форж не гейтит сознательно, но эти команды уничтожают рабочее дерево — «вернуть в чистое состояние» сносит и несохранённую работу пользователя, вернуть её нечем (tasks/015 п.5). Требует approval-маркера git-discard с цитатой пользователя; маркер ОДНОРАЗОВЫЙ — gate-guard тратит его на пропуске команды. Точечный откат своего файла (`git checkout -- <файл>`, `git restore <файл>`), `restore --staged`, `clean -n`, `reset` без --hard, `stash`/`stash pop` — свободны. `reset --hard` на origin по-прежнему режет destructive-blocker без всяких маркеров.",
     "approval_key": "git-discard"

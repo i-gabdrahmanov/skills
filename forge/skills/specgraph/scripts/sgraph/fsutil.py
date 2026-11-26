@@ -123,3 +123,16 @@ def write_bytes(path: Union[str, Path], data: bytes) -> None:
 
 def write_text(path: Union[str, Path], text: str, encoding: str = "utf-8") -> None:
     write_bytes(path, text.encode(encoding))
+
+
+def run_paused(run_dir: Union[str, Path]) -> bool:
+    """Прогон на паузе (paused.json от pipeline-state/scripts/pause.py). Копия
+    hooks/_project.run_paused: движок хуки не импортирует, а расходиться им нельзя — паузный
+    прогон хуки не видят, и если граф будет считать его активным, update.py откажет на close.
+    Равенство пинит test_pause_parity.py."""
+    import json
+    try:
+        data = json.loads((Path(run_dir) / "paused.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("produced_by") == "pause"

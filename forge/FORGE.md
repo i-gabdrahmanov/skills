@@ -41,7 +41,8 @@ git-история и `tasks/`.
    санкционированным скриптом с `produced_by:<script>`. Прямая запись моделью (Write/Edit,
    shell-редирект, `python -c open()`) запрещена (`state-write-guard.py`); во фронт-репо то же для `.daiver/`
    (конфиг, карта компонентов, трек, канон, резолв, план, прогресс сборки и проверки — их пишет только движок
-   forge-ui). Approval-маркеры пишет только `record_approval.py`.
+   forge-ui). Approval-маркеры пишет только `record_approval.py` (исключение — `pause.py pause
+   --evidence`: та же проверка цитаты в gate-guard и скрипте, запись с `recorded_by:"pause"`).
 6. **Совместное размещение `hooks/` и `skills/` обязательно.** Гейты вызываются по
    `../skills/`. `install.sh` кладёт оба каталога одним пакетом в каталог extension'а (исключает
    класс ошибок «0 hook entries»).
@@ -84,7 +85,8 @@ ENFORCEMENT OFF. Артефакты фаз — в `<project>/docs/feature-pipeli
 `config.py repin`, `config.py set` по переключателю enforcement, `config.py risk
 list-remove|cap-set` и `phase disable` обязательной фазы (`--confirm` согласием не считается —
 его ставит сама модель), `archive.py abandon` / `put --force` (снять прогон с активных вместе
-с его чекпойнтами), git-команды, стирающие незакоммиченную работу целиком (`reset --hard`,
+с его чекпойнтами), `pause.py pause` (прогон на паузе выпадает из резолва — гейты его фазы
+не действуют; согласие `--evidence` в самой команде, при работающем субагенте — отказ; `resume` свободен), git-команды, стирающие незакоммиченную работу целиком (`reset --hard`,
 `clean -f`, `checkout .`/`restore .`, `stash drop|clear` — маркер `git-discard`; точечный откат
 файла свободен). Каждое — со своим
 approval-маркером (см. §Approval markers). **R5** — деструктивные операции
@@ -241,7 +243,7 @@ R4-гейта, копировала оттуда готовую команду �
 целиком помещалась внутри модели.
 
 Поэтому для ключей, которые СНИМАЮТ enforcement — `gate-override-*`, `rollback-*`,
-`skip-judges-*`, `policy-repin-*`, `policy-downgrade-*`, `acceptance-*`, `abandon-*`,
+`skip-judges-*`, `policy-repin-*`, `policy-downgrade-*`, `acceptance-*`, `abandon-*`, `pause-*`,
 `archive-force-*`, `git-discard`, `tech-plan-*` (`forge_events.CONSENT_PREFIXES`, один список на оба
 слоя; `tech-plan` — потому что утверждение плана техзадачи ЗАДАЁТ скоуп записи) — обязателен
 `--evidence "<дословная фраза пользователя>"`, и цитата сверяется с **репликами

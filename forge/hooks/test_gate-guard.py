@@ -909,7 +909,9 @@ class TConsentIsExternal(unittest.TestCase):
                     # доки давно называли его классом с цитатой, а код не знал
                     "policy-downgrade-quality.tdd",
                     # снять живой прогон и удалить его чекпойнты
-                    "abandon-f1", "archive-force-f1", "git-discard"):
+                    "abandon-f1", "archive-force-f1", "git-discard",
+                    # пауза прогона снимает гейты его фазы
+                    "pause-f1"):
             with self.subTest(key=key):
                 r = self._run(self.RA.format(key=key))
                 self.assertEqual(r.returncode, 2, f"{key} прошёл без цитаты")
@@ -1281,6 +1283,128 @@ class TArchiveDropIsR4(unittest.TestCase):
                          'put STOR-1 --force --reason "x" --dry-run'):
                 with self.subTest(tail=tail):
                     self.assertEqual(_run(self.A + tail, td).returncode, 0)
+
+
+class TRunPauseIsR4(unittest.TestCase):
+    """Поставить прогон на паузу (`pause.py pause`) — R4: прогон выпадает из резолва
+    активного, и гейты его фазы перестают действовать. resume/status свободны."""
+
+    P = "python3 .gigacode/skills/pipeline-state/scripts/pause.py --project . "
+
+    def test_pause_blocked_without_marker(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = _run(self.P + 'pause FORGE-1 --skill feature-pipeline --reason "баг"', td)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("pause-FORGE-1", r.stderr)
+            self.assertIn("--evidence", r.stderr)
+
+    def test_marker_unlocks(self):
+        with tempfile.TemporaryDirectory() as td:
+            TGateOverride._grant(td, "pause-FORGE-1")
+            r = _run(self.P + 'pause FORGE-1 --reason "баг"', td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_other_runs_marker_does_not_unlock(self):
+        with tempfile.TemporaryDirectory() as td:
+            TGateOverride._grant(td, "pause-FORGE-2")
+            r = _run(self.P + 'pause FORGE-1 --reason "баг"', td)
+            self.assertEqual(r.returncode, 2, r.stderr)
+
+    ANSWER = "Да, FORGE-1 на паузу — начать новую"
+
+    def _run_with(self, cmd, td, user_text=None, session_id="",
+                  asked="Идёт прогон FORGE-1. Что делаем: на паузу, продолжить или бросить?"):
+        tr = Path(td) / "transcript.jsonl"
+        q = TConsentIsExternal._qwen
+        tr.write_text("\n".join([
+            q("assistant", [{"text": asked}]),
+            q("user", [{"text": user_text or self.ANSWER}]),
+            q("assistant", [{"functionCall": {"name": "run_shell_command",
+                                              "args": {"command": cmd}}}]),
+        ]) + "\n", encoding="utf-8")
+        payload = {"hook_event_name": "PreToolUse", "cwd": td, "tool_name": "run_shell_command",
+                   "tool_input": {"command": cmd}, "transcript_path": str(tr),
+                   "session_id": session_id}
+        return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
+                              capture_output=True, text=True, timeout=30)
+
+    def test_evidence_in_command_is_the_consent(self):
+        """Одна команда вместо record_approval + pause: цитата сверяется с транскриптом."""
+        with tempfile.TemporaryDirectory() as td:
+            cmd = self.P + f'pause FORGE-1 --reason "баг" --evidence "{self.ANSWER}"'
+            r = self._run_with(cmd, td)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_made_up_evidence_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            cmd = self.P + 'pause FORGE-1 --reason "баг" --evidence "да, ставь на паузу всё подряд"'
+            r = self._run_with(cmd, td, user_text="сначала покажи статус")
+            self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_consent_must_name_the_run(self):
+        """«Да, на паузу» про один прогон не ставит на паузу другой."""
+        with tempfile.TemporaryDirectory() as td:
+            cmd = self.P + 'pause FORGE-1 --reason "баг" --evidence "Да, FORGE-2 на паузу — начать новую"'
+            r = self._run_with(cmd, td, user_text="Да, FORGE-2 на паузу — начать новую",
+                               asked="Идёт прогон FORGE-2. Что делаем: на паузу, продолжить или бросить?")
+            self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_inline_import_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            TGateOverride._grant(td, "pause-FORGE-1")
+            for cmd in ('python3 -c "import pause; pause.main([\'pause\', \'FORGE-1\', \'--reason\', \'x\'])"',
+                        "python3 -X utf8 -m pause pause FORGE-1 --reason x"):
+                with self.subTest(cmd=cmd):
+                    self.assertEqual(_run(cmd, td).returncode, 2)
+            self.assertEqual(_run("git commit -m pause", td).returncode, 0,
+                             "git commit -m pause принят за импорт модуля")
+
+    def test_stale_subagent_from_previous_turn_does_not_block(self):
+        """Субагент прерван (Esc), SubagentStop не пришёл: после следующей реплики
+        пользователя его отметка паузу не держит — иначе отказ висел бы три часа."""
+        import time
+        import uuid
+        sys.path.insert(0, str(HOOK.parent))
+        import subagent_scope
+        sid = f"test-pause-{uuid.uuid4().hex}"
+        subagent_scope.enter(sid, "general-purpose-1", "general-purpose")
+        try:
+            time.sleep(0.01)
+            subagent_scope.mark_turn(sid)          # UserPromptSubmit: новый ход
+            with tempfile.TemporaryDirectory() as td:
+                TGateOverride._grant(td, "pause-FORGE-1")
+                r = self._run_with(self.P + 'pause FORGE-1 --reason "баг"', td, session_id=sid)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertTrue(subagent_scope.active(sid), "actor-гейт потерял субагента")
+        finally:
+            subagent_scope.leave(sid, "general-purpose-1", "general-purpose")
+
+    def test_blocked_while_subagent_runs(self):
+        """Субагент работает — пауза не проходит даже с готовым согласием: его результат в
+        паузный прогон уже не ляжет (а вызов идёт из самого субагента)."""
+        import uuid
+        sys.path.insert(0, str(HOOK.parent))
+        import subagent_scope
+        sid = f"test-pause-{uuid.uuid4().hex}"
+        subagent_scope.mark_turn(sid)              # реплика пользователя, потом субагент
+        subagent_scope.enter(sid, "general-purpose-1", "general-purpose")
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                TGateOverride._grant(td, "pause-FORGE-1")
+                r = self._run_with(self.P + 'pause FORGE-1 --reason "баг"', td, session_id=sid)
+                self.assertEqual(r.returncode, 2, r.stderr)
+                self.assertIn("субагент", r.stderr)
+                r = self._run_with(self.P + "resume FORGE-1", td, session_id=sid)
+                self.assertEqual(r.returncode, 0, "resume не должен зависеть от субагента")
+        finally:
+            subagent_scope.leave(sid, "general-purpose-1", "general-purpose")
+
+    def test_resume_and_status_are_free(self):
+        with tempfile.TemporaryDirectory() as td:
+            for tail in ("status", "status --json", "resume FORGE-1",
+                         "resume FORGE-1 --skill feature-pipeline"):
+                with self.subTest(tail=tail):
+                    self.assertEqual(_run(self.P + tail, td).returncode, 0)
 
 
 class TQualityDowngradeIsR4(unittest.TestCase):

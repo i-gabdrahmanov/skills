@@ -609,6 +609,7 @@ _CONSENT_ACTION_WORDS = (
                           "security", "параметр", "tdd", "покрыт", "coverage", "eval")),
     ("acceptance", ("acceptance", "критери", "приёмк", "приемк")),
     ("abandon", ("abandon", "прогон", "брош")),
+    ("pause", ("pause", "пауз", "приостан", "отлож")),
     ("archive-force", ("архив", "archive")),
     ("git-discard", ("git", "reset", "clean", "checkout", "restore", "stash", "сброс",
                      "сбрасыв", "стере", "стира", "удал", "откат", "незакоммич", "рабоч")),
@@ -627,6 +628,8 @@ _CONSENT_ACTION_WORDS = (
     ("brd-approved", ("brd", "утверд", "требован", "документ")),
     ("sdd-approved", ("sdd", "спек", "утверд", "требован", "документ")),
 )
+# Классы, где согласие обязано назвать цель (ключ прогона), а не только действие.
+_CONSENT_NAMES_TARGET = frozenset({"pause"})
 _DOC_APPROVED_WORDS = ("утверд", "approve", "документ", "спек", "spec", "sdd", "brd")
 
 
@@ -652,6 +655,10 @@ def _action_named(key: str, text: str) -> bool:
     if words is None:
         return True                       # класс без словаря — привязка не применяется
     tail = k[len(cls) + 1:] if k.startswith(cls + "-") else ""
+    if cls in _CONSENT_NAMES_TARGET:
+        # Действие над КОНКРЕТНЫМ прогоном: слова класса мало, нужен и сам прогон. Иначе
+        # «да, на паузу» про один прогон выписывало паузу любому другому.
+        return any(w in t for w in words) and bool(tail) and tail in t
     return any(w in t for w in words) or bool(tail and len(tail) >= 3 and tail in t)
 
 
@@ -829,37 +836,45 @@ def check_record_approval(command: str, root: Path, transcript_path: str,
         evidence = _opt_value(argv, "--evidence")
         head = (f"запись согласия по ключу '{key}' снимает enforcement — цитата пользователя "
                 f"обязательна. ")
-        if len(evidence) < _EVIDENCE_MIN_CHARS:
-            return head + (f"В команде нет --evidence (или он короче {_EVIDENCE_MIN_CHARS} "
-                           f"символов: «да»/«ок» цитатой не считаются).") + tail
-
-        dialog = _transcript_dialog(transcript_path)
-        utterances = dialog[0] if dialog else None
-        if utterances is None:
-            # Сверить не с чем. Не запираем единственный аварийный выход наглухо:
-            # --evidence уже обязателен, record_approval проверит, что это согласие, и
-            # цитата уйдёт в журнал под аудит.
-            print(f"[gate-guard] WARN: реплики пользователя в транскрипте не найдены (файла нет "
-                  f"либо формат рантайма не распознан) — цитата --evidence для '{key}' "
-                  f"записана БЕЗ сверки. Проверяется постфактум по ground/approvals.jsonl.",
-                  file=sys.stderr)
-            return None
-        problem = _evidence_problem(evidence, utterances)
-        if problem:
-            return head + problem[0].upper() + problem[1:] + tail
-        last, asked = utterances[-1], dialog[1][-1]
-        if not _action_named(key, f"{asked}\n{last}"):
-            return head + (f"Ответ пользователя «{last[:80]}» дан не на вопрос об этом действии: "
-                           f"ни вопрос перед ним, ни сам ответ не называют, что снимается "
-                           f"('{key}'). «Да» на другой вопрос согласием на это не считается.") + tail
-        uid = _utterance_id(len(utterances) - 1, last)
-        problem = _ledger_problem(transcript_path, uid, key)
-        if problem:
-            return head + problem[0].upper() + problem[1:] + tail
-        _ledger_add(transcript_path, uid, key)
-        return None
+        problem = _quote_denial(key, evidence, transcript_path)
+        return head + problem + tail if problem else None
     except Exception as e:
         return f"deny-first: ошибка проверки record_approval ({e})."
+
+
+def _quote_denial(key: str, evidence: str, transcript_path: str) -> str | None:
+    """Сверка цитаты --evidence для согласия по ключу key: причина отказа (с заглавной) или
+    None. Общая для record_approval.py и скриптов, принимающих цитату сами (pause.py) —
+    одна проверка на оба входа, иначе второй вход стал бы обходом первого. На успехе
+    реплика списывается в журнал «реплика → согласие» (одна реплика — один класс)."""
+    if len(evidence) < _EVIDENCE_MIN_CHARS:
+        return (f"В команде нет --evidence (или он короче {_EVIDENCE_MIN_CHARS} "
+                f"символов: «да»/«ок» цитатой не считаются).")
+    dialog = _transcript_dialog(transcript_path)
+    utterances = dialog[0] if dialog else None
+    if utterances is None:
+        # Сверить не с чем. Не запираем единственный аварийный выход наглухо:
+        # --evidence уже обязателен, скрипт проверит, что это согласие, и
+        # цитата уйдёт в журнал под аудит.
+        print(f"[gate-guard] WARN: реплики пользователя в транскрипте не найдены (файла нет "
+              f"либо формат рантайма не распознан) — цитата --evidence для '{key}' "
+              f"записана БЕЗ сверки. Проверяется постфактум по ground/approvals.jsonl.",
+              file=sys.stderr)
+        return None
+    problem = _evidence_problem(evidence, utterances)
+    if problem:
+        return problem[0].upper() + problem[1:]
+    last, asked = utterances[-1], dialog[1][-1]
+    if not _action_named(key, f"{asked}\n{last}"):
+        return (f"Ответ пользователя «{last[:80]}» дан не на вопрос об этом действии: "
+                f"ни вопрос перед ним, ни сам ответ не называют, что снимается "
+                f"('{key}'). «Да» на другой вопрос согласием на это не считается.")
+    uid = _utterance_id(len(utterances) - 1, last)
+    problem = _ledger_problem(transcript_path, uid, key)
+    if problem:
+        return problem[0].upper() + problem[1:]
+    _ledger_add(transcript_path, uid, key)
+    return None
 
 
 def check_policy_repin(command: str, root: Path) -> str | None:
@@ -1196,6 +1211,99 @@ def _archive_drop_target(argv: "list[str]", put_force_prefix: str,
     return None
 
 
+# Модуль pause.py изнутри питона: `import pause`, `from pause import …`, `-m pause`,
+# importlib/runpy по имени. Сам pause.py так не вызывается никогда.
+_PAUSE_IMPORT_RE = re.compile(
+    r"(?:\bimport\s+pause\b|\bfrom\s+pause\s+import\b|\bpython[\w.]*\s[^|;&\n]*?-m\s+pause\b"
+    r"|(?:import_module|run_module)\(\s*['\"]pause['\"])")
+
+
+def _pause_target(argv: "list[str]") -> "str | None":
+    """Слаг из `pause.py pause <feature>`; '' — подкоманда pause без слага; None — не пауза
+    (resume/status свободны: возвращают enforcement или только читают)."""
+    idx = next((i for i, a in enumerate(argv) if re.search(r"pause\.py$", a)), None)
+    if idx is None:
+        return None
+    rest, pos, i = argv[idx + 1:], [], 0
+    while i < len(rest):
+        if rest[i] in ("--project", "--skill", "--reason", "--evidence"):
+            i += 2
+            continue
+        if not rest[i].startswith("-"):
+            pos.append(rest[i])
+        i += 1
+    if not pos or pos[0] != "pause":
+        return None
+    return pos[1] if len(pos) > 1 else ""
+
+
+def check_run_pause(command: str, root: Path, transcript_path: str = "",
+                    session_id: str = "") -> str | None:
+    """R4-класс: поставить прогон на паузу (`pause.py pause <feature>`). Прогон выпадает из
+    резолва активного, и гейты его фазы перестают действовать: самовыписанная пауза — это
+    модель, снявшая с себя TDD/SoD на время «другой задачи». Согласие — одно из двух:
+    `--evidence "<ответ пользователя>"` в самой команде (сверяется с транскриптом той же
+    проверкой, что у record_approval) либо готовый маркер pause-<feature>.
+
+    Пока в сессии работает субагент — отказ. Оркестратор в это время ждёт результата, так что
+    вызов идёт из самого субагента; а результат, сданный после паузы, в прогон уже не ляжет
+    (резолвер паузный прогон не видит, update.py его шаги не двигает) — субагент отработал бы
+    впустую. Второй слой — pause.py сверяет согласие сам. Ошибка разбора → fail-CLOSED."""
+    try:
+        if command and _PAUSE_IMPORT_RE.search(command):
+            # Импорт модуля мимо `pause.py` не даёт ни подкоманды, ни слага — разобрать нечего,
+            # а второй слой скрипта цитату с транскриптом не сверяет. Скрипту импорт не нужен.
+            return ("pause.py вызывается только скриптом (`python3 …/pause.py pause <feature> "
+                    "--reason … --evidence …`), не импортом модуля: так gate-guard не видит, "
+                    "что ставится на паузу, и не может сверить согласие пользователя.")
+        policy = R.load_policy().get("run_pause") or {}
+        pat = policy.get("command_pattern", r"pause\.py")
+        if not command or not re.search(pat, command):
+            return None
+        argv = _gated_argv(command, pat)
+        slug = _pause_target(argv)
+        if slug is None:
+            return None
+        if _subagent_running(session_id):
+            return ("поставить прогон на паузу, пока работает субагент, нельзя: его результат "
+                    "в прогон на паузе уже не ляжет. Дождись, пока он сдаст шаг, и повтори. "
+                    "Субагента прервали — отметка снимется со следующей репликой пользователя.")
+        prefix = policy.get("approval_prefix", "pause")
+        key = _safe_key(f"{prefix}-{slug}") if slug else f"{prefix}-<feature>"
+        tail = (f" Порядок: (1) спроси пользователя, что делаем с прогоном (на паузу / "
+                f"продолжить / бросить), вариант-фразой «Да, {slug or '<feature>'} на паузу — "
+                f"начать новую»; (2) ТОЛЬКО после его ответа — pause.py pause "
+                f"{slug or '<feature>'} --reason \"<на что переключаемся>\" --evidence "
+                f"\"<его ответ дословно>\". resume и status не гейтятся.")
+        evidence = _opt_value(argv, "--evidence")
+        if slug and evidence:
+            problem = _quote_denial(key, evidence, transcript_path)
+            return (f"пауза прогона снимает гейты его фазы — нужно согласие пользователя. "
+                    f"{problem}{tail}") if problem else None
+        if slug and _approval_valid(root, key):
+            return None
+        prov_note = (" Маркер есть, но БЕЗ провенанса record_approval — рукописный маркер не "
+                     "считается." if slug and R.approval_exists(root, key) else "")
+        return (f"поставить прогон на паузу (pause.py pause) — R4-класс: гейты его фазы "
+                f"перестанут действовать. Нужно согласие пользователя: --evidence с его ответом "
+                f"в самой команде (или маркер '{key}').{prov_note}{tail}")
+    except Exception as e:
+        return f"deny-first: ошибка проверки pause.py ({e})."
+
+
+def _subagent_running(session_id: str) -> bool:
+    """Идёт ли в сессии работа субагента (граница SubagentStart/Stop, subagent_scope)."""
+    if not session_id:
+        return False
+    try:
+        import subagent_scope
+        # только начатые в ЭТОМ ходе: стартовавший до последней реплики пользователя уже не
+        # работает (прерван), а его отметка иначе держала бы отказ до TTL в три часа
+        return subagent_scope.active(session_id, since=subagent_scope.turn_started(session_id))
+    except Exception:  # noqa: BLE001 — маркер не читается: субагента не видно
+        return False
+
+
 def check_archive_drop(command: str, root: Path) -> str | None:
     """R4-класс: снять прогон с активных — `archive.py abandon` либо `put --force`. Прогон
     перестаёт числиться живым и выпадает из резолва активной фичи; у `put --force` ещё и
@@ -1440,6 +1548,12 @@ def main() -> int:
 
         # ── R4-класс: снять прогон с активных (archive.py abandon / put --force) ──
         deny = check_archive_drop(command, root)
+        if deny:
+            return _block(deny)
+
+        # ── R4-класс: поставить прогон на паузу (pause.py pause) ──
+        deny = check_run_pause(command, root, str(data.get("transcript_path") or ""),
+                               str(data.get("session_id") or ""))
         if deny:
             return _block(deny)
 

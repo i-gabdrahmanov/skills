@@ -114,7 +114,7 @@ def enter(session_id: str, agent_id: str, agent_type: str = "") -> None:
         data = _load(session_id)
         active = _active(data)
         active.setdefault(str(agent_id or agent_type or "subagent"), []).append(time.time())
-        _save(session_id, {"active": active, "seen": True})
+        _save(session_id, dict(data, active=active, seen=True))
 
 
 def leave(session_id: str, agent_id: str, agent_type: str = "") -> None:
@@ -139,7 +139,7 @@ def leave(session_id: str, agent_id: str, agent_type: str = "") -> None:
         # ли субагент прямо сейчас. Снимать его вместе с active нельзя, иначе диагностика ниже
         # («сигнал есть, но ты оркестратор» vs «сигнала нет вовсе») теряет смысл после первого
         # же SubagentStop.
-        _save(session_id, {"active": active, "seen": bool(data.get("seen")) or bool(active)})
+        _save(session_id, dict(data, active=active, seen=bool(data.get("seen")) or bool(active)))
 
 
 def start_seen(session_id: str) -> bool:
@@ -156,9 +156,34 @@ def start_seen(session_id: str) -> bool:
     return bool(_load(session_id).get("seen"))
 
 
-def active(session_id: str) -> bool:
-    """Идёт ли сейчас работа субагента в этой сессии (с учётом TTL)."""
+def active(session_id: str, since: "float | None" = None) -> bool:
+    """Идёт ли сейчас работа субагента в этой сессии (с учётом TTL).
+
+    since — учитывать только субагентов, стартовавших не раньше этого момента (см. turn_started)."""
     if not session_id:
         return False
     now = time.time()
-    return any(now - t <= _TTL_SEC for stamps in _active(_load(session_id)).values() for t in stamps)
+    return any(now - t <= _TTL_SEC and (since is None or t >= since)
+               for stamps in _active(_load(session_id)).values() for t in stamps)
+
+
+def mark_turn(session_id: str) -> None:
+    """UserPromptSubmit: пользователь прислал реплику — прежний ход оркестратора кончился.
+
+    Субагент, стартовавший ДО реплики, к этому ходу не относится: он либо прерван (Esc — и
+    SubagentStop, похоже, не приходит), либо сдал работу, а отметка не снялась. Для actor-гейта
+    это ничего не меняет (там TTL), а «нельзя, пока работает субагент» (пауза прогона) без
+    этой границы держало бы отказ до трёх часов после прерванного субагента."""
+    if not session_id:
+        return
+    with _locked(session_id):
+        data = _load(session_id)
+        _save(session_id, dict(data, turn_at=time.time()))
+
+
+def turn_started(session_id: str) -> "float | None":
+    """Момент последней реплики пользователя в сессии (mark_turn); None — не было."""
+    if not session_id:
+        return None
+    t = _load(session_id).get("turn_at")
+    return t if isinstance(t, (int, float)) else None

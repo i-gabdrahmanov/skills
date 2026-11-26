@@ -96,6 +96,8 @@ exit 0 — продолжаем; exit 1 — стоп, чинить деплой.
 python3 <project>/.gigacode/skills/pipeline-state/scripts/init.py --project <toplevel> --skill forgetech --feature <KEY|slug> --steps @<project>/.gigacode/skills/forgetech/references/manifest-steps.json
 ```
 
+**`init.py` → exit 3 «идёт другой прогон»** — в репозитории уже идёт прогон: спроси пользователя, что с ним (на паузу / продолжить / бросить — router §0, вопрос и команды есть в сообщении `init.py`). Сам не выбирай.
+
 **Шаг 2 — per-feature решения, ПОСЛЕ `init.py`** (`--project` ДО подкоманды `set`;
 `auto_max_risk` — sensitive, нужен `--confirm`):
 ```

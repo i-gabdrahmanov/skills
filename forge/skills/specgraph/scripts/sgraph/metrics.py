@@ -49,6 +49,8 @@ def current_key(root: Path) -> str:
     best, best_m = None, -1.0
     if base.is_dir():
         for m in base.glob("*/manifest.json"):
+            if FS.run_paused(m.parent):
+                continue                 # прогон на паузе — вызовы идут не к нему
             try:
                 mt = m.stat().st_mtime
             except OSError:

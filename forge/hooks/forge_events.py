@@ -369,6 +369,9 @@ def approval(root: Path, key: str) -> Optional[dict]:
 #   git-discard             — git reset --hard / clean -f / checkout . стирают незакоммиченное.
 CONSENT_PREFIXES = ("gate-override", "rollback", "skip-judges", "policy-repin",
                     "policy-downgrade", "acceptance", "abandon", "archive-force", "git-discard",
+                    # pause-<F>: прогон на паузе выпадает из резолва активного — гейты его
+                    # фазы перестают действовать. Самовыписанная пауза = сам снял с себя TDD/SoD.
+                    "pause",
                     # tech-plan-<F>: утверждение плана техзадачи ЗАДАЁТ скоуп записи (targets)
                     # и разрешённый diff (expected_changes). Самовыписанное согласие = сам себе
                     # расширил, что можно менять, — тот же класс, что снятие гейта.
