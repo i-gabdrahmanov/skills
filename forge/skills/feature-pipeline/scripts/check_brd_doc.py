@@ -44,7 +44,7 @@ _SQL_DDL = re.compile(r"(?i)\b(?:CREATE|ALTER|DROP)\s+(?:TABLE|INDEX|SEQUENCE)\b
 _MIN_MEANINGFUL_CHARS = 400  # BRD короче — заглушка/мусор, не документ требований
 
 
-def check(text_raw: str) -> tuple[list[str], list[str]]:
+def check(text_raw: str, charset_policy: dict | None = None) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
     text = text_raw.lower()
@@ -68,9 +68,7 @@ def check(text_raw: str) -> tuple[list[str], list[str]]:
         errors.append("в brd.md есть SQL DDL / Liquibase changeSet — схему БД описывает "
                       "tech-design, BRD — только бизнес-смысл данных")
 
-    # Чистота текста: китайские/CJK-символы (блок) + мусор (warn). Правописание валидной
-    # кириллицы — на LLM-судье brd-judge; здесь только Unicode-детерминизм (без словаря).
-    ch_errors, ch_warnings = charset_hygiene.scan(text_raw)
+    ch_errors, ch_warnings = charset_hygiene.scan(text_raw, charset_policy)
     errors.extend(ch_errors)
     warnings.extend(ch_warnings)
     return errors, warnings

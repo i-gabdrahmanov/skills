@@ -26,7 +26,7 @@ import unicodedata
 from pathlib import Path
 
 # --- Диапазоны Unicode (start, end, метка) --------------------------------------------------
-# CJK и родственные восточноазиатские блоки. В русской/английской спеке нелегитимны никогда.
+# CJK и родственные восточноазиатские блоки. Политику языка задаёт проект.
 _CJK_RANGES: list[tuple[int, int, str]] = [
     (0x3000, 0x303F, "CJK-пунктуация"),
     (0x3040, 0x309F, "Hiragana"),
@@ -53,7 +53,7 @@ _ASCII_LETTERS = set(string.ascii_letters)
 
 DEFAULT_CFG: dict[str, object] = {
     "enabled": True,
-    "cjk": "block",          # китайские/CJK-символы: block | warn | off
+    "cjk": "warn",          # китайские/CJK-символы: block | warn | off
     "mojibake": "warn",      # U+FFFD: block | warn | off
     "zero_width": "warn",    # невидимые/bidi: block | warn | off
     "mixed_script": "warn",  # слова кириллица+латиница: block | warn | off

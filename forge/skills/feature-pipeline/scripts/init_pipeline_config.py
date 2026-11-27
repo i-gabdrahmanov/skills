@@ -552,9 +552,9 @@ def build_config(root):
             "compile_test_command": (None if docs else
                                      f"{_GRADLEW} compileTestJava" if gradle else "mvn -q test-compile"),
             "test_layer": "service-unit",     # по умолчанию ТОЛЬКО Mockito unit; НЕ писать JPA/@DataJpaTest/@SpringBootTest (red-judge блокирует)
-            "charset_gate": {                 # чистота текста спеки (charset_hygiene): китайские/CJK → блок; мусор → warn
+            "charset_gate": {                 # чистота текста спеки (charset_hygiene): CJK и подозрительный текст → warn
                 "enabled": True,
-                "cjk": "block",               # китайские/CJK-символы в brd/sdd/tech-design/мастере — блок
+                "cjk": "warn",                # block — для проектов с языковым ограничением
                 "mojibake": "warn",           # символ замены U+FFFD (битая перекодировка)
                 "zero_width": "warn",         # невидимые/zero-width/bidi-символы
                 "mixed_script": "warn",       # слова кириллица+латиница (homoglyph, «странные слова»)

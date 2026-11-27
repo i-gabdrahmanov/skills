@@ -50,6 +50,23 @@ def _has_work_evidence(root: Path, skill: str, feature: str, step_id: str) -> bo
         return False
 
 
+def _awaiting_design_approval(root: Path, skill: str, feature: str, step_id: str) -> bool:
+    if FE is None or step_id != "02-design":
+        return False
+    verdict = FE.judge(root, skill, feature, "design-judge", step_id=step_id, layer="final")
+    if not verdict or verdict.get("passed") is not True or not FE.origin(root, skill, feature, step_id):
+        return False
+    try:
+        from _project import feature_docs_dir
+        inputs = FE.design_judge_inputs(feature_docs_dir(root) / feature)
+    except (OSError, ValueError):
+        return False
+    if any(verdict.get(name) != value for name, value in inputs.items()):
+        return False
+    approval = FE.approval(root, f"design-approved-{feature}") or {}
+    return approval.get("design_sha256") != inputs["design_sha256"]
+
+
 def _already_blocked(session_id: str, signature: str) -> bool:
     """Блокировали ли уже в этой сессии по этой же причине (одноразовость без stop_hook_active).
 
@@ -110,7 +127,8 @@ def main() -> int:
             skill, feature = mp.parent.parent.name, mp.parent.name
             for s in manifest.get("steps", []):
                 sid, st = s.get("id"), s.get("status")
-                if not sid:
+                if not sid or (st in ("pending", "in_progress")
+                               and _awaiting_design_approval(Path(root), skill, feature, sid)):
                     continue
                 if st == "in_progress":
                     dangling.append(sid)

@@ -454,9 +454,9 @@ def check_gate_override(command: str, root: Path) -> str | None:
 # на согласиях плана/документа (jira-plan, fix-plan, brd/sdd-approved): без цитаты модель
 # выписывала их себе сама, и точка «покажи и спроси» держалась одной прозой.
 _EVIDENCE_MIN_CHARS = 12          # «да», «ок», «+» цитатой пользователя не являются
-# Потолок чтения транскрипта: файл читается целиком (реплика с согласием может быть далеко
-# от хвоста — после неё модель успевает прочитать десятки файлов), но не бесконечно.
-_TRANSCRIPT_MAX_BYTES = 64 * 1024 * 1024
+# JSONL читается до конца. Ограничиваем размер отдельной записи, чтобы не засчитать
+# старое согласие, если последняя реплика лежит за границей чтения.
+_TRANSCRIPT_RECORD_MAX_BYTES = 64 * 1024 * 1024
 
 
 # Ответ на `ask_user_question` — тоже слова пользователя, хотя приходит результатом
@@ -560,29 +560,26 @@ def _transcript_dialog(transcript_path: str) -> "tuple[list[str], list[str]] | N
     чем (файла нет либо в нём не распознано ни одной реплики — формат рантайма не тот)."""
     if not transcript_path:
         return None
-    try:
-        with open(_main_transcript(transcript_path), "rb") as f:
-            raw = f.read(_TRANSCRIPT_MAX_BYTES)
-    except Exception:  # noqa: BLE001 — рантайм не отдал путь/файл недоступен
-        return None
     utterances: "list[str]" = []
     before: "list[str]" = []
     pending: "list[str]" = []
-    for line in raw.decode("utf-8", errors="replace").splitlines():
-        if '"user"' not in line and '"tool_result"' not in line and '"assistant"' not in line \
-                and '"model"' not in line:          # дешёвый префильтр
-            continue
-        try:
-            rec = json.loads(line)
-        except ValueError:
-            continue
-        texts = _user_texts(rec)
-        if texts:
-            utterances.append("\n".join(texts))
-            before.append("\n".join(pending))
-            pending = []
-            continue
-        pending += _assistant_texts(rec)
+    try:
+        with open(_main_transcript(transcript_path), "rb") as transcript:
+            for line in iter(lambda: transcript.readline(_TRANSCRIPT_RECORD_MAX_BYTES + 1), b""):
+                if len(line) > _TRANSCRIPT_RECORD_MAX_BYTES:
+                    return None
+                if not line.strip():
+                    continue
+                rec = json.loads(line)
+                texts = _user_texts(rec)
+                if texts:
+                    utterances.append("\n".join(texts))
+                    before.append("\n".join(pending))
+                    pending.clear()
+                else:
+                    pending.extend(_assistant_texts(rec))
+    except (OSError, ValueError):
+        return None
     return (utterances, before) if utterances else None
 
 
@@ -624,6 +621,10 @@ _CONSENT_ACTION_WORDS = (
     ("graph-ontology", ("онтолог", "ontology")),
     ("spec-entity", ("сущност", "entity")),
     ("jira-plan", ("jira", "джир", "задач")),
+    ("jira-create", ("jira", "джир", "задач")),
+    ("security-review", ("security review", "безопасност")),
+    ("human-approval", ("human-approval",)),
+    ("change-advisory", ("change advisory", "cab", "комитет")),
     ("fix-plan", ("план", "plan", "фикс", "fix", "правим", "регресс", "root cause")),
     ("brd-approved", ("brd", "утверд", "требован", "документ")),
     ("sdd-approved", ("sdd", "спек", "утверд", "требован", "документ")),
@@ -861,17 +862,8 @@ def _quote_denial(key: str, evidence: str, transcript_path: str, *, design_diges
     dialog = _transcript_dialog(transcript_path)
     utterances = dialog[0] if dialog else None
     if utterances is None:
-        if design_approval or design_override:
-            return ("Транскрипт пользователя недоступен или не распознан. "
-                    "Утверждение техдизайна требует проверяемого ответа пользователя.")
-        # Сверить не с чем. Не запираем единственный аварийный выход наглухо:
-        # --evidence уже обязателен, скрипт проверит, что это согласие, и
-        # цитата уйдёт в журнал под аудит.
-        print(f"[gate-guard] WARN: реплики пользователя в транскрипте не найдены (файла нет "
-              f"либо формат рантайма не распознан) — цитата --evidence для '{key}' "
-              f"записана БЕЗ сверки. Проверяется постфактум по ground/approvals.jsonl.",
-              file=sys.stderr)
-        return None
+        return ("Транскрипт пользователя недоступен, не распознан или прочитан не полностью. "
+                "Нужно проверяемое подтверждение из поддерживаемой сессии.")
     problem = _evidence_problem(evidence, utterances)
     if problem:
         return problem[0].upper() + problem[1:]

@@ -154,16 +154,22 @@ def _check_judges(step: dict, project: Path, skill: str, feature: str):
     events = FE.read_events(project, skill, feature)
     blocking = []
     overridden = []
+    step_id = step["id"]
+    design_inputs = None
 
     for judge_name in required:
         # Вердикт — из журнала прогона (kind:"judge", produced_by:"run_judge"); при его
         # отсутствии — из старой раскладки judges/<name>.json (прогон до миграции).
-        verdict = FE.judge(project, skill, feature, judge_name, events=events)
+        scoped = judge_name in FE.TASK_JUDGES or judge_name == "design-judge"
+        verdict = FE.judge(project, skill, feature, judge_name, events=events,
+                           step_id=step_id if scoped else None,
+                           layer="final" if scoped else None)
+        ov = FE.override(project, skill, feature, judge_name, events=events,
+                         step_id=step_id if judge_name in FE.TASK_JUDGES else None)
 
         # 1. Вердикта нет: судья не запускался, либо запись/файл нечитаемы, либо провенанс
         # чужой (подделка не отличается от отсутствия — и в обоих случаях шаг не закрыть).
         if verdict is None:
-            ov = _load_override(project, skill, feature, judge_name)
             if ov:
                 overridden.append(
                     f"⚠️  '{judge_name}' не запускался — пропущен вручную. "
@@ -181,7 +187,6 @@ def _check_judges(step: dict, project: Path, skill: str, feature: str):
         # verdict/checks/summary/step_id. Голый {"passed":true} — не вердикт.
         if (not isinstance(verdict.get("passed"), bool)
                 or not any(k in verdict for k in ("verdict", "checks", "summary", "step_id"))):
-            ov = _load_override(project, skill, feature, judge_name)
             if ov:
                 overridden.append(f"⚠️  '{judge_name}' схема невалидна — пропущен вручную. "
                                   f"Причина: {ov.get('reason', '?')}")
@@ -193,9 +198,27 @@ def _check_judges(step: dict, project: Path, skill: str, feature: str):
             )
             continue
 
+        if judge_name == "design-judge" and verdict["passed"]:
+            try:
+                current = FE.design_judge_inputs(_docs_dir_for(project, skill, feature))
+            except (OSError, ValueError) as exc:
+                problem = f"Входы design-judge недоступны: {exc}"
+            else:
+                problem = None
+                if verdict.get("design_check_version") != current["design_check_version"]:
+                    problem = "design-judge запускался до добавления обязательной проверки разделов"
+                elif any(verdict.get(key) != value for key, value in current.items()):
+                    problem = "design-judge проверял другую версию техдизайна, плана задач или SDD"
+            if problem:
+                if ov:
+                    overridden.append(f"⚠️ {problem}. Причина override: {ov.get('reason', '?')}")
+                else:
+                    blocking.append(f"❌ {problem}. Перезапусти run_judge.py design {feature}.")
+                continue
+            design_inputs = current
+
         # 3. Вердикт есть, но FAIL
         if not verdict.get("passed", False):
-            ov = _load_override(project, skill, feature, judge_name)
             if ov:
                 issues = verdict.get("blocking_issues", [])
                 overridden.append(
@@ -226,6 +249,7 @@ def _check_judges(step: dict, project: Path, skill: str, feature: str):
             f"Шаг {step['id']} не может быть закрыт: {len(blocking)} блокирующих проблем(ы).\n" +
             "\n".join(blocking)
         )
+    return design_inputs
 
 
 def _check_subagent_origin(step: dict, closed_by: str, project: Path, skill: str, feature: str):
@@ -297,7 +321,7 @@ def _approval_marker_valid(project: Path, key: str) -> bool:
     return FE.approval(project, key) is not None
 
 
-def _check_doc_approval(step: dict, project: Path, skill: str, feature: str):
+def _check_doc_approval(step: dict, project: Path, skill: str, feature: str, design_inputs=None):
     """Проверяет обязательное согласие пользователя перед закрытием документной фазы.
 
     Для закрытия нужен маркер <doc>-approved-<feature> (record_approval
@@ -315,12 +339,20 @@ def _check_doc_approval(step: dict, project: Path, skill: str, feature: str):
     version_hint = ""
     version_arg = ""
     if doc == "design":
+        if design_inputs is not None:
+            try:
+                latest = FE.design_judge_inputs(_docs_dir_for(project, skill, feature))
+            except (OSError, ValueError) as exc:
+                raise StepGateBlocked(f"Не удалось повторно сверить входы design-judge: {exc}") from exc
+            if latest != design_inputs:
+                raise StepGateBlocked("Входы design-judge изменились при закрытии шага. Повтори проверку.")
         version_hint = (f"Сначала получи версию через record_approval.py --project {project} "
                         f"--design-digest {feature} и покажи её в вопросе как design-sha256=<хеш>. ")
         version_arg = " --design-sha256 <показанный-хеш>"
         if approval:
             try:
-                current = FE.design_approval_digest(project, feature)
+                current = (design_inputs["design_sha256"] if design_inputs is not None
+                           else FE.design_approval_digest(project, feature))
             except (OSError, ValueError) as exc:
                 problem = f"не удалось сверить версию техдизайна: {exc}"
             else:
@@ -879,10 +911,11 @@ def _apply(args, project: Path, pdir: Path, manifest_path: Path) -> None:
     # становился каналом подмены своего результата: один честный прогон — и дальше любой
     # вердикт, любые артефакты. Повторное закрытие обязано заново предъявить те же гейты;
     # если вердикты на месте, оно и пройдёт заново.
+    design_inputs = None
     if not args.skip_judges and args.status == "completed":
         _check_subagent_origin(step, args.closed_by, project, args.skill, args.feature)
         _check_gate_result(step, project, args.skill, args.feature)
-        _check_judges(step, project, args.skill, args.feature)
+        design_inputs = _check_judges(step, project, args.skill, args.feature)
         _check_grounding_substance(step, project, args.skill, args.feature)
         _check_required_decisions(step, project, args.skill, args.feature)
         _check_step_artifacts(step, project, args.skill, args.feature)
@@ -891,7 +924,7 @@ def _apply(args, project: Path, pdir: Path, manifest_path: Path) -> None:
     # закрывался без sdd-approved (боевой прогон v0.4.6). Восстановлению статусов после
     # init.py --force это не мешает — маркер утверждения лежит в проектном журнале.
     if args.status == "completed":
-        _check_doc_approval(step, project, args.skill, args.feature)
+        _check_doc_approval(step, project, args.skill, args.feature, design_inputs)
 
     # Fallback=STOP: обязательный шаг нельзя тихо пропустить (skipped) без override
     if args.status == "skipped" and (not args.skip_judges or args.step_id.startswith("02-design")):

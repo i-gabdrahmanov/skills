@@ -37,12 +37,12 @@ Given заявка сменила статус When событие обрабо�
 
 class TestScan(unittest.TestCase):
     def test_cjk_blocks(self):
-        errors, _ = ch.scan("Сервис 实现订单服务 обрабатывает заказы")
+        errors, _ = ch.scan("Сервис 实现订单服务 обрабатывает заказы", {"cjk": "block"})
         self.assertTrue(any("CJK" in e for e in errors), errors)
 
     def test_hiragana_katakana_hangul_fullwidth_block(self):
         for bad in ("текст ひらがな", "текст カタカナ", "текст 한글", "текст ｆｕｌｌｗｉｄｔｈ"):
-            errors, _ = ch.scan(bad)
+            errors, _ = ch.scan(bad, {"cjk": "block"})
             self.assertTrue(errors, f"не заблокировано: {bad!r}")
 
     def test_clean_ru_en_passes(self):
@@ -75,8 +75,8 @@ class TestScan(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(warnings, [])
 
-    def test_cfg_cjk_as_warn(self):
-        errors, warnings = ch.scan("订单", {"cjk": "warn"})
+    def test_cjk_warns_by_default(self):
+        errors, warnings = ch.scan("订单")
         self.assertEqual(errors, [])
         self.assertTrue(warnings)
 
@@ -100,7 +100,7 @@ class TestCharsetFloor(unittest.TestCase):
 
     def test_cjk_file_blocks(self):
         p = self._write("sdd.md", "Сервис 订单 обрабатывает заказы")
-        checks, blocking, _w = rj._charset_floor([p], {})
+        checks, blocking, _w = rj._charset_floor([p], {"charset_gate": {"cjk": "block"}})
         self.assertTrue(blocking)
         self.assertTrue(any("CJK" in b for b in blocking))
         self.assertTrue(any(c["status"] == "FAIL" for c in checks))
@@ -117,8 +117,9 @@ class TestCharsetFloor(unittest.TestCase):
 
     def test_filename_prefixes_findings(self):
         p = self._write("tech-design.md", "订单")
-        _checks, blocking, _w = rj._charset_floor([p], {})
-        self.assertTrue(any(b.startswith("tech-design.md:") for b in blocking), blocking)
+        _checks, blocking, warnings = rj._charset_floor([p], {})
+        self.assertFalse(blocking)
+        self.assertTrue(any(w.startswith("tech-design.md:") for w in warnings), warnings)
 
 
 class TestJudgeWiring(unittest.TestCase):
@@ -126,6 +127,9 @@ class TestJudgeWiring(unittest.TestCase):
 
     def _project(self) -> Path:
         root = Path(tempfile.mkdtemp())
+        (root / "ground").mkdir()
+        (root / "ground/policy.json").write_text('{"quality":{"charset_gate":{"cjk":"block"}}}',
+                                                encoding="utf-8")
         rj._set_paths(root, skill="feature-pipeline")
         return root
 

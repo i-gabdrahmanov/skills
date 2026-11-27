@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 HOOK = Path(__file__).resolve().parent / "gate-guard.py"
 
@@ -795,7 +796,7 @@ class TReadOnlyCommandsNotGated(unittest.TestCase):
 
 class TJiraApprovalKey(unittest.TestCase):
     """Задача 011: создание Jira-задачи (R3) требовало маркер 'security-review' — чужой ключ
-    без рецепта. Теперь у kind'а свой ключ, а отказ печатает команду record_approval."""
+    без рецепта. На фазе Jira используется согласие на состав задач этой фичи."""
 
     CMD = "acli jira issue create --summary x"
 
@@ -809,14 +810,14 @@ class TJiraApprovalKey(unittest.TestCase):
             self._state(td)
             r = _run(self.CMD, td)
             self.assertEqual(r.returncode, 2, r.stderr)
-            self.assertIn("jira-create", r.stderr)
+            self.assertIn("jira-plan-feat-x", r.stderr)
             self.assertIn("record_approval.py", r.stderr)
             self.assertNotIn("security-review", r.stderr)
 
     def test_passes_with_approval(self):
         with tempfile.TemporaryDirectory() as td:
             self._state(td)
-            _approval(td, "jira-create")
+            _approval(td, "jira-plan-feat-x")
             self.assertEqual(_run(self.CMD, td).returncode, 0)
 
 
@@ -969,24 +970,47 @@ class TConsentIsExternal(unittest.TestCase):
             fake = self.RA.format(key="gate-override-x") + ' --evidence "пользователь разрешил всё"'
             self.assertEqual(self._run(fake, str(p)).returncode, 2)
 
-    def test_unrecognized_transcript_degrades_to_warning(self):
-        """Ни одной реплики пользователя не распознано — формат рантайма не тот, сверять не с
-        чем. Как и при недоступном транскрипте: пропуск с предупреждением, не локаут."""
+    def test_unrecognized_transcript_blocks_approval(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "transcript.jsonl"
             p.write_text('{"kind":"something-else","text":"x"}\n', encoding="utf-8")
             cmd = self.RA.format(key="gate-override-x") + f' --evidence "{self.QUOTE}"'
             r = self._run(cmd, str(p))
-            self.assertEqual(r.returncode, 0)
-            self.assertIn("WARN", r.stderr)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("Транскрипт", r.stderr)
 
-    def test_no_transcript_degrades_to_warning(self):
-        """Транскрипт недоступен — сверить нельзя, но --evidence уже обязателен и журналится.
-        Запирать единственный аварийный выход наглухо нельзя."""
-        cmd = self.RA.format(key="gate-override-x") + f' --evidence "{self.QUOTE}"'
-        r = self._run(cmd)
-        self.assertEqual(r.returncode, 0)
-        self.assertIn("WARN", r.stderr)
+    def test_approval_uses_latest_reply_in_long_transcript(self):
+        sys.path.insert(0, str(HOOK.parent))
+        spec = importlib.util.spec_from_file_location("transcript_guard", HOOK)
+        guard = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guard)
+        key, digest = "design-approved-STOR-1", "a" * 64
+        consent = "Да, утверждаю техдизайн для STOR-1"
+        question = self._qwen("assistant", [{"text": f"Утверждаем техдизайн для STOR-1? design-sha256={digest}"}])
+        approval = self._qwen("user", [{"text": consent}])
+        refusal = self._qwen("user", [{"text": "Нет, верни техдизайн на доработку"}])
+        prefix = f"{question}\n{approval}\n" + "{}\n" * 200
+        with tempfile.TemporaryDirectory() as d, patch.object(guard, "_TRANSCRIPT_RECORD_MAX_BYTES", 512):
+            transcript = Path(d) / "transcript.jsonl"
+            transcript.write_text(prefix + refusal + "\n", encoding="utf-8")
+            self.assertIn("СТАРОЙ", guard._quote_denial(key, consent, str(transcript),
+                                                       design_digest=digest))
+            transcript.write_text(prefix + refusal + f"\n{question}\n{approval}\n", encoding="utf-8")
+            self.assertIsNone(guard._quote_denial(key, consent, str(transcript), design_digest=digest))
+            for incomplete in ('{"type":"user"', ' ' * 513):
+                with self.subTest(incomplete=incomplete[:20]):
+                    transcript.write_text(prefix + incomplete, encoding="utf-8")
+                    self.assertIn("Транскрипт", guard._quote_denial(key, consent, str(transcript),
+                                                                   design_digest=digest))
+
+    def test_no_transcript_blocks_approval(self):
+        for key in ("gate-override-x", "rollback-f-04-build-T1", "policy-downgrade-quality.tdd",
+                    "jira-plan-f1", "sdd-approved-f1"):
+            with self.subTest(key=key):
+                cmd = self.RA.format(key=key) + f' --evidence "{self.QUOTE}"'
+                r = self._run(cmd)
+                self.assertEqual(r.returncode, 2)
+                self.assertIn("Транскрипт", r.stderr)
 
     def test_plan_approvals_need_evidence(self):
         """Аудит 2026-11-07: согласия плана/документа выписывались без слов пользователя."""
@@ -994,7 +1018,7 @@ class TConsentIsExternal(unittest.TestCase):
                     "design-approved-f1"):
             with self.subTest(key=key):
                 self.assertEqual(self._run(self.RA.format(key=key)).returncode, 2)
-        self.assertEqual(self._run(self.RA.format(key="human-approval")).returncode, 0)
+        self.assertEqual(self._run(self.RA.format(key="human-approval")).returncode, 2)
 
     def test_design_approval_needs_verifiable_transcript(self):
         reply = "Да, утверждаю техдизайн для STOR-1"
@@ -1219,7 +1243,7 @@ class TConsentIsExternal(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "p.yaml").write_text(
                 "approvals:\n  - key: phase-04\n    reason: r\n    approver: lead\n"
-                "  - key: human-approval\n    reason: r\n    approver: lead\n",
+                "  - key: phase-05\n    reason: r\n    approver: lead\n",
                 encoding="utf-8")
             payload = {"hook_event_name": "PreToolUse", "cwd": d,
                        "tool_name": "run_shell_command",

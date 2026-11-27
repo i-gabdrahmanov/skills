@@ -142,6 +142,20 @@ class TestEvalGuard(unittest.TestCase):
                 "tool_input": {"file_path": str(tmp / "src/main/java/X.java")},
             }), 0)
 
+    def test_ready_build_requires_plan_and_compile(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _make_project(tmp, build_status="pending", cache={"e1": {"status": "passed"}})
+            plan = tmp / "docs/feature-pipeline/feat-x/eval-plan.json"
+            plan.unlink()
+            payload = {"tool_name": "Write", "cwd": str(tmp),
+                       "tool_input": {"file_path": str(tmp / "src/main/java/X.java")}}
+            self.assertEqual(_run(payload), 2)
+            for contents in ("{", '{"evals":[]}', '{"evals":[{"task_id":"T1","type":"coverage"}]}'):
+                with self.subTest(contents=contents):
+                    plan.write_text(contents, encoding="utf-8")
+                    self.assertEqual(_run(payload), 2)
+
     def test_slug_from_top_level_feature_field(self):
         """Слаг брался только из `context.feature`, а `--context` у init.py опционален:
         без него путь к eval-plan.json не складывался и гейт молча пропускал запись."""

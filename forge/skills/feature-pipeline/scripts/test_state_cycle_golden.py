@@ -28,6 +28,7 @@ ADD_STEPS_FP = REPO / "skills/feature-pipeline/scripts/add_steps.py"
 
 sys.path.insert(0, str(REPO / "skills/feature-pipeline/scripts"))
 import pipeline_phases as _pp  # noqa: E402
+import forge_events as FE  # noqa: E402
 
 SLUG = "KID-1"  # Jira-ключ: init.py гейтит feature-pipeline на формат ключа
 
@@ -45,8 +46,7 @@ DYNAMIC_STEPS = [
     {"id": "04-build-TASK1", "depends_on": ["04-test-TASK1", "02-eval-plan"]},
 ]
 # Вердикты, имена которых совпадают с required_judges всех шагов выше.
-JUDGE_VERDICTS = ["brd-judge", "design-judge", "eval-judge", "coverage-judge", "spec-judge",
-                  "red-judge", "build-judge", "reuse-judge"]
+JUDGE_VERDICTS = ["brd-judge", "eval-judge", "coverage-judge", "spec-judge", "red-judge"]
 
 UPDATE_ORDER = ["00-brd", "01-grounding", "02-design", "02-eval-plan", "03-jira",
                 "04-test-TASK1", "04-build-TASK1", "05-tests", "06-spec"]
@@ -65,6 +65,7 @@ class GoldenStateCycle(unittest.TestCase):
         self.docs.mkdir(parents=True)
         (self.docs / "tech-design.md").write_text("# Исходный дизайн\n", encoding="utf-8")
         (self.docs / "task-plan.json").write_text('{"tasks":[{"id":"TASK1"}]}', encoding="utf-8")
+        (self.docs / "sdd.md").write_text("# SDD\n", encoding="utf-8")
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -92,6 +93,11 @@ class GoldenStateCycle(unittest.TestCase):
                 "judge": name, "passed": True, "verdict": "PASS",
                 "blocking_issues": [],
             }), encoding="utf-8")
+        self._write_design_verdict()
+        for name in FE.TASK_JUDGES:
+            FE.append_event(self.proj, "feature-pipeline", feature, "judge",
+                            judge=name, layer="final", step_id="04-build-TASK1", passed=True,
+                            verdict="PASS")
         # маркеры утверждения доков (их пишет record_approval после «да» пользователя) —
         # update._check_doc_approval не закроет документные фазы без них
         appr = self.proj / "ground/approvals"
@@ -108,6 +114,11 @@ class GoldenStateCycle(unittest.TestCase):
         (sa / "grounding-excerpt.json").write_text(json.dumps(
             {"modules": [{"name": "service-x"}], "entities": [{"name": "Foo"}]}),
             encoding="utf-8")
+
+    def _write_design_verdict(self):
+        FE.append_event(self.proj, "feature-pipeline", SLUG, "judge",
+                        judge="design-judge", layer="final", step_id="02-design",
+                        passed=True, verdict="PASS", **FE.design_judge_inputs(self.docs))
 
     def test_full_cycle_reaches_empty_current_phase(self):
         # 1. init со статическими шагами
@@ -178,6 +189,11 @@ class GoldenStateCycle(unittest.TestCase):
                                                         "step_id": "02-design", "status": "unit-done"})}),
                                   capture_output=True, text=True, timeout=60)
         self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        stopped = subprocess.run([sys.executable, str(REPO / "hooks/phase-gate.py")], cwd=self.proj,
+                                 input=json.dumps({"cwd": str(self.proj)}),
+                                 capture_output=True, text=True, timeout=60)
+        self.assertEqual(stopped.returncode, 0, stopped.stderr)
+        self.assertEqual(stopped.stdout, "", stopped.stdout)
         update = [UPDATE, "--project", self.proj, "--skill", "feature-pipeline",
                   "--feature", SLUG, "--step-id", "02-design", "--status", "completed"]
         denied = _run(update, self.proj)
@@ -193,19 +209,30 @@ class GoldenStateCycle(unittest.TestCase):
         digest = self._design_digest()
         approved = self._approve_design(digest)
         self.assertEqual(approved.returncode, 0, approved.stderr)
+        old_inputs = FE.design_judge_inputs(self.docs)
+        del old_inputs["design_check_version"]
+        FE.append_event(self.proj, "feature-pipeline", SLUG, "judge", judge="design-judge",
+                        layer="final", step_id="02-design", passed=True, verdict="PASS", **old_inputs)
+        old_pass = _run(update, self.proj)
+        self.assertEqual(old_pass.returncode, 2, old_pass.stderr)
+        self.assertIn("до добавления обязательной проверки разделов", old_pass.stderr)
+        self._write_design_verdict()
         for name, contents in (("tech-design.md", "# Новый дизайн\n"),
                                ("task-plan.json", '{"tasks":[{"id":"TASK2"}]}')):
             with self.subTest(name=name):
                 (self.docs / name).write_text(contents, encoding="utf-8")
                 stale = _run(update, self.proj)
                 self.assertEqual(stale.returncode, 2, stale.stderr)
-                self.assertIn("не подтверждает текущие", stale.stderr)
+                self.assertIn("design-judge проверял другую версию", stale.stderr)
                 refused = self._approve_design(digest)
                 self.assertEqual(refused.returncode, 2, refused.stderr)
                 self.assertIn("версия техдизайна изменилась", refused.stderr)
                 digest = self._design_digest()
                 approved = self._approve_design(digest)
                 self.assertEqual(approved.returncode, 0, approved.stderr)
+                stale = _run(update, self.proj)
+                self.assertIn("design-judge проверял другую версию", stale.stderr)
+                self._write_design_verdict()
         closed = _run(update, self.proj)
         self.assertEqual(closed.returncode, 0, closed.stderr)
 
@@ -225,6 +252,29 @@ class GoldenStateCycle(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0,
                             "02-design закрылся без вердикта судьи — enforcement сломан")
         self.assertIn("Вердикт 'design-judge' не найден", r.stderr)
+
+    def test_build_step_cannot_close_on_another_steps_verdicts(self):
+        first, second = "04-build-TASK1", "04-build-TASK2"
+        initialized = _run([INIT, "--project", self.proj, "--skill", "feature-pipeline",
+                            "--feature", SLUG, "--steps",
+                            json.dumps([{"id": sid, "depends_on": []} for sid in (first, second)])],
+                           self.proj)
+        self.assertEqual(initialized.returncode, 0, initialized.stderr)
+        for judge in FE.TASK_JUDGES:
+            FE.append_event(self.proj, "feature-pipeline", SLUG, "judge", judge=judge,
+                            layer="final", step_id=first, passed=True, verdict="PASS")
+        FE.append_event(self.proj, "feature-pipeline", SLUG, "origin", step_id=second)
+        FE.append_event(self.proj, "feature-pipeline", SLUG, "gate", step_id=second, passed=True)
+        update = [UPDATE, "--project", self.proj, "--skill", "feature-pipeline",
+                  "--feature", SLUG, "--step-id", second, "--status", "completed"]
+        denied = _run(update, self.proj)
+        self.assertEqual(denied.returncode, 2, denied.stderr)
+        for judge in FE.TASK_JUDGES:
+            self.assertIn(f"Вердикт '{judge}' не найден", denied.stderr)
+            FE.append_event(self.proj, "feature-pipeline", SLUG, "judge", judge=judge,
+                            layer="final", step_id=second, passed=True, verdict="PASS")
+        closed = _run(update, self.proj)
+        self.assertEqual(closed.returncode, 0, closed.stderr)
 
 
 if __name__ == "__main__":

@@ -696,14 +696,19 @@ def check_requirement(level: str, req: dict, root: Path, kind: str,
     kind_key = (load_policy().get("kind_approval") or {}).get(kind)
     if isinstance(kind_key, str) and kind_key and not kind_key.startswith("_"):
         appr = kind_key
+    if appr == "jira-create" and (current_step_id(root) or "").startswith("03-jira"):
+        feature = active_feature_name(root)
+        if feature:
+            appr = f"jira-plan-{feature}"
     if appr and not approval_valid(root, appr):
         # Без рецепта отказ выглядит тупиком, и модель уходит в override_judge (а это R4 —
         # ещё один deny). Печатаем ровно ту команду, которой маркер и заводится.
         return False, (
             f"{level}: нет валидного approval-маркера '{appr}'. Порядок: (1) спроси "
-            f"пользователя и покажи, что именно делаешь; (2) после явного «да» — python3 "
+            f"пользователя, назови ключ '{appr}' и покажи, что именно делаешь; (2) после явного «да» — python3 "
             f"<project>/{install_rel()}/skills/pipeline-state/scripts/record_approval.py --key {appr} "
-            f"--approved-by user --reason \"<кто/почему>\" (прямая запись в approvals/ "
+            f"--approved-by user --reason \"<кто/почему>\" --evidence \"<дословный ответ>\" "
+            f"(прямая запись в approvals/ "
             f"заблокирована state-write-guard); (3) повтори действие")
 
     # evidence bundle

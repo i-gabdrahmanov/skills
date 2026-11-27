@@ -12,7 +12,7 @@ test_pass, до 300с) — это execution-gate `run_pending_evals.py`, кот�
 и трактует как fail-open — то есть запись бы прошла молча; см. FORGE.md «известные ограничения»).
 
 Матчится на Write/Edit/WriteFile в src/main/. Блок: exit 2 + stderr.
-fail-open: если eval-plan.json нет, eval_enabled=false, фичи/задачи нет — пропускает.
+При отключённом EDD или вне готовой фазы сборки хук пропускает запись.
 Если кэша `evals.json` нет или задача в нём не пройдена — блок с инструкцией прогнать
 `run_pending_evals.py`.
 """
@@ -216,58 +216,48 @@ def main() -> int:
                     or (manifest.get("context") or {}).get("feature")
                     or mp.parent.name or "")
 
-    # 4. Ищем eval-plan.json (каталог фич резолвится по docs-конфигу: in-repo/separate-repo)
+    steps = manifest.get("steps", [])
+    completed = {s.get("id") for s in steps if s.get("status") in ("completed", "skipped")}
+    ready_tasks = {tid for s in steps
+                   if (tid := _build_task_id(s.get("id")))
+                   and (s.get("status") == "in_progress"
+                        or (s.get("id") not in completed
+                            and set(s.get("depends_on") or []) <= completed))}
+    if not ready_tasks:
+        return 0
+
     import _project
     eval_plan_path = _project.feature_docs_dir(root, cfg) / feature_slug / "eval-plan.json"
-    if not eval_plan_path.exists():
-        return 0
+    try:
+        eval_plan = json.loads(eval_plan_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return _block(f"EDD: обязательный eval-план не читается: {exc}. Восстанови 02-eval-plan.")
+    evals = eval_plan.get("evals") if isinstance(eval_plan, dict) else None
+    if not isinstance(evals, list) or not evals or not all(isinstance(e, dict) for e in evals):
+        return _block("EDD: отсутствуют проверки в eval-plan.json. Пересобери 02-eval-plan.")
 
-    eval_plan = json.loads(eval_plan_path.read_text(encoding="utf-8"))
-    evals = eval_plan.get("evals", [])
-    if not evals:
-        return 0
+    # Файл из task-plan определяет задачу. Для общих файлов проверяем все готовые задачи
+    # или явно начатую задачу, если она одна.
+    started = {_build_task_id(s.get("id")) for s in steps if s.get("status") == "in_progress"}
+    started &= ready_tasks
+    fallback = started if len(started) == 1 else ready_tasks
+    task_ids = set()
+    for target in targets:
+        owner = _task_of_target(eval_plan_path.parent / "task-plan.json", target)
+        if owner in ready_tasks:
+            task_ids.add(owner)
+        else:
+            task_ids.update(fallback)
 
-    # 5. Определяем задачу, к которой относится запись. Три источника по убыванию точности:
-    #    (1) единый резолвер фазы current_step_id → build-шаг → task-id;
-    #    (2) явный in_progress (его на живых прогонах не проставляют — раньше это был
-    #        ЕДИНСТВЕННЫЙ источник, поэтому EDD-гейта фактически не существовало);
-    #    (3) владелец самого файла по `artifacts` task-plan — на параллельных задачах
-    #        резолвер фазы намеренно отдаёт None, и без этого шага гейт снова молчал бы.
-    current_task_id = None
-    if hasattr(R, "current_step_id"):
-        current_task_id = _build_task_id(R.current_step_id(root) or "")
-    if not current_task_id:
-        for step in manifest.get("steps", []):
-            tid = _build_task_id(step.get("id", ""))
-            if tid and step.get("status") == "in_progress":
-                current_task_id = tid
-                break
-    if not current_task_id:
-        # На параллельных задачах current_step_id намеренно отдаёт None — определяем задачу по
-        # самому файлу (её `artifacts` в task-plan), иначе EDD-гейт молча пропускает запись.
-        current_task_id = next((tid for tid in (
-            _task_of_target(eval_plan_path.parent / "task-plan.json", t) for t in targets)
-            if tid), None)
-    if not current_task_id:
-        return 0
-
-    # 6. Фильтруем eval'ы по текущей задаче И по выполнимости ДО кода (см. _PREWRITE_EVAL_TYPES)
-    task_evals = [e for e in evals if e.get("task_id") == current_task_id]
-    if not task_evals:
-        return 0
-    prewrite_evals = [e for e in task_evals
-                      if str(e.get("type") or "").strip().lower() in _PREWRITE_EVAL_TYPES]
-    if not prewrite_evals:
-        return 0
-
-    # 7. Читаем кэш результатов (его пишет execution-gate run_pending_evals.py)
-    manifest_dir = mp.parent
-    eval_results = _load_eval_results(manifest_dir)
-
-    # 8. Блокируем, если для задачи есть pre-write eval'ы без статуса passed в кэше
-    failed_evals = [e.get("id") for e in prewrite_evals
-                    if not _has_passed(eval_results, e.get("id"))]
-    if failed_evals:
+    eval_results = _load_eval_results(mp.parent)
+    for current_task_id in sorted(task_ids):
+        prewrite_evals = [e.get("id") for e in evals if e.get("task_id") == current_task_id
+                          and str(e.get("type") or "").strip().lower() in _PREWRITE_EVAL_TYPES]
+        if not prewrite_evals or not all(isinstance(eid, str) and eid for eid in prewrite_evals):
+            return _block(f"EDD: в eval-plan.json нет корректной проверки compile для {current_task_id}.")
+        failed_evals = [eid for eid in prewrite_evals if not _has_passed(eval_results, eid)]
+        if not failed_evals:
+            continue
         return _block(
             f"Eval-Driven Development: для задачи {current_task_id} не пройдены (или не прогонялись) "
             f"eval'ы: {failed_evals}. Прогони execution-gate: "

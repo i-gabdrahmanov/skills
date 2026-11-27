@@ -177,6 +177,10 @@ def main() -> int:
 
         if not isinstance(obj, dict):
             return 0
+        judge_name = obj.get("judge")
+        if isinstance(judge_name, str) and judge_name in FE.TASK_JUDGES:
+            # step_id вердикта адресует проверяемую задачу. Запись вердикта делает run_judge.
+            return 0
 
         step_id = obj.get("step_id")
         if step_id:
