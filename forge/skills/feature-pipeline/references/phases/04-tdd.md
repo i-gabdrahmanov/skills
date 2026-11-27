@@ -151,8 +151,8 @@ agent(
 
 После возврата субагента — запусти build-judge:
 ```
-agent(subagent_type="general-purpose", description="build-judge for <slug>",
-      prompt="<вывод `get_prompt.py 7.3` (build-judge)>")
+agent(subagent_type="general-purpose", description="build-judge for 04-build-<taskId> in <slug>",
+      prompt="<вывод `get_prompt.py 7.3` (build-judge); подставь slug, taskId и diff задачи>")
 ```
 build-judge — гибрид: вердикт считает СУБАГЕНТ, а run_judge на ингесте АВТОМАТИЧЕСКИ
 применяет детерминированный пол (stubs/TODO в изменённом src/main) и AND-ит с вердиктом
@@ -160,9 +160,9 @@ build-judge — гибрид: вердикт считает СУБАГЕНТ, а
 **Сохрани JSON-вердикт субагента в файл и передай его через `--from-output`**
 (иначе вердикта на диске не будет и шаг не закроется), затем подтверди `--recheck`:
 ```bash
-# verdict.json — JSON, который вернул субагент build-judge ({"passed":..., "blocking_issues":[...]})
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py build <slug> --from-output verdict.json
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py build <slug> --recheck
+# verdict.json — ответ субагента с judge, feature_slug и step_id по контракту §7.3
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py build <slug> --step-id 04-build-<taskId> --from-output verdict.json
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py build <slug> --step-id 04-build-<taskId> --recheck
 ```
 
 И execution-gate — критерии приёмки задачи прогоном её маркированных тестов (каждый обязан
@@ -178,14 +178,15 @@ python3 <project>/.gigacode/skills/feature-pipeline/scripts/check_acceptance.py 
 
 Шаг 1 — LLM-субагент (контракт: `get_prompt.py 7.7`):
 ```
-agent(subagent_type="general-purpose", description="reuse-judge for <slug>",
-      prompt="<вывод `get_prompt.py 7.7` (reuse-judge) + git diff + путь к scan/reuse.json>")
+agent(subagent_type="general-purpose", description="reuse-judge for 04-build-<taskId> in <slug>",
+      prompt="<вывод `get_prompt.py 7.7` (reuse-judge); подставь slug, taskId, diff задачи и путь к scan/reuse.json>")
 ```
 Шаг 2 — ингест вердикта и детерминированная проверка велосипедов по git diff:
 ```bash
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py reuse <slug> \
+# verdict.json — ответ субагента с judge, feature_slug и step_id по контракту §7.7
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py reuse <slug> --step-id 04-build-<taskId> \
   --from-output verdict.json --diff-base <base> --project-root <project>
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py reuse <slug> \
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py reuse <slug> --step-id 04-build-<taskId> \
   --recheck --diff-base <base> --project-root <project>
 ```
 `<base>` — родительская ветка/коммит задачи (как в check_coverage). Если каталога

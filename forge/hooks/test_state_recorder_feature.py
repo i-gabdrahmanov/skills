@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -106,8 +107,23 @@ class ResolveRunByStep(unittest.TestCase):
         self._run("feature-pipeline", "ONLY", [("01-grounding", "pending")], now)
         self.assertIsNone(SR._owner_run(self.root, "99-nope"))
 
+    def test_task_judge_does_not_record_build_origin_or_status(self):
+        step_id = "04-build-T1"
+        self._run("feature-pipeline", "FORGE-1", [(step_id, "pending")], time.time())
+        state = self.root / "ground/statements/feature-pipeline/FORGE-1"
+        manifest = state / "manifest.json"
+        original = manifest.read_bytes()
+        for judge, passed in (("build-judge", True), ("reuse-judge", False)):
+            verdict = {"step_id": step_id, "judge": judge, "passed": passed}
+            payload = json.dumps({"hook_event_name": "SubagentStop", "cwd": str(self.root),
+                                  "last_assistant_message": json.dumps(verdict)})
+            result = subprocess.run([sys.executable, str(Path(SR.__file__))], input=payload,
+                                    capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((state / "events.jsonl").exists())
+            self.assertEqual(manifest.read_bytes(), original)
+
     def test_empty_project_gets_no_phantom_namespace(self):
-        import subprocess
         payload = json.dumps({"hook_event_name": "SubagentStop", "cwd": str(self.root),
                               "last_assistant_message": '{"step_id": "01-grounding", '
                                                         '"status": "completed"}'})

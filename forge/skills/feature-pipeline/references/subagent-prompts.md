@@ -647,7 +647,7 @@ prompt:
 что реализация соответствует tech-design, нет stubs, нет мёртвого кода.
 
 ```
-description: "Verify build quality for feature <slug>"
+description: "Verify build quality of 04-build-<taskId> for feature <slug>"
 subagent_type: general-purpose
 
 prompt:
@@ -657,6 +657,7 @@ runtime-опасности.
 
 Контекст:
 - Фича (slug): <slug>
+- Шаг сборки для проверки: 04-build-<taskId>
 - task-plan.json: <путь>
 - tech-design.md: <путь>
 - Изменённые production-файлы: <git diff --name-only>
@@ -697,9 +698,11 @@ runtime-опасности.
 - Код не компилируется
 - Новые checkstyle-нарушения
 
-Верни JSON:
+Верни JSON с точными ID шага и слагом фичи из контекста:
 {
-  "step_id": "build-judge-<slug>",
+  "judge": "build-judge",
+  "feature_slug": "<slug>",
+  "step_id": "04-build-<taskId>",
   "verdict": "PASS" | "WARN" | "FAIL",
   "passed": true | false,
   "checks": [
@@ -875,7 +878,7 @@ prompt:
 (семантика по каталогу переиспользования).
 
 ```
-description: "Verify code reuse for feature <slug>"
+description: "Verify code reuse of 04-build-<taskId> for feature <slug>"
 subagent_type: general-purpose
 
 prompt:
@@ -884,6 +887,7 @@ prompt:
 
 Контекст:
 - Фича (slug): <slug>
+- Шаг сборки для проверки: 04-build-<taskId>
 - git diff (production, без тестов): <git diff>
 - Каталог переиспользования: <ground/inventory/scan/reuse.json> (dependencies + project_utils)
   и секция reuse из grounding-excerpt.json (инъектится context-injector)
@@ -908,9 +912,11 @@ prompt:
 - Замена из stdlib (Objects/Optional/Stream) — эвристика, может быть ложным срабатыванием
 - Похожий util, но сигнатуры/намерение отличаются
 
-Верни JSON:
+Верни JSON с точными ID шага и слагом фичи из контекста:
 {
-  "step_id": "reuse-judge-<slug>",
+  "judge": "reuse-judge",
+  "feature_slug": "<slug>",
+  "step_id": "04-build-<taskId>",
   "verdict": "PASS" | "WARN" | "FAIL",
   "passed": true | false,
   "checks": [
@@ -926,9 +932,9 @@ prompt:
 Сохрани вердикт субагента в файл и ингесть детерминированным раннером (он добавит ошибки в
 errors.json для ре-итерации), затем подтверди:
 ```bash
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py reuse <slug> \
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py reuse <slug> --step-id 04-build-<taskId> \
   --from-output <verdict.json> --diff-base <base> --project-root <project>
-python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py reuse <slug> \
+python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py reuse <slug> --step-id 04-build-<taskId> \
   --recheck --diff-base <base> --project-root <project>
 ```
 

@@ -24,6 +24,7 @@ PAUSE = REPO / "skills/pipeline-state/scripts/pause.py"
 
 sys.path.insert(0, str(REPO / "skills/feature-pipeline/scripts"))
 import pipeline_phases as _pp  # noqa: E402
+import forge_events as FE  # noqa: E402
 
 STATIC = [
     {"id": "00-brd", "depends_on": []},
@@ -38,8 +39,7 @@ DYN = [
     {"id": "04-test-TASK1", "depends_on": []},
     {"id": "04-build-TASK1", "depends_on": []},
 ]
-JUDGES = ["brd-judge", "design-judge", "eval-judge", "coverage-judge", "spec-judge",
-          "red-judge", "build-judge", "reuse-judge"]
+JUDGES = ["brd-judge", "eval-judge", "coverage-judge", "spec-judge", "red-judge"]
 ALL_STEPS = [s["id"] for s in STATIC] + [s["id"] for s in DYN]
 
 
@@ -57,7 +57,11 @@ class MultiFeatureGate(unittest.TestCase):
         self._tmp.cleanup()
 
     def _setup_feature(self, feat):
-        (self.proj / "docs/feature-pipeline" / feat).mkdir(parents=True, exist_ok=True)
+        docs = self.proj / "docs/feature-pipeline" / feat
+        docs.mkdir(parents=True, exist_ok=True)
+        for name in ("sdd.md", "tech-design.md", "task-plan.json"):
+            (docs / name).write_text("fixture", encoding="utf-8")
+        inputs = FE.design_judge_inputs(docs)
         r = _run([INIT, "--project", self.proj, "--skill", "feature-pipeline",
                   "--feature", feat, "--steps", json.dumps(STATIC)], self.proj)
         self.assertEqual(r.returncode, 0, f"init {feat}: {r.stderr}")
@@ -70,6 +74,12 @@ class MultiFeatureGate(unittest.TestCase):
             (jdir / f"{n}.json").write_text(json.dumps(
                 {"produced_by": "run_judge", "judge": n, "verdict": "PASS", "passed": True,
                  "checks": [], "summary": "ok"}), encoding="utf-8")
+        FE.append_event(self.proj, "feature-pipeline", feat, "judge", judge="design-judge",
+                        step_id="02-design", layer="final", passed=True, verdict="PASS", **inputs)
+        for name in FE.TASK_JUDGES:
+            FE.append_event(self.proj, "feature-pipeline", feat, "judge", judge=name,
+                            step_id="04-build-TASK1", layer="final", passed=True, verdict="PASS")
+        FE.append_approval(self.proj, f"design-approved-{feat}", design_sha256=inputs["design_sha256"])
         # маркеры утверждения доков (их пишет record_approval после «да» пользователя) —
         # update._check_doc_approval не закроет 00-brd/02-sdd без них
         appr = self.proj / "ground/approvals"

@@ -339,9 +339,19 @@ def cmd_batch(args, project: Path) -> int:
     plan = []
     for (skill, feature), items in by_path.items():
         active = _active_override_targets(project, skill, feature)
-        to_write = [it for it in items if it["judge"] not in active]
-        skipped.extend({"skill": skill, "feature": feature, "judge": it["judge"]}
-                       for it in items if it["judge"] in active)
+        events = FE.read_events(project, skill, feature)
+        to_write = []
+        for item in items:
+            judge = item["judge"]
+            if judge in FE.TASK_JUDGES:
+                exists = FE.override(project, skill, feature, judge, events=events,
+                                     step_id=item["payload"]["step_id"]) is not None
+            else:
+                exists = judge in active
+            if exists:
+                skipped.append({"skill": skill, "feature": feature, "judge": judge})
+            else:
+                to_write.append(item)
         if to_write:
             plan.append((skill, feature, to_write))
 

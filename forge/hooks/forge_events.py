@@ -235,8 +235,12 @@ def gate(root: Path, skill: str, feature: str, step_id: str,
                           produced_by="record_gate")
 
 
+TASK_JUDGES = frozenset(("build-judge", "reuse-judge"))
+
+
 def judge(root: Path, skill: str, feature: str, name: str,
-          events: Optional[list[dict]] = None, *, layer: Optional[str] = None) -> Optional[dict]:
+          events: Optional[list[dict]] = None, *, layer: Optional[str] = None,
+          step_id: Optional[str] = None) -> Optional[dict]:
     """Вердикт судьи (run_judge). None — судья не отработал.
 
     `layer` — какой СЛОЙ вердикта нужен. У гибридного судьи их два, и оба живут в одном
@@ -254,6 +258,12 @@ def judge(root: Path, skill: str, feature: str, name: str,
     Записи БЕЗ поля layer (прогоны до тегирования) считаются входными — совместимость.
     """
     ev = events if events is not None else read_events(root, skill, feature)
+    if step_id is not None:
+        boundary = _reopen_boundary(ev, step=step_id)
+        return next((record for record in reversed(ev[boundary + 1:])
+                     if _authentic(record, "judge") and record.get("judge") == name
+                     and record.get("step_id") == step_id
+                     and (layer is None or record.get("layer") == layer)), None)
     boundary = _reopen_boundary(ev, judge_name=name)
     if layer is None:
         rec = _last(ev, "judge", match={"judge": name}, boundary=boundary)
@@ -272,19 +282,29 @@ def judge(root: Path, skill: str, feature: str, name: str,
 
 
 def override(root: Path, skill: str, feature: str, name: str,
-             events: Optional[list[dict]] = None) -> Optional[dict]:
+             events: Optional[list[dict]] = None, *, step_id: Optional[str] = None) -> Optional[dict]:
     """Ручное снятие блокировки (override_judge, R4). None — нет либо отозван.
 
     Отзыв (бывший `--remove`, удалявший файл) — это запись revoked:true: снятие гейта
     остаётся в истории, а не исчезает бесследно."""
     ev = events if events is not None else read_events(root, skill, feature)
-    boundary = _reopen_boundary(ev, override_target=name)
-    rec = _last(ev, "override", match={"target": name}, boundary=boundary)
+    if step_id is None:
+        boundary = _reopen_boundary(ev, override_target=name)
+        rec = _last(ev, "override", match={"target": name}, boundary=boundary)
+    else:
+        boundary = _reopen_boundary(ev, step=step_id)
+        rec = next((r for r in reversed(ev[boundary + 1:]) if _authentic(r, "override")
+                    and r.get("target") == name
+                    and (r.get("step_id") == step_id
+                         or (r.get("revoked") and not r.get("step_id")))), None)
     if rec is not None:
         return None if rec.get("revoked") else rec
     if boundary >= 0:
         return None  # откат забрал и снятие гейта: новое согласие — новый override
-    return _legacy_marker(override_path(root, skill, feature, name), require_provenance=False)
+    legacy = _legacy_marker(override_path(root, skill, feature, name), require_provenance=False)
+    if step_id is not None and (not legacy or legacy.get("step_id") != step_id):
+        return None
+    return legacy
 
 
 def overrides(root: Path, skill: str, feature: str,
@@ -370,6 +390,7 @@ def approval(root: Path, key: str) -> Optional[dict]:
 #   git-discard             — git reset --hard / clean -f / checkout . стирают незакоммиченное.
 CONSENT_PREFIXES = ("gate-override", "rollback", "skip-judges", "policy-repin",
                     "policy-downgrade", "acceptance", "abandon", "archive-force", "git-discard",
+                    "security-review", "human-approval", "change-advisory", "jira-create",
                     # pause-<F>: прогон на паузе выпадает из резолва активного — гейты его
                     # фазы перестают действовать. Самовыписанная пауза = сам снял с себя TDD/SoD.
                     "pause",
@@ -479,11 +500,21 @@ def file_sha256(path: Path) -> str:
 
 def design_approval_digest(project: Path, feature: str) -> str:
     """SHA-256 пары канонических артефактов 02-design для этой фичи."""
-    directory = feature_docs_dir(project) / safe_slug(feature)
+    return _design_digest(feature_docs_dir(project) / safe_slug(feature))
+
+
+def _design_digest(directory: Path) -> str:
     return hashlib.sha256(
         bytes.fromhex(file_sha256(directory / "tech-design.md"))
         + bytes.fromhex(file_sha256(directory / "task-plan.json"))
     ).hexdigest()
+
+
+def design_judge_inputs(directory: Path) -> dict:
+    """Хеши артефактов и версия обязательных проверок design-judge."""
+    return {"design_sha256": _design_digest(directory),
+            "sdd_sha256": file_sha256(directory / "sdd.md"),
+            "design_check_version": 1}
 
 
 def revoke_approval(root: Path, key: str, reason: str = "") -> dict:

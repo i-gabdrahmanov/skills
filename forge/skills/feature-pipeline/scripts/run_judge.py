@@ -8,7 +8,7 @@ run_judge.py — Детерминированный runner для судей (ju
 3) Нужно перепроверить вердикт перед закрытием шага
 
 Usage:
-    run_judge.py <phase> <slug> [--recheck] [--out <path>]
+    run_judge.py <phase> <slug> [--step-id <stepId>] [--recheck] [--out <path>]
 
 Phases:
     brd        — проверка БТ на язык бизнеса (нет код-токенов); поддерживает --brd <path>
@@ -20,7 +20,7 @@ Phases:
     coverage   — проверка JaCoCo-покрытия (закрывает шаг 05-tests)
     regression — тесты затронутых модулей не регрессировали vs baseline + затронутый диффом
                  второй сервис вне baseline не красный/не «не прогнан» (module_tests compare)
-    design     — check_taskplan + check_sdd (закрывает шаг 02-design)
+    design     — tech-design.md + check_taskplan + check_sdd (закрывает шаг 02-design)
 
 Если --recheck указан, скрипт проверяет, что вердикт судьи на диске есть и passed=true.
 Если вердикта нет или passed=false — exit 1 (блокировка).
@@ -63,6 +63,7 @@ SKILL_NAME: str = "feature-pipeline"
 BRD_OVERRIDE: Path | None = None  # явный путь к brd.md (--brd) для standalone-проверки
 REUSE_SCAN_OVERRIDE: Path | None = None  # явный путь к scan/reuse.json (--reuse-scan)
 DIFF_BASE: str = "HEAD"  # база git diff для фазы reuse (--diff-base)
+JUDGE_STEP_ID: str | None = None
 
 # Слои, непокрываемые юнит-тестами при test_layer=service-unit (data-holders / framework-generated):
 # repository (Spring Data — тело генерит фреймворк), entity (data-класс), dto, config. Coverage-гейт
@@ -157,6 +158,10 @@ def _save_verdict(slug: str, judge_name: str, verdict: dict, layer: str = "final
     второй раз — детерминированный FAIL залипал навсегда (см. FE.judge(layer=...)).
     """
     payload = {k: v for k, v in verdict.items() if k != "judge"}
+    if judge_name == "design-judge":
+        payload["step_id"] = "02-design"
+    elif judge_name in FE.TASK_JUDGES and JUDGE_STEP_ID:
+        payload["step_id"] = JUDGE_STEP_ID
     FE.append_event(PROJECT_ROOT, SKILL_NAME, slug, "judge",
                     judge=judge_name, layer=layer, **payload)
     return FE.events_path(PROJECT_ROOT, SKILL_NAME, slug)
@@ -314,13 +319,8 @@ def _merge_saved_llm(judge_name: str, slug: str, det: dict) -> dict:
     minor-defect-fix (advisory) LLM-слоя может не быть по дизайну, и требовать его — значит
     ломать документированный поток. Пол при этом никуда не девается.
 
-    ОГРАНИЧЕНИЕ (принятое, не чинится здесь). Вердикты ключуются ИМЕНЕМ судьи, а не задачей,
-    поэтому у пер-задачных судей (`red` на `04-test-<taskId>`, `build`/`reuse` на
-    `04-build-<taskId>`) ингест для T2 перекрывает вердикт T1. Это держится тем, что шаги
-    задач идут последовательно: к моменту ингеста T2 шаг T1 уже закрыт своим вердиктом, а
-    откат фазы (`rollback`) ставит в журнале границу и обнуляет оба. Параллельная работа над
-    двумя задачами одной фичи эту схему сломает — тогда вердикты нужно ключевать парой
-    (судья, шаг), и менять это придётся в `forge_events.judge`, а не тут.
+    Build/reuse читают вердикт для конкретного шага сборки. Red пока хранит вердикт по
+    имени судьи на уровне фичи.
 
     Залипает между прогонами ровно ОДИН слой — LLM: сохранённый вердикт субагента мержится
     снова, пока субагент не пришлёт новый через `--from-output`. Детерминированный слой
@@ -329,8 +329,18 @@ def _merge_saved_llm(judge_name: str, slug: str, det: dict) -> dict:
     свёртка пишется в тот же поток под тем же именем судьи, и без фильтра слияние вычитывало
     собственный итог — детерминированный FAIL AND-ился сам с собой и не снимался уже никогда.
     """
-    llm = FE.judge(PROJECT_ROOT, SKILL_NAME, slug, judge_name, layer="llm")
+    llm = FE.judge(PROJECT_ROOT, SKILL_NAME, slug, judge_name, layer="llm",
+                   step_id=JUDGE_STEP_ID if judge_name in FE.TASK_JUDGES else None)
     if not llm:
+        if judge_name in FE.TASK_JUDGES and JUDGE_STEP_ID:
+            detail = f"Нет вердикта субагента {judge_name} для {JUDGE_STEP_ID}"
+            return _make_verdict(
+                judge_name, slug, False,
+                list(det.get("checks", [])) + [
+                    {"name": "Вердикт субагента для шага", "status": "FAIL",
+                     "detail": detail, "severity": "error"}],
+                list(det.get("blocking_issues", [])) + [detail],
+                list(det.get("warnings", [])), detail)
         return det
 
     ok, verr = validate_verdict(llm)
@@ -1091,7 +1101,7 @@ def _build_floor() -> tuple:
 
 
 def _charset_floor(files: list, quality_cfg: dict) -> tuple:
-    """Детерминированный пол чистоты текста спеки: китайские/CJK-символы (блок по дефолту)
+    """Детерминированный пол чистоты текста спеки: CJK-символы (предупреждение по умолчанию)
     + текстовый мусор (mojibake/zero-width/homoglyph — warn). Работает даже без/при битом
     LLM-вердикте: модель не может «протащить» иероглифы, объявив passed=true (важно на Qwen).
 
@@ -1148,7 +1158,8 @@ def check_build(slug: str, feature_dir: Path | None) -> dict:
         )
     # Вердикт субагента — из журнала прогона (при отсутствии записи фолбэк на старый
     # judges/build-judge.json делает сам FE.judge).
-    verdict = FE.judge(PROJECT_ROOT, SKILL_NAME, slug, "build-judge", layer="llm")
+    verdict = FE.judge(PROJECT_ROOT, SKILL_NAME, slug, "build-judge", layer="llm",
+                       step_id=JUDGE_STEP_ID)
 
     if not verdict:
         return _make_verdict(
@@ -1336,7 +1347,7 @@ def check_spec(slug: str, feature_dir: Path | None) -> dict:
             warnings.append(
                 f"требования-мастер ещё не заведён — /forge-spec merge {slug} создаст его")
 
-    # Пол чистоты текста: китайские/CJK-символы в tech-design.md, task-plan.json и мастере (блок).
+    # Пол чистоты текста: китайские/CJK-символы в tech-design.md, task-plan.json и мастере.
     _charset_files = [tech_path, task_plan_path]
     try:
         _ms = skill_paths.master_spec_for(PROJECT_ROOT, slug=slug)
@@ -1412,7 +1423,7 @@ def check_sdd_doc(slug: str, feature_dir: Path | None) -> dict:
                        "detail": f"sdd.md not found at {sdd_path}", "severity": "error"})
         blocking_issues.append(f"SDD (sdd.md) не найден: {sdd_path}")
 
-    # Пол чистоты текста: китайские/CJK-символы в sdd.md (блок) + мусор (warn).
+    # Пол чистоты текста: китайские/CJK-символы и подозрительный текст в sdd.md.
     _qual = (_load_project_config(PROJECT_ROOT) or {}).get("quality", {})
     cf_checks, cf_block, cf_warn = _charset_floor([sdd_path], _qual)
     checks.extend(cf_checks)
@@ -1432,9 +1443,72 @@ def check_sdd_doc(slug: str, feature_dir: Path | None) -> dict:
     return verdict
 
 
+_DESIGN_SECTIONS = (
+    "1. Резюме решения", "2. Затронутые модули", "3. Изменения по слоям",
+    "4. Миграции БД", "5. Async и интеграции", "6. Контракт API",
+    "7. Влияние на существующее", "8. Риски и альтернативы", "9. Критерии приёмки",
+)
+
+
+def _design_sections_errors(text: str) -> list[str]:
+    """Проверяет заполнение разделов из tech-design/references/design-template.md."""
+    sections = {}
+    body = []
+    fence = ""
+    for line in re.sub(r"<!--.*?(?:-->|\Z)", "", text, flags=re.DOTALL).splitlines():
+        delimiter = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if delimiter:
+            marks, suffix = delimiter.groups()
+            if not fence:
+                fence = marks
+            elif marks.startswith(fence) and not suffix.strip():
+                fence = ""
+            continue
+        heading = None if fence else re.match(r"^ {0,3}(#{1,6})[ \t]+(.*)$", line)
+        if heading:
+            level, title = heading.groups()
+            if len(level) <= 2:
+                body = []
+            if len(level) == 2:
+                title = re.sub(r"[ \t]+#+[ \t]*$", "", title).strip().casefold()
+                sections[title.replace("ё", "е")] = body
+        else:
+            body.append(line)
+
+    errors = []
+    for title in _DESIGN_SECTIONS:
+        content = sections.get(title.casefold().replace("ё", "е"))
+        if content is None:
+            errors.append(f"в tech-design.md отсутствует раздел «{title}»")
+        else:
+            meaningful = re.sub(r"<[^>\n]+>", "", "\n".join(content))
+            if not any(char.isalnum() for char in meaningful):
+                errors.append(f"в tech-design.md пустой раздел «{title}»")
+    return errors
+
+
 def check_design(slug: str, feature_dir: Path | None) -> dict:
-    """Запускает check_taskplan.py + check_sdd.py и собирает единый вердикт."""
+    """Проверяет структуру техдизайна, план задач и его связь с SDD."""
     project_root = PROJECT_ROOT
+    try:
+        if feature_dir is None:
+            raise FileNotFoundError("папка фичи отсутствует")
+        inputs = FE.design_judge_inputs(feature_dir)
+        design_md = feature_dir / "tech-design.md"
+        design_text = design_md.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        detail = f"Обязательные входы design-judge не читаются: {exc}"
+        return _make_verdict("design-judge", slug, False,
+                             [{"name": "Входы техдизайна", "status": "FAIL", "detail": detail}],
+                             [detail], [], detail)
+
+    structure_errors = _design_sections_errors(design_text)
+    if structure_errors:
+        return _make_verdict(
+            "design-judge", slug, False,
+            [{"name": "Разделы tech-design.md", "status": "FAIL",
+              "detail": "\n".join(structure_errors), "severity": "error"}],
+            structure_errors, [], "Заполни обязательные разделы tech-design.md")
 
     # Пути — из единого реестра skill-paths.json (skill_paths loader)
     check_taskplan_script = skill_paths.script(project_root, "tech-design", "check_taskplan")
@@ -1455,7 +1529,8 @@ def check_design(slug: str, feature_dir: Path | None) -> dict:
         scan_dir = None
     inventory_note = _ensure_inventory(project_root)
 
-    checks = []
+    checks = [{"name": "Разделы tech-design.md", "status": "PASS",
+               "detail": f"{len(_DESIGN_SECTIONS)} разделов заполнены", "severity": "error"}]
     blocking_issues = []
     warnings = []
     if inventory_note:
@@ -1486,16 +1561,13 @@ def check_design(slug: str, feature_dir: Path | None) -> dict:
                            "detail": "timeout (60s)", "severity": "error"})
             blocking_issues.append("check_taskplan: timeout")
     else:
-        warnings.append(f"task-plan.json not found at {taskplan_path}")
-        checks.append({"name": "check_taskplan", "status": "SKIP",
-                       "detail": "file not found", "severity": "info"})
+        blocking_issues.append(f"task-plan.json отсутствует: {taskplan_path}")
 
     # 2. check_sdd
     if taskplan_path and taskplan_path.exists():
         try:
             cmd = [sys.executable, str(check_sdd_script), str(taskplan_path), "--json"]
-            if sdd_path and sdd_path.exists():
-                cmd.extend(["--sdd", str(sdd_path)])
+            cmd.extend(["--sdd", str(sdd_path)])
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             if r.returncode == 0:
                 checks.append({"name": "check_sdd", "status": "PASS",
@@ -1510,9 +1582,7 @@ def check_design(slug: str, feature_dir: Path | None) -> dict:
                            "detail": "timeout (60s)", "severity": "error"})
             blocking_issues.append("check_sdd: timeout")
     else:
-        warnings.append(f"task-plan.json not found at {taskplan_path}")
-        checks.append({"name": "check_sdd", "status": "SKIP",
-                       "detail": "task-plan.json missing", "severity": "info"})
+        blocking_issues.append("Без task-plan.json нельзя проверить связи с SDD")
 
     # 3. check_adr (если adr.enabled): состав ADR + резолв ссылок ADR-NNNN из tech-design/sdd.
     pcfg = _load_project_config(PROJECT_ROOT) or {}
@@ -1521,11 +1591,11 @@ def check_design(slug: str, feature_dir: Path | None) -> dict:
             adr_dir = skill_paths.master_adr_dir(PROJECT_ROOT)
         except Exception:  # noqa: BLE001
             adr_dir = None
+            blocking_issues.append("Не удалось определить каталог при включённой проверке ADR")
         if adr_dir is not None:
             cmd = [sys.executable,
                    str(skill_paths.script(PROJECT_ROOT, "system-analyst", "check_adr")),
                    str(adr_dir), "--json"]
-            design_md = feature_dir / "tech-design.md" if feature_dir else None
             for ref in (design_md, sdd_path):
                 if ref and ref.exists():
                     cmd.extend(["--refs", str(ref)])
@@ -1540,26 +1610,31 @@ def check_design(slug: str, feature_dir: Path | None) -> dict:
                                    "detail": detail, "severity": "error"})
                     blocking_issues.append(f"check_adr FAIL: {detail}")
             except FileNotFoundError:
-                warnings.append("check_adr.py не найден — ADR не проверены")
+                blocking_issues.append("check_adr.py не найден при включённой проверке ADR")
             except subprocess.TimeoutExpired:
                 checks.append({"name": "check_adr", "status": "FAIL",
                                "detail": "timeout (60s)", "severity": "error"})
                 blocking_issues.append("check_adr: timeout")
 
-    # Пол чистоты текста: китайские/CJK-символы в tech-design.md и task-plan.json (блок) + мусор.
-    design_md = feature_dir / "tech-design.md" if feature_dir else None
+    # Пол чистоты текста: китайские/CJK-символы и подозрительный текст в tech-design.md и task-plan.json.
     _qual = pcfg.get("quality", {}) if isinstance(pcfg, dict) else {}
     cf_checks, cf_block, cf_warn = _charset_floor([design_md, taskplan_path], _qual)
     checks.extend(cf_checks)
     blocking_issues.extend(cf_block)
     warnings.extend(cf_warn)
 
+    try:
+        if FE.design_judge_inputs(feature_dir) != inputs:
+            blocking_issues.append("Входы design-judge изменились во время проверки")
+    except OSError as exc:
+        blocking_issues.append(f"Входы design-judge стали недоступны: {exc}")
     passed = len(blocking_issues) == 0
     summary = f"{sum(1 for c in checks if c['status'] == 'PASS')}/{len(checks)} checks passed"
     if blocking_issues:
         summary += f", {len(blocking_issues)} blocking"
 
-    return _make_verdict("design-judge", slug, passed, checks, blocking_issues, warnings, summary)
+    return {**_make_verdict("design-judge", slug, passed, checks, blocking_issues, warnings, summary),
+            **inputs}
 
 
 # Floor «GREEN любой ценой» (C2): паттерны ослабления СУЩЕСТВУЮЩИХ тестов.
@@ -1932,7 +2007,8 @@ def check_brd(slug: str, feature_dir: Path | None) -> dict:
     # 0. Структурный слой (check_brd_doc): обязательные бизнес-секции, содержательность,
     #    утечка реализации. Вшит в судью, а не только в guidance 00-brd.md — иначе шаг 00-brd
     #    закрывался ингестом LLM-вердикта, ни разу не выполнив структурную проверку.
-    doc_errors, doc_warnings = _brd_doc.check(text)
+    charset_policy = (_load_project_config(PROJECT_ROOT).get("quality") or {}).get("charset_gate")
+    doc_errors, doc_warnings = _brd_doc.check(text, charset_policy)
     if doc_errors:
         for e in doc_errors:
             checks.append({"name": "Структура БТ (check_brd_doc)", "status": "FAIL",
@@ -2255,6 +2331,7 @@ def main():
                         help="Корень проекта (по умолчанию cwd)")
     parser.add_argument("--skill", default=None,
                         help="Имя скилла для резолвинга ground/statements/<skill>/")
+    parser.add_argument("--step-id", help="Шаг 04-build-<taskId> для build/reuse")
     parser.add_argument("--feature-docs", default=None,
                         help="Путь к docs/feature-pipeline (по умолчанию <project-root>/docs/feature-pipeline)")
     parser.add_argument("--brd", default=None,
@@ -2280,6 +2357,28 @@ def main():
     project_root = Path(args.project_root).resolve()
     args.skill = _resolve_skill_ns(project_root, args.skill)
     _set_paths(project_root, skill=args.skill)
+
+    global JUDGE_STEP_ID
+    JUDGE_STEP_ID = None
+    if f"{args.phase}-judge" in FE.TASK_JUDGES:
+        manifest_path = FE.state_dir(project_root, args.skill, args.slug) / "manifest.json"
+        if manifest_path.exists():
+            manifest = _load_json(manifest_path)
+            if manifest is None:
+                parser.error(f"Не читается {manifest_path}")
+            candidates = [s["id"] for s in manifest.get("steps", [])
+                          if _pp.build_task_id(s.get("id"))]
+            if not args.step_id and len(candidates) == 1:
+                args.step_id = candidates[0]
+            if candidates and args.step_id not in candidates:
+                parser.error(f"Укажите --step-id одного из шагов сборки: {', '.join(candidates)}")
+            if args.step_id and args.step_id not in candidates:
+                parser.error(f"Шаг {args.step_id} не найден в манифесте")
+            JUDGE_STEP_ID = args.step_id
+        elif args.step_id:
+            parser.error("--step-id требует манифест фичи")
+    elif args.step_id:
+        parser.error("--step-id поддерживается для build и reuse")
 
     # docs-пути уже резолвлены в _set_paths по docs-конфигу; CLI-флаги переопределяют точечно
     if args.feature_docs:
@@ -2321,6 +2420,14 @@ def main():
             for e in verr:
                 print(f"  - {e}", file=sys.stderr)
             sys.exit(1)
+        if JUDGE_STEP_ID:
+            identity = {"step_id": JUDGE_STEP_ID, "feature_slug": args.slug, "judge": judge_name}
+            mismatches = [f"{field}={value!r} (получено {subagent.get(field)!r})"
+                          for field, value in identity.items() if subagent.get(field) != value]
+            if mismatches:
+                print("ERROR: вердикт должен содержать " + ", ".join(mismatches)
+                      + ". Запроси вердикт у нужного судьи для этого шага.", file=sys.stderr)
+                sys.exit(1)
         verdict = _make_verdict(
             judge_name, args.slug, bool(subagent.get("passed")),
             subagent.get("checks", []),
@@ -2404,7 +2511,8 @@ def main():
             sys.exit(0 if verdict["passed"] else 1)
 
         # Для остальных фаз — проверяем, что вердикт уже есть и passed=true
-        verdict = FE.judge(PROJECT_ROOT, SKILL_NAME, args.slug, f"{args.phase}-judge")
+        verdict = FE.judge(PROJECT_ROOT, SKILL_NAME, args.slug, f"{args.phase}-judge",
+                           step_id=JUDGE_STEP_ID)
         if not verdict:
             print(f"FAIL: Вердикт {args.phase}-judge не найден в "
                   f"{FE.events_path(PROJECT_ROOT, SKILL_NAME, args.slug)}", file=sys.stderr)

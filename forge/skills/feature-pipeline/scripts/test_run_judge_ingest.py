@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -52,6 +53,81 @@ class Ingest(unittest.TestCase):
     def test_recheck_without_ingest_fails(self):
         r = _run(["build", "feat", "--recheck", "--project-root", self.proj], self.proj)
         self.assertNotEqual(r.returncode, 0, "build --recheck без вердикта должен падать")
+
+    def test_task_verdict_requires_matching_step_from_subagent(self):
+        sid1, sid2 = "04-build-T1", "04-build-T2"
+        state = FE.state_dir(self.proj, "feature-pipeline", "feat")
+        state.mkdir(parents=True)
+        (state / "manifest.json").write_text(json.dumps({
+            "steps": [{"id": sid} for sid in (sid1, sid2)],
+        }), encoding="utf-8")
+        for phase in ("build", "reuse"):
+            with self.subTest(phase=phase):
+                judge = f"{phase}-judge"
+                args = [phase, "feat", "--project-root", self.proj]
+                self.assertEqual(_run([*args, "--recheck"], self.proj).returncode, 2)
+                verdict = {"passed": True, "judge": judge, "feature_slug": "feat", "step_id": sid1}
+                for field, wrong, expected in (("step_id", None, sid1), ("step_id", sid2, sid1),
+                                               ("judge", "red-judge", judge),
+                                               ("feature_slug", "other", "feat")):
+                    wrong_verdict = dict(verdict, **{field: wrong})
+                    if wrong is None:
+                        del wrong_verdict[field]
+                    denied = _run([*args, "--step-id", sid1, "--from-output", "-"], self.proj,
+                                  stdin=json.dumps(wrong_verdict))
+                    self.assertEqual(denied.returncode, 1, denied.stderr)
+                    self.assertIn(f"{field}={expected!r}", denied.stderr)
+                    self.assertIsNone(FE.judge(self.proj, "feature-pipeline", "feat", judge,
+                                               step_id=sid1))
+                saved = _run([*args, "--step-id", sid1, "--from-output", "-"], self.proj,
+                             stdin=json.dumps(verdict))
+                self.assertEqual(saved.returncode, 0, saved.stderr)
+                other = _run([*args, "--step-id", sid2, "--recheck"], self.proj)
+                self.assertEqual(other.returncode, 1, other.stdout + other.stderr)
+                self.assertTrue(FE.judge(self.proj, "feature-pipeline", "feat", judge,
+                                         step_id=sid1, layer="final")["passed"])
+
+    def test_design_missing_required_artifact_fails(self):
+        folder = self.proj / "docs/feature-pipeline/feat"
+        for name in ("tech-design.md", "sdd.md"):
+            (folder / name).write_text("# Документ\n", encoding="utf-8")
+        result = _run(["design", "feat", "--project-root", self.proj], self.proj)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        verdict = FE.judge(self.proj, "feature-pipeline", "feat",
+                           "design-judge", step_id="02-design", layer="final")
+        self.assertFalse(verdict["passed"])
+        self.assertIn("task-plan.json", verdict["blocking_issues"][0])
+
+    def test_design_requires_filled_template_sections(self):
+        folder = self.proj / "docs/feature-pipeline/feat"
+        (folder / "sdd.md").write_text("# SDD\n## Архив заказов\n", encoding="utf-8")
+        plan = {"feature_slug": "feat", "title": "Архив заказов", "tasks": [{
+            "id": "T1", "acceptance": ["Given order When archived Then audit is recorded"],
+            "artifacts": ["src/main/java/Order.java"], "layers": ["service"],
+            "sdd_ref": "Архив заказов",
+        }]}
+        (folder / "task-plan.json").write_text(json.dumps(plan), encoding="utf-8")
+        template = REPO / "skills/tech-design/references/design-template.md"
+        headings = re.findall(r"^## \d+\. .+$", template.read_text(encoding="utf-8"), re.MULTILINE)
+        design = "\n\n".join(f"{heading}\nНе затрагивается." for heading in headings)
+        path = folder / "tech-design.md"
+        args = ["design", "feat", "--project-root", self.proj]
+        for content, expected in (
+            ("", "отсутствует раздел"),
+            (design.replace("Не затрагивается.", "<описание>\n<!-- заполни позже -->", 1),
+             "пустой раздел"),
+            (design, None),
+            (f"````markdown\n{design}\n````", "отсутствует раздел"),
+        ):
+            with self.subTest(expected=expected):
+                path.write_text(content, encoding="utf-8")
+                result = _run(args, self.proj)
+                self.assertEqual(result.returncode, 1 if expected else 0, result.stdout + result.stderr)
+                verdict = FE.judge(self.proj, "feature-pipeline", "feat", "design-judge",
+                                   step_id="02-design", layer="final")
+                self.assertEqual(verdict["passed"], expected is None)
+                if expected:
+                    self.assertIn(expected, verdict["blocking_issues"][0])
 
     def test_failing_verdict_ingest_fails(self):
         r = _run(["build", "feat", "--from-output", "-", "--project-root", self.proj],

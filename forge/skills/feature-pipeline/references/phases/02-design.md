@@ -5,7 +5,9 @@
 > SKILL.md §0.6, override — SKILL.md §0.6.1. Нумерация секций ниже — историческая (§ из
 > монолитного SKILL.md), внутри брифа она самодостаточна.
 >
-> **Гейт закрытия фазы:** `design-judge: PASS` и маркер утверждения `design-approved-<slug>`.
+> **Гейт закрытия фазы:** `design-judge: PASS` для текущих `sdd.md`, `tech-design.md`
+> и `task-plan.json`. Маркер `design-approved-<slug>` утверждает проверенную пару
+> `tech-design.md` и `task-plan.json`.
 
 ### 5b. Фаза 02-design — Tech Design → Гейт 2
 
@@ -65,8 +67,9 @@ agent(
 
 Gate (обязательно, перед завершением):
   python3 <project>/.gigacode/skills/feature-pipeline/scripts/run_judge.py design <slug> --project-root <project>
-  Должен быть PASS (check_taskplan + check_sdd-линковка; при adr.enabled — ещё check_adr: состав ADR
-  + резолв ссылок ADR-NNNN). Сохраняет вердикт design-judge в журнал прогона (events.jsonl).
+  Для PASS заполни все девять разделов tech-design.md по шаблону. Судья проверяет их вместе
+  с планом задач и его связью с SDD, а при adr.enabled проверяет ADR и ссылки ADR-NNNN.
+  Вердикт сохраняется в журнале прогона (events.jsonl).
 
 Выходной JSON (state-recorder фиксирует работу субагента, шаг закрывает оркестратор после утверждения):
   {"step_id": "02-design", "status": "unit-done", "path": "...", "gates": {"design-judge": "PASS"}}

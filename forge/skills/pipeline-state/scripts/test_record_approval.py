@@ -110,9 +110,9 @@ class TestRecordApprovalSingle(unittest.TestCase):
     def test_evidence_field(self):
         """--evidence пишется в запись. Ссылка-артефакт годится ключу плана; ключу согласия
         (gate-override-* и др.) — только ответ пользователя, см. TestConsentEvidenceRequired."""
-        rc = ra_mod.cmd_single(self._args(key="human-approval", evidence="sha256:abc123"))
+        rc = ra_mod.cmd_single(self._args(key="phase-04", evidence="sha256:abc123"))
         self.assertEqual(rc, 0)
-        rec = FE.approval(self.project, "human-approval")
+        rec = FE.approval(self.project, "phase-04")
         self.assertEqual(rec["evidence"], "sha256:abc123")
 
     def test_feature_ctx(self):
@@ -529,7 +529,7 @@ class TestRecordApprovalCLI(unittest.TestCase):
              "--reason", "delivery approved",
              "--approver", "release-manager",
              "--kind", "human-approval",
-             "--evidence", "ticket DEL-42",
+             "--evidence", "Да, подтверждаю выпуск DEL-42",
              "--feature-ctx", "KIDPPRB-9254"],
             capture_output=True, text=True, cwd=str(SCRIPTS),
         )
@@ -539,7 +539,7 @@ class TestRecordApprovalCLI(unittest.TestCase):
         self.assertEqual(rec["approved_by"], "release-manager")
         # Категория approval_kind (kind — тип события журнала, всегда "approval")
         self.assertEqual(rec["approval_kind"], "human-approval")
-        self.assertEqual(rec["evidence"], "ticket DEL-42")
+        self.assertEqual(rec["evidence"], "Да, подтверждаю выпуск DEL-42")
         self.assertEqual(rec["feature"], "KIDPPRB-9254")
 
     def test_cli_batch_yaml(self):
@@ -787,7 +787,7 @@ class TestConsentEvidenceRequired(unittest.TestCase):
                 self.assertNotEqual(self._run("--key", key).returncode, 0)
                 self.assertEqual(self._run("--key", key, "--evidence",
                                            "да, утверждаю план целиком").returncode, 0)
-        self.assertEqual(self._run("--key", "human-approval").returncode, 0)
+        self.assertEqual(self._run("--key", "human-approval").returncode, 2)
 
 
 if __name__ == "__main__":
